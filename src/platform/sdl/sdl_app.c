@@ -4,6 +4,49 @@
 
 #include "cupid/common/log.h"
 #include "cupid/core/system.h"
+#include "cupid/gb/gb.h"
+
+/* DMG 4-shade palette (ARGB8888) */
+static const Uint32 cupid_dmg_palette[4] = {
+    0xFFE0F8D0u, /* color 0: lightest (off-white green) */
+    0xFF88C070u, /* color 1: light green */
+    0xFF346856u, /* color 2: dark green */
+    0xFF081820u  /* color 3: darkest (near-black) */
+};
+
+/*
+ * Joypad bit layout stored in CupidGb.joypad (0=pressed, 1=released):
+ *   bit 0: Right   bit 4: A
+ *   bit 1: Left    bit 5: B
+ *   bit 2: Up      bit 6: Select
+ *   bit 3: Down    bit 7: Start
+ */
+static void cupid_sdl_handle_key(CupidGb *gb, SDL_Scancode sc, bool pressed)
+{
+    uint8_t bit;
+
+    switch (sc) {
+    case SDL_SCANCODE_RIGHT:     bit = 0u; break;
+    case SDL_SCANCODE_LEFT:      bit = 1u; break;
+    case SDL_SCANCODE_UP:        bit = 2u; break;
+    case SDL_SCANCODE_DOWN:      bit = 3u; break;
+    case SDL_SCANCODE_Z:         bit = 4u; break; /* A */
+    case SDL_SCANCODE_X:         bit = 5u; break; /* B */
+    case SDL_SCANCODE_BACKSPACE: bit = 6u; break; /* Select */
+    case SDL_SCANCODE_RETURN:    bit = 7u; break; /* Start */
+    default:                     return;
+    }
+
+    if (pressed) {
+        /* Only fire the joypad interrupt on the transition released -> pressed */
+        if ((gb->joypad & (uint8_t)(1u << bit)) != 0u) {
+            gb->joypad = (uint8_t)(gb->joypad & (uint8_t)~(1u << bit));
+            gb->interrupt_flags = (uint8_t)(gb->interrupt_flags | 0x10u); /* bit 4: joypad IRQ */
+        }
+    } else {
+        gb->joypad = (uint8_t)(gb->joypad | (uint8_t)(1u << bit));
+    }
+}
 
 static void cupid_sdl_log_system(const CupidEmulator *emulator)
 {
@@ -17,7 +60,7 @@ static void cupid_sdl_log_system(const CupidEmulator *emulator)
 
 bool cupid_sdl_app_init(CupidSdlApp *app,
                         const CupidSdlAppConfig *config,
-                        const CupidEmulator *emulator)
+                        CupidEmulator *emulator)
 {
     if (app == 0 || config == 0) {
         cupid_log_error("Cannot initialize SDL app: invalid arguments.");
@@ -26,9 +69,12 @@ bool cupid_sdl_app_init(CupidSdlApp *app,
 
     app->window = 0;
     app->renderer = 0;
+    app->texture = 0;
+    app->audio_dev = 0u;
+    app->emulator = emulator;
     app->running = false;
 
-    if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) != 0) {
         cupid_log_errorf("SDL_Init failed: %s", SDL_GetError());
         return false;
     }
@@ -46,13 +92,55 @@ bool cupid_sdl_app_init(CupidSdlApp *app,
     }
 
     app->renderer = SDL_CreateRenderer((SDL_Window *)app->window, -1,
-                                       SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+                                       SDL_RENDERER_ACCELERATED |
+                                       SDL_RENDERER_PRESENTVSYNC);
     if (app->renderer == 0) {
         cupid_log_errorf("SDL_CreateRenderer failed: %s", SDL_GetError());
         SDL_DestroyWindow((SDL_Window *)app->window);
         app->window = 0;
         SDL_Quit();
         return false;
+    }
+
+    /* Create a 160x144 streaming texture for the GB framebuffer */
+    app->texture = SDL_CreateTexture((SDL_Renderer *)app->renderer,
+                                     SDL_PIXELFORMAT_ARGB8888,
+                                     SDL_TEXTUREACCESS_STREAMING,
+                                     (int)CUPID_GB_SCREEN_WIDTH,
+                                     (int)CUPID_GB_SCREEN_HEIGHT);
+    if (app->texture == 0) {
+        cupid_log_errorf("SDL_CreateTexture failed: %s", SDL_GetError());
+        SDL_DestroyRenderer((SDL_Renderer *)app->renderer);
+        SDL_DestroyWindow((SDL_Window *)app->window);
+        app->renderer = 0;
+        app->window = 0;
+        SDL_Quit();
+        return false;
+    }
+
+    /* Scale framebuffer to fill the entire window */
+    SDL_RenderSetLogicalSize((SDL_Renderer *)app->renderer,
+                             (int)CUPID_GB_SCREEN_WIDTH,
+                             (int)CUPID_GB_SCREEN_HEIGHT);
+
+    /* Open audio device for GB APU output */
+    {
+        SDL_AudioSpec want;
+        SDL_AudioSpec got;
+        SDL_memset(&want, 0, sizeof(want));
+        want.freq     = (int)CUPID_GB_APU_SAMPLE_RATE;
+        want.format   = AUDIO_S16SYS;
+        want.channels = 2;
+        want.samples  = 512; /* low latency */
+        want.callback = NULL; /* push API */
+        app->audio_dev = SDL_OpenAudioDevice(NULL, 0, &want, &got, 0);
+        if (app->audio_dev == 0u) {
+            cupid_log_errorf("SDL_OpenAudioDevice failed: %s", SDL_GetError());
+            /* Non-fatal: run without audio */
+        } else {
+            SDL_PauseAudioDevice((SDL_AudioDeviceID)app->audio_dev, 0);
+            cupid_log_info("SDL2 audio opened: 44100 Hz stereo int16");
+        }
     }
 
     app->running = true;
@@ -63,6 +151,7 @@ bool cupid_sdl_app_init(CupidSdlApp *app,
                     config->title,
                     config->width,
                     config->height);
+    cupid_log_info("Controls: Arrow keys=DPad  Z=A  X=B  Enter=Start  Backspace=Select");
     cupid_log_info("Console logging remains in the terminal running cupidgb.");
 
     return true;
@@ -70,9 +159,10 @@ bool cupid_sdl_app_init(CupidSdlApp *app,
 
 void cupid_sdl_app_run(CupidSdlApp *app)
 {
+    /* Safety cap: a bit over one full DMG frame (70224 T-cycles / 2 per step) */
+    enum { CUPID_GB_MAX_STEPS_PER_FRAME = 80000 };
     SDL_Event event;
     Uint32 frame_start;
-    Uint8 color = 0;
 
     if (app == 0 || !app->running) {
         return;
@@ -81,23 +171,109 @@ void cupid_sdl_app_run(CupidSdlApp *app)
     cupid_log_info("Entering SDL event loop. Close the window to exit.");
 
     while (app->running) {
+        unsigned int steps;
+
         frame_start = SDL_GetTicks();
 
+        /* Process SDL events */
         while (SDL_PollEvent(&event) != 0) {
             if (event.type == SDL_QUIT) {
                 cupid_log_info("Received SDL quit event.");
                 app->running = false;
+            } else if (event.type == SDL_KEYDOWN && app->emulator != 0) {
+                cupid_sdl_handle_key(&app->emulator->gb,
+                                     event.key.keysym.scancode,
+                                     true);
+            } else if (event.type == SDL_KEYUP && app->emulator != 0) {
+                cupid_sdl_handle_key(&app->emulator->gb,
+                                     event.key.keysym.scancode,
+                                     false);
             }
         }
 
-        SDL_SetRenderDrawColor((SDL_Renderer *)app->renderer, color, 90U, 140U, 255U);
-        SDL_RenderClear((SDL_Renderer *)app->renderer);
-        SDL_RenderPresent((SDL_Renderer *)app->renderer);
+        /* Run the emulator until a full frame is produced (vblank) */
+        if (app->emulator != 0 && app->emulator->initialized &&
+            app->emulator->gb.loaded) {
+            for (steps = 0u;
+                 steps < (unsigned int)CUPID_GB_MAX_STEPS_PER_FRAME;
+                 ++steps) {
+                if (!cupid_emulator_step(app->emulator)) {
+                    cupid_log_error("Emulation stopped after a CPU execution failure.");
+                    app->running = false;
+                    break;
+                }
+                if (app->emulator->gb.frame_ready) {
+                    app->emulator->gb.frame_ready = false;
+                    break;
+                }
+            }
+        }
 
-        color = (Uint8)(color + 1U);
+        /* Convert GB palette-index framebuffer to ARGB and upload to texture */
+        if (app->texture != 0 && app->emulator != 0) {
+            Uint32 pixels[CUPID_GB_SCREEN_WIDTH * CUPID_GB_SCREEN_HEIGHT];
+            size_t i;
 
-        if (SDL_GetTicks() - frame_start < 16U) {
-            SDL_Delay(16U - (SDL_GetTicks() - frame_start));
+            for (i = 0u;
+                 i < CUPID_GB_SCREEN_WIDTH * CUPID_GB_SCREEN_HEIGHT;
+                 ++i) {
+                pixels[i] = cupid_dmg_palette[
+                    app->emulator->gb.frame_buffer[i] & 0x03u];
+            }
+
+            SDL_UpdateTexture((SDL_Texture *)app->texture,
+                              NULL,
+                              pixels,
+                              (int)(CUPID_GB_SCREEN_WIDTH * sizeof(Uint32)));
+            SDL_RenderClear((SDL_Renderer *)app->renderer);
+            SDL_RenderCopy((SDL_Renderer *)app->renderer,
+                           (SDL_Texture *)app->texture,
+                           NULL,
+                           NULL);
+            SDL_RenderPresent((SDL_Renderer *)app->renderer);
+        }
+
+        /* Queue APU samples to SDL audio device */
+        if (app->audio_dev != 0u && app->emulator != 0) {
+            int16_t audio_buf[CUPID_GB_APU_BUF_FRAMES * 2u];
+            uint32_t frames = cupid_gb_apu_drain(&app->emulator->gb,
+                                                 audio_buf,
+                                                 CUPID_GB_APU_BUF_FRAMES);
+            if (frames > 0u) {
+                SDL_QueueAudio((SDL_AudioDeviceID)app->audio_dev,
+                               audio_buf,
+                               (Uint32)(frames * 2u * sizeof(int16_t)));
+            }
+        }
+
+        /* Sync emulation speed to audio playback rate.
+         * Wait until the queued audio drops below ~2 frames' worth of
+         * samples so we neither starve the device nor pile up latency.
+         * Fall back to a simple timer-based 60 fps cap when there is
+         * no audio device. */
+        if (app->audio_dev != 0u) {
+            enum { CUPID_AUDIO_QUEUE_LIMIT = 8192 }; /* ~46 ms of stereo int16 */
+            while (SDL_GetQueuedAudioSize(
+                       (SDL_AudioDeviceID)app->audio_dev) > CUPID_AUDIO_QUEUE_LIMIT) {
+                SDL_Delay(1u);
+                while (SDL_PollEvent(&event) != 0) {
+                    if (event.type == SDL_QUIT) {
+                        app->running = false;
+                    } else if (event.type == SDL_KEYDOWN && app->emulator != 0) {
+                        cupid_sdl_handle_key(&app->emulator->gb,
+                                             event.key.keysym.scancode, true);
+                    } else if (event.type == SDL_KEYUP && app->emulator != 0) {
+                        cupid_sdl_handle_key(&app->emulator->gb,
+                                             event.key.keysym.scancode, false);
+                    }
+                }
+                if (!app->running) { break; }
+            }
+        } else {
+            Uint32 elapsed = SDL_GetTicks() - frame_start;
+            if (elapsed < 17U) {
+                SDL_Delay(17U - elapsed);
+            }
         }
     }
 }
@@ -106,6 +282,16 @@ void cupid_sdl_app_shutdown(CupidSdlApp *app)
 {
     if (app == 0) {
         return;
+    }
+
+    if (app->audio_dev != 0u) {
+        SDL_CloseAudioDevice((SDL_AudioDeviceID)app->audio_dev);
+        app->audio_dev = 0u;
+    }
+
+    if (app->texture != 0) {
+        SDL_DestroyTexture((SDL_Texture *)app->texture);
+        app->texture = 0;
     }
 
     if (app->renderer != 0) {
