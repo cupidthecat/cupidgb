@@ -1,0 +1,15 @@
+#!/usr/bin/env sh
+
+set -eu
+
+ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+BUILD_DIR="$ROOT_DIR/build"
+BIN_PATH="$BUILD_DIR/cupidgb"
+
+if [ ! -x "$BIN_PATH" ]; then
+    echo "[INFO] Building cupidgb..." >&2
+    cmake -S "$ROOT_DIR" -B "$BUILD_DIR"
+    cmake --build "$BUILD_DIR"
+fi
+
+exec "$BIN_PATH" "$@"
