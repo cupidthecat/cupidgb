@@ -260,15 +260,12 @@ void cupid_gb_reset_ppu(CupidGb *gb)
         return;
     }
 
-    gb->ppu_counter = 0u;
+    gb->ppu_counter = 1u; /* hardware starts 1 M-cycle into scanline 0 on LCD enable */
     gb->frame_ready = false;
     gb->stat_irq_line = false;
     gb->window_line_counter = 0u;
     gb->io_registers[CUPID_GB_IO_LY] = 0u;
-    /* On real DMG the PPU stays in mode 0 for ~76 T-cycles (19 M-cycles)
-       after LCD enable before the first OAM scan begins. */
-    gb->ppu_startup_delay = CUPID_GB_PPU_LCD_ON_DELAY;
-    cupid_gb_set_ppu_mode(gb, CUPID_GB_PPU_MODE_HBLANK);
+    cupid_gb_set_ppu_mode(gb, CUPID_GB_PPU_MODE_OAM);
     cupid_gb_update_stat_irq(gb);
 }
 
@@ -309,13 +306,6 @@ void cupid_gb_tick_ppu(CupidGb *gb, uint16_t cycles)
         uint8_t ly;
         uint16_t line_cycle;
         uint8_t next_mode;
-
-        /* LCD-on warmup: stay in mode 0, don't advance the dot counter */
-        if (gb->ppu_startup_delay > 0u) {
-            gb->ppu_startup_delay = (uint8_t)(gb->ppu_startup_delay - 1u);
-            --cycles;
-            continue;
-        }
 
         ly = gb->io_registers[CUPID_GB_IO_LY];
         line_cycle = gb->ppu_counter;

@@ -93,6 +93,7 @@ void cupid_gb_init(CupidGb *gb)
     gb->apu.ch1_freq       = 0u;
     gb->apu.ch1_timer      = 8192u;
     gb->apu.ch4_lfsr       = 0x7fffu;
+    gb->io_registers[0x4du] = 0x00u;  /* KEY1: normal speed, switch not armed */
     gb->io_registers[0x00u] = 0xcfu;  /* P1: no selection, all buttons released */
     gb->joypad = 0xffu;               /* all buttons released (0=pressed) */
     cupid_gb_reset_ppu(gb);
@@ -102,6 +103,13 @@ void cupid_gb_init(CupidGb *gb)
 
 uint8_t cupid_gb_read_u8(const CupidGb *gb, uint16_t address)
 {
+    static const uint8_t apu_read_masks[0x20] = {
+        0x80u, 0x3fu, 0x00u, 0xffu, 0xbfu, 0xffu, 0x3fu, 0x00u,
+        0xffu, 0xbfu, 0x7fu, 0xffu, 0x9fu, 0xffu, 0xbfu, 0xffu,
+        0xffu, 0x00u, 0x00u, 0xbfu, 0x00u, 0x00u, 0x70u, 0xffu,
+        0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu
+    };
+
     if (gb == 0) {
         return 0xffu;
     }
@@ -224,6 +232,32 @@ uint8_t cupid_gb_read_u8(const CupidGb *gb, uint16_t address)
 
     if (address == 0xff0fu) {
         return (uint8_t)(gb->interrupt_flags | 0xe0u);
+    }
+
+    if (address == 0xff4du) {
+        uint8_t key1 = gb->io_registers[0x4du];
+
+        if (!gb->cgb_mode) {
+            return 0xffu;
+        }
+        return (uint8_t)(0x7eu | (key1 & 0x81u));
+    }
+
+    if (address >= 0xff10u && address <= 0xff2fu) {
+        return (uint8_t)(gb->io_registers[address - 0xff00u] |
+                         apu_read_masks[address - 0xff10u]);
+    }
+
+    if (address >= 0xff30u && address <= 0xff3fu) {
+        if (gb->apu.apu_on && gb->apu.ch3_on) {
+            if (!gb->cgb_mode) {
+                if (gb->apu.ch3_wave_access_ticks == 0u) {
+                    return 0xffu;
+                }
+            }
+            return gb->io_registers[0x30u + gb->apu.ch3_current_byte];
+        }
+        return gb->io_registers[address - 0xff00u];
     }
 
     if (address >= 0xff00u && address <= 0xff7fu) {
@@ -500,6 +534,14 @@ void cupid_gb_write_u8(CupidGb *gb, uint16_t address, uint8_t value)
         return;
     }
 
+    if (!gb->cgb_mode && address >= 0xfe00u && address <= 0xfeffu &&
+        cupid_gb_lcd_enabled(gb) &&
+        gb->io_registers[CUPID_GB_IO_LY] < CUPID_GB_PPU_VISIBLE_SCANLINES &&
+        gb->ppu_counter < CUPID_GB_PPU_OAM_CYCLES) {
+        cupid_gb_trigger_oam_bug_write_access(gb, address);
+        return;
+    }
+
     if (address >= 0xfe00u && address <= 0xfe9fu) {
         gb->object_attribute_memory[address - 0xfe00u] = value;
         return;
@@ -517,6 +559,12 @@ void cupid_gb_write_u8(CupidGb *gb, uint16_t address, uint8_t value)
     if (address >= 0xff00u && address <= 0xff7fu) {
         if (address == 0xff02u) {
             cupid_gb_handle_serial_transfer(gb, value);
+        } else if (address == 0xff4du) {
+            if (gb->cgb_mode) {
+                gb->speed_switch_armed = (value & 0x01u) != 0u;
+                gb->io_registers[0x4du] = (uint8_t)((gb->double_speed ? 0x80u : 0x00u) |
+                                                    (gb->speed_switch_armed ? 0x01u : 0x00u));
+            }
         } else if (address == 0xff04u) {
             gb->io_registers[0x04u] = 0u;
             gb->div_counter = 0u;
@@ -558,7 +606,6 @@ void cupid_gb_write_u8(CupidGb *gb, uint16_t address, uint8_t value)
             gb->io_registers[0x07u] = (uint8_t)(value & 0x07u);
             gb->timer_counter = 0u;
         } else if (address >= 0xff10u && address <= 0xff3fu) {
-            gb->io_registers[address - 0xff00u] = value;
             cupid_gb_apu_on_write(gb, (uint8_t)(address - 0xff00u), value);
         } else {
             gb->io_registers[address - 0xff00u] = value;

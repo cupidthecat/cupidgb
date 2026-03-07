@@ -20,6 +20,7 @@ enum {
     CUPID_GB_HEADER_END      = 0x014c,
     CUPID_GB_TITLE_START     = 0x0134,
     CUPID_GB_TITLE_END       = 0x0143,
+    CUPID_GB_CGB_FLAG        = 0x0143,
     CUPID_GB_CARTRIDGE_TYPE  = 0x0147,
     CUPID_GB_ROM_SIZE        = 0x0148,
     CUPID_GB_RAM_SIZE        = 0x0149,
@@ -257,6 +258,7 @@ bool cupid_gb_parse_header(const uint8_t *rom_data,
     }
 
     header->title[title_index] = '\0';
+    header->cgb_flag = rom_data[CUPID_GB_CGB_FLAG];
     header->cartridge_type = rom_data[CUPID_GB_CARTRIDGE_TYPE];
     header->rom_size_code = rom_data[CUPID_GB_ROM_SIZE];
     header->ram_size_code = rom_data[CUPID_GB_RAM_SIZE];
@@ -394,6 +396,18 @@ bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size)
     if (!cupid_gb_parse_header(rom_data, rom_size, &gb->header)) {
         cupid_log_error("Failed to parse Game Boy cartridge header.");
         return false;
+    }
+
+     /* Bit 7 marks CGB support, but only 0xC0 carts require CGB mode.
+         Dual-mode 0x80 carts should still run as DMG on this emulator's
+         default Game Boy target. */
+     gb->cgb_mode = (gb->header.cgb_flag & 0xc0u) == 0xc0u;
+    gb->double_speed = false;
+    gb->speed_switch_armed = false;
+    gb->speed_phase = false;
+    gb->io_registers[0x4du] = 0x00u;
+    if (gb->cgb_mode) {
+        gb->cpu.a = 0x11u;
     }
 
     if (gb->header.rom_bank_count == 0u) {
@@ -559,6 +573,16 @@ void cupid_gb_load_save(CupidGb *gb)
         return;
     }
 
+    /*
+     * Many hardware test ROMs advertise battery-backed RAM for result
+     * reporting, but leave the title blank and/or ship with an invalid
+     * header checksum. Persisting their cartridge RAM can feed stale test
+     * output back into later runs and produce misleading failures.
+     */
+    if (!gb->header.header_checksum_valid || gb->header.title[0] == '\0') {
+        return;
+    }
+
     file = fopen(gb->save_path, "rb");
     if (file == 0) {
         return; /* No save file yet — not an error */
@@ -585,6 +609,10 @@ void cupid_gb_save(CupidGb *gb)
     }
 
     if (!gb->header.has_battery || gb->cartridge_ram_size == 0u) {
+        return;
+    }
+
+    if (!gb->header.header_checksum_valid || gb->header.title[0] == '\0') {
         return;
     }
 

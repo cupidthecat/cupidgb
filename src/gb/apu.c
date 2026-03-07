@@ -47,8 +47,51 @@ static void cupid_gb_apu_clock_length(CupidGbApu *apu)
     }
 }
 
-static void cupid_gb_apu_clock_sweep(CupidGbApu *apu)
+static bool cupid_gb_apu_next_step_clocks_length(const CupidGbApu *apu)
 {
+    return (apu->fs_step & 1u) == 0u;
+}
+
+static void cupid_gb_apu_clock_length_once_u8(uint8_t *length, bool *channel_on)
+{
+    if (*length > 0u) {
+        *length = (uint8_t)(*length - 1u);
+        if (*length == 0u) {
+            *channel_on = false;
+        }
+    }
+}
+
+static void cupid_gb_apu_clock_length_once_u16(uint16_t *length, bool *channel_on)
+{
+    if (*length > 0u) {
+        *length = (uint16_t)(*length - 1u);
+        if (*length == 0u) {
+            *channel_on = false;
+        }
+    }
+}
+
+static uint16_t cupid_gb_apu_calc_sweep_freq(CupidGbApu *apu, bool *overflow)
+{
+    uint16_t delta = (uint16_t)(apu->ch1_sweep_shadow >> apu->ch1_sweep_shift);
+    uint16_t new_freq;
+
+    if (apu->ch1_sweep_neg) {
+        new_freq = (uint16_t)(apu->ch1_sweep_shadow - delta);
+        apu->ch1_sweep_subtracted = true;
+    } else {
+        new_freq = (uint16_t)(apu->ch1_sweep_shadow + delta);
+    }
+
+    *overflow = new_freq > 2047u;
+    return new_freq;
+}
+
+static void cupid_gb_apu_clock_sweep(CupidGb *gb)
+{
+    CupidGbApu *apu = &gb->apu;
+
     if (!apu->ch1_sweep_en) {
         return;
     }
@@ -59,22 +102,23 @@ static void cupid_gb_apu_clock_sweep(CupidGbApu *apu)
         uint8_t period = apu->ch1_sweep_period;
         apu->ch1_sweep_timer = (period != 0u) ? period : 8u;
         if (period != 0u) {
-            uint16_t delta = (uint16_t)(apu->ch1_freq >> apu->ch1_sweep_shift);
-            uint16_t new_freq;
-            if (apu->ch1_sweep_neg) {
-                new_freq = (uint16_t)(apu->ch1_freq - delta);
-            } else {
-                new_freq = (uint16_t)(apu->ch1_freq + delta);
-            }
-            if (new_freq > 2047u) {
+            bool overflow = false;
+            uint16_t new_freq = cupid_gb_apu_calc_sweep_freq(apu, &overflow);
+
+            if (overflow) {
                 apu->ch1_on = false;
             } else if (apu->ch1_sweep_shift != 0u) {
+                bool second_overflow = false;
+
+                apu->ch1_sweep_shadow = new_freq;
                 apu->ch1_freq = new_freq;
-                if (!apu->ch1_sweep_neg) {
-                    uint16_t delta2 = (uint16_t)(new_freq >> apu->ch1_sweep_shift);
-                    if ((uint32_t)new_freq + (uint32_t)delta2 > 2047u) {
-                        apu->ch1_on = false;
-                    }
+                gb->io_registers[0x13u] = (uint8_t)(new_freq & 0xffu);
+                gb->io_registers[0x14u] = (uint8_t)((gb->io_registers[0x14u] & 0xf8u)
+                                                    | ((new_freq >> 8u) & 0x07u));
+
+                (void)cupid_gb_apu_calc_sweep_freq(apu, &second_overflow);
+                if (second_overflow) {
+                    apu->ch1_on = false;
                 }
             }
         }
@@ -131,9 +175,6 @@ static void cupid_gb_apu_clock_fs(CupidGbApu *apu, uint8_t step)
 {
     if ((step & 1u) == 0u) {        /* steps 0, 2, 4, 6 */
         cupid_gb_apu_clock_length(apu);
-    }
-    if (step == 2u || step == 6u) {
-        cupid_gb_apu_clock_sweep(apu);
     }
     if (step == 7u) {
         cupid_gb_apu_clock_envelope(apu);
@@ -233,6 +274,8 @@ static void cupid_gb_apu_trigger_ch1(CupidGb *gb)
     apu->ch1_env_add    = (nr12 & 0x08u) != 0u;
     apu->ch1_env_period = (uint8_t)(nr12 & 0x07u);
     apu->ch1_env_timer  = (apu->ch1_env_period != 0u) ? apu->ch1_env_period : 8u;
+    apu->ch1_sweep_shadow = apu->ch1_freq;
+    apu->ch1_sweep_subtracted = false;
 
     apu->ch1_sweep_period = (uint8_t)((nr10 >> 4u) & 0x07u);
     apu->ch1_sweep_neg    = (nr10 & 0x08u) != 0u;
@@ -243,9 +286,11 @@ static void cupid_gb_apu_trigger_ch1(CupidGb *gb)
     if (apu->ch1_dac) { apu->ch1_on = true; }
 
     /* Trigger-time overflow check */
-    if (apu->ch1_sweep_shift != 0u && !apu->ch1_sweep_neg) {
-        uint16_t delta = (uint16_t)(apu->ch1_freq >> apu->ch1_sweep_shift);
-        if ((uint32_t)apu->ch1_freq + (uint32_t)delta > 2047u) {
+    if (apu->ch1_sweep_shift != 0u) {
+        bool overflow = false;
+
+        (void)cupid_gb_apu_calc_sweep_freq(apu, &overflow);
+        if (overflow) {
             apu->ch1_on = false;
         }
     }
@@ -276,16 +321,42 @@ static void cupid_gb_apu_trigger_ch3(CupidGb *gb)
     CupidGbApu *apu = &gb->apu;
     uint8_t nr33 = gb->io_registers[0x1du];
     uint8_t nr34 = gb->io_registers[0x1eu];
+    uint16_t period;
 
     apu->ch3_dac = (gb->io_registers[0x1au] & 0x80u) != 0u;
     if (apu->ch3_len == 0u) { apu->ch3_len = 256u; }
 
     apu->ch3_freq     = (uint16_t)(((uint16_t)(nr34 & 0x07u) << 8u) | (uint16_t)nr33);
-    apu->ch3_timer    = (uint16_t)((2048u - (uint32_t)apu->ch3_freq) * 2u);
-    if (apu->ch3_timer == 0u) { apu->ch3_timer = 2u; }
+    apu->ch3_active_freq = apu->ch3_freq;
+    period            = (uint16_t)((2048u - (uint32_t)apu->ch3_freq) * 2u);
+    if (period == 0u) { period = 2u; }
+    apu->ch3_timer    = (uint16_t)(period + 6u);
     apu->ch3_wave_pos = 0u;
+    apu->ch3_current_byte = 0u;
+    apu->ch3_started = false;
+    apu->ch3_wave_access_ticks = 0u;
+    apu->ch3_freq_pending = false;
 
     if (apu->ch3_dac) { apu->ch3_on = true; }
+}
+
+static void cupid_gb_apu_apply_dmg_ch3_retrigger_bug(CupidGb *gb)
+{
+    CupidGbApu *apu = &gb->apu;
+    uint8_t offset;
+
+    if (gb->cgb_mode || !apu->ch3_on || apu->ch3_timer > 2u) {
+        return;
+    }
+
+    offset = (uint8_t)(((apu->ch3_wave_pos + 1u) >> 1u) & 0x0fu);
+    if (offset < 4u) {
+        gb->io_registers[0x30u] = gb->io_registers[0x30u + offset];
+    } else {
+        memcpy(&gb->io_registers[0x30u],
+               &gb->io_registers[0x30u + (offset & (uint8_t)~0x03u)],
+               4u);
+    }
 }
 
 static void cupid_gb_apu_trigger_ch4(CupidGb *gb)
@@ -325,6 +396,20 @@ void cupid_gb_apu_on_write(CupidGb *gb, uint8_t off, uint8_t val)
 {
     CupidGbApu *apu = &gb->apu;
 
+    if (off >= 0x30u && off <= 0x3fu) {
+        if (apu->apu_on && apu->ch3_on) {
+            if (!gb->cgb_mode) {
+                if (apu->ch3_wave_access_ticks == 0u) {
+                    return;
+                }
+            }
+            gb->io_registers[0x30u + apu->ch3_current_byte] = val;
+        } else {
+            gb->io_registers[off] = val;
+        }
+        return;
+    }
+
     /* NR52 – APU power; always accessible */
     if (off == 0x26u) {
         bool was_on = apu->apu_on;
@@ -339,6 +424,50 @@ void cupid_gb_apu_on_write(CupidGb *gb, uint8_t off, uint8_t val)
             apu->ch2_on = false;
             apu->ch3_on = false;
             apu->ch4_on = false;
+            apu->ch1_dac = false;
+            apu->ch2_dac = false;
+            apu->ch3_dac = false;
+            apu->ch4_dac = false;
+            apu->ch1_len_en = false;
+            apu->ch2_len_en = false;
+            apu->ch3_len_en = false;
+            apu->ch4_len_en = false;
+            apu->ch1_sweep_en = false;
+            apu->ch1_sweep_timer = 0u;
+            apu->ch1_sweep_period = 0u;
+            apu->ch1_sweep_neg = false;
+            apu->ch1_sweep_shift = 0u;
+            apu->ch1_sweep_shadow = 0u;
+            apu->ch1_sweep_subtracted = false;
+            apu->ch1_env_period = 0u;
+            apu->ch1_env_timer = 0u;
+            apu->ch2_env_period = 0u;
+            apu->ch2_env_timer = 0u;
+            apu->ch4_env_period = 0u;
+            apu->ch4_env_timer = 0u;
+            apu->ch3_active_freq = 0u;
+            apu->ch3_current_byte = 0u;
+            apu->ch3_started = false;
+            apu->ch3_wave_access_ticks = 0u;
+            apu->ch3_freq_pending = false;
+            apu->ch3_sample = 0u;
+            apu->fs_counter = 8191u;
+            apu->fs_step = 0u;
+        } else if (!was_on && apu->apu_on) {
+            if (gb->cgb_mode) {
+                apu->ch1_len = 0u;
+                apu->ch2_len = 0u;
+                apu->ch3_len = 0u;
+                apu->ch4_len = 0u;
+            }
+            apu->ch3_active_freq = 0u;
+            apu->ch3_current_byte = 0u;
+            apu->ch3_started = false;
+            apu->ch3_wave_access_ticks = 0u;
+            apu->ch3_freq_pending = false;
+            apu->ch3_sample = 0u;
+            apu->fs_counter = 8191u;
+            apu->fs_step = 0u;
         }
         gb->io_registers[0x26u] = (uint8_t)(
             (apu->apu_on ? 0x80u : 0u) | 0x70u |
@@ -349,20 +478,41 @@ void cupid_gb_apu_on_write(CupidGb *gb, uint8_t off, uint8_t val)
         return;
     }
 
-    /* Writes to other NR registers ignored while APU is off (DMG) */
     if (!apu->apu_on) {
-        if (off != 0x11u && off != 0x16u && off != 0x1bu && off != 0x20u) {
-            return;
+        if (!gb->cgb_mode) {
+            if (off == 0x11u) {
+                apu->ch1_len = (uint8_t)(64u - (val & 0x3fu));
+            } else if (off == 0x16u) {
+                apu->ch2_len = (uint8_t)(64u - (val & 0x3fu));
+            } else if (off == 0x1bu) {
+                apu->ch3_len = (uint16_t)(256u - (uint16_t)val);
+            } else if (off == 0x20u) {
+                gb->io_registers[off] = val;
+                apu->ch4_len = (uint8_t)(64u - (val & 0x3fu));
+            }
+        } else if (off == 0x20u) {
+            gb->io_registers[off] = val;
+            apu->ch4_len = (uint8_t)(64u - (val & 0x3fu));
         }
+        return;
     }
+
+    gb->io_registers[off] = val;
 
     switch (off) {
     /* -- CH1 -- */
     case 0x10u: /* NR10 sweep */
+    {
+        bool old_neg = apu->ch1_sweep_neg;
+
         apu->ch1_sweep_period = (uint8_t)((val >> 4u) & 0x07u);
         apu->ch1_sweep_neg    = (val & 0x08u) != 0u;
         apu->ch1_sweep_shift  = (uint8_t)(val & 0x07u);
+        if (old_neg && !apu->ch1_sweep_neg && apu->ch1_sweep_subtracted) {
+            apu->ch1_on = false;
+        }
         break;
+    }
     case 0x11u: /* NR11 length/duty */
         apu->ch1_duty = (uint8_t)((val >> 6u) & 0x03u);
         apu->ch1_len  = (uint8_t)(64u - (val & 0x3fu));
@@ -375,10 +525,29 @@ void cupid_gb_apu_on_write(CupidGb *gb, uint8_t off, uint8_t val)
         apu->ch1_freq = (uint16_t)((apu->ch1_freq & 0x700u) | (uint16_t)val);
         break;
     case 0x14u: /* NR14 freq high + trigger */
+    {
+        bool old_len_en;
+        bool trigger;
+        bool length_reloaded;
+
         apu->ch1_freq   = (uint16_t)((apu->ch1_freq & 0x00ffu) | ((uint16_t)(val & 0x07u) << 8u));
+        old_len_en      = apu->ch1_len_en;
         apu->ch1_len_en = (val & 0x40u) != 0u;
-        if ((val & 0x80u) != 0u) { cupid_gb_apu_trigger_ch1(gb); }
+        trigger         = (val & 0x80u) != 0u;
+
+        if (!cupid_gb_apu_next_step_clocks_length(apu) && !old_len_en && apu->ch1_len_en) {
+            cupid_gb_apu_clock_length_once_u8(&apu->ch1_len, &apu->ch1_on);
+        }
+
+        length_reloaded = apu->ch1_len == 0u;
+        if (trigger) {
+            cupid_gb_apu_trigger_ch1(gb);
+            if (!cupid_gb_apu_next_step_clocks_length(apu) && apu->ch1_len_en && length_reloaded) {
+                cupid_gb_apu_clock_length_once_u8(&apu->ch1_len, &apu->ch1_on);
+            }
+        }
         break;
+    }
     /* -- CH2 -- */
     case 0x16u: /* NR21 */
         apu->ch2_duty = (uint8_t)((val >> 6u) & 0x03u);
@@ -392,10 +561,29 @@ void cupid_gb_apu_on_write(CupidGb *gb, uint8_t off, uint8_t val)
         apu->ch2_freq = (uint16_t)((apu->ch2_freq & 0x700u) | (uint16_t)val);
         break;
     case 0x19u: /* NR24 */
+    {
+        bool old_len_en;
+        bool trigger;
+        bool length_reloaded;
+
         apu->ch2_freq   = (uint16_t)((apu->ch2_freq & 0x00ffu) | ((uint16_t)(val & 0x07u) << 8u));
+        old_len_en      = apu->ch2_len_en;
         apu->ch2_len_en = (val & 0x40u) != 0u;
-        if ((val & 0x80u) != 0u) { cupid_gb_apu_trigger_ch2(gb); }
+        trigger         = (val & 0x80u) != 0u;
+
+        if (!cupid_gb_apu_next_step_clocks_length(apu) && !old_len_en && apu->ch2_len_en) {
+            cupid_gb_apu_clock_length_once_u8(&apu->ch2_len, &apu->ch2_on);
+        }
+
+        length_reloaded = apu->ch2_len == 0u;
+        if (trigger) {
+            cupid_gb_apu_trigger_ch2(gb);
+            if (!cupid_gb_apu_next_step_clocks_length(apu) && apu->ch2_len_en && length_reloaded) {
+                cupid_gb_apu_clock_length_once_u8(&apu->ch2_len, &apu->ch2_on);
+            }
+        }
         break;
+    }
     /* -- CH3 -- */
     case 0x1au: /* NR30 DAC power */
         apu->ch3_dac = (val & 0x80u) != 0u;
@@ -409,12 +597,51 @@ void cupid_gb_apu_on_write(CupidGb *gb, uint8_t off, uint8_t val)
         break;
     case 0x1du: /* NR33 */
         apu->ch3_freq = (uint16_t)((apu->ch3_freq & 0x700u) | (uint16_t)val);
+        if (apu->ch3_on) {
+            if (gb->cgb_mode) {
+                apu->ch3_freq_pending = true;
+            } else {
+                apu->ch3_active_freq = apu->ch3_freq;
+                apu->ch3_freq_pending = false;
+            }
+        } else {
+            apu->ch3_active_freq = apu->ch3_freq;
+        }
         break;
     case 0x1eu: /* NR34 */
+    {
+        bool old_len_en;
+        bool trigger;
+        bool length_reloaded;
+
         apu->ch3_freq   = (uint16_t)((apu->ch3_freq & 0x00ffu) | ((uint16_t)(val & 0x07u) << 8u));
+        old_len_en      = apu->ch3_len_en;
         apu->ch3_len_en = (val & 0x40u) != 0u;
-        if ((val & 0x80u) != 0u) { cupid_gb_apu_trigger_ch3(gb); }
+        trigger         = (val & 0x80u) != 0u;
+
+        if (!cupid_gb_apu_next_step_clocks_length(apu) && !old_len_en && apu->ch3_len_en) {
+            cupid_gb_apu_clock_length_once_u16(&apu->ch3_len, &apu->ch3_on);
+        }
+
+        length_reloaded = apu->ch3_len == 0u;
+        if (trigger) {
+            cupid_gb_apu_apply_dmg_ch3_retrigger_bug(gb);
+            cupid_gb_apu_trigger_ch3(gb);
+            if (!cupid_gb_apu_next_step_clocks_length(apu) && apu->ch3_len_en && length_reloaded) {
+                cupid_gb_apu_clock_length_once_u16(&apu->ch3_len, &apu->ch3_on);
+            }
+        } else if (apu->ch3_on) {
+            if (gb->cgb_mode) {
+                apu->ch3_freq_pending = true;
+            } else {
+                apu->ch3_active_freq = apu->ch3_freq;
+                apu->ch3_freq_pending = false;
+            }
+        } else {
+            apu->ch3_active_freq = apu->ch3_freq;
+        }
         break;
+    }
     /* -- CH4 -- */
     case 0x20u: /* NR41 */
         apu->ch4_len = (uint8_t)(64u - (val & 0x3fu));
@@ -429,9 +656,28 @@ void cupid_gb_apu_on_write(CupidGb *gb, uint8_t off, uint8_t val)
         apu->ch4_width7   = (val & 0x08u) != 0u;
         break;
     case 0x23u: /* NR44 */
+    {
+        bool old_len_en;
+        bool trigger;
+        bool length_reloaded;
+
+        old_len_en      = apu->ch4_len_en;
         apu->ch4_len_en = (val & 0x40u) != 0u;
-        if ((val & 0x80u) != 0u) { cupid_gb_apu_trigger_ch4(gb); }
+        trigger         = (val & 0x80u) != 0u;
+
+        if (!cupid_gb_apu_next_step_clocks_length(apu) && !old_len_en && apu->ch4_len_en) {
+            cupid_gb_apu_clock_length_once_u8(&apu->ch4_len, &apu->ch4_on);
+        }
+
+        length_reloaded = apu->ch4_len == 0u;
+        if (trigger) {
+            cupid_gb_apu_trigger_ch4(gb);
+            if (!cupid_gb_apu_next_step_clocks_length(apu) && apu->ch4_len_en && length_reloaded) {
+                cupid_gb_apu_clock_length_once_u8(&apu->ch4_len, &apu->ch4_on);
+            }
+        }
         break;
+    }
     default:
         break;
     }
@@ -445,6 +691,10 @@ void cupid_gb_tick_apu(CupidGb *gb, uint16_t cycles)
     uint16_t c;
 
     for (c = 0u; c < cycles; ++c) {
+        if (apu->ch3_wave_access_ticks > 0u) {
+            apu->ch3_wave_access_ticks = (uint8_t)(apu->ch3_wave_access_ticks - 1u);
+        }
+
         /* Frame sequencer: fires every 8192 T-cycles at 512 Hz */
         if (apu->fs_counter > 0u) {
             apu->fs_counter = (uint16_t)(apu->fs_counter - 1u);
@@ -452,6 +702,9 @@ void cupid_gb_tick_apu(CupidGb *gb, uint16_t cycles)
             apu->fs_counter = 8191u;
             if (apu->apu_on) {
                 cupid_gb_apu_clock_fs(apu, apu->fs_step);
+                if (apu->fs_step == 2u || apu->fs_step == 6u) {
+                    cupid_gb_apu_clock_sweep(gb);
+                }
             }
             apu->fs_step = (uint8_t)((apu->fs_step + 1u) & 7u);
         }
@@ -474,19 +727,36 @@ void cupid_gb_tick_apu(CupidGb *gb, uint16_t cycles)
             }
 
             /* CH3 wave timer */
-            if (apu->ch3_timer > 0u) {
-                apu->ch3_timer = (uint16_t)(apu->ch3_timer - 1u);
-            } else {
-                apu->ch3_timer = (uint16_t)((2048u - (uint32_t)apu->ch3_freq) * 2u);
-                if (apu->ch3_timer == 0u) { apu->ch3_timer = 2u; }
-                apu->ch3_wave_pos = (uint8_t)((apu->ch3_wave_pos + 1u) & 31u);
-                {
-                    uint8_t wbyte = gb->io_registers[0x30u + (apu->ch3_wave_pos >> 1u)];
-                    if ((apu->ch3_wave_pos & 1u) == 0u) {
-                        apu->ch3_sample = (uint8_t)((wbyte >> 4u) & 0x0fu);
+            if (apu->ch3_on) {
+                if (apu->ch3_timer > 0u) {
+                    apu->ch3_timer = (uint16_t)(apu->ch3_timer - 1u);
+                }
+                if (apu->ch3_timer == 0u) {
+                    uint16_t period;
+
+                    if (!apu->ch3_started) {
+                        apu->ch3_wave_pos = 1u;
+                        apu->ch3_started = true;
                     } else {
-                        apu->ch3_sample = (uint8_t)(wbyte & 0x0fu);
+                        apu->ch3_wave_pos = (uint8_t)((apu->ch3_wave_pos + 1u) & 31u);
                     }
+                    apu->ch3_current_byte = (uint8_t)(apu->ch3_wave_pos >> 1u);
+                    {
+                        uint8_t wbyte = gb->io_registers[0x30u + apu->ch3_current_byte];
+                        if ((apu->ch3_wave_pos & 1u) == 0u) {
+                            apu->ch3_sample = (uint8_t)((wbyte >> 4u) & 0x0fu);
+                        } else {
+                            apu->ch3_sample = (uint8_t)(wbyte & 0x0fu);
+                        }
+                    }
+                    apu->ch3_wave_access_ticks = 1u;
+                    if (apu->ch3_freq_pending) {
+                        apu->ch3_active_freq = apu->ch3_freq;
+                        apu->ch3_freq_pending = false;
+                    }
+                    period = (uint16_t)((2048u - (uint32_t)apu->ch3_active_freq) * 2u);
+                    if (period == 0u) { period = 2u; }
+                    apu->ch3_timer = period;
                 }
             }
 
