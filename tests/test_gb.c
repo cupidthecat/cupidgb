@@ -9,8 +9,10 @@
 
 #include "cupid/core/emulator.h"
 #include "cupid/gb/apu.h"
+#include "cupid/gb/cpu.h"
 #include "cupid/gb/gb.h"
 #include "cupid/gb/ppu.h"
+#include "cupid/gb/timer.h"
 
 static uint8_t compute_header_checksum(const uint8_t *rom)
 {
@@ -64,6 +66,34 @@ static void build_cgb_speed_rom(uint8_t *rom, size_t rom_size)
     build_test_rom(rom, rom_size);
     memcpy(&rom[0x0100], program, sizeof(program));
     rom[0x0143] = 0xc0u; /* CGB required */
+    rom[0x014d] = compute_header_checksum(rom);
+}
+
+static void build_ei_sequence_rom(uint8_t *rom, size_t rom_size)
+{
+    static const uint8_t program[] = {
+        0xf3u,                         /* DI */
+        0x3eu, 0x08u,                  /* LD A,$08 */
+        0xe0u, 0x0fu,                  /* LDH (IF),A */
+        0xeau, 0xffu, 0xffu,           /* LD ($FFFF),A */
+        0xafu,                         /* XOR A */
+        0xeau, 0x00u, 0xc0u,           /* LD ($C000),A */
+        0xeau, 0x01u, 0xc0u,           /* LD ($C001),A */
+        0xfbu,                         /* EI */
+        0xfbu,                         /* EI */
+        0x3eu, 0x01u,                  /* LD A,$01 ; must not execute */
+        0xeau, 0x00u, 0xc0u,           /* LD ($C000),A */
+        0x76u                          /* HALT */
+    };
+    static const uint8_t isr[] = {
+        0x3eu, 0x01u,                  /* LD A,$01 */
+        0xeau, 0x01u, 0xc0u,           /* LD ($C001),A */
+        0x76u                          /* HALT */
+    };
+
+    build_test_rom(rom, rom_size);
+    memcpy(&rom[0x0100], program, sizeof(program));
+    memcpy(&rom[0x0058], isr, sizeof(isr));
     rom[0x014d] = compute_header_checksum(rom);
 }
 
@@ -132,7 +162,7 @@ static void prepare_gb(CupidGb *gb, uint8_t *rom, uint8_t opcode0, uint8_t opcod
     gb->cpu.e = 0x20u;
     gb->cpu.h = 0xc0u;
     gb->cpu.l = 0x30u;
-    gb->cpu.sp = 0xff80u;
+    gb->cpu.sp = 0xff82u;
     gb->cpu.f = 0u;
     gb->cpu.halted = false;
     gb->cpu.stopped = false;
@@ -188,6 +218,79 @@ static void test_parse_mbc1_header(void)
     assert(header.ram_bank_count == 4u);
     assert(header.mbc_type == CUPID_GB_MBC1);
     assert(header.header_checksum_valid);
+}
+
+static void test_boot_model_profiles(void)
+{
+    uint8_t rom[32u * 1024u];
+    CupidGb gb = {0};
+
+    build_test_rom(rom, sizeof(rom));
+
+    cupid_gb_set_model(&gb, CUPID_GB_MODEL_DMG0);
+    cupid_gb_init(&gb);
+    assert(gb.model == CUPID_GB_MODEL_DMG0);
+    assert(gb.cpu.a == 0x01u);
+    assert(gb.cpu.f == 0x00u);
+    assert(gb.cpu.b == 0xffu);
+    assert(gb.cpu.c == 0x13u);
+    assert(gb.cpu.e == 0xc1u);
+    assert(gb.cpu.h == 0x84u);
+    assert(gb.cpu.l == 0x03u);
+    assert(gb.io_registers[0x04u] == 0x18u);
+    assert(gb.io_registers[CUPID_GB_IO_STAT] == 0x83u);
+    assert(gb.io_registers[CUPID_GB_IO_DMA] == 0x01u);
+    assert(gb.io_registers[CUPID_GB_IO_LY] == 0x91u);
+    assert(gb.div_counter == 11u);
+
+    assert(cupid_gb_load_rom(&gb, rom, sizeof(rom)));
+    assert(gb.model == CUPID_GB_MODEL_DMG0);
+    assert(gb.cpu.b == 0xffu);
+    assert(gb.io_registers[0x04u] == 0x18u);
+    assert(gb.io_registers[CUPID_GB_IO_STAT] == 0x83u);
+    assert(gb.io_registers[CUPID_GB_IO_LY] == 0x91u);
+    assert(gb.div_counter == 11u);
+
+    cupid_gb_set_model(&gb, CUPID_GB_MODEL_DMG_ABC);
+    cupid_gb_init(&gb);
+    assert(gb.model == CUPID_GB_MODEL_DMG_ABC);
+    assert(gb.cpu.a == 0x01u);
+    assert(gb.cpu.f == 0xb0u);
+    assert(gb.cpu.b == 0x00u);
+    assert(gb.cpu.c == 0x13u);
+    assert(gb.cpu.e == 0xd8u);
+    assert(gb.cpu.h == 0x01u);
+    assert(gb.cpu.l == 0x4du);
+    assert(gb.io_registers[0x04u] == 0xabu);
+    assert(gb.io_registers[CUPID_GB_IO_STAT] == 0x80u);
+    assert(gb.io_registers[CUPID_GB_IO_DMA] == 0x0au);
+    assert(gb.io_registers[CUPID_GB_IO_LY] == 0x00u);
+    assert(gb.div_counter == 50u);
+}
+
+static void test_boot_io_defaults(void)
+{
+    CupidGb gb = {0};
+
+    cupid_gb_set_model(&gb, CUPID_GB_MODEL_DMG0);
+    cupid_gb_init(&gb);
+    assert(cupid_gb_read_u8(&gb, 0xff02u) == 0x7eu);
+    assert(cupid_gb_read_u8(&gb, 0xff03u) == 0xffu);
+    assert(cupid_gb_read_u8(&gb, 0xff07u) == 0xf8u);
+    assert(cupid_gb_read_u8(&gb, 0xff08u) == 0xffu);
+    assert(cupid_gb_read_u8(&gb, 0xff41u) == 0x83u);
+    assert(cupid_gb_read_u8(&gb, 0xff44u) == 0x91u);
+    assert(cupid_gb_read_u8(&gb, 0xff46u) == 0x01u);
+    assert(cupid_gb_read_u8(&gb, 0xff50u) == 0xffu);
+
+    cupid_gb_set_model(&gb, CUPID_GB_MODEL_DMG_ABC);
+    cupid_gb_init(&gb);
+    assert(cupid_gb_read_u8(&gb, 0xff02u) == 0x7eu);
+    assert(cupid_gb_read_u8(&gb, 0xff07u) == 0xf8u);
+    assert(cupid_gb_read_u8(&gb, 0xff41u) == 0x80u);
+    assert(cupid_gb_read_u8(&gb, 0xff44u) == 0x00u);
+    assert(cupid_gb_read_u8(&gb, 0xff46u) == 0x0au);
+    assert(cupid_gb_read_u8(&gb, 0xff50u) == 0xffu);
 }
 
 static void test_load_rom_file(void)
@@ -372,14 +475,14 @@ static void test_call_and_ret(void)
     prepare_gb(&gb, rom, 0xcdu, 0x00u, 0x02u);
     assert(cupid_gb_step(&gb));
     assert(gb.cpu.pc == 0x0200u);
-    assert(gb.cpu.sp == 0xff7eu);
-    assert(cupid_gb_read_u8(&gb, 0xff7eu) == 0x03u);
-    assert(cupid_gb_read_u8(&gb, 0xff7fu) == 0x01u);
+    assert(gb.cpu.sp == 0xff80u);
+    assert(cupid_gb_read_u8(&gb, 0xff80u) == 0x03u);
+    assert(cupid_gb_read_u8(&gb, 0xff81u) == 0x01u);
 
     gb.rom[0x0200] = 0xc9u;
     assert(cupid_gb_step(&gb));
     assert(gb.cpu.pc == 0x0103u);
-    assert(gb.cpu.sp == 0xff80u);
+    assert(gb.cpu.sp == 0xff82u);
 }
 
 static void test_cb_bit_res_set(void)
@@ -557,6 +660,7 @@ static void test_cgb_double_speed_slows_timer_domain(void)
     uint8_t rom[32u * 1024u];
     CupidGb gb = {0};
     unsigned int index;
+    uint8_t div_before;
 
     build_cgb_speed_rom(rom, sizeof(rom));
     assert(cupid_gb_load_rom(&gb, rom, sizeof(rom)));
@@ -566,11 +670,97 @@ static void test_cgb_double_speed_slows_timer_domain(void)
     assert(cupid_gb_step(&gb));
     assert(gb.double_speed);
 
+    div_before = cupid_gb_read_u8(&gb, 0xff04u);
+
     for (index = 0u; index < CUPID_GB_SPEED_TEST_STEPS; ++index) {
         assert(cupid_gb_step(&gb));
     }
 
-    assert(cupid_gb_read_u8(&gb, 0xff04u) == 0x02u);
+    assert((uint8_t)(cupid_gb_read_u8(&gb, 0xff04u) - div_before) == 0x02u);
+}
+
+static void test_ei_sequence_enables_interrupts_after_next_instruction(void)
+{
+    uint8_t rom[32u * 1024u];
+    CupidGb gb = {0};
+    unsigned int steps;
+
+    build_ei_sequence_rom(rom, sizeof(rom));
+    assert(cupid_gb_load_rom(&gb, rom, sizeof(rom)));
+
+    for (steps = 0u; steps < 32u && !gb.cpu.halted; ++steps) {
+        assert(cupid_gb_step(&gb));
+    }
+
+    assert(gb.cpu.halted);
+    assert(cupid_gb_read_u8(&gb, 0xc000u) == 0x00u);
+    assert(cupid_gb_read_u8(&gb, 0xc001u) == 0x01u);
+}
+
+static void test_interrupt_ie_push_can_cancel_dispatch(void)
+{
+    uint8_t rom[32u * 1024u];
+    CupidGb gb = {0};
+
+    build_idle_rom(rom, sizeof(rom));
+    assert(cupid_gb_load_rom(&gb, rom, sizeof(rom)));
+
+    gb.cpu.pc = 0x0214u;
+    gb.cpu.sp = 0x0000u;
+    gb.cpu.ime = true;
+    gb.interrupt_enable = 0x04u;
+    gb.interrupt_flags = 0x04u;
+
+    assert(cupid_gb_service_interrupt(&gb));
+    assert(!gb.cpu.ime);
+    assert(gb.cpu.sp == 0xfffeu);
+    assert(gb.interrupt_enable == 0x02u);
+    assert((gb.interrupt_flags & 0x1fu) == 0x04u);
+    assert(gb.cpu.pc == 0x0000u);
+}
+
+static void test_interrupt_ie_push_can_reroute_dispatch(void)
+{
+    uint8_t rom[32u * 1024u];
+    CupidGb gb = {0};
+
+    build_idle_rom(rom, sizeof(rom));
+    assert(cupid_gb_load_rom(&gb, rom, sizeof(rom)));
+
+    gb.cpu.pc = 0x0253u;
+    gb.cpu.sp = 0x0000u;
+    gb.cpu.ime = true;
+    gb.interrupt_enable = 0x03u;
+    gb.interrupt_flags = 0x03u;
+
+    assert(cupid_gb_service_interrupt(&gb));
+    assert(!gb.cpu.ime);
+    assert(gb.cpu.sp == 0xfffeu);
+    assert(gb.interrupt_enable == 0x02u);
+    assert((gb.interrupt_flags & 0x1fu) == 0x01u);
+    assert(gb.cpu.pc == 0x0048u);
+}
+
+static void test_interrupt_ie_push_low_byte_is_too_late_to_cancel(void)
+{
+    uint8_t rom[32u * 1024u];
+    CupidGb gb = {0};
+
+    build_idle_rom(rom, sizeof(rom));
+    assert(cupid_gb_load_rom(&gb, rom, sizeof(rom)));
+
+    gb.cpu.pc = 0x0235u;
+    gb.cpu.sp = 0x0001u;
+    gb.cpu.ime = true;
+    gb.interrupt_enable = 0x08u;
+    gb.interrupt_flags = 0x08u;
+
+    assert(cupid_gb_service_interrupt(&gb));
+    assert(!gb.cpu.ime);
+    assert(gb.cpu.sp == 0xffffu);
+    assert(gb.interrupt_enable == 0x35u);
+    assert((gb.interrupt_flags & 0x1fu) == 0x00u);
+    assert(gb.cpu.pc == 0x0058u);
 }
 
 static void test_dmg_oam_bug_inc_de(void)
@@ -685,9 +875,8 @@ static void test_dmg_oam_bug_push_bc_fef0(void)
     for (index = 0u; index < 8u; ++index) {
         assert(gb.object_attribute_memory[32u + index] == original_row24[index]);
         assert(gb.object_attribute_memory[40u + index] == original_row24[index]);
-        assert(gb.object_attribute_memory[48u + index] == original_row24[index]);
         assert(gb.object_attribute_memory[32u + index] != original_row32[index]);
-        assert(gb.object_attribute_memory[48u + index] != original_row48[index]);
+        assert(gb.object_attribute_memory[48u + index] == original_row48[index]);
     }
 }
 
@@ -729,6 +918,66 @@ static void test_halt_bug_repeats_next_opcode_fetch(void)
     assert(gb.cpu.a == 0x3eu);
     assert(gb.cpu.pc == 0x010au);
     assert(!gb.cpu.halt_bug);
+}
+
+static void test_halt_services_interrupt_requested_during_halt_cycle(void)
+{
+    uint8_t rom[32u * 1024u];
+    CupidGb gb = {0};
+    uint16_t initial_sp;
+    uint16_t initial_pc;
+
+    build_test_rom(rom, sizeof(rom));
+    rom[0x0050] = 0x76u; /* HALT at timer vector */
+    rom[0x014d] = compute_header_checksum(rom);
+
+    assert(cupid_gb_load_rom(&gb, rom, sizeof(rom)));
+
+    gb.cpu.halted = true;
+    gb.cpu.ime = true;
+    gb.interrupt_enable = CUPID_GB_INTERRUPT_TIMER;
+    gb.interrupt_flags = 0u;
+    gb.tima_overflow_delay = 1u;
+
+    initial_sp = gb.cpu.sp;
+    initial_pc = gb.cpu.pc;
+
+    assert(cupid_gb_step(&gb));
+
+    assert(!gb.cpu.halted);
+    assert(!gb.cpu.ime);
+    assert(gb.cpu.pc == 0x0050u);
+    assert(gb.cpu.sp == (uint16_t)(initial_sp - 2u));
+    assert((gb.interrupt_flags & CUPID_GB_INTERRUPT_TIMER) == 0u);
+    assert(cupid_gb_read_u8(&gb, gb.cpu.sp) == (uint8_t)(initial_pc & 0xffu));
+    assert(cupid_gb_read_u8(&gb, (uint16_t)(gb.cpu.sp + 1u)) == (uint8_t)(initial_pc >> 8u));
+}
+
+static void test_halt_ime0_wakes_and_executes_without_extra_step(void)
+{
+    uint8_t rom[32u * 1024u];
+    CupidGb gb = {0};
+
+    build_test_rom(rom, sizeof(rom));
+    rom[0x0100] = 0x04u; /* INC B */
+    rom[0x0101] = 0x76u; /* HALT */
+    rom[0x014d] = compute_header_checksum(rom);
+
+    assert(cupid_gb_load_rom(&gb, rom, sizeof(rom)));
+
+    gb.cpu.halted = true;
+    gb.cpu.ime = false;
+    gb.cpu.b = 0x12u;
+    gb.interrupt_enable = CUPID_GB_INTERRUPT_TIMER;
+    gb.interrupt_flags = 0u;
+    gb.tima_overflow_delay = 1u;
+
+    assert(cupid_gb_step(&gb));
+
+    assert(!gb.cpu.halted);
+    assert(gb.cpu.b == 0x13u);
+    assert(gb.cpu.pc == 0x0101u);
+    assert((gb.interrupt_flags & CUPID_GB_INTERRUPT_TIMER) != 0u);
 }
 
 static void test_apu_register_read_masks(void)
@@ -1131,6 +1380,7 @@ static void test_ppu_scanline_progression(void)
     build_idle_rom(rom, sizeof(rom));
     assert(cupid_gb_load_rom(&gb, rom, sizeof(rom)));
 
+    cupid_gb_write_u8(&gb, 0xff40u, 0x00u);
     cupid_gb_write_u8(&gb, 0xff40u, 0x91u);
     /* After LCD enable, ppu_counter starts at 1, so the first scanline
        completes in 113 M-cycles. After 114 steps LY=1, still in OAM. */
@@ -1152,6 +1402,7 @@ static void test_ppu_vblank_interrupt(void)
     build_idle_rom(rom, sizeof(rom));
     assert(cupid_gb_load_rom(&gb, rom, sizeof(rom)));
 
+    cupid_gb_write_u8(&gb, 0xff40u, 0x00u);
     cupid_gb_write_u8(&gb, 0xff40u, 0x91u);
     step_gb(&gb, CUPID_GB_STEPS_PER_SCANLINE * CUPID_GB_VISIBLE_SCANLINES);
 
@@ -1169,12 +1420,103 @@ static void test_ppu_dma_transfer(void)
 
     build_idle_rom(rom, sizeof(rom));
     assert(cupid_gb_load_rom(&gb, rom, sizeof(rom)));
+    cupid_gb_write_u8(&gb, 0xff40u, 0x00u);
 
     for (index = 0u; index < 0xa0u; ++index) {
         cupid_gb_write_u8(&gb, (uint16_t)(0xc000u + index), (uint8_t)(index ^ 0x5au));
     }
 
     cupid_gb_write_u8(&gb, 0xff46u, 0xc0u);
+
+    cupid_gb_tick(&gb, 1u);
+    assert(!gb.dma_active);
+    assert(gb.dma_start_delay == 1u);
+
+    cupid_gb_tick(&gb, 1u);
+    assert(gb.dma_active);
+    assert(gb.dma_start_delay == 0u);
+    assert(cupid_gb_read_u8(&gb, 0xfe00u) == 0xffu);
+
+    cupid_gb_tick(&gb, 160u);
+    assert(!gb.dma_active);
+
+    cupid_gb_write_u8(&gb, 0xff40u, 0x00u);
+
+    for (index = 0u; index < 0xa0u; ++index) {
+        assert(cupid_gb_read_u8(&gb, (uint16_t)(0xfe00u + index)) == (uint8_t)(index ^ 0x5au));
+    }
+}
+
+static void test_ppu_dma_restart_extends_blocking_until_restart_completes(void)
+{
+    uint8_t rom[32u * 1024u];
+    CupidGb gb = {0};
+
+    build_idle_rom(rom, sizeof(rom));
+    assert(cupid_gb_load_rom(&gb, rom, sizeof(rom)));
+    cupid_gb_write_u8(&gb, 0xff40u, 0x00u);
+
+    cupid_gb_write_u8(&gb, 0x8000u, 0x01u);
+    cupid_gb_write_u8(&gb, 0xff46u, 0x80u);
+
+    cupid_gb_tick(&gb, 8u);
+    cupid_gb_write_u8(&gb, 0xff46u, 0x80u);
+
+    cupid_gb_tick(&gb, 160u);
+    assert(gb.dma_active || gb.dma_start_delay > 0u);
+    assert(cupid_gb_read_u8(&gb, 0xfe00u) == 0xffu);
+
+    cupid_gb_tick(&gb, 1u);
+    assert(gb.dma_active || gb.dma_start_delay > 0u);
+    assert(cupid_gb_read_u8(&gb, 0xfe00u) == 0xffu);
+
+    cupid_gb_tick(&gb, 1u);
+    assert(!gb.dma_active);
+    assert(gb.dma_start_delay == 0u);
+    cupid_gb_write_u8(&gb, 0xff40u, 0x00u);
+    assert(cupid_gb_read_u8(&gb, 0xfe00u) == 0x01u);
+}
+
+static void test_ppu_dma_fe00_source_uses_wram_echo(void)
+{
+    uint8_t rom[32u * 1024u];
+    CupidGb gb = {0};
+    size_t index;
+
+    build_idle_rom(rom, sizeof(rom));
+    assert(cupid_gb_load_rom(&gb, rom, sizeof(rom)));
+    cupid_gb_write_u8(&gb, 0xff40u, 0x00u);
+
+    for (index = 0u; index < 0xa0u; ++index) {
+        cupid_gb_write_u8(&gb, (uint16_t)(0xde00u + index), (uint8_t)(index ^ 0x96u));
+        cupid_gb_write_u8(&gb, (uint16_t)(0xfe00u + index), 0x00u);
+    }
+
+    cupid_gb_write_u8(&gb, 0xff46u, 0xfeu);
+    cupid_gb_tick(&gb, 162u);
+
+    for (index = 0u; index < 0xa0u; ++index) {
+        assert(cupid_gb_read_u8(&gb, (uint16_t)(0xfe00u + index)) == (uint8_t)(index ^ 0x96u));
+    }
+}
+
+static void test_ppu_dma_ff00_source_uses_wram_echo(void)
+{
+    uint8_t rom[32u * 1024u];
+    CupidGb gb = {0};
+    size_t index;
+
+    build_idle_rom(rom, sizeof(rom));
+    assert(cupid_gb_load_rom(&gb, rom, sizeof(rom)));
+    cupid_gb_write_u8(&gb, 0xff40u, 0x00u);
+
+    for (index = 0u; index < 0xa0u; ++index) {
+        cupid_gb_write_u8(&gb, (uint16_t)(0xdf00u + index), (uint8_t)(index ^ 0x5au));
+        cupid_gb_write_u8(&gb, (uint16_t)(0xfe00u + index), 0x00u);
+    }
+
+    cupid_gb_write_u8(&gb, 0xff46u, 0xffu);
+    cupid_gb_tick(&gb, 162u);
 
     for (index = 0u; index < 0xa0u; ++index) {
         assert(cupid_gb_read_u8(&gb, (uint16_t)(0xfe00u + index)) == (uint8_t)(index ^ 0x5au));
@@ -1192,6 +1534,7 @@ static void test_ppu_background_render(void)
     build_idle_rom(rom, sizeof(rom));
     assert(cupid_gb_load_rom(&gb, rom, sizeof(rom)));
 
+    cupid_gb_write_u8(&gb, 0xff40u, 0x00u);
     cupid_gb_write_u8(&gb, 0xff47u, 0xe4u);
     cupid_gb_write_u8(&gb, 0x8000u, 0x55u);
     cupid_gb_write_u8(&gb, 0x8001u, 0x33u);
@@ -1209,10 +1552,72 @@ static void test_ppu_background_render(void)
     }
 }
 
+static void test_ppu_mode3_length_depends_on_scx(void)
+{
+    uint8_t rom[32u * 1024u];
+    CupidGb gb = {0};
+
+    build_idle_rom(rom, sizeof(rom));
+    assert(cupid_gb_load_rom(&gb, rom, sizeof(rom)));
+
+    gb.io_registers[CUPID_GB_IO_LCDC] = 0x91u;
+    gb.io_registers[CUPID_GB_IO_LY] = 1u;
+
+    gb.io_registers[CUPID_GB_IO_SCX] = 0u;
+    gb.ppu_counter = CUPID_GB_PPU_OAM_CYCLES;
+    cupid_gb_set_ppu_mode(&gb, CUPID_GB_PPU_MODE_TRANSFER);
+    cupid_gb_tick_ppu(&gb, CUPID_GB_PPU_TRANSFER_CYCLES);
+    assert((cupid_gb_read_u8(&gb, 0xff41u) & 0x03u) == CUPID_GB_PPU_MODE_TRANSFER);
+    cupid_gb_tick_ppu(&gb, 1u);
+    assert((cupid_gb_read_u8(&gb, 0xff41u) & 0x03u) == CUPID_GB_PPU_MODE_HBLANK);
+
+    gb.io_registers[CUPID_GB_IO_LY] = 1u;
+    gb.io_registers[CUPID_GB_IO_SCX] = 1u;
+    gb.ppu_counter = CUPID_GB_PPU_OAM_CYCLES;
+    cupid_gb_set_ppu_mode(&gb, CUPID_GB_PPU_MODE_TRANSFER);
+    cupid_gb_tick_ppu(&gb, CUPID_GB_PPU_TRANSFER_CYCLES);
+    assert((cupid_gb_read_u8(&gb, 0xff41u) & 0x03u) == CUPID_GB_PPU_MODE_TRANSFER);
+    cupid_gb_tick_ppu(&gb, 1u);
+    assert((cupid_gb_read_u8(&gb, 0xff41u) & 0x03u) == CUPID_GB_PPU_MODE_HBLANK);
+
+    gb.io_registers[CUPID_GB_IO_LY] = 1u;
+    gb.io_registers[CUPID_GB_IO_SCX] = 5u;
+    gb.ppu_counter = CUPID_GB_PPU_OAM_CYCLES;
+    cupid_gb_set_ppu_mode(&gb, CUPID_GB_PPU_MODE_TRANSFER);
+    cupid_gb_tick_ppu(&gb, CUPID_GB_PPU_TRANSFER_CYCLES + 1u);
+    assert((cupid_gb_read_u8(&gb, 0xff41u) & 0x03u) == CUPID_GB_PPU_MODE_TRANSFER);
+    cupid_gb_tick_ppu(&gb, 1u);
+    assert((cupid_gb_read_u8(&gb, 0xff41u) & 0x03u) == CUPID_GB_PPU_MODE_HBLANK);
+}
+
+static void test_ppu_dmg_last_vblank_line_is_shorter(void)
+{
+    uint8_t rom[32u * 1024u];
+    CupidGb gb = {0};
+
+    build_idle_rom(rom, sizeof(rom));
+    assert(cupid_gb_load_rom(&gb, rom, sizeof(rom)));
+
+    gb.cgb_mode = false;
+    gb.io_registers[CUPID_GB_IO_LCDC] = 0x91u;
+    gb.io_registers[CUPID_GB_IO_LY] = 153u;
+    gb.ppu_counter = (uint16_t)(CUPID_GB_PPU_SCANLINE_CYCLES - 3u);
+    cupid_gb_set_ppu_mode(&gb, CUPID_GB_PPU_MODE_VBLANK);
+
+    cupid_gb_tick_ppu(&gb, 1u);
+    assert(cupid_gb_read_u8(&gb, 0xff44u) == 153u);
+
+    cupid_gb_tick_ppu(&gb, 1u);
+    assert(cupid_gb_read_u8(&gb, 0xff44u) == 0u);
+    assert((cupid_gb_read_u8(&gb, 0xff41u) & 0x03u) == CUPID_GB_PPU_MODE_OAM);
+}
+
 int main(void)
 {
     test_parse_header();
     test_parse_mbc1_header();
+    test_boot_model_profiles();
+    test_boot_io_defaults();
     test_load_rom_file();
     test_battery_save_loads_for_valid_rom();
     test_battery_save_ignored_for_invalid_untitled_rom();
@@ -1230,11 +1635,18 @@ int main(void)
     test_ppu_scanline_progression();
     test_ppu_vblank_interrupt();
     test_ppu_dma_transfer();
+    test_ppu_dma_restart_extends_blocking_until_restart_completes();
+    test_ppu_dma_fe00_source_uses_wram_echo();
+    test_ppu_dma_ff00_source_uses_wram_echo();
     test_ppu_background_render();
+    test_ppu_mode3_length_depends_on_scx();
+    test_ppu_dmg_last_vblank_line_is_shorter();
     test_dmg_oam_bug_inc_de();
     test_dmg_oam_bug_pop_bc_fdff();
     test_dmg_oam_bug_push_bc_fef0();
     test_halt_bug_repeats_next_opcode_fetch();
+    test_halt_services_interrupt_requested_during_halt_cycle();
+    test_halt_ime0_wakes_and_executes_without_extra_step();
     test_apu_register_read_masks();
     test_apu_writes_ignored_while_off();
     test_apu_dmg_length_load_writes_work_while_off();
@@ -1249,5 +1661,9 @@ int main(void)
     test_dual_mode_rom_stays_dmg();
     test_cgb_speed_switch();
     test_cgb_double_speed_slows_timer_domain();
+    test_ei_sequence_enables_interrupts_after_next_instruction();
+    test_interrupt_ie_push_can_cancel_dispatch();
+    test_interrupt_ie_push_can_reroute_dispatch();
+    test_interrupt_ie_push_low_byte_is_too_late_to_cancel();
     return 0;
 }

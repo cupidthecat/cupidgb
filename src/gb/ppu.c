@@ -34,6 +34,147 @@ static uint8_t cupid_gb_palette_lookup(uint8_t palette, uint8_t color_index)
     return (uint8_t)((palette >> (color_index * 2u)) & 0x03u);
 }
 
+static int cupid_gb_floor_div8(int value)
+{
+    if (value >= 0) {
+        return value / 8;
+    }
+
+    return -(((-value) + 7) / 8);
+}
+
+static uint16_t cupid_gb_sprite_penalty_cycles(const CupidGb *gb)
+{
+    struct SpriteCandidate {
+        uint8_t x;
+    } sprites[10];
+    int considered_buckets[10];
+    int bucket_waits[10];
+    uint8_t count;
+    uint8_t i;
+    uint8_t ly;
+    uint8_t lcdc;
+    uint8_t scx;
+    int obj_height;
+    uint8_t active_buckets;
+    uint8_t contributing_sprites;
+    uint16_t penalty_dots;
+
+    if (gb == 0) {
+        return 0u;
+    }
+
+    lcdc = gb->io_registers[CUPID_GB_IO_LCDC];
+    if ((lcdc & 0x02u) == 0u) {
+        return 0u;
+    }
+
+    ly = gb->io_registers[CUPID_GB_IO_LY];
+    if (ly >= CUPID_GB_PPU_VISIBLE_SCANLINES) {
+        return 0u;
+    }
+
+    scx = gb->io_registers[CUPID_GB_IO_SCX];
+    obj_height = ((lcdc & 0x04u) != 0u) ? 16 : 8;
+    count = 0u;
+
+    for (i = 0u; i < 40u && count < 10u; ++i) {
+        int obj_y = (int)gb->object_attribute_memory[i * 4u] - 16;
+
+        if ((int)ly < obj_y || (int)ly >= obj_y + obj_height) {
+            continue;
+        }
+
+        sprites[count].x = gb->object_attribute_memory[i * 4u + 1u];
+        ++count;
+    }
+
+    penalty_dots = 0u;
+    active_buckets = 0u;
+    contributing_sprites = 0u;
+    for (i = 0u; i < count; ++i) {
+        int x;
+        int bucket_id;
+        int wait_dots;
+        bool bucket_seen;
+        uint8_t j;
+
+        x = (int)sprites[i].x;
+        ++contributing_sprites;
+        if (x >= (int)(CUPID_GB_SCREEN_WIDTH + 8u)) {
+            continue;
+        }
+
+        penalty_dots = (uint16_t)(penalty_dots + 6u);
+
+        bucket_id = cupid_gb_floor_div8(x + (int)scx);
+        wait_dots = 5 - ((x + (int)scx) & 7);
+        if (wait_dots < 0) {
+            wait_dots = 0;
+        }
+
+        bucket_seen = false;
+        for (j = 0u; j < active_buckets; ++j) {
+            if (considered_buckets[j] == bucket_id) {
+                if (bucket_waits[j] < wait_dots) {
+                    bucket_waits[j] = wait_dots;
+                }
+                bucket_seen = true;
+                break;
+            }
+        }
+
+        if (!bucket_seen && active_buckets < 10u) {
+            considered_buckets[active_buckets] = bucket_id;
+            bucket_waits[active_buckets] = wait_dots;
+            ++active_buckets;
+        }
+    }
+
+    for (i = 0u; i < active_buckets; ++i) {
+        penalty_dots = (uint16_t)(penalty_dots + (uint16_t)bucket_waits[i]);
+    }
+
+    if (contributing_sprites > 0u) {
+        return (uint16_t)((penalty_dots / 4u) + 1u);
+    }
+
+    return 0u;
+}
+
+static uint16_t cupid_gb_visible_transfer_cycles(const CupidGb *gb)
+{
+    uint8_t scx_mod;
+    uint16_t cycles;
+
+    if (gb == 0) {
+        return CUPID_GB_PPU_TRANSFER_CYCLES;
+    }
+
+    scx_mod = (uint8_t)(gb->io_registers[CUPID_GB_IO_SCX] & 0x07u);
+    cycles = CUPID_GB_PPU_TRANSFER_CYCLES;
+    if (scx_mod <= 4u) {
+        cycles = CUPID_GB_PPU_TRANSFER_CYCLES;
+    } else {
+        cycles = (uint16_t)(CUPID_GB_PPU_TRANSFER_CYCLES + 1u);
+    }
+
+    return (uint16_t)(cycles + cupid_gb_sprite_penalty_cycles(gb));
+}
+
+static uint16_t cupid_gb_scanline_cycles(const CupidGb *gb, uint8_t ly)
+{
+    if (gb != 0 && gb->ppu_lcd_startup && ly == 0u) {
+        return 111u;
+    }
+
+    if (gb != 0 && !gb->cgb_mode && ly == (uint8_t)(CUPID_GB_PPU_TOTAL_SCANLINES - 1u)) {
+        return (uint16_t)(CUPID_GB_PPU_SCANLINE_CYCLES - 1u);
+    }
+
+    return CUPID_GB_PPU_SCANLINE_CYCLES;
+}
+
 /* ---------- scanline renderer ---------- */
 
 static void cupid_gb_render_scanline(CupidGb *gb)
@@ -173,9 +314,9 @@ static void cupid_gb_render_scanline(CupidGb *gb)
                 }
             }
 
-            palette = ((attrs & 0x10u) != 0u)
-                          ? gb->io_registers[CUPID_GB_IO_OBP1]
-                          : gb->io_registers[CUPID_GB_IO_OBP0];
+                        palette = ((attrs & 0x10u) != 0u)
+                                                    ? gb->io_registers[CUPID_GB_IO_OBP1]
+                                                    : gb->io_registers[CUPID_GB_IO_OBP0];
             tile_addr = (size_t)tile_idx * 16u + (size_t)(tile_row * 2);
             olow = gb->video_ram[tile_addr & 0x1fffu];
             ohigh = gb->video_ram[(tile_addr + 1u) & 0x1fffu];
@@ -231,7 +372,26 @@ void cupid_gb_update_stat_irq(CupidGb *gb)
     }
 
     stat = gb->io_registers[CUPID_GB_IO_STAT];
-    coincidence = gb->io_registers[CUPID_GB_IO_LY] == gb->io_registers[CUPID_GB_IO_LYC];
+
+    if (!cupid_gb_lcd_enabled(gb)) {
+        coincidence = (stat & 0x04u) != 0u;
+        stat = (uint8_t)((stat & (uint8_t)~0x03u) | CUPID_GB_PPU_MODE_HBLANK);
+        gb->io_registers[CUPID_GB_IO_STAT] = stat;
+        irq_signal = coincidence && (stat & 0x40u) != 0u;
+
+        if (irq_signal && !gb->stat_irq_line) {
+            gb->stat_irq_delay = 0u;
+            cupid_gb_request_interrupt(gb, CUPID_GB_INTERRUPT_LCD_STAT);
+        } else if (!irq_signal) {
+            gb->stat_irq_delay = 0u;
+        }
+
+        gb->stat_irq_line = irq_signal;
+        return;
+    }
+
+    coincidence = !gb->ppu_line_boundary_hold &&
+                  gb->io_registers[CUPID_GB_IO_LY] == gb->io_registers[CUPID_GB_IO_LYC];
     if (coincidence) {
         stat = (uint8_t)(stat | 0x04u);
     } else {
@@ -246,7 +406,14 @@ void cupid_gb_update_stat_irq(CupidGb *gb)
                  (mode == CUPID_GB_PPU_MODE_OAM && (stat & 0x20u) != 0u);
 
     if (irq_signal && !gb->stat_irq_line) {
-        cupid_gb_request_interrupt(gb, CUPID_GB_INTERRUPT_LCD_STAT);
+        if (mode == CUPID_GB_PPU_MODE_HBLANK && !gb->cpu.halted) {
+            gb->stat_irq_delay = 0u;
+            cupid_gb_request_interrupt(gb, CUPID_GB_INTERRUPT_LCD_STAT);
+        } else {
+            gb->stat_irq_delay = 1u;
+        }
+    } else if (!irq_signal) {
+        gb->stat_irq_delay = 0u;
     }
 
     gb->stat_irq_line = irq_signal;
@@ -260,27 +427,81 @@ void cupid_gb_reset_ppu(CupidGb *gb)
         return;
     }
 
-    gb->ppu_counter = 1u; /* hardware starts 1 M-cycle into scanline 0 on LCD enable */
+    gb->ppu_counter = 0u;
     gb->frame_ready = false;
-    gb->stat_irq_line = false;
+    gb->ppu_lcd_warmup_lines = 2u;
+    gb->ppu_lcd_startup = true;
+    gb->ppu_line_boundary_hold = false;
     gb->window_line_counter = 0u;
     gb->io_registers[CUPID_GB_IO_LY] = 0u;
-    cupid_gb_set_ppu_mode(gb, CUPID_GB_PPU_MODE_OAM);
+    cupid_gb_set_ppu_mode(gb, CUPID_GB_PPU_MODE_HBLANK);
     cupid_gb_update_stat_irq(gb);
 }
 
 void cupid_gb_run_dma_transfer(CupidGb *gb, uint8_t source_high)
 {
     uint16_t source_base;
-    size_t index;
 
     if (gb == 0) {
         return;
     }
 
+    if (source_high >= 0xe0u) {
+        source_high = (uint8_t)(source_high - 0x20u);
+    }
+
     source_base = (uint16_t)((uint16_t)source_high << 8u);
-    for (index = 0u; index < sizeof(gb->object_attribute_memory); ++index) {
-        gb->object_attribute_memory[index] = cupid_gb_read_u8(gb, (uint16_t)(source_base + index));
+
+    if (gb->dma_active) {
+        gb->dma_restart_source_base = source_base;
+        gb->dma_restart_delay = 2u;
+        gb->dma_restart_pending = true;
+        return;
+    }
+
+    gb->dma_source_base = source_base;
+    gb->dma_index = 0u;
+    gb->dma_start_delay = 2u;
+    gb->dma_restart_delay = 0u;
+    gb->dma_restart_pending = false;
+    gb->dma_active = false;
+}
+
+void cupid_gb_tick_dma(CupidGb *gb)
+{
+    if (gb == 0) {
+        return;
+    }
+
+    if (gb->dma_restart_pending && gb->dma_restart_delay > 0u) {
+        gb->dma_restart_delay = (uint8_t)(gb->dma_restart_delay - 1u);
+        if (gb->dma_restart_delay == 0u) {
+            gb->dma_source_base = gb->dma_restart_source_base;
+            gb->dma_index = 0u;
+            gb->dma_restart_pending = false;
+            return;
+        }
+    } else if (gb->dma_start_delay > 0u) {
+        gb->dma_start_delay = (uint8_t)(gb->dma_start_delay - 1u);
+        if (gb->dma_start_delay == 0u) {
+            gb->dma_active = true;
+        } else {
+            return;
+        }
+    }
+
+    if (!gb->dma_active) {
+        return;
+    }
+
+    if (gb->dma_index < sizeof(gb->object_attribute_memory)) {
+        gb->object_attribute_memory[gb->dma_index] =
+            cupid_gb_read_u8(gb, (uint16_t)(gb->dma_source_base + gb->dma_index));
+        gb->dma_index = (uint8_t)(gb->dma_index + 1u);
+    }
+
+    if (gb->dma_index >= sizeof(gb->object_attribute_memory)) {
+        gb->dma_active = false;
     }
 }
 
@@ -295,6 +516,9 @@ void cupid_gb_tick_ppu(CupidGb *gb, uint16_t cycles)
     if (!cupid_gb_lcd_enabled(gb)) {
         gb->ppu_counter = 0u;
         gb->frame_ready = false;
+        gb->ppu_lcd_warmup_lines = 0u;
+        gb->ppu_lcd_startup = false;
+        gb->ppu_line_boundary_hold = false;
         gb->window_line_counter = 0u;
         gb->io_registers[CUPID_GB_IO_LY] = 0u;
         cupid_gb_set_ppu_mode(gb, CUPID_GB_PPU_MODE_HBLANK);
@@ -305,16 +529,62 @@ void cupid_gb_tick_ppu(CupidGb *gb, uint16_t cycles)
     while (cycles > 0u) {
         uint8_t ly;
         uint16_t line_cycle;
+        uint16_t scanline_cycles;
+        uint16_t transfer_cycles;
+        uint8_t stat;
         uint8_t next_mode;
+
+        if (gb->ppu_line_boundary_hold) {
+            gb->ppu_line_boundary_hold = false;
+            cupid_gb_update_stat_irq(gb);
+        }
 
         ly = gb->io_registers[CUPID_GB_IO_LY];
         line_cycle = gb->ppu_counter;
+        scanline_cycles = cupid_gb_scanline_cycles(gb, ly);
+        transfer_cycles = cupid_gb_visible_transfer_cycles(gb);
+        stat = gb->io_registers[CUPID_GB_IO_STAT];
 
-        if (ly >= CUPID_GB_PPU_VISIBLE_SCANLINES) {
+        if (!gb->cpu.halted &&
+            (gb->io_registers[CUPID_GB_IO_LCDC] & 0x02u) == 0u &&
+            ly < CUPID_GB_PPU_VISIBLE_SCANLINES &&
+            cupid_gb_ppu_mode(gb) == CUPID_GB_PPU_MODE_TRANSFER &&
+            line_cycle + 1u == (uint16_t)(CUPID_GB_PPU_OAM_CYCLES + transfer_cycles) &&
+            (stat & 0x08u) != 0u &&
+            !gb->stat_irq_line) {
+            cupid_gb_request_interrupt(gb, CUPID_GB_INTERRUPT_LCD_STAT);
+            gb->stat_irq_delay = 0u;
+            gb->stat_irq_line = true;
+        }
+
+        if (gb->stat_irq_delay > 0u) {
+            gb->stat_irq_delay = (uint8_t)(gb->stat_irq_delay - 1u);
+            if (gb->stat_irq_delay == 0u && gb->stat_irq_line) {
+                cupid_gb_request_interrupt(gb, CUPID_GB_INTERRUPT_LCD_STAT);
+            }
+        }
+
+        if (ly == (uint8_t)(CUPID_GB_PPU_VISIBLE_SCANLINES - 1u) &&
+            line_cycle + 1u == scanline_cycles) {
+            cupid_gb_request_interrupt(gb, CUPID_GB_INTERRUPT_VBLANK);
+            if (!gb->cgb_mode && (gb->io_registers[CUPID_GB_IO_STAT] & 0x20u) != 0u) {
+                cupid_gb_request_interrupt(gb, CUPID_GB_INTERRUPT_LCD_STAT);
+            }
+        }
+
+        if (gb->ppu_lcd_startup && ly == 0u) {
+            if (line_cycle < 17u) {
+                next_mode = CUPID_GB_PPU_MODE_HBLANK;
+            } else if (line_cycle < (uint16_t)(17u + transfer_cycles)) {
+                next_mode = CUPID_GB_PPU_MODE_TRANSFER;
+            } else {
+                next_mode = CUPID_GB_PPU_MODE_HBLANK;
+            }
+        } else if (ly >= CUPID_GB_PPU_VISIBLE_SCANLINES) {
             next_mode = CUPID_GB_PPU_MODE_VBLANK;
         } else if (line_cycle < CUPID_GB_PPU_OAM_CYCLES) {
             next_mode = CUPID_GB_PPU_MODE_OAM;
-        } else if (line_cycle < CUPID_GB_PPU_OAM_CYCLES + CUPID_GB_PPU_TRANSFER_CYCLES) {
+        } else if (line_cycle < CUPID_GB_PPU_OAM_CYCLES + transfer_cycles) {
             next_mode = CUPID_GB_PPU_MODE_TRANSFER;
         } else {
             next_mode = CUPID_GB_PPU_MODE_HBLANK;
@@ -331,8 +601,8 @@ void cupid_gb_tick_ppu(CupidGb *gb, uint16_t cycles)
         gb->ppu_counter = (uint16_t)(gb->ppu_counter + 1u);
         --cycles;
 
-        if (gb->ppu_counter >= CUPID_GB_PPU_SCANLINE_CYCLES) {
-            gb->ppu_counter = (uint16_t)(gb->ppu_counter - CUPID_GB_PPU_SCANLINE_CYCLES);
+        if (gb->ppu_counter >= scanline_cycles) {
+            gb->ppu_counter = (uint16_t)(gb->ppu_counter - scanline_cycles);
             ly = (uint8_t)(gb->io_registers[CUPID_GB_IO_LY] + 1u);
 
             if (ly >= CUPID_GB_PPU_TOTAL_SCANLINES) {
@@ -341,17 +611,23 @@ void cupid_gb_tick_ppu(CupidGb *gb, uint16_t cycles)
 
             if (ly == CUPID_GB_PPU_VISIBLE_SCANLINES) {
                 gb->frame_ready = true;
-                cupid_gb_request_interrupt(gb, CUPID_GB_INTERRUPT_VBLANK);
+                gb->ppu_line_boundary_hold = false;
                 cupid_gb_set_ppu_mode(gb, CUPID_GB_PPU_MODE_VBLANK);
             } else if (ly >= CUPID_GB_PPU_TOTAL_SCANLINES) {
                 ly = 0u;
                 gb->frame_ready = false;
+                gb->ppu_line_boundary_hold = false;
                 cupid_gb_set_ppu_mode(gb, CUPID_GB_PPU_MODE_OAM);
-            } else if (ly < CUPID_GB_PPU_VISIBLE_SCANLINES) {
-                cupid_gb_set_ppu_mode(gb, CUPID_GB_PPU_MODE_OAM);
+            } else if (gb->ppu_lcd_warmup_lines > 0u) {
+                gb->ppu_line_boundary_hold = true;
+                gb->ppu_lcd_warmup_lines = (uint8_t)(gb->ppu_lcd_warmup_lines - 1u);
+                cupid_gb_set_ppu_mode(gb, CUPID_GB_PPU_MODE_HBLANK);
             }
 
             gb->io_registers[CUPID_GB_IO_LY] = ly;
+            if (ly != 0u) {
+                gb->ppu_lcd_startup = false;
+            }
             cupid_gb_update_stat_irq(gb);
         }
     }
