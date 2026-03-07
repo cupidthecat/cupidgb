@@ -14,12 +14,15 @@ typedef struct CupidSdlAppConfig {
 typedef struct CupidSdlApp {
     void *window;
     void *renderer;
+    void *texture;    /* SDL_Texture* for the 160x144 GB screen */
+    uint32_t audio_dev; /* SDL_AudioDeviceID, 0 = not opened */
+    CupidEmulator *emulator;
     bool running;
 } CupidSdlApp;
 
 bool cupid_sdl_app_init(CupidSdlApp *app,
                         const CupidSdlAppConfig *config,
-                        const CupidEmulator *emulator);
+                        CupidEmulator *emulator);
 void cupid_sdl_app_run(CupidSdlApp *app);
 void cupid_sdl_app_shutdown(CupidSdlApp *app);
 
