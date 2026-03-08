@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "cupid/gb/gb.h"
+#include "cupid/gbc/cgb.h"
 #include "cupid/common/log.h"
 
 /* --- Header field offsets --- */
@@ -18,14 +19,37 @@
 enum {
     CUPID_GB_HEADER_START    = 0x0134,
     CUPID_GB_HEADER_END      = 0x014c,
+    CUPID_GB_LOGO_START      = 0x0104,
+    CUPID_GB_LOGO_END        = 0x0133,
     CUPID_GB_TITLE_START     = 0x0134,
     CUPID_GB_TITLE_END       = 0x0143,
     CUPID_GB_CGB_FLAG        = 0x0143,
+    CUPID_GB_NEW_LICENSEE_0  = 0x0144,
+    CUPID_GB_NEW_LICENSEE_1  = 0x0145,
+    CUPID_GB_SGB_FLAG        = 0x0146,
     CUPID_GB_CARTRIDGE_TYPE  = 0x0147,
     CUPID_GB_ROM_SIZE        = 0x0148,
     CUPID_GB_RAM_SIZE        = 0x0149,
     CUPID_GB_DESTINATION_CODE = 0x014a,
+    CUPID_GB_OLD_LICENSEE_CODE = 0x014b,
     CUPID_GB_HEADER_CHECKSUM = 0x014d
+};
+
+static const uint8_t cupid_gb_nintendo_logo[] = {
+    0xceu, 0xedu, 0x66u, 0x66u, 0xccu, 0x0du, 0x00u, 0x0bu,
+    0x03u, 0x73u, 0x00u, 0x83u, 0x00u, 0x0cu, 0x00u, 0x0du,
+    0x00u, 0x08u, 0x11u, 0x1fu, 0x88u, 0x89u, 0x00u, 0x0eu,
+    0xdcu, 0xccu, 0x6eu, 0xe6u, 0xddu, 0xddu, 0xd9u, 0x99u,
+    0xbbu, 0xbbu, 0x67u, 0x63u, 0x6eu, 0x0eu, 0xecu, 0xccu,
+    0xddu, 0xdcu, 0x99u, 0x9fu, 0xbbu, 0xb9u, 0x33u, 0x3eu
+};
+
+enum {
+    CUPID_GB_SGB_PACKET_START = 0x0104,
+    CUPID_GB_SGB_PACKET_END = 0x0158,
+    CUPID_GB_SGB_PACKET_BLOCK_SIZE = 14,
+    CUPID_GB_SGB_REFERENCE_DIV_COUNTER = 24,
+    CUPID_GB_SGB_REFERENCE_STREAM_POPCOUNT = 288
 };
 
 /* --- Small helpers (file-local) --- */
@@ -48,6 +72,53 @@ static size_t cupid_gb_ram_size_from_code(uint8_t code)
     default:
         return 0u;
     }
+}
+
+static uint8_t cupid_gb_popcount8(uint8_t value)
+{
+    uint8_t count = 0u;
+
+    while (value != 0u) {
+        count = (uint8_t)(count + (value & 0x01u));
+        value >>= 1u;
+    }
+
+    return count;
+}
+
+static uint16_t cupid_gb_sgb_boot_div_counter(const uint8_t *rom_data, size_t rom_size)
+{
+    size_t offset = CUPID_GB_SGB_PACKET_START;
+    unsigned stream_popcount = 0u;
+    int adjusted_counter;
+
+    while (offset < CUPID_GB_SGB_PACKET_END) {
+        uint8_t checksum = 0u;
+        size_t block_index;
+
+        for (block_index = 0u; block_index < CUPID_GB_SGB_PACKET_BLOCK_SIZE; ++block_index) {
+            uint8_t value = 0u;
+
+            if (offset <= 0x014fu && offset < rom_size) {
+                value = rom_data[offset];
+            }
+
+            checksum = (uint8_t)(checksum + value);
+            stream_popcount += cupid_gb_popcount8(value);
+            offset += 1u;
+        }
+
+        stream_popcount += cupid_gb_popcount8(checksum);
+    }
+
+    adjusted_counter = CUPID_GB_SGB_REFERENCE_DIV_COUNTER -
+                       ((int)stream_popcount - CUPID_GB_SGB_REFERENCE_STREAM_POPCOUNT);
+
+    while (adjusted_counter < 0) {
+        adjusted_counter += 64;
+    }
+
+    return (uint16_t)(adjusted_counter & 0x3f);
 }
 
 static size_t cupid_gb_rom_bank_count_from_code(uint8_t code)
@@ -145,16 +216,80 @@ static CupidGbMbcType cupid_gb_detect_mbc_type(uint8_t cartridge_type)
     }
 }
 
-static uint8_t cupid_gb_compute_header_checksum(const uint8_t *rom_data)
+static uint8_t cupid_gb_compute_header_checksum_at(const uint8_t *rom_data,
+                                                   size_t rom_size,
+                                                   size_t base_offset)
 {
     size_t index;
     uint8_t checksum = 0u;
 
-    for (index = CUPID_GB_HEADER_START; index <= CUPID_GB_HEADER_END; ++index) {
+    if (rom_data == 0 || base_offset + CUPID_GB_HEADER_CHECKSUM >= rom_size) {
+        return 0u;
+    }
+
+    for (index = base_offset + CUPID_GB_HEADER_START;
+         index <= base_offset + CUPID_GB_HEADER_END;
+         ++index) {
         checksum = (uint8_t)(checksum - rom_data[index] - 1u);
     }
 
     return checksum;
+}
+
+static uint8_t cupid_gb_compute_header_checksum(const uint8_t *rom_data)
+{
+    return cupid_gb_compute_header_checksum_at(rom_data,
+                                               CUPID_GB_MAX_ROM_SIZE,
+                                               0u);
+}
+
+static bool cupid_gb_has_nintendo_logo(const uint8_t *rom_data,
+                                       size_t rom_size,
+                                       size_t base_offset)
+{
+    size_t logo_offset = base_offset + CUPID_GB_LOGO_START;
+
+    if (rom_data == 0 || logo_offset + sizeof(cupid_gb_nintendo_logo) > rom_size) {
+        return false;
+    }
+
+    return memcmp(&rom_data[logo_offset],
+                  cupid_gb_nintendo_logo,
+                  sizeof(cupid_gb_nintendo_logo)) == 0;
+}
+
+static bool cupid_gb_detect_mbc1_multicart(const uint8_t *rom_data,
+                                           size_t rom_size,
+                                           const CupidGbCartridgeHeader *header)
+{
+    size_t index;
+
+    if (rom_data == 0 || header == 0) {
+        return false;
+    }
+
+    if (header->mbc_type != CUPID_GB_MBC1 || header->rom_bank_count != 64u) {
+        return false;
+    }
+
+    for (index = 0u; index < 4u; ++index) {
+        size_t base_offset = index * 0x40000u;
+
+        if (base_offset + CUPID_GB_HEADER_CHECKSUM >= rom_size) {
+            return false;
+        }
+
+        if (!cupid_gb_has_nintendo_logo(rom_data, rom_size, base_offset)) {
+            return false;
+        }
+
+        if (cupid_gb_compute_header_checksum_at(rom_data, rom_size, base_offset) !=
+            rom_data[base_offset + CUPID_GB_HEADER_CHECKSUM]) {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 /* --- MBC bank helpers (used by memory map in gb.c) --- */
@@ -168,6 +303,15 @@ size_t cupid_gb_effective_rom_bank(const CupidGb *gb, bool lower_region)
     case CUPID_GB_HUC1: {
         size_t high = (size_t)(gb->mbc1_bank_high2 & 0x03u);
         size_t low = (size_t)(gb->mbc1_bank_low5 & 0x1fu);
+
+        if (gb->mbc1_multicart) {
+            if (lower_region) {
+                bank = gb->mbc1_ram_banking_mode ? (high << 4u) : 0u;
+            } else {
+                bank = (high << 4u) | (low & 0x0fu);
+            }
+            break;
+        }
 
         if (low == 0u) {
             low = 1u;
@@ -223,9 +367,13 @@ size_t cupid_gb_effective_ram_bank(const CupidGb *gb)
         return 0u;
     }
 
-    if ((gb->header.mbc_type == CUPID_GB_MBC1 ||
-         gb->header.mbc_type == CUPID_GB_HUC1) && gb->mbc1_ram_banking_mode) {
-        return (size_t)(gb->mbc1_bank_high2 & 0x03u) % gb->ram_bank_count;
+    if (gb->header.mbc_type == CUPID_GB_MBC1 ||
+        gb->header.mbc_type == CUPID_GB_HUC1) {
+        if (gb->mbc1_ram_banking_mode) {
+            return (size_t)(gb->mbc1_bank_high2 & 0x03u) % gb->ram_bank_count;
+        }
+
+        return 0u;
     }
 
     return gb->current_ram_bank % gb->ram_bank_count;
@@ -259,10 +407,14 @@ bool cupid_gb_parse_header(const uint8_t *rom_data,
 
     header->title[title_index] = '\0';
     header->cgb_flag = rom_data[CUPID_GB_CGB_FLAG];
+    header->new_licensee_code[0] = rom_data[CUPID_GB_NEW_LICENSEE_0];
+    header->new_licensee_code[1] = rom_data[CUPID_GB_NEW_LICENSEE_1];
+    header->sgb_flag = rom_data[CUPID_GB_SGB_FLAG];
     header->cartridge_type = rom_data[CUPID_GB_CARTRIDGE_TYPE];
     header->rom_size_code = rom_data[CUPID_GB_ROM_SIZE];
     header->ram_size_code = rom_data[CUPID_GB_RAM_SIZE];
     header->destination_code = rom_data[CUPID_GB_DESTINATION_CODE];
+    header->old_licensee_code = rom_data[CUPID_GB_OLD_LICENSEE_CODE];
     header->header_checksum = rom_data[CUPID_GB_HEADER_CHECKSUM];
     header->rom_bank_count = cupid_gb_rom_bank_count_from_code(header->rom_size_code);
     header->ram_bank_count = cupid_gb_ram_bank_count_from_code(header->ram_size_code);
@@ -390,6 +542,9 @@ bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size)
     }
 
     cupid_gb_init(gb);
+    if (gb->rom == 0) {
+        return false;
+    }
     memcpy(gb->rom, rom_data, rom_size);
     gb->rom_size = rom_size;
 
@@ -398,16 +553,33 @@ bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size)
         return false;
     }
 
-     /* Bit 7 marks CGB support, but only 0xC0 carts require CGB mode.
-         Dual-mode 0x80 carts should still run as DMG on this emulator's
-         default Game Boy target. */
-     gb->cgb_mode = (gb->header.cgb_flag & 0xc0u) == 0xc0u;
+    /* 0xC0 cartridges require CGB mode. 0x80 cartridges enter CGB mode only
+     * when the user selected the CGB hardware profile. */
+    gb->cgb_mode = (gb->header.cgb_flag & 0xc0u) == 0xc0u ||
+                   ((gb->header.cgb_flag & 0x80u) != 0u && gb->model == CUPID_GB_MODEL_CGB);
+    gb->sgb.enabled = (gb->model == CUPID_GB_MODEL_SGB || gb->model == CUPID_GB_MODEL_SGB2) &&
+                      gb->header.sgb_flag == 0x03u;
     gb->double_speed = false;
     gb->speed_switch_armed = false;
     gb->speed_phase = false;
     gb->io_registers[0x4du] = 0x00u;
+    gb->io_registers[0x4fu] = (uint8_t)(0xfeu | (gb->cgb_vram_bank & 0x01u));
+    gb->io_registers[0x70u] = (uint8_t)(0xf8u | gb->cgb_wram_bank);
+    if (gb->model == CUPID_GB_MODEL_SGB || gb->model == CUPID_GB_MODEL_SGB2) {
+        /* The SGB boot ROM spends ROM-dependent time transmitting header
+         * packets before it jumps to 0x0100. In HLE mode, approximate the
+         * resulting DIV phase from that packet stream so timing tests such as
+         * boot_div-S and boot_div2-S land on the same post-boot phase as the
+         * real boot ROM. */
+        gb->div_counter = cupid_gb_sgb_boot_div_counter(rom_data, rom_size);
+    }
     if (gb->cgb_mode) {
         gb->cpu.a = 0x11u;
+        gb->io_registers[0x4du] = 0x00u;
+    } else if (gb->model == CUPID_GB_MODEL_CGB) {
+        cupid_cgb_apply_compatibility_palette(gb);
+    } else if (gb->sgb.enabled) {
+        cupid_gb_sgb_apply_compatibility_palette(gb);
     }
 
     if (gb->header.rom_bank_count == 0u) {
@@ -438,6 +610,7 @@ bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size)
     gb->current_ram_bank = 0u;
     gb->mbc1_bank_low5 = 1u;
     gb->mbc1_bank_high2 = 0u;
+    gb->mbc1_multicart = cupid_gb_detect_mbc1_multicart(rom_data, rom_size, &gb->header);
     gb->ram_enabled = gb->header.mbc_type == CUPID_GB_MBC_NONE;
     gb->mbc1_ram_banking_mode = false;
     gb->mbc5_rom_bank = 1u;
@@ -471,6 +644,9 @@ bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size)
 
     cupid_log_infof("Loaded Game Boy ROM: %s",
                     gb->header.title[0] != '\0' ? gb->header.title : "<untitled>");
+    if (gb->mbc1_multicart) {
+        cupid_log_info("Detected MBC1 multicart banking layout.");
+    }
     if (!gb->header.header_checksum_valid) {
         cupid_log_error("ROM header checksum is invalid; continuing for development purposes.");
     }

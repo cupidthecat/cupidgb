@@ -35,6 +35,7 @@ void    cupid_gb_set_ppu_mode(CupidGb *gb, uint8_t mode);
 void    cupid_gb_update_stat_irq(CupidGb *gb);
 void    cupid_gb_reset_ppu(CupidGb *gb);
 void    cupid_gb_run_dma_transfer(CupidGb *gb, uint8_t source_high);
+void    cupid_gb_tick_dma(CupidGb *gb);
 void    cupid_gb_tick_ppu(CupidGb *gb, uint16_t cycles);
 
 #endif

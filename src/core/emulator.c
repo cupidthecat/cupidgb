@@ -25,6 +25,7 @@ void cupid_emulator_shutdown(CupidEmulator *emulator)
         return;
     }
 
+    cupid_gb_cleanup(&emulator->gb);
     emulator->initialized = false;
     cupid_log_info("Cupid emulator core shut down.");
 }

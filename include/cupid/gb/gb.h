@@ -5,7 +5,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define CUPID_GB_MAX_ROM_SIZE    (2u * 1024u * 1024u)
+#include "cupid/gb/sgb.h"
+
+#define CUPID_GB_MAX_ROM_SIZE    (8u * 1024u * 1024u)
 #define CUPID_GB_MAX_RAM_SIZE    (128u * 1024u)
 #define CUPID_GB_SCREEN_WIDTH    160u
 #define CUPID_GB_SCREEN_HEIGHT   144u
@@ -144,10 +146,13 @@ typedef struct CupidGbCpu {
 typedef struct CupidGbCartridgeHeader {
     char title[17];
     uint8_t cgb_flag;
+    uint8_t new_licensee_code[2];
+    uint8_t sgb_flag;
     uint8_t cartridge_type;
     uint8_t rom_size_code;
     uint8_t ram_size_code;
     uint8_t destination_code;
+    uint8_t old_licensee_code;
     uint8_t header_checksum;
     size_t rom_bank_count;
     size_t ram_bank_count;
@@ -158,19 +163,30 @@ typedef struct CupidGbCartridgeHeader {
     bool has_rumble;
 } CupidGbCartridgeHeader;
 
+typedef enum CupidGbModel {
+    CUPID_GB_MODEL_DMG_ABC = 0,
+    CUPID_GB_MODEL_DMG0,
+    CUPID_GB_MODEL_MGB,
+    CUPID_GB_MODEL_CGB,
+    CUPID_GB_MODEL_SGB,
+    CUPID_GB_MODEL_SGB2
+} CupidGbModel;
+
 typedef struct CupidGb {
     CupidGbCpu cpu;
+    CupidGbModel model;
     CupidGbCartridgeHeader header;
-    uint8_t rom[CUPID_GB_MAX_ROM_SIZE];
+    uint8_t *rom;
     size_t rom_size;
-    uint8_t video_ram[0x2000];
+    uint8_t video_ram[0x4000];
     uint8_t cartridge_ram[CUPID_GB_MAX_RAM_SIZE];
     size_t cartridge_ram_size;
-    uint8_t work_ram[0x2000];
+    uint8_t work_ram[0x8000];
     uint8_t object_attribute_memory[0x00a0];
     uint8_t io_registers[0x0080];
     uint8_t high_ram[0x007f];
     uint8_t frame_buffer[CUPID_GB_SCREEN_WIDTH * CUPID_GB_SCREEN_HEIGHT];
+    uint16_t frame_buffer_color[CUPID_GB_SCREEN_WIDTH * CUPID_GB_SCREEN_HEIGHT];
     uint8_t interrupt_enable;
     uint8_t interrupt_flags;
     size_t rom_bank_count;
@@ -179,6 +195,7 @@ typedef struct CupidGb {
     size_t current_ram_bank;
     uint8_t mbc1_bank_low5;
     uint8_t mbc1_bank_high2;
+    bool mbc1_multicart;
     bool ram_enabled;
     bool mbc1_ram_banking_mode;
     /* MBC3 real-time clock */
@@ -198,24 +215,51 @@ typedef struct CupidGb {
     /* HuC3 */
     uint8_t  huc3_mode;
     uint8_t  huc3_value;
+    uint8_t  serial_counter;
+    uint8_t  serial_bits_remaining;
+    uint8_t  serial_tx_latch;
     uint16_t div_counter;
     uint16_t timer_counter;
     uint8_t  tima_overflow_delay; /* M-cycles remaining until TMA reload + timer IRQ */
+    bool     tima_reload_just_happened;
+    uint16_t dma_source_base;
+    uint16_t dma_restart_source_base;
+    uint8_t  dma_index;
+    uint8_t  dma_start_delay;
+    uint8_t  dma_restart_delay;
+    bool     dma_active;
+    bool     dma_restart_pending;
     uint16_t ppu_counter;
     bool cgb_mode;
+    uint8_t cgb_vram_bank;
+    uint8_t cgb_wram_bank;
+    uint8_t cgb_bg_palette_ram[0x40];
+    uint8_t cgb_obj_palette_ram[0x40];
+    uint16_t hdma_source;
+    uint16_t hdma_destination;
+    uint8_t hdma_blocks_remaining;
+    bool hdma_active;
     bool double_speed;
     bool speed_switch_armed;
     bool speed_phase;
     uint8_t joypad;          /* button state: bits 0-3 dpad, 4-7 action; 0=pressed */
     uint8_t window_line_counter; /* internal window scanline counter */
+    uint8_t ppu_lcd_warmup_lines;
+    uint8_t stat_irq_delay;
+    bool ppu_lcd_startup;
+    bool ppu_line_boundary_hold;
     bool stat_irq_line;
     bool frame_ready;
     bool loaded;
     char save_path[260];
+    CupidGbSgb sgb;
     CupidGbApu apu;
 } CupidGb;
 
 void cupid_gb_init(CupidGb *gb);
+void cupid_gb_cleanup(CupidGb *gb);
+void cupid_gb_set_model(CupidGb *gb, CupidGbModel model);
+const char *cupid_gb_model_name(CupidGbModel model);
 bool cupid_gb_parse_header(const uint8_t *rom_data,
                            size_t rom_size,
                            CupidGbCartridgeHeader *header);
