@@ -9,6 +9,7 @@
 
 #define CUPID_GB_MAX_ROM_SIZE    (8u * 1024u * 1024u)
 #define CUPID_GB_MAX_RAM_SIZE    (128u * 1024u)
+#define CUPID_GB_MAX_BOOT_ROM_SIZE 0x0900u  /* CGB boot ROM is 2304 bytes */
 #define CUPID_GB_SCREEN_WIDTH    160u
 #define CUPID_GB_SCREEN_HEIGHT   144u
 
@@ -254,6 +255,10 @@ typedef struct CupidGb {
     char save_path[260];
     CupidGbSgb sgb;
     CupidGbApu apu;
+    /* Boot ROM overlay */
+    uint8_t  boot_rom[CUPID_GB_MAX_BOOT_ROM_SIZE];
+    size_t   boot_rom_size;     /* 0x0100 for DMG, 0x0900 for CGB */
+    bool     boot_rom_enabled;  /* true while boot ROM is mapped */
 } CupidGb;
 
 void cupid_gb_init(CupidGb *gb);
@@ -281,5 +286,10 @@ uint32_t cupid_gb_apu_drain(CupidGb *gb, int16_t *out, uint32_t max_frames);
 void cupid_gb_set_save_path(CupidGb *gb, const char *rom_path);
 void cupid_gb_load_save(CupidGb *gb);
 void cupid_gb_save(CupidGb *gb);
+
+/* Boot ROM support: load an external boot ROM dump for authentic startup */
+bool cupid_gb_load_boot_rom_file(CupidGb *gb, const char *path);
+void cupid_gb_clear_boot_rom(CupidGb *gb);
+void cupid_gb_enter_boot_rom(CupidGb *gb);
 
 #endif

@@ -13,6 +13,48 @@ static bool cupid_path_exists(const char *path)
     return path != 0 && access(path, F_OK) == 0;
 }
 
+/*
+ * Try to locate and load a boot ROM for the current model.
+ * Searches common filenames in bootroms/ and the current directory.
+ */
+static void cupid_try_load_boot_rom(CupidGb *gb)
+{
+    static const char *const dmg_paths[] = {
+        "bootroms/dmg_boot.bin",
+        "bootroms/gb_boot.bin",
+        "dmg_boot.bin",
+        "gb_boot.bin",
+        0
+    };
+    static const char *const cgb_paths[] = {
+        "bootroms/cgb_boot.bin",
+        "bootroms/gbc_boot.bin",
+        "cgb_boot.bin",
+        "gbc_boot.bin",
+        0
+    };
+    const char *const *paths;
+    size_t i;
+
+    if (gb == 0) {
+        return;
+    }
+
+    paths = (gb->model == CUPID_GB_MODEL_CGB) ? cgb_paths : dmg_paths;
+
+    for (i = 0u; paths[i] != 0; ++i) {
+        if (cupid_path_exists(paths[i])) {
+            if (cupid_gb_load_boot_rom_file(gb, paths[i])) {
+                cupid_log_infof("Loaded external boot ROM: %s", paths[i]);
+                return;
+            }
+        }
+    }
+
+    cupid_log_infof("No external %s boot ROM found; startup will skip the original Nintendo boot sequence.",
+                    (gb->model == CUPID_GB_MODEL_CGB) ? "CGB" : "DMG");
+}
+
 static const char *cupid_resolve_rom_path(const char *path, char *resolved_path, size_t resolved_path_size)
 {
     static const char *const fallback_extensions[] = { ".gb", ".gbc", ".sgb" };
@@ -107,6 +149,7 @@ int main(int argc, char **argv)
     CupidSdlApp app = {0};
     CupidGbModel model = CUPID_GB_MODEL_DMG_ABC;
     bool model_explicit = false;
+    CupidSystem target_system = CUPID_SYSTEM_GB;
     CupidSdlAppConfig config = {
         .title = "cupidgb",
         .width = 640,
@@ -115,8 +158,6 @@ int main(int argc, char **argv)
     char resolved_rom_path[PATH_MAX];
     const char *rom_path = 0;
     int arg_index;
-
-    cupid_emulator_init(&emulator, CUPID_SYSTEM_GB);
 
     for (arg_index = 1; arg_index < argc; ++arg_index) {
         if (strcmp(argv[arg_index], "--model") == 0 && arg_index + 1 < argc) {
@@ -135,7 +176,6 @@ int main(int argc, char **argv)
                 model = CUPID_GB_MODEL_SGB2;
             } else {
                 cupid_log_errorf("Unknown Game Boy model '%s'. Use dmgabc, dmg0, mgb, cgb, sgb or sgb2.", argv[arg_index]);
-                cupid_emulator_shutdown(&emulator);
                 return 1;
             }
             model_explicit = true;
@@ -143,60 +183,70 @@ int main(int argc, char **argv)
             rom_path = argv[arg_index];
         } else {
             cupid_log_errorf("Unexpected argument '%s'.", argv[arg_index]);
-            cupid_emulator_shutdown(&emulator);
             return 1;
         }
     }
 
     rom_path = cupid_resolve_rom_path(rom_path, resolved_rom_path, sizeof(resolved_rom_path));
 
-    if (!model_explicit) {
-        model = cupid_gb_detect_model_from_path(rom_path, model);
-    }
+    cupid_emulator_init(&emulator, target_system);
 
-    cupid_gb_set_model(&emulator.gb, model);
-
-    cupid_log_infof("cupidgb boot stub ready for %s development.",
-                    cupid_system_name(emulator.target_system));
-    cupid_log_info("Terminal logging is active.");
-    cupid_log_infof("Game Boy boot profile: %s", cupid_gb_model_name(model));
-
-    if (rom_path != 0) {
-        if (!cupid_emulator_load_rom_file(&emulator, rom_path)) {
-            cupid_emulator_shutdown(&emulator);
-            return 1;
+    {
+        /* ----- Game Boy / Game Boy Color path ----- */
+        if (!model_explicit) {
+            model = cupid_gb_detect_model_from_path(rom_path, model);
         }
 
-        if (!model_explicit && model == CUPID_GB_MODEL_DMG_ABC) {
-            if ((emulator.gb.header.cgb_flag & 0x80u) != 0u) {
-                model = CUPID_GB_MODEL_CGB;
-            } else if (emulator.gb.header.sgb_flag == 0x03u) {
-                model = CUPID_GB_MODEL_SGB;
-            }
-        }
+        cupid_gb_set_model(&emulator.gb, model);
 
-        if (model != emulator.gb.model) {
-            cupid_gb_set_model(&emulator.gb, model);
+        cupid_log_infof("cupidgb boot stub ready for %s development.",
+                        cupid_system_name(emulator.target_system));
+        cupid_log_info("Terminal logging is active.");
+        cupid_log_infof("Game Boy boot profile: %s", cupid_gb_model_name(model));
+
+        if (rom_path != 0) {
             if (!cupid_emulator_load_rom_file(&emulator, rom_path)) {
                 cupid_emulator_shutdown(&emulator);
                 return 1;
             }
-            cupid_log_infof("Game Boy boot profile: %s", cupid_gb_model_name(model));
+
+            if (!model_explicit && model == CUPID_GB_MODEL_DMG_ABC) {
+                if ((emulator.gb.header.cgb_flag & 0x80u) != 0u) {
+                    model = CUPID_GB_MODEL_CGB;
+                } else if (emulator.gb.header.sgb_flag == 0x03u) {
+                    model = CUPID_GB_MODEL_SGB;
+                }
+            }
+
+            if (model != emulator.gb.model) {
+                cupid_gb_set_model(&emulator.gb, model);
+                if (!cupid_emulator_load_rom_file(&emulator, rom_path)) {
+                    cupid_emulator_shutdown(&emulator);
+                    return 1;
+                }
+                cupid_log_infof("Game Boy boot profile: %s", cupid_gb_model_name(model));
+            }
+
+            cupid_log_infof("title: %s",
+                            emulator.gb.header.title[0] != '\0' ? emulator.gb.header.title : "<untitled>");
+            cupid_log_infof("cart type: %s",
+                            cupid_gb_cartridge_type_name(emulator.gb.header.cartridge_type));
+            cupid_log_infof("rom banks: %zu", emulator.gb.rom_bank_count);
+            cupid_log_infof("ram banks: %zu", emulator.gb.ram_bank_count);
+            cupid_log_infof("mbc: %s", cupid_gb_mbc_name(emulator.gb.header.mbc_type));
+
+            /* Set up battery-backed save path and load existing save */
+            cupid_gb_set_save_path(&emulator.gb, rom_path);
+            cupid_gb_load_save(&emulator.gb);
+
+            /* Try to load an external boot ROM for authentic startup logo + chime */
+            cupid_try_load_boot_rom(&emulator.gb);
+            if (emulator.gb.boot_rom_size > 0u) {
+                cupid_gb_enter_boot_rom(&emulator.gb);
+            }
+        } else {
+            cupid_log_info("No ROM supplied. Pass a .gb file path to load a cartridge.");
         }
-
-        cupid_log_infof("title: %s",
-                        emulator.gb.header.title[0] != '\0' ? emulator.gb.header.title : "<untitled>");
-        cupid_log_infof("cart type: %s",
-                        cupid_gb_cartridge_type_name(emulator.gb.header.cartridge_type));
-        cupid_log_infof("rom banks: %zu", emulator.gb.rom_bank_count);
-        cupid_log_infof("ram banks: %zu", emulator.gb.ram_bank_count);
-        cupid_log_infof("mbc: %s", cupid_gb_mbc_name(emulator.gb.header.mbc_type));
-
-        /* Set up battery-backed save path and load existing save */
-        cupid_gb_set_save_path(&emulator.gb, rom_path);
-        cupid_gb_load_save(&emulator.gb);
-    } else {
-        cupid_log_info("No ROM supplied. Pass a .gb file path to load a cartridge.");
     }
 
     if (!cupid_sdl_app_init(&app, &config, &emulator)) {

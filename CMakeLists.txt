@@ -17,6 +17,14 @@ add_library(cupidgb_core STATIC
     src/common/log.c
     src/core/emulator.c
     src/core/system.c
+    src/gb/gb.c
+    src/gb/cpu.c
+    src/gb/ppu.c
+    src/gb/apu.c
+    src/gb/timer.c
+    src/gb/cartridge.c
+    src/gb/sgb.c
+    src/gbc/cgb.c
     src/platform/sdl/sdl_app.c
 )
 
@@ -27,7 +35,7 @@ target_include_directories(cupidgb_core
 )
 
 target_link_directories(cupidgb_core PUBLIC ${SDL2_LIBRARY_DIRS})
-target_link_libraries(cupidgb_core PUBLIC ${SDL2_LIBRARIES})
+target_link_libraries(cupidgb_core PUBLIC ${SDL2_LIBRARIES} m)
 target_compile_options(cupidgb_core PUBLIC ${SDL2_CFLAGS_OTHER})
 
 if(CUPIDGB_ENABLE_WARNINGS)
@@ -54,4 +62,9 @@ if(CUPIDGB_ENABLE_TESTS)
     add_executable(cupidgb_smoke tests/test_smoke.c)
     target_link_libraries(cupidgb_smoke PRIVATE cupidgb_core)
     add_test(NAME cupidgb_smoke COMMAND cupidgb_smoke)
+
+    add_executable(cupidgb_gb tests/test_gb.c)
+    target_link_libraries(cupidgb_gb PRIVATE cupidgb_core)
+    add_test(NAME cupidgb_gb COMMAND cupidgb_gb)
+
 endif()

@@ -12,7 +12,7 @@ void cupid_emulator_init(CupidEmulator *emulator, CupidSystem target_system)
     emulator->target_system = target_system;
     emulator->initialized = true;
 
-    if (target_system == CUPID_SYSTEM_GB) {
+    if (target_system == CUPID_SYSTEM_GB || target_system == CUPID_SYSTEM_GBC) {
         cupid_gb_init(&emulator->gb);
     }
 
@@ -38,12 +38,13 @@ bool cupid_emulator_load_rom(CupidEmulator *emulator,
         return false;
     }
 
-    if (emulator->target_system != CUPID_SYSTEM_GB) {
-        cupid_log_error("ROM loading is only implemented for Game Boy right now.");
-        return false;
+    if (emulator->target_system == CUPID_SYSTEM_GB ||
+        emulator->target_system == CUPID_SYSTEM_GBC) {
+        return cupid_gb_load_rom(&emulator->gb, rom_data, rom_size);
     }
 
-    return cupid_gb_load_rom(&emulator->gb, rom_data, rom_size);
+    cupid_log_error("ROM loading is not implemented for this target system.");
+    return false;
 }
 
 bool cupid_emulator_load_rom_file(CupidEmulator *emulator, const char *path)
@@ -52,12 +53,13 @@ bool cupid_emulator_load_rom_file(CupidEmulator *emulator, const char *path)
         return false;
     }
 
-    if (emulator->target_system != CUPID_SYSTEM_GB) {
-        cupid_log_error("ROM file loading is only implemented for Game Boy right now.");
-        return false;
+    if (emulator->target_system == CUPID_SYSTEM_GB ||
+        emulator->target_system == CUPID_SYSTEM_GBC) {
+        return cupid_gb_load_rom_file(&emulator->gb, path);
     }
 
-    return cupid_gb_load_rom_file(&emulator->gb, path);
+    cupid_log_error("ROM file loading is not implemented for this target system.");
+    return false;
 }
 
 bool cupid_emulator_step(CupidEmulator *emulator)
@@ -66,10 +68,11 @@ bool cupid_emulator_step(CupidEmulator *emulator)
         return false;
     }
 
-    if (emulator->target_system != CUPID_SYSTEM_GB) {
-        cupid_log_error("Stepping is only implemented for Game Boy right now.");
-        return false;
+    if (emulator->target_system == CUPID_SYSTEM_GB ||
+        emulator->target_system == CUPID_SYSTEM_GBC) {
+        return cupid_gb_step(&emulator->gb);
     }
 
-    return cupid_gb_step(&emulator->gb);
+    cupid_log_error("Stepping is not implemented for this target system.");
+    return false;
 }

@@ -1,7 +1,9 @@
 BUILD_DIR ?= build
 CMAKE ?= cmake
 
-.PHONY: configure build run test clean debug release
+.PHONY: all configure build run test clean debug release
+
+all: build
 
 configure:
 	$(CMAKE) -S . -B $(BUILD_DIR)

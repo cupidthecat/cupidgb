@@ -3,8 +3,7 @@
 
 typedef enum CupidSystem {
     CUPID_SYSTEM_GB = 0,
-    CUPID_SYSTEM_GBC,
-    CUPID_SYSTEM_GBA
+    CUPID_SYSTEM_GBC
 } CupidSystem;
 
 const char *cupid_system_name(CupidSystem system);

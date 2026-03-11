@@ -96,14 +96,15 @@ bool cupid_sdl_app_init(CupidSdlApp *app,
     app->emulator = emulator;
     app->running = false;
 
-    if (emulator != 0 && cupid_gb_sgb_active(&emulator->gb)) {
+    if (emulator != 0 &&
+        cupid_gb_sgb_active(&emulator->gb)) {
         app->texture_width = CUPID_SGB_SCREEN_WIDTH;
         app->texture_height = CUPID_SGB_SCREEN_HEIGHT;
     }
 
-    window_scale = config->width / (int)CUPID_GB_SCREEN_WIDTH;
-    if (config->height / (int)CUPID_GB_SCREEN_HEIGHT < window_scale) {
-        window_scale = config->height / (int)CUPID_GB_SCREEN_HEIGHT;
+    window_scale = config->width / (int)app->texture_width;
+    if (config->height / (int)app->texture_height < window_scale) {
+        window_scale = config->height / (int)app->texture_height;
     }
     if (window_scale < 1) {
         window_scale = 1;
@@ -169,7 +170,7 @@ bool cupid_sdl_app_init(CupidSdlApp *app,
                              (int)app->texture_height);
 
     /* Open audio device for GB APU output */
-    {
+    if (emulator != 0) {
         SDL_AudioSpec want;
         SDL_AudioSpec got;
         SDL_memset(&want, 0, sizeof(want));
@@ -254,7 +255,7 @@ void cupid_sdl_app_run(CupidSdlApp *app)
             }
         }
 
-        /* Convert GB palette-index framebuffer to ARGB and upload to texture */
+        /* Convert active framebuffer to ARGB and upload to texture */
         if (app->texture != 0 && app->emulator != 0) {
             size_t i;
 
@@ -318,10 +319,12 @@ void cupid_sdl_app_run(CupidSdlApp *app)
                         app->running = false;
                     } else if (event.type == SDL_KEYDOWN && app->emulator != 0) {
                         cupid_sdl_handle_key(&app->emulator->gb,
-                                             event.key.keysym.scancode, true);
+                                             event.key.keysym.scancode,
+                                             true);
                     } else if (event.type == SDL_KEYUP && app->emulator != 0) {
                         cupid_sdl_handle_key(&app->emulator->gb,
-                                             event.key.keysym.scancode, false);
+                                             event.key.keysym.scancode,
+                                             false);
                     }
                 }
                 if (!app->running) { break; }

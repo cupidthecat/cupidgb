@@ -267,6 +267,130 @@ void cupid_gb_init(CupidGb *gb)
     cupid_gb_sgb_init(gb);
 }
 
+/* --- Boot ROM support --- */
+
+/*
+ * Load an external boot ROM dump from the given file path.
+ * DMG boot ROMs are exactly 256 (0x100) bytes.
+ * CGB boot ROMs are exactly 2304 (0x900) bytes.
+ * Returns true on success.
+ */
+bool cupid_gb_load_boot_rom_file(CupidGb *gb, const char *path)
+{
+    FILE *fp;
+    long file_size;
+
+    if (gb == 0 || path == 0) {
+        return false;
+    }
+
+    fp = fopen(path, "rb");
+    if (fp == 0) {
+        return false;
+    }
+
+    fseek(fp, 0, SEEK_END);
+    file_size = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+
+    if (file_size != 0x0100 && file_size != 0x0900) {
+        cupid_log_errorf("Boot ROM '%s' has invalid size %ld (expected 256 or 2304 bytes)",
+                         path, file_size);
+        fclose(fp);
+        return false;
+    }
+
+    if ((size_t)file_size > sizeof(gb->boot_rom)) {
+        fclose(fp);
+        return false;
+    }
+
+    if (fread(gb->boot_rom, 1u, (size_t)file_size, fp) != (size_t)file_size) {
+        cupid_log_errorf("Failed to read boot ROM '%s'", path);
+        fclose(fp);
+        return false;
+    }
+
+    fclose(fp);
+    gb->boot_rom_size = (size_t)file_size;
+    return true;
+}
+
+void cupid_gb_clear_boot_rom(CupidGb *gb)
+{
+    if (gb == 0) {
+        return;
+    }
+    memset(gb->boot_rom, 0, sizeof(gb->boot_rom));
+    gb->boot_rom_size = 0u;
+    gb->boot_rom_enabled = false;
+}
+
+/*
+ * Enter boot ROM mode: reset CPU/PPU/APU to true power-on state
+ * so the boot ROM executes from address 0x0000.
+ * Call this AFTER loading the boot ROM and the game ROM.
+ */
+void cupid_gb_enter_boot_rom(CupidGb *gb)
+{
+    if (gb == 0 || gb->boot_rom_size == 0u) {
+        return;
+    }
+
+    /* Zero out CPU registers — boot ROM initializes everything */
+    gb->cpu.a = 0u;
+    gb->cpu.f = 0u;
+    gb->cpu.b = 0u;
+    gb->cpu.c = 0u;
+    gb->cpu.d = 0u;
+    gb->cpu.e = 0u;
+    gb->cpu.h = 0u;
+    gb->cpu.l = 0u;
+    gb->cpu.sp = 0u;
+    gb->cpu.pc = 0x0000u;  /* start executing boot ROM from address 0 */
+    gb->cpu.ime = false;
+    gb->cpu.ime_delay = 0u;
+    gb->cpu.halted = false;
+    gb->cpu.stopped = false;
+    gb->cpu.halt_bug = false;
+
+    /* Reset IO to power-on defaults */
+    memset(gb->io_registers, 0x00u, sizeof(gb->io_registers));
+    gb->io_registers[0x00u] = 0xcfu; /* P1: no buttons selected */
+
+    /* Reset PPU state */
+    gb->io_registers[CUPID_GB_IO_LCDC] = 0x00u; /* LCD off at power-on */
+    gb->io_registers[CUPID_GB_IO_STAT] = 0x00u;
+    gb->io_registers[CUPID_GB_IO_SCY] = 0x00u;
+    gb->io_registers[CUPID_GB_IO_SCX] = 0x00u;
+    gb->io_registers[CUPID_GB_IO_LY] = 0x00u;
+    gb->io_registers[CUPID_GB_IO_LYC] = 0x00u;
+    gb->io_registers[CUPID_GB_IO_BGP] = 0x00u;
+    gb->io_registers[CUPID_GB_IO_OBP0] = 0x00u;
+    gb->io_registers[CUPID_GB_IO_OBP1] = 0x00u;
+    gb->io_registers[CUPID_GB_IO_WY] = 0x00u;
+    gb->io_registers[CUPID_GB_IO_WX] = 0x00u;
+
+    /* Reset DIV, timers, serial */
+    gb->div_counter = 0u;
+    gb->ppu_counter = 0u;
+    gb->serial_counter = 0u;
+    gb->interrupt_flags = 0x00u;
+    gb->interrupt_enable = 0x00u;
+
+    /* Reset APU to power-on state */
+    memset(&gb->apu, 0, sizeof(gb->apu));
+
+    /* Activate boot ROM overlay */
+    gb->boot_rom_enabled = true;
+    gb->frame_ready = false;
+    gb->ppu_lcd_startup = false;
+    gb->ppu_lcd_warmup_lines = 0u;
+    gb->stat_irq_delay = 0u;
+    gb->stat_irq_line = false;
+    gb->window_line_counter = 0u;
+}
+
 void cupid_gb_cleanup(CupidGb *gb)
 {
     if (gb == 0) {
@@ -297,6 +421,19 @@ uint8_t cupid_gb_read_u8(const CupidGb *gb, uint16_t address)
     }
 
     if (address <= 0x3fffu) {
+        /* Boot ROM overlay: intercept reads while the boot ROM is mapped */
+        if (gb->boot_rom_enabled && gb->boot_rom_size > 0u) {
+            /* DMG boot ROM: 0x0000-0x00FF (256 bytes) */
+            if (address <= 0x00ffu && address < gb->boot_rom_size) {
+                return gb->boot_rom[address];
+            }
+            /* CGB boot ROM: also 0x0200-0x08FF */
+            if (gb->boot_rom_size > 0x0100u &&
+                address >= 0x0200u && address <= 0x08ffu) {
+                return gb->boot_rom[address];
+            }
+        }
+
         size_t bank = cupid_gb_effective_rom_bank(gb, true);
         size_t offset = bank * 0x4000u + (size_t)address;
 
@@ -852,6 +989,11 @@ void cupid_gb_write_u8(CupidGb *gb, uint16_t address, uint8_t value)
             cupid_gb_timer_apply_tac_write(gb, value);
         } else if (address >= 0xff10u && address <= 0xff3fu) {
             cupid_gb_apu_on_write(gb, (uint8_t)(address - 0xff00u), value);
+        } else if (address == 0xff50u) {
+            /* BOOT register: writing bit 0 = 1 permanently disables boot ROM */
+            if ((value & 0x01u) != 0u && gb->boot_rom_enabled) {
+                gb->boot_rom_enabled = false;
+            }
         } else {
             gb->io_registers[address - 0xff00u] = value;
         }
