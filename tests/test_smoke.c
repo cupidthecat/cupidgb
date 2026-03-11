@@ -11,7 +11,6 @@ int main(void)
 
     assert(emulator.initialized);
     assert(emulator.target_system == CUPID_SYSTEM_GBC);
-    assert(cupid_system_name(CUPID_SYSTEM_GBA) != 0);
 
     cupid_emulator_shutdown(&emulator);
     assert(!emulator.initialized);

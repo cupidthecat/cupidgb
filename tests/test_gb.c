@@ -568,6 +568,47 @@ static void test_load_rom_file(void)
     assert(unlink(path) == 0);
 }
 
+static void test_boot_rom_file_maps_until_ff50_disable(void)
+{
+    uint8_t rom[32u * 1024u];
+    CupidGb gb = {0};
+
+    /* Build a minimal DMG boot ROM (256 bytes) with a known pattern */
+    uint8_t boot_rom[0x100];
+    memset(boot_rom, 0x00u, sizeof(boot_rom));
+    boot_rom[0x00u] = 0x31u; /* LD SP, 0xFFFE */
+    boot_rom[0x01u] = 0xfeu;
+    boot_rom[0x02u] = 0xffu;
+    boot_rom[0xffu] = 0xAAu; /* known sentinel at end of boot ROM */
+
+    build_test_rom(rom, sizeof(rom));
+    /* Put a different byte at address 0x00 in the game ROM for comparison */
+    rom[0x00u] = 0xFFu;
+
+    cupid_gb_load_rom(&gb, rom, sizeof(rom));
+
+    /* Manually load boot ROM into the struct */
+    memcpy(gb.boot_rom, boot_rom, sizeof(boot_rom));
+    gb.boot_rom_size = sizeof(boot_rom);
+    cupid_gb_enter_boot_rom(&gb);
+
+    /* Boot ROM should be mapped: reads from 0x0000 should return boot ROM data */
+    assert(cupid_gb_read_u8(&gb, 0x0000u) == 0x31u);
+    assert(cupid_gb_read_u8(&gb, 0x00ffu) == 0xAAu);
+
+    /* Address above boot ROM range should still come from game ROM */
+    assert(cupid_gb_read_u8(&gb, 0x0100u) == rom[0x0100u]);
+
+    /* Write to FF50 with bit 0 set: disables boot ROM */
+    cupid_gb_write_u8(&gb, 0xff50u, 0x01u);
+    assert(!gb.boot_rom_enabled);
+
+    /* Now address 0x0000 should come from game ROM */
+    assert(cupid_gb_read_u8(&gb, 0x0000u) == 0xFFu);
+
+    cupid_gb_cleanup(&gb);
+}
+
 static void test_battery_save_loads_for_valid_rom(void)
 {
     uint8_t rom[32u * 1024u];
@@ -2350,6 +2391,7 @@ int main(void)
     test_boot_io_defaults();
     test_sgb_boot_div_phase_depends_on_header_stream();
     test_load_rom_file();
+    test_boot_rom_file_maps_until_ff50_disable();
     test_battery_save_loads_for_valid_rom();
     test_battery_save_ignored_for_invalid_untitled_rom();
     test_mbc1_bank_switching();
