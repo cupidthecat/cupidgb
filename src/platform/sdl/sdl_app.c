@@ -1,3 +1,18 @@
+/**
+ * @file sdl_app.c
+ * @brief SDL2 platform front-end for the cupidgb emulator.
+ *
+ * Provides initialization, the main event/render loop, and cleanup for an
+ * SDL2-backed window. Responsibilities:
+ *   - SDL2 window, renderer, and streaming texture lifecycle
+ *   - SDL2 audio device lifecycle (push API, 44100 Hz stereo int16)
+ *   - Keyboard-to-joypad mapping and interrupt generation
+ *   - Per-frame emulation stepping until VBlank
+ *   - Frame-buffer conversion (DMG palette, CGB RGB555, SGB ARGB border)
+ *     and texture upload
+ *   - APU sample draining and SDL audio queue management
+ *   - Speed regulation via audio-queue back-pressure or a 60 fps timer fallback
+ */
 #include "cupid/platform/sdl_app.h"
 
 #include <SDL2/SDL.h>
@@ -9,7 +24,11 @@
 #include "cupid/gb/sgb.h"
 #include "cupid/gbc/cgb.h"
 
-/* DMG 4-shade palette (ARGB8888) */
+/** @brief DMG 4-shade display palette in ARGB8888 format.
+ *
+ * Maps the four DMG shade indices (0 = lightest, 3 = darkest) to
+ * the classic Game Boy green color ramp used for DMG output.
+ */
 static const Uint32 cupid_dmg_palette[4] = {
     0xFFE0F8D0u, /* color 0: lightest (off-white green) */
     0xFF88C070u, /* color 1: light green */
@@ -17,6 +36,16 @@ static const Uint32 cupid_dmg_palette[4] = {
     0xFF081820u  /* color 3: darkest (near-black) */
 };
 
+/**
+ * @brief Converts a 15-bit RGB555 color to a 32-bit ARGB8888 value.
+ *
+ * Each 5-bit channel is expanded to 8 bits using the standard
+ * bit-replication formula `(c << 3) | (c >> 2)`. Alpha is always 0xFF.
+ *
+ * @param color The RGB555 color (bits 14\u20130 = 0BBBBBGGGGGRRRRR).
+ *
+ * @return The corresponding 0xAARRGGBB pixel value.
+ */
 static Uint32 cupid_rgb555_to_argb(uint16_t color)
 {
     Uint32 r = (Uint32)(color & 0x1fu);
@@ -29,12 +58,28 @@ static Uint32 cupid_rgb555_to_argb(uint16_t color)
     return 0xff000000u | (r << 16u) | (g << 8u) | b;
 }
 
-/*
- * Joypad bit layout stored in CupidGb.joypad (0=pressed, 1=released):
- *   bit 0: Right   bit 4: A
- *   bit 1: Left    bit 5: B
- *   bit 2: Up      bit 6: Select
- *   bit 3: Down    bit 7: Start
+/**
+ * @brief Translates an SDL scancode key event into a Game Boy joypad state change.
+ *
+ * Key mapping:
+ * | SDL scancode    | GB button |
+ * |-----------------|----------|
+ * | Arrow Right     | Right    |
+ * | Arrow Left      | Left     |
+ * | Arrow Up        | Up       |
+ * | Arrow Down      | Down     |
+ * | Z               | A        |
+ * | X               | B        |
+ * | Backspace       | Select   |
+ * | Return          | Start    |
+ *
+ * Joypad bits in `CupidGb.joypad` follow active-low convention
+ * (0 = pressed, 1 = released). A joypad interrupt (bit 4 of IF)
+ * is fired on the released \u2192 pressed transition only.
+ *
+ * @param gb      Pointer to the Game Boy state.
+ * @param sc      The SDL scancode of the key event.
+ * @param pressed `true` if the key was pressed, `false` if released.
  */
 static void cupid_sdl_handle_key(CupidGb *gb, SDL_Scancode sc, bool pressed)
 {
@@ -63,6 +108,14 @@ static void cupid_sdl_handle_key(CupidGb *gb, SDL_Scancode sc, bool pressed)
     }
 }
 
+/**
+ * @brief Logs the name of the target system for the active emulator instance.
+ *
+ * Queries @ref cupid_system_name and writes the result at INFO level.
+ * If @p emulator is NULL, an error is logged instead.
+ *
+ * @param emulator Pointer to the emulator instance, or NULL.
+ */
 static void cupid_sdl_log_system(const CupidEmulator *emulator)
 {
     if (emulator == 0) {
@@ -73,6 +126,34 @@ static void cupid_sdl_log_system(const CupidEmulator *emulator)
     cupid_log_infof("Target system: %s", cupid_system_name(emulator->target_system));
 }
 
+/**
+ * @brief Initializes the SDL2 application and all associated resources.
+ *
+ * Performs the following in order:
+ *   1. Determines the output resolution (SGB 256\u00d7224 or DMG/CGB 160\u00d7144).
+ *   2. Computes the largest integer scale factor that fits within
+ *      `config->width` \u00d7 `config->height`.
+ *   3. Allocates the ARGB frame-pixel staging buffer.
+ *   4. Calls `SDL_Init` for video and audio subsystems.
+ *   5. Creates the SDL window, renderer (accelerated + vsync), and
+ *      an ARGB8888 streaming texture.
+ *   6. Sets the renderer\u2019s logical size to the native texture dimensions so
+ *      SDL scales to fill the window automatically.
+ *   7. Opens an SDL audio device at 44100 Hz stereo int16 (push API).
+ *
+ * On any failure after `SDL_Init`, previously created SDL objects are
+ * destroyed before returning `false`.
+ *
+ * @param app      Pointer to an uninitialized @ref CupidSdlApp structure.
+ * @param config   Pointer to the window configuration (title, dimensions).
+ * @param emulator Pointer to the emulator instance, or NULL to run without
+ *                 emulation (display only).
+ *
+ * @return `true` on success, `false` if any required resource could not
+ *         be created.
+ *
+ * @note Does nothing and returns `false` if @p app or @p config is NULL.
+ */
 bool cupid_sdl_app_init(CupidSdlApp *app,
                         const CupidSdlAppConfig *config,
                         CupidEmulator *emulator)
@@ -203,6 +284,35 @@ bool cupid_sdl_app_init(CupidSdlApp *app,
     return true;
 }
 
+/**
+ * @brief Runs the SDL2 main loop until the window is closed.
+ *
+ * Each iteration of the loop:
+ *   1. **Events** \u2014 drains the SDL event queue; maps keyboard events to
+ *      joypad state via @ref cupid_sdl_handle_key; sets `app->running =
+ *      false` on SDL_QUIT.
+ *   2. **Emulation** \u2014 calls @ref cupid_emulator_step up to
+ *      `CUPID_GB_MAX_STEPS_PER_FRAME` (80000) times, stopping early when
+ *      `gb.frame_ready` is set (VBlank).
+ *   3. **Rendering** \u2014 converts the active frame buffer to ARGB8888:
+ *      - SGB active: @ref cupid_gb_sgb_render_argb
+ *      - CGB / compat mode: @ref cupid_rgb555_to_argb per pixel
+ *      - DMG: index lookup in `cupid_dmg_palette`
+ *      Then uploads to the SDL texture and presents the renderer.
+ *   4. **Audio** \u2014 drains APU samples via @ref cupid_gb_apu_drain and
+ *      pushes them to the SDL audio device queue.
+ *   5. **Speed regulation** \u2014 if an audio device is open, spins with
+ *      1 ms sleeps (processing events) until the queued audio drops
+ *      below ~8 KiB (~46 ms). Without audio, pads the frame to ~17 ms
+ *      (\u224860 fps) via `SDL_Delay`.
+ *
+ * Returns as soon as `app->running` becomes `false`, either from a
+ * quit event or an emulation error.
+ *
+ * @param app Pointer to an initialized @ref CupidSdlApp.
+ *
+ * @note Does nothing if @p app is NULL or `app->running` is `false`.
+ */
 void cupid_sdl_app_run(CupidSdlApp *app)
 {
     /* Safety cap: a bit over one full DMG frame (70224 T-cycles / 2 per step) */
@@ -338,6 +448,18 @@ void cupid_sdl_app_run(CupidSdlApp *app)
     }
 }
 
+/**
+ * @brief Shuts down the SDL2 application and releases all resources.
+ *
+ * Closes the SDL audio device, destroys the streaming texture, frees
+ * the frame-pixel staging buffer, destroys the renderer and window, and
+ * calls `SDL_Quit`. All pointers inside @p app are set to NULL / 0
+ * after release.
+ *
+ * @param app Pointer to an initialized @ref CupidSdlApp.
+ *
+ * @note Does nothing if @p app is NULL.
+ */
 void cupid_sdl_app_shutdown(CupidSdlApp *app)
 {
     if (app == 0) {

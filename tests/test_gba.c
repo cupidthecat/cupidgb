@@ -481,7 +481,7 @@ static void test_arm_mov_instruction(void)
     gba.cpu.cpsr = CUPID_ARM_MODE_SVC | CUPID_ARM_FLAG_I | CUPID_ARM_FLAG_F;
     gba.cpu.pipeline_valid = false;
 
-    /* Step once — executes MOV R0, #42 */
+    /* Step once - executes MOV R0, #42 */
     cupid_arm7_step(&gba);
 
     assert(gba.cpu.r[0] == 42u);

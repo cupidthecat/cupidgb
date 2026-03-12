@@ -1,3 +1,11 @@
+/**
+ * @file emulator.c
+ * @brief Emulator core for managing system state, ROM loading, and stepping.
+ *
+ * Provides a unified interface for different target systems (e.g., GB, GBC).
+ * All public functions operate on a `CupidEmulator` instance and delegate
+ * system-specific logic to the appropriate subsystem (e.g., `cupid_gb_*`).
+ */
 #include "cupid/core/emulator.h"
 
 #include "cupid/common/log.h"

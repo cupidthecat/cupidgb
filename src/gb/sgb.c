@@ -1,3 +1,23 @@
+/**
+ * @file sgb.c
+ * @brief Super Game Boy (SGB/SGB2) enhancement emulation.
+ *
+ * Implements the SGB command protocol, attribute/palette management,
+ * border rendering, and the JOYP-based serial packet interface.
+ *
+ * Supported SGB commands:
+ *   - PAL01/23/03/12, PAL_SET, PAL_TRN  – palette programming
+ *   - ATTR_BLK, ATTR_LIN, ATTR_DIV, ATTR_CHR, ATTR_TRN, ATTR_SET
+ *                                         – per-tile attribute map editing
+ *   - CHR_TRN, PCT_TRN                   – border tile and tilemap upload
+ *   - MLT_REQ                            – multi-player controller select
+ *   - MASK_EN                            – screen mask control
+ *
+ * The SGB command stream is clocked in via writes to the P1/JOYP register
+ * (0xFF00). @ref cupid_gb_sgb_write_joyp should be called on every JOYP
+ * write while the SGB is active.
+ */
+
 #include "cupid/gb/sgb.h"
 
 #include <string.h>
@@ -26,11 +46,28 @@ enum {
     CUPID_SGB_CMD_MASK_EN = 0x17
 };
 
+/**
+ * @brief Reads a little-endian 16-bit value from a byte buffer.
+ *
+ * @param data Pointer to at least 2 bytes of data.
+ *
+ * @return The 16-bit value at @p data, interpreted as little-endian.
+ */
 static uint16_t cupid_gb_sgb_read_le16(const uint8_t *data)
 {
     return (uint16_t)(data[0] | ((uint16_t)data[1] << 8u));
 }
 
+/**
+ * @brief Converts a 15-bit RGB555 color to a 32-bit ARGB8888 value.
+ *
+ * Each 5-bit channel is scaled to the full 8-bit range using the
+ * formula `(c * 255 + 15) / 31`. Alpha is always set to 0xFF.
+ *
+ * @param color The 15-bit RGB555 color (bits 14–0 = 0BBBBBGGGGGRRRRR).
+ *
+ * @return The corresponding 0xAARRGGBB value with full alpha.
+ */
 static uint32_t cupid_gb_sgb_rgb15_to_argb(uint16_t color)
 {
     uint32_t r = (uint32_t)(color & 0x1fu);
@@ -44,6 +81,14 @@ static uint32_t cupid_gb_sgb_rgb15_to_argb(uint16_t color)
     return 0xff000000u | (r << 16u) | (g << 8u) | b;
 }
 
+/**
+ * @brief Fills all four SGB screen palettes with the default greyscale ramp.
+ *
+ * Writes the four standard DMG shades (white → black) into every palette
+ * slot so the screen has sensible colors before any PAL command is received.
+ *
+ * @param gb Pointer to the Game Boy state.
+ */
 static void cupid_gb_sgb_set_default_palettes(CupidGb *gb)
 {
     static const uint16_t default_palette[4] = {
@@ -56,6 +101,16 @@ static void cupid_gb_sgb_set_default_palettes(CupidGb *gb)
     }
 }
 
+/**
+ * @brief Loads an attribute file from the SGB attribute file RAM into the live attribute map.
+ *
+ * Each attribute file is 90 bytes (360 2-bit entries) which covers the
+ * full 20×18 attribute map. The selected file is unpacked into
+ * `gb->sgb.attribute_map` as one byte per tile.
+ *
+ * @param gb         Pointer to the Game Boy state.
+ * @param file_index The attribute file index (0–0x2C). Out-of-range values are ignored.
+ */
 static void cupid_gb_sgb_load_attr_file(CupidGb *gb, unsigned file_index)
 {
     uint8_t *output;
@@ -77,6 +132,17 @@ static void cupid_gb_sgb_load_attr_file(CupidGb *gb, unsigned file_index)
     }
 }
 
+/**
+ * @brief Handles a PAL01/PAL23/PAL03/PAL12 palette command.
+ *
+ * Copies color 0 from the command data into all four screen palettes
+ * (enforcing shared color 0), then writes the three unique colors of
+ * the @p first and @p second palette from the command payload.
+ *
+ * @param gb     Pointer to the Game Boy state.
+ * @param first  Index of the first palette to update (0–3).
+ * @param second Index of the second palette to update (0–3).
+ */
 static void cupid_gb_sgb_pal_command(CupidGb *gb, unsigned first, unsigned second)
 {
     unsigned i;
@@ -93,11 +159,28 @@ static void cupid_gb_sgb_pal_command(CupidGb *gb, unsigned first, unsigned secon
     }
 }
 
+/**
+ * @brief Captures the first 4 KiB of VRAM into a caller-supplied buffer.
+ *
+ * Used by PAL_TRN, ATTR_TRN, CHR_TRN, and PCT_TRN to snapshot the
+ * tile data that the game has pre-loaded into VRAM bank 0.
+ *
+ * @param gb     Pointer to the Game Boy state.
+ * @param buffer Destination buffer; must be at least 0x1000 bytes.
+ */
 static void cupid_gb_sgb_capture_transfer_buffer(const CupidGb *gb, uint8_t *buffer)
 {
     memcpy(buffer, gb->video_ram, 0x1000u);
 }
 
+/**
+ * @brief Executes the PAL_TRN command: uploads 512 palettes from VRAM.
+ *
+ * Reads 4 KiB from VRAM and interprets it as 512 palettes of 4 RGB555
+ * colors each, storing them in `gb->sgb.ram_palettes`.
+ *
+ * @param gb Pointer to the Game Boy state.
+ */
 static void cupid_gb_sgb_apply_pal_trn(CupidGb *gb)
 {
     uint8_t buffer[0x1000u];
@@ -109,6 +192,15 @@ static void cupid_gb_sgb_apply_pal_trn(CupidGb *gb)
     }
 }
 
+/**
+ * @brief Executes the ATTR_TRN command: uploads attribute files from VRAM.
+ *
+ * Reads 4 KiB from VRAM and stores it verbatim into
+ * `gb->sgb.attribute_files`, providing up to 45 attribute files of
+ * 90 bytes each.
+ *
+ * @param gb Pointer to the Game Boy state.
+ */
 static void cupid_gb_sgb_apply_attr_trn(CupidGb *gb)
 {
     uint8_t buffer[0x1000u];
@@ -117,6 +209,17 @@ static void cupid_gb_sgb_apply_attr_trn(CupidGb *gb)
     memcpy(gb->sgb.attribute_files, buffer, sizeof(gb->sgb.attribute_files));
 }
 
+/**
+ * @brief Executes a CHR_TRN command: uploads one half of the border tile set from VRAM.
+ *
+ * The SGB border uses 256 tiles, transferred in two 4 KiB blocks.
+ * The @p high flag selects which block is written:
+ *   - `false` → lower 4 KiB (tiles 0–127) at offset 0x0000
+ *   - `true`  → upper 4 KiB (tiles 128–255) at offset 0x1000
+ *
+ * @param gb   Pointer to the Game Boy state.
+ * @param high `false` for the lower tile block, `true` for the upper block.
+ */
 static void cupid_gb_sgb_apply_chr_trn(CupidGb *gb, bool high)
 {
     uint8_t buffer[0x1000u];
@@ -125,6 +228,15 @@ static void cupid_gb_sgb_apply_chr_trn(CupidGb *gb, bool high)
     memcpy(&gb->sgb.border_tiles[high ? 0x1000u : 0u], buffer, sizeof(buffer));
 }
 
+/**
+ * @brief Executes the PCT_TRN command: uploads the border tilemap and palettes from VRAM.
+ *
+ * Reads 4 KiB from VRAM. The first 2 KiB are decoded as the
+ * 32×28 border tilemap (one 16-bit entry per tile), and the following
+ * 512 bytes are decoded as the 8 border palettes of 16 RGB555 colors each.
+ *
+ * @param gb Pointer to the Game Boy state.
+ */
 static void cupid_gb_sgb_apply_pct_trn(CupidGb *gb)
 {
     uint8_t buffer[0x1000u];
@@ -139,6 +251,15 @@ static void cupid_gb_sgb_apply_pct_trn(CupidGb *gb)
     }
 }
 
+/**
+ * @brief Dispatches a fully-received SGB command packet.
+ *
+ * Reads the command code from `gb->sgb.command[0]` (bits 7–3) and
+ * executes the corresponding operation. Unknown or intentionally ignored
+ * commands are logged at INFO level.
+ *
+ * @param gb Pointer to the Game Boy state.
+ */
 static void cupid_gb_sgb_handle_command(CupidGb *gb)
 {
     uint8_t command = (uint8_t)(gb->sgb.command[0] >> 3u);
@@ -383,6 +504,16 @@ static void cupid_gb_sgb_handle_command(CupidGb *gb)
     }
 }
 
+/**
+ * @brief Initializes the SGB subsystem state.
+ *
+ * Zeroes all SGB fields and sets the default greyscale palettes.
+ * The player count is reset to 1 (single-player mode).
+ *
+ * @param gb Pointer to the Game Boy state.
+ *
+ * @note Does nothing if @p gb is NULL.
+ */
 void cupid_gb_sgb_init(CupidGb *gb)
 {
     if (gb == NULL) {
@@ -394,6 +525,21 @@ void cupid_gb_sgb_init(CupidGb *gb)
     cupid_gb_sgb_set_default_palettes(gb);
 }
 
+/**
+ * @brief Applies a CGB compatibility palette to the SGB screen palettes.
+ *
+ * Queries the CGB compatibility palette for the loaded ROM via
+ * @ref cupid_cgb_get_compatibility_palette and writes the background
+ * palette into all four SGB screen palette slots.
+ *
+ * Called after loading a ROM on an SGB/SGB2 when the cartridge does not
+ * natively support SGB enhancements but should still display with
+ * hardware-accurate colors.
+ *
+ * @param gb Pointer to the Game Boy state.
+ *
+ * @note Does nothing if @p gb is NULL or no compatibility palette is found.
+ */
 void cupid_gb_sgb_apply_compatibility_palette(CupidGb *gb)
 {
     uint16_t bg[4];
@@ -414,11 +560,39 @@ void cupid_gb_sgb_apply_compatibility_palette(CupidGb *gb)
     }
 }
 
+/**
+ * @brief Returns whether the SGB enhancement layer is active.
+ *
+ * The SGB is considered active when the emulator is in SGB/SGB2 mode
+ * and the cartridge declared SGB support (SGB flag byte = 0x03).
+ *
+ * @param gb Pointer to the Game Boy state.
+ *
+ * @return `true` if SGB enhancements are active, `false` otherwise.
+ */
 bool cupid_gb_sgb_active(const CupidGb *gb)
 {
     return gb != NULL && gb->sgb.enabled;
 }
 
+/**
+ * @brief Processes a write to the P1/JOYP register (0xFF00) for SGB packet reception.
+ *
+ * Implements the 4-state SGB serial protocol driven by bits 5–4 of JOYP:
+ *   - `11` (reset pulse): arms the receiver for a new packet
+ *   - `01` (start bit): marks the beginning of a bit stream
+ *   - `10` (zero bit): clocks in a 0 or finalizes the packet on stop
+ *   - `01` (one bit): clocks in a 1 or resets state on stop
+ *
+ * When a complete packet (or multi-packet command) is received,
+ * @ref cupid_gb_sgb_handle_command is called. Also handles multi-player
+ * controller cycling when P15 transitions high.
+ *
+ * @param gb    Pointer to the Game Boy state.
+ * @param value The value being written to JOYP.
+ *
+ * @note Does nothing if @p gb is NULL or SGB is not active.
+ */
 void cupid_gb_sgb_write_joyp(CupidGb *gb, uint8_t value)
 {
     uint16_t command_size;
@@ -498,6 +672,31 @@ void cupid_gb_sgb_write_joyp(CupidGb *gb, uint8_t value)
     }
 }
 
+/**
+ * @brief Renders a full SGB frame into an ARGB8888 pixel buffer.
+ *
+ * Composites the Game Boy screen pixels (160×144) and the SGB border
+ * (256×224) into @p pixels using the active attribute map, screen
+ * palettes, border tilemap, border tiles, and border palettes.
+ *
+ * The Game Boy viewport is placed at (@ref CUPID_SGB_VIEWPORT_X,
+ * @ref CUPID_SGB_VIEWPORT_Y) within the output buffer. Border tiles
+ * that overlap the viewport with color index 0 are left transparent
+ * (the screen pixels show through). The active mask mode is respected:
+ *   - @ref CUPID_SGB_MASK_DISABLED / FREEZE: normal screen rendering
+ *   - @ref CUPID_SGB_MASK_BLACK: viewport filled with black
+ *   - @ref CUPID_SGB_MASK_COLOR0: viewport filled with palette color 0
+ *
+ * @param gb          Pointer to the Game Boy state.
+ * @param pixels      Output buffer of at least
+ *                    `CUPID_SGB_SCREEN_WIDTH * CUPID_SGB_SCREEN_HEIGHT`
+ *                    `uint32_t` elements.
+ * @param pixel_count Total number of elements in @p pixels; must be≥
+ *                    `CUPID_SGB_SCREEN_WIDTH * CUPID_SGB_SCREEN_HEIGHT`.
+ *
+ * @note Does nothing if @p gb or @p pixels is NULL, or @p pixel_count
+ *       is too small.
+ */
 void cupid_gb_sgb_render_argb(const CupidGb *gb, uint32_t *pixels, size_t pixel_count)
 {
     uint32_t border_colors[8u * 16u];

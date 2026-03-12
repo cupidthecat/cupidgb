@@ -1,8 +1,15 @@
-/* =========================================================================
- * Cartridge – ROM/RAM parsing, MBC bank switching
- *   Shared between Game Boy (DMG) and Game Boy Color (CGB).
- *   Same cartridge header format and MBC controllers.
- * ========================================================================= */
+/**
+ * @file cartridge.c
+ * @brief ROM/RAM parsing, MBC bank-switching, and save-RAM persistence.
+ *
+ * Handles cartridge header parsing, ROM/RAM loading, MBC bank-switching
+ * logic, and save-RAM (.sav) persistence. Shared between Game Boy (DMG)
+ * and Game Boy Color (CGB) — both use the same cartridge header format
+ * and MBC controllers.
+ *
+ * Supported MBC types: ROM-only, MBC1 (including multicart), MBC2, MBC3
+ * (with optional RTC), MBC5, MBC6, MBC7, MMM01, HuC1, and HuC3.
+ */
 
 #include "cupid/gb/cartridge.h"
 
@@ -14,7 +21,7 @@
 #include "cupid/gbc/cgb.h"
 #include "cupid/common/log.h"
 
-/* --- Header field offsets --- */
+// Header field offsets
 
 enum {
     CUPID_GB_HEADER_START    = 0x0134,
@@ -52,8 +59,15 @@ enum {
     CUPID_GB_SGB_REFERENCE_STREAM_POPCOUNT = 288
 };
 
-/* --- Small helpers (file-local) --- */
+// Small helpers (file-local)
 
+/**
+ * @brief Converts a RAM size code from the cartridge header to a byte count.
+ *
+ * @param code The RAM size code read from header offset 0x0149.
+ *
+ * @return The corresponding RAM size in bytes, or 0 for unrecognised codes.
+ */
 static size_t cupid_gb_ram_size_from_code(uint8_t code)
 {
     switch (code) {
@@ -74,6 +88,13 @@ static size_t cupid_gb_ram_size_from_code(uint8_t code)
     }
 }
 
+/**
+ * @brief Counts the number of set bits in an 8-bit value.
+ *
+ * @param value The byte to count set bits in.
+ *
+ * @return The number of bits set to 1 in @p value.
+ */
 static uint8_t cupid_gb_popcount8(uint8_t value)
 {
     uint8_t count = 0u;
@@ -86,6 +107,21 @@ static uint8_t cupid_gb_popcount8(uint8_t value)
     return count;
 }
 
+/**
+ * @brief Approximates the DIV counter value after the SGB boot ROM finishes.
+ *
+ * The SGB boot ROM transmits the cartridge header as packet data to the
+ * SNES before jumping to 0x0100. The time spent doing so — and therefore
+ * the resulting DIV phase — depends on the number of 1-bits in that packet
+ * stream. This function replicates that calculation so HLE boot mode lands
+ * on the correct post-boot DIV phase for timing-sensitive tests.
+ *
+ * @param rom_data Pointer to the full ROM data buffer.
+ * @param rom_size Size of the ROM data in bytes.
+ *
+ * @return The estimated DIV counter value (6-bit, 0–63) at the point the
+ *         boot ROM hands off to the cartridge.
+ */
 static uint16_t cupid_gb_sgb_boot_div_counter(const uint8_t *rom_data, size_t rom_size)
 {
     size_t offset = CUPID_GB_SGB_PACKET_START;
@@ -121,6 +157,13 @@ static uint16_t cupid_gb_sgb_boot_div_counter(const uint8_t *rom_data, size_t ro
     return (uint16_t)(adjusted_counter & 0x3f);
 }
 
+/**
+ * @brief Converts a ROM size code from the cartridge header to a bank count.
+ *
+ * @param code The ROM size code read from header offset 0x0148.
+ *
+ * @return The number of 16 KiB ROM banks, or 0 for unrecognised codes.
+ */
 static size_t cupid_gb_rom_bank_count_from_code(uint8_t code)
 {
     switch (code) {
@@ -153,6 +196,13 @@ static size_t cupid_gb_rom_bank_count_from_code(uint8_t code)
     }
 }
 
+/**
+ * @brief Converts a RAM size code from the cartridge header to a bank count.
+ *
+ * @param code The RAM size code read from header offset 0x0149.
+ *
+ * @return The number of 8 KiB RAM banks, or 0 for unrecognised codes.
+ */
 static size_t cupid_gb_ram_bank_count_from_code(uint8_t code)
 {
     switch (code) {
@@ -172,6 +222,14 @@ static size_t cupid_gb_ram_bank_count_from_code(uint8_t code)
     }
 }
 
+/**
+ * @brief Identifies the MBC type from the cartridge type byte.
+ *
+ * @param cartridge_type The cartridge type byte read from header offset 0x0147.
+ *
+ * @return The corresponding @ref CupidGbMbcType enum value, or
+ *         @ref CUPID_GB_MBC_UNKNOWN for unrecognised values.
+ */
 static CupidGbMbcType cupid_gb_detect_mbc_type(uint8_t cartridge_type)
 {
     switch (cartridge_type) {
@@ -216,6 +274,20 @@ static CupidGbMbcType cupid_gb_detect_mbc_type(uint8_t cartridge_type)
     }
 }
 
+/**
+ * @brief Computes the header checksum for a ROM image at a given base offset.
+ *
+ * Implements the standard Game Boy header checksum algorithm over bytes
+ * 0x0134–0x014C, relative to @p base_offset.
+ *
+ * @param rom_data    Pointer to the ROM data buffer.
+ * @param rom_size    Size of the ROM data in bytes.
+ * @param base_offset Byte offset of the start of the ROM header within
+ *                    @p rom_data (0 for the primary header).
+ *
+ * @return The computed 8-bit checksum, or 0 if @p rom_data is NULL or the
+ *         ROM is too small to contain the checksum byte.
+ */
 static uint8_t cupid_gb_compute_header_checksum_at(const uint8_t *rom_data,
                                                    size_t rom_size,
                                                    size_t base_offset)
@@ -236,6 +308,16 @@ static uint8_t cupid_gb_compute_header_checksum_at(const uint8_t *rom_data,
     return checksum;
 }
 
+/**
+ * @brief Computes the header checksum for the primary ROM header.
+ *
+ * Convenience wrapper around @ref cupid_gb_compute_header_checksum_at
+ * with base_offset of 0.
+ *
+ * @param rom_data Pointer to the ROM data buffer.
+ *
+ * @return The computed 8-bit header checksum.
+ */
 static uint8_t cupid_gb_compute_header_checksum(const uint8_t *rom_data)
 {
     return cupid_gb_compute_header_checksum_at(rom_data,
@@ -243,6 +325,18 @@ static uint8_t cupid_gb_compute_header_checksum(const uint8_t *rom_data)
                                                0u);
 }
 
+/**
+ * @brief Checks whether a ROM image contains the Nintendo logo bitmap.
+ *
+ * Compares the 48-byte logo region at 0x0104–0x0133 (relative to
+ * @p base_offset) against the official reference bitmap.
+ *
+ * @param rom_data    Pointer to the ROM data buffer.
+ * @param rom_size    Size of the ROM data in bytes.
+ * @param base_offset Byte offset of the ROM header within @p rom_data.
+ *
+ * @return `true` if the logo matches exactly, `false` otherwise.
+ */
 static bool cupid_gb_has_nintendo_logo(const uint8_t *rom_data,
                                        size_t rom_size,
                                        size_t base_offset)
@@ -258,6 +352,23 @@ static bool cupid_gb_has_nintendo_logo(const uint8_t *rom_data,
                   sizeof(cupid_gb_nintendo_logo)) == 0;
 }
 
+/**
+ * @brief Detects whether a MBC1 cartridge uses a multicart banking layout.
+ *
+ * A MBC1 multicart partitions its 64-bank ROM into four 16-bank sub-ROMs,
+ * each with its own valid Nintendo logo and header checksum at a 256 KiB
+ * boundary. All four sub-ROM headers must pass validation for detection
+ * to succeed.
+ *
+ * @param rom_data Pointer to the ROM data buffer.
+ * @param rom_size Size of the ROM data in bytes.
+ * @param header   Pointer to the already-parsed cartridge header.
+ *
+ * @return `true` if a MBC1 multicart layout is detected, `false` otherwise.
+ *
+ * @note Returns `false` if @p rom_data or @p header is NULL, if the MBC
+ *       type is not MBC1, or if the ROM does not have exactly 64 banks.
+ */
 static bool cupid_gb_detect_mbc1_multicart(const uint8_t *rom_data,
                                            size_t rom_size,
                                            const CupidGbCartridgeHeader *header)
@@ -292,8 +403,22 @@ static bool cupid_gb_detect_mbc1_multicart(const uint8_t *rom_data,
     return true;
 }
 
-/* --- MBC bank helpers (used by memory map in gb.c) --- */
+// MBC bank helpers (used by memory map in gb.c)
 
+/**
+ * @brief Returns the effective ROM bank number for a given address region.
+ *
+ * Computes the physical 16 KiB ROM bank that should be mapped into the
+ * requested address region, accounting for MBC type, banking mode, and
+ * multicart layout. The result is always wrapped modulo the available
+ * bank count.
+ *
+ * @param gb           Pointer to the Game Boy state.
+ * @param lower_region `true` for the fixed lower region (0x0000–0x3FFF),
+ *                     `false` for the switchable upper region (0x4000–0x7FFF).
+ *
+ * @return The effective ROM bank index, or 0 if no banks are present.
+ */
 size_t cupid_gb_effective_rom_bank(const CupidGb *gb, bool lower_region)
 {
     size_t bank;
@@ -361,6 +486,18 @@ size_t cupid_gb_effective_rom_bank(const CupidGb *gb, bool lower_region)
     return bank % gb->rom_bank_count;
 }
 
+/**
+ * @brief Returns the effective cartridge RAM bank number.
+ *
+ * Computes the physical 8 KiB RAM bank that should be mapped into the
+ * cartridge RAM window (0xA000–0xBFFF), accounting for MBC type and
+ * banking mode. The result is always wrapped modulo the available bank
+ * count.
+ *
+ * @param gb Pointer to the Game Boy state.
+ *
+ * @return The effective RAM bank index, or 0 if no RAM banks are present.
+ */
 size_t cupid_gb_effective_ram_bank(const CupidGb *gb)
 {
     if (gb->ram_bank_count == 0u) {
@@ -379,8 +516,23 @@ size_t cupid_gb_effective_ram_bank(const CupidGb *gb)
     return gb->current_ram_bank % gb->ram_bank_count;
 }
 
-/* --- Header parsing --- */
+// Header parsing
 
+/**
+ * @brief Parses the cartridge header from a ROM image.
+ *
+ * Extracts title, CGB/SGB flags, cartridge type, ROM/RAM size codes,
+ * MBC type, battery/timer/rumble capability flags, and validates the
+ * header checksum.
+ *
+ * @param rom_data Pointer to the ROM data buffer.
+ * @param rom_size Size of the ROM data in bytes.
+ * @param header   Output pointer to a @ref CupidGbCartridgeHeader struct
+ *                 to populate.
+ *
+ * @return `true` on success, `false` if any pointer is NULL or the ROM is
+ *         too small to contain the full header.
+ */
 bool cupid_gb_parse_header(const uint8_t *rom_data,
                            size_t rom_size,
                            CupidGbCartridgeHeader *header)
@@ -470,8 +622,23 @@ bool cupid_gb_parse_header(const uint8_t *rom_data,
     return true;
 }
 
-/* --- ROM loading --- */
+// ROM loading
 
+/**
+ * @brief Loads a Game Boy ROM from a file path.
+ *
+ * Opens the file at @p path, reads its entire contents into a temporary
+ * buffer, and delegates to @ref cupid_gb_load_rom. The buffer is freed
+ * before returning.
+ *
+ * @param gb   Pointer to an initialized @ref CupidGb instance.
+ * @param path Null-terminated path to the ROM file.
+ *
+ * @return `true` if the ROM was read and loaded successfully,
+ *         `false` on any I/O or parse error.
+ *
+ * @note Returns `false` if @p gb or @p path is NULL.
+ */
 bool cupid_gb_load_rom_file(CupidGb *gb, const char *path)
 {
     FILE *file;
@@ -530,6 +697,25 @@ bool cupid_gb_load_rom_file(CupidGb *gb, const char *path)
     return loaded;
 }
 
+/**
+ * @brief Loads a Game Boy ROM from a memory buffer.
+ *
+ * Copies the ROM into the emulator, parses the cartridge header, sets
+ * CGB/SGB mode flags, initialises all MBC state, and optionally applies
+ * compatibility palettes. Must be called on an already-initialized
+ * @ref CupidGb instance.
+ *
+ * @param gb       Pointer to an initialized @ref CupidGb instance.
+ * @param rom_data Pointer to the ROM data buffer.
+ * @param rom_size Size of the ROM data in bytes.
+ *
+ * @return `true` if the ROM was loaded and validated successfully,
+ *         `false` on any validation or size error.
+ *
+ * @note Returns `false` if @p gb or @p rom_data is NULL.
+ * @note An invalid header checksum is non-fatal; a warning is logged and
+ *       loading continues.
+ */
 bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size)
 {
     if (gb == 0 || rom_data == 0) {
@@ -654,8 +840,18 @@ bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size)
     return true;
 }
 
-/* --- Name helpers --- */
+// Name helpers
 
+/**
+ * @brief Returns the human-readable name for a cartridge type byte.
+ *
+ * @param cartridge_type The cartridge type byte from header offset 0x0147.
+ *
+ * @return A null-terminated string such as `"MBC1+RAM+BATTERY"`, or
+ *         `"UNKNOWN"` for unrecognised values.
+ *
+ * @note The returned string is a literal and must not be modified or freed.
+ */
 const char *cupid_gb_cartridge_type_name(uint8_t cartridge_type)
 {
     switch (cartridge_type) {
@@ -689,6 +885,16 @@ const char *cupid_gb_cartridge_type_name(uint8_t cartridge_type)
     }
 }
 
+/**
+ * @brief Returns the human-readable name for an MBC type.
+ *
+ * @param mbc_type The @ref CupidGbMbcType enum value to look up.
+ *
+ * @return A null-terminated string such as `"MBC5"`, or `"UNKNOWN"` for
+ *         unrecognised values.
+ *
+ * @note The returned string is a literal and must not be modified or freed.
+ */
 const char *cupid_gb_mbc_name(CupidGbMbcType mbc_type)
 {
     switch (mbc_type) {
@@ -706,8 +912,21 @@ const char *cupid_gb_mbc_name(CupidGbMbcType mbc_type)
     }
 }
 
-/* --- Save RAM (.sav) helpers --- */
+// Save RAM (.sav) helpers
 
+/**
+ * @brief Derives and stores the save file path from a ROM file path.
+ *
+ * Copies @p rom_path into the emulator's `save_path` field and replaces
+ * the file extension with `.sav`. If the resulting path would exceed the
+ * internal buffer, `save_path` is set to an empty string and save I/O is
+ * silently disabled.
+ *
+ * @param gb       Pointer to the @ref CupidGb instance.
+ * @param rom_path Null-terminated path to the ROM file.
+ *
+ * @note Does nothing if @p gb or @p rom_path is NULL.
+ */
 void cupid_gb_set_save_path(CupidGb *gb, const char *rom_path)
 {
     size_t len;
@@ -736,6 +955,19 @@ void cupid_gb_set_save_path(CupidGb *gb, const char *rom_path)
     }
 }
 
+/**
+ * @brief Loads cartridge RAM contents from the save file.
+ *
+ * Reads up to `cartridge_ram_size` bytes from the `.sav` file indicated
+ * by `gb->save_path` into `gb->cartridge_ram`. A partial read is accepted
+ * with a warning. Missing save files are silently ignored.
+ *
+ * @param gb Pointer to the @ref CupidGb instance.
+ *
+ * @note Does nothing if @p gb is NULL, `save_path` is empty, the
+ *       cartridge has no battery, RAM size is zero, the header checksum
+ *       is invalid, or the title is blank.
+ */
 void cupid_gb_load_save(CupidGb *gb)
 {
     FILE *file;
@@ -761,7 +993,7 @@ void cupid_gb_load_save(CupidGb *gb)
 
     file = fopen(gb->save_path, "rb");
     if (file == 0) {
-        return; /* No save file yet — not an error */
+        return; /* No save file yet - not an error */
     }
 
     bytes_read = fread(gb->cartridge_ram, 1u, gb->cartridge_ram_size, file);
@@ -776,6 +1008,19 @@ void cupid_gb_load_save(CupidGb *gb)
     }
 }
 
+/**
+ * @brief Writes cartridge RAM contents to the save file.
+ *
+ * Writes `cartridge_ram_size` bytes from `gb->cartridge_ram` to the
+ * `.sav` file indicated by `gb->save_path`, creating or overwriting
+ * it as needed.
+ *
+ * @param gb Pointer to the @ref CupidGb instance.
+ *
+ * @note Does nothing if @p gb is NULL, `save_path` is empty, the
+ *       cartridge has no battery, RAM size is zero, the header checksum
+ *       is invalid, or the title is blank.
+ */
 void cupid_gb_save(CupidGb *gb)
 {
     FILE *file;

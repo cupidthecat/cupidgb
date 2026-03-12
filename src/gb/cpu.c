@@ -1,8 +1,19 @@
-/* =========================================================================
- * SM83 CPU – shared between Game Boy (DMG) and Game Boy Color (CGB)
- *   Register helpers, ALU operations, instruction decode/execute,
- *   interrupt service routine.
- * ========================================================================= */
+/**
+ * @file cpu.c
+ * @brief SM83 CPU emulation, shared between Game Boy (DMG) and Game Boy Color (CGB).
+ *
+ * Implements the full SM83 instruction set, including:
+ *   - Register file helpers (8-bit and 16-bit register pairs)
+ *   - ALU operations (add, sub, adc, sbc, and, or, xor, cp, inc, dec, daa)
+ *   - Shift, rotate, and bit operations (CB-prefixed)
+ *   - Instruction fetch, decode, and execute (unprefixed and 0xCB-prefixed)
+ *   - Interrupt request and service routine (ISR)
+ *   - DMG OAM corruption bug emulation
+ *
+ * Cycle timing is driven by @ref cupid_gb_tick, called inline during
+ * instruction execution to advance the PPU, APU, and timer subsystems
+ * at machine-cycle granularity.
+ */
 
 #include "cupid/gb/cpu.h"
 
@@ -11,13 +22,28 @@
 #include "cupid/gb/timer.h"
 #include "cupid/common/log.h"
 
-/* ---------- register helpers ---------- */
+// Register helpers
 
+/**
+ * @brief Reads a CPU flag from the F register.
+ *
+ * @param cpu  Pointer to the CPU state.
+ * @param mask One of the @ref CUPID_GB_FLAG_* bitmasks.
+ *
+ * @return `true` if the flag is set, `false` otherwise.
+ */
 static bool cupid_gb_get_flag(const CupidGbCpu *cpu, uint8_t mask)
 {
     return (cpu->f & mask) != 0u;
 }
 
+/**
+ * @brief Sets or clears a CPU flag in the F register.
+ *
+ * @param cpu     Pointer to the CPU state.
+ * @param mask    One of the @ref CUPID_GB_FLAG_* bitmasks.
+ * @param enabled `true` to set the flag, `false` to clear it.
+ */
 static void cupid_gb_set_flag(CupidGbCpu *cpu, uint8_t mask, bool enabled)
 {
     if (enabled) {
@@ -27,52 +53,81 @@ static void cupid_gb_set_flag(CupidGbCpu *cpu, uint8_t mask, bool enabled)
     }
 }
 
+/** @brief Returns the BC register pair as a 16-bit value. */
 static uint16_t cupid_gb_get_bc(const CupidGbCpu *cpu)
 {
     return (uint16_t)(((uint16_t)cpu->b << 8u) | cpu->c);
 }
 
+/** @brief Returns the DE register pair as a 16-bit value. */
 static uint16_t cupid_gb_get_de(const CupidGbCpu *cpu)
 {
     return (uint16_t)(((uint16_t)cpu->d << 8u) | cpu->e);
 }
 
+/** @brief Returns the HL register pair as a 16-bit value. */
 static uint16_t cupid_gb_get_hl(const CupidGbCpu *cpu)
 {
     return (uint16_t)(((uint16_t)cpu->h << 8u) | cpu->l);
 }
 
+/** @brief Returns the AF register pair as a 16-bit value. */
 static uint16_t cupid_gb_get_af(const CupidGbCpu *cpu)
 {
     return (uint16_t)(((uint16_t)cpu->a << 8u) | cpu->f);
 }
 
+/** @brief Writes a 16-bit value into the BC register pair. */
 static void cupid_gb_set_bc(CupidGbCpu *cpu, uint16_t value)
 {
     cpu->b = (uint8_t)(value >> 8u);
     cpu->c = (uint8_t)(value & 0x00ffu);
 }
 
+/** @brief Writes a 16-bit value into the DE register pair. */
 static void cupid_gb_set_de(CupidGbCpu *cpu, uint16_t value)
 {
     cpu->d = (uint8_t)(value >> 8u);
     cpu->e = (uint8_t)(value & 0x00ffu);
 }
 
+/** @brief Writes a 16-bit value into the HL register pair. */
 static void cupid_gb_set_hl(CupidGbCpu *cpu, uint16_t value)
 {
     cpu->h = (uint8_t)(value >> 8u);
     cpu->l = (uint8_t)(value & 0x00ffu);
 }
 
+/**
+ * @brief Writes a 16-bit value into the AF register pair.
+ *
+ * @note The lower nibble of F is always masked to 0 to preserve
+ *       the hardware constraint that bits 3–0 of F are always zero.
+ */
 static void cupid_gb_set_af(CupidGbCpu *cpu, uint16_t value)
 {
     cpu->a = (uint8_t)(value >> 8u);
     cpu->f = (uint8_t)(value & 0x00f0u);
 }
 
-/* ---------- DMG OAM corruption bug ---------- */
+// DMG OAM corruption bug
 
+/**
+ * @brief Checks whether a DMG OAM corruption glitch would be triggered.
+ *
+ * The OAM corruption bug only fires on original DMG hardware when the PPU
+ * is in OAM scan (Mode 2) on a visible scanline and the address falls in
+ * the OAM region (0xFE00–0xFEFF).
+ *
+ * @param gb          Pointer to the Game Boy state.
+ * @param address     The address being accessed.
+ * @param row_offset  If non-NULL and the bug is active, receives the byte
+ *                    offset of the current OAM row being scanned.
+ *
+ * @return `true` if the OAM bug is active for this access, `false` otherwise.
+ *
+ * @note Always returns `false` in CGB mode or when the LCD is disabled.
+ */
 static bool cupid_gb_oam_bug_active(const CupidGb *gb, uint16_t address, uint16_t *row_offset)
 {
     uint8_t ly;
@@ -96,6 +151,15 @@ static bool cupid_gb_oam_bug_active(const CupidGb *gb, uint16_t address, uint16_
     return true;
 }
 
+/**
+ * @brief Reads a 16-bit word from OAM at a given row and word index.
+ *
+ * @param gb         Pointer to the Game Boy state.
+ * @param row_offset Byte offset of the OAM row.
+ * @param word_index 0-based index of the 16-bit word within the row.
+ *
+ * @return The 16-bit little-endian value at that position.
+ */
 static uint16_t cupid_gb_oam_bug_get_word(const CupidGb *gb, uint16_t row_offset, uint8_t word_index)
 {
     size_t offset = (size_t)row_offset + (size_t)word_index * 2u;
@@ -104,6 +168,14 @@ static uint16_t cupid_gb_oam_bug_get_word(const CupidGb *gb, uint16_t row_offset
                       | (uint16_t)((uint16_t)gb->object_attribute_memory[offset + 1u] << 8u));
 }
 
+/**
+ * @brief Writes a 16-bit word into OAM at a given row and word index.
+ *
+ * @param gb         Pointer to the Game Boy state.
+ * @param row_offset Byte offset of the OAM row.
+ * @param word_index 0-based index of the 16-bit word within the row.
+ * @param value      The value to write (little-endian).
+ */
 static void cupid_gb_oam_bug_set_word(CupidGb *gb, uint16_t row_offset, uint8_t word_index, uint16_t value)
 {
     size_t offset = (size_t)row_offset + (size_t)word_index * 2u;
@@ -112,6 +184,13 @@ static void cupid_gb_oam_bug_set_word(CupidGb *gb, uint16_t row_offset, uint8_t 
     gb->object_attribute_memory[offset + 1u] = (uint8_t)(value >> 8u);
 }
 
+/**
+ * @brief Copies 8 bytes from one OAM row to another.
+ *
+ * @param gb             Pointer to the Game Boy state.
+ * @param dst_row_offset Byte offset of the destination row.
+ * @param src_row_offset Byte offset of the source row.
+ */
 static void cupid_gb_oam_bug_copy_row(CupidGb *gb, uint16_t dst_row_offset, uint16_t src_row_offset)
 {
     size_t index;
@@ -122,6 +201,16 @@ static void cupid_gb_oam_bug_copy_row(CupidGb *gb, uint16_t dst_row_offset, uint
     }
 }
 
+/**
+ * @brief Applies the DMG OAM corruption pattern for a write access.
+ *
+ * When triggered, corrupts the current OAM scan row using a bitwise
+ * combination of the current, previous, and two-rows-back row data,
+ * then copies a portion of the prior row into the current row.
+ *
+ * @param gb      Pointer to the Game Boy state.
+ * @param address The address involved in the write.
+ */
 static void cupid_gb_trigger_oam_bug_write(CupidGb *gb, uint16_t address)
 {
     uint16_t row_offset;
@@ -145,11 +234,29 @@ static void cupid_gb_trigger_oam_bug_write(CupidGb *gb, uint16_t address)
     }
 }
 
+/**
+ * @brief Public wrapper for the DMG OAM write corruption bug.
+ *
+ * Called by the memory subsystem when a write to the OAM region occurs
+ * during Mode 2 (OAM scan) on DMG hardware.
+ *
+ * @param gb      Pointer to the Game Boy state.
+ * @param address The address being written.
+ */
 void cupid_gb_trigger_oam_bug_write_access(CupidGb *gb, uint16_t address)
 {
     cupid_gb_trigger_oam_bug_write(gb, address);
 }
 
+/**
+ * @brief Applies the DMG OAM corruption pattern for a read access.
+ *
+ * Copies the previous OAM row into the current row, then overwrites the
+ * first word with a bitwise combination of current and previous row data.
+ *
+ * @param gb      Pointer to the Game Boy state.
+ * @param address The address involved in the read.
+ */
 static void cupid_gb_trigger_oam_bug_read(CupidGb *gb, uint16_t address)
 {
     uint16_t row_offset;
@@ -169,6 +276,16 @@ static void cupid_gb_trigger_oam_bug_read(CupidGb *gb, uint16_t address)
     cupid_gb_oam_bug_set_word(gb, row_offset, 0u, (uint16_t)(b | (a & c)));
 }
 
+/**
+ * @brief Applies the DMG OAM corruption pattern for a read-with-increment access.
+ *
+ * Handles the glitch pattern produced by 16-bit read-increment instructions
+ * (e.g. POP, LD A,(HL+)). Corrupts up to three OAM rows then falls through
+ * to the plain read corruption.
+ *
+ * @param gb      Pointer to the Game Boy state.
+ * @param address The address involved in the read.
+ */
 static void cupid_gb_trigger_oam_bug_read_increment(CupidGb *gb, uint16_t address)
 {
     uint16_t row_offset;
@@ -192,8 +309,18 @@ static void cupid_gb_trigger_oam_bug_read_increment(CupidGb *gb, uint16_t addres
     cupid_gb_trigger_oam_bug_read(gb, address);
 }
 
-/* ---------- fetch / push / pop ---------- */
+// Fetch / push / pop
 
+/**
+ * @brief Fetches the next byte from memory at PC and advances PC.
+ *
+ * Implements the halt bug: if `halt_bug` is set the PC is not incremented
+ * after the fetch, so the next byte is re-fetched on the following call.
+ *
+ * @param gb Pointer to the Game Boy state.
+ *
+ * @return The byte read from the current PC address.
+ */
 uint8_t cupid_gb_fetch_u8(CupidGb *gb)
 {
     uint8_t value = cupid_gb_read_u8(gb, gb->cpu.pc);
@@ -205,6 +332,15 @@ uint8_t cupid_gb_fetch_u8(CupidGb *gb)
     return value;
 }
 
+/**
+ * @brief Fetches the next 16-bit little-endian immediate from memory at PC.
+ *
+ * Calls @ref cupid_gb_fetch_u8 twice and combines the results.
+ *
+ * @param gb Pointer to the Game Boy state.
+ *
+ * @return The 16-bit value read from PC and PC+1.
+ */
 static uint16_t cupid_gb_fetch_u16(CupidGb *gb)
 {
     uint16_t low = cupid_gb_fetch_u8(gb);
@@ -212,13 +348,39 @@ static uint16_t cupid_gb_fetch_u16(CupidGb *gb)
     return (uint16_t)(low | (uint16_t)(high << 8u));
 }
 
-/* ---------- interrupts ---------- */
+// Interrupts
 
+/**
+ * @brief Raises one or more interrupt flags in the IF register.
+ *
+ * Sets the bits indicated by @p mask in `gb->interrupt_flags`. Only the
+ * lower 5 bits are used (VBlank, STAT, Timer, Serial, Joypad).
+ *
+ * @param gb   Pointer to the Game Boy state.
+ * @param mask Bitmask of interrupt(s) to request (e.g. `CUPID_GB_INT_VBLANK`).
+ */
 void cupid_gb_request_interrupt(CupidGb *gb, uint8_t mask)
 {
     gb->interrupt_flags = (uint8_t)((gb->interrupt_flags | mask) & 0x1fu);
 }
 
+/**
+ * @brief Services the highest-priority pending interrupt, if any.
+ *
+ * Checks IF & IE for pending interrupts. If IME is enabled and an
+ * interrupt is pending, performs the full 5-machine-cycle ISR sequence:
+ * two internal cycles, push PC high byte, re-evaluate pending interrupts
+ * (cancel-on-clear), push PC low byte, then load PC from the interrupt
+ * vector. Also unhals the CPU on any pending interrupt regardless of IME.
+ *
+ * @param gb Pointer to the Game Boy state.
+ *
+ * @return `true` if an interrupt was dispatched, `false` otherwise.
+ *
+ * @note If a new highest-priority interrupt is cleared between the high
+ *       and low PC push cycles, the dispatch is cancelled and PC is set
+ *       to 0x0000 (hardware quirk).
+ */
 bool cupid_gb_service_interrupt(CupidGb *gb)
 {
     static const uint16_t vectors[5] = {0x40u, 0x48u, 0x50u, 0x58u, 0x60u};
@@ -287,8 +449,18 @@ bool cupid_gb_service_interrupt(CupidGb *gb)
     return false;
 }
 
-/* ---------- register read/write by index ---------- */
+// Register read/write by index
 
+/**
+ * @brief Reads an 8-bit register by its 3-bit opcode index (0=B … 7=A).
+ *
+ * Index 6 reads from memory at (HL) rather than a CPU register.
+ *
+ * @param gb    Pointer to the Game Boy state.
+ * @param index 3-bit register index as encoded in SM83 opcodes.
+ *
+ * @return The current value of the selected register or (HL) byte.
+ */
 static uint8_t cupid_gb_read_reg8(CupidGb *gb, uint8_t index)
 {
     switch (index & 0x07u) {
@@ -311,6 +483,15 @@ static uint8_t cupid_gb_read_reg8(CupidGb *gb, uint8_t index)
     }
 }
 
+/**
+ * @brief Writes an 8-bit register by its 3-bit opcode index (0=B … 7=A).
+ *
+ * Index 6 writes to memory at (HL) rather than a CPU register.
+ *
+ * @param gb    Pointer to the Game Boy state.
+ * @param index 3-bit register index as encoded in SM83 opcodes.
+ * @param value The value to write.
+ */
 static void cupid_gb_write_reg8(CupidGb *gb, uint8_t index, uint8_t value)
 {
     switch (index & 0x07u) {
@@ -341,6 +522,16 @@ static void cupid_gb_write_reg8(CupidGb *gb, uint8_t index, uint8_t value)
     }
 }
 
+/**
+ * @brief Reads a 16-bit register pair by its 2-bit opcode index.
+ *
+ * Encoding: 0=BC, 1=DE, 2=HL, 3=SP.
+ *
+ * @param cpu  Pointer to the CPU state.
+ * @param pair 2-bit register pair index as encoded in SM83 opcodes.
+ *
+ * @return The current 16-bit value of the register pair.
+ */
 static uint16_t cupid_gb_read_pair(const CupidGbCpu *cpu, uint8_t pair)
 {
     switch (pair & 0x03u) {
@@ -355,6 +546,15 @@ static uint16_t cupid_gb_read_pair(const CupidGbCpu *cpu, uint8_t pair)
     }
 }
 
+/**
+ * @brief Writes a 16-bit value to a register pair by its 2-bit opcode index.
+ *
+ * Encoding: 0=BC, 1=DE, 2=HL, 3=SP.
+ *
+ * @param cpu   Pointer to the CPU state.
+ * @param pair  2-bit register pair index as encoded in SM83 opcodes.
+ * @param value The 16-bit value to write.
+ */
 static void cupid_gb_write_pair(CupidGbCpu *cpu, uint8_t pair, uint16_t value)
 {
     switch (pair & 0x03u) {
@@ -373,6 +573,16 @@ static void cupid_gb_write_pair(CupidGbCpu *cpu, uint8_t pair, uint16_t value)
     }
 }
 
+/**
+ * @brief Evaluates a 2-bit branch condition code against the current flags.
+ *
+ * Encoding: 0=NZ, 1=Z, 2=NC, 3=C.
+ *
+ * @param cpu       Pointer to the CPU state.
+ * @param condition 2-bit condition code as encoded in SM83 branch opcodes.
+ *
+ * @return `true` if the condition is satisfied, `false` otherwise.
+ */
 static bool cupid_gb_check_condition(const CupidGbCpu *cpu, uint8_t condition)
 {
     switch (condition & 0x03u) {
@@ -387,8 +597,19 @@ static bool cupid_gb_check_condition(const CupidGbCpu *cpu, uint8_t condition)
     }
 }
 
-/* ---------- ALU ---------- */
+// ALU
 
+/**
+ * @brief Increments an 8-bit value and updates Z, N, H flags.
+ *
+ * The carry flag is preserved. N is always cleared. H is set if the
+ * lower nibble of @p value was 0xF.
+ *
+ * @param cpu   Pointer to the CPU state.
+ * @param value The value to increment.
+ *
+ * @return The incremented result.
+ */
 static uint8_t cupid_gb_inc8(CupidGbCpu *cpu, uint8_t value)
 {
     uint8_t result = (uint8_t)(value + 1u);
@@ -401,6 +622,17 @@ static uint8_t cupid_gb_inc8(CupidGbCpu *cpu, uint8_t value)
     return result;
 }
 
+/**
+ * @brief Decrements an 8-bit value and updates Z, N, H flags.
+ *
+ * The carry flag is preserved. N is always set. H is set if the
+ * lower nibble of @p value was 0x0.
+ *
+ * @param cpu   Pointer to the CPU state.
+ * @param value The value to decrement.
+ *
+ * @return The decremented result.
+ */
 static uint8_t cupid_gb_dec8(CupidGbCpu *cpu, uint8_t value)
 {
     uint8_t result = (uint8_t)(value - 1u);
@@ -413,6 +645,12 @@ static uint8_t cupid_gb_dec8(CupidGbCpu *cpu, uint8_t value)
     return result;
 }
 
+/**
+ * @brief Adds a byte to A (ADD A,r) and updates all flags.
+ *
+ * @param cpu   Pointer to the CPU state.
+ * @param value The byte to add to A.
+ */
 static void cupid_gb_add_a(CupidGbCpu *cpu, uint8_t value)
 {
     uint16_t result = (uint16_t)cpu->a + value;
@@ -424,6 +662,12 @@ static void cupid_gb_add_a(CupidGbCpu *cpu, uint8_t value)
     cpu->a = (uint8_t)result;
 }
 
+/**
+ * @brief Adds a byte and the carry flag to A (ADC A,r) and updates all flags.
+ *
+ * @param cpu   Pointer to the CPU state.
+ * @param value The byte to add to A (carry is added separately).
+ */
 static void cupid_gb_adc_a(CupidGbCpu *cpu, uint8_t value)
 {
     uint8_t carry = cupid_gb_get_flag(cpu, CUPID_GB_FLAG_C) ? 1u : 0u;
@@ -438,6 +682,12 @@ static void cupid_gb_adc_a(CupidGbCpu *cpu, uint8_t value)
     cpu->a = (uint8_t)result;
 }
 
+/**
+ * @brief Subtracts a byte from A (SUB r) and updates all flags.
+ *
+ * @param cpu   Pointer to the CPU state.
+ * @param value The byte to subtract from A.
+ */
 static void cupid_gb_sub_a(CupidGbCpu *cpu, uint8_t value)
 {
     cpu->f = CUPID_GB_FLAG_N;
@@ -447,6 +697,12 @@ static void cupid_gb_sub_a(CupidGbCpu *cpu, uint8_t value)
     cpu->a = (uint8_t)(cpu->a - value);
 }
 
+/**
+ * @brief Subtracts a byte and the carry flag from A (SBC A,r) and updates all flags.
+ *
+ * @param cpu   Pointer to the CPU state.
+ * @param value The byte to subtract from A (carry is subtracted separately).
+ */
 static void cupid_gb_sbc_a(CupidGbCpu *cpu, uint8_t value)
 {
     uint8_t carry = cupid_gb_get_flag(cpu, CUPID_GB_FLAG_C) ? 1u : 0u;
@@ -461,6 +717,14 @@ static void cupid_gb_sbc_a(CupidGbCpu *cpu, uint8_t value)
     cpu->a = (uint8_t)(cpu->a - subtrahend);
 }
 
+/**
+ * @brief Bitwise AND of A with a byte (AND r) and updates flags.
+ *
+ * Z is set if result is zero. N=0, H=1, C=0.
+ *
+ * @param cpu   Pointer to the CPU state.
+ * @param value The byte to AND with A.
+ */
 static void cupid_gb_and_a(CupidGbCpu *cpu, uint8_t value)
 {
     cpu->a = (uint8_t)(cpu->a & value);
@@ -469,6 +733,14 @@ static void cupid_gb_and_a(CupidGbCpu *cpu, uint8_t value)
     cupid_gb_set_flag(cpu, CUPID_GB_FLAG_H, true);
 }
 
+/**
+ * @brief Bitwise XOR of A with a byte (XOR r) and updates flags.
+ *
+ * Z is set if result is zero. N=0, H=0, C=0.
+ *
+ * @param cpu   Pointer to the CPU state.
+ * @param value The byte to XOR with A.
+ */
 static void cupid_gb_xor_a(CupidGbCpu *cpu, uint8_t value)
 {
     cpu->a = (uint8_t)(cpu->a ^ value);
@@ -476,6 +748,14 @@ static void cupid_gb_xor_a(CupidGbCpu *cpu, uint8_t value)
     cupid_gb_set_flag(cpu, CUPID_GB_FLAG_Z, cpu->a == 0u);
 }
 
+/**
+ * @brief Bitwise OR of A with a byte (OR r) and updates flags.
+ *
+ * Z is set if result is zero. N=0, H=0, C=0.
+ *
+ * @param cpu   Pointer to the CPU state.
+ * @param value The byte to OR with A.
+ */
 static void cupid_gb_or_a(CupidGbCpu *cpu, uint8_t value)
 {
     cpu->a = (uint8_t)(cpu->a | value);
@@ -483,6 +763,14 @@ static void cupid_gb_or_a(CupidGbCpu *cpu, uint8_t value)
     cupid_gb_set_flag(cpu, CUPID_GB_FLAG_Z, cpu->a == 0u);
 }
 
+/**
+ * @brief Compares A with a byte (CP r) and updates flags without storing the result.
+ *
+ * Flags are set as for SUB but A is unchanged.
+ *
+ * @param cpu   Pointer to the CPU state.
+ * @param value The byte to compare A against.
+ */
 static void cupid_gb_cp_a(CupidGbCpu *cpu, uint8_t value)
 {
     cpu->f = CUPID_GB_FLAG_N;
@@ -491,6 +779,14 @@ static void cupid_gb_cp_a(CupidGbCpu *cpu, uint8_t value)
     cupid_gb_set_flag(cpu, CUPID_GB_FLAG_C, cpu->a < value);
 }
 
+/**
+ * @brief Adds a 16-bit value to HL (ADD HL,rr) and updates N, H, C flags.
+ *
+ * Z is preserved. N is cleared. H and C reflect the 16-bit addition.
+ *
+ * @param cpu   Pointer to the CPU state.
+ * @param value The 16-bit value to add to HL.
+ */
 static void cupid_gb_add_hl(CupidGbCpu *cpu, uint16_t value)
 {
     uint32_t result = (uint32_t)cupid_gb_get_hl(cpu) + value;
@@ -505,6 +801,17 @@ static void cupid_gb_add_hl(CupidGbCpu *cpu, uint16_t value)
     cupid_gb_set_hl(cpu, (uint16_t)result);
 }
 
+/**
+ * @brief Computes SP + signed 8-bit offset (ADD SP,e / LD HL,SP+e) and updates flags.
+ *
+ * Z and N are always cleared. H and C are derived from the low-byte
+ * unsigned addition only (8-bit carry semantics), matching hardware.
+ *
+ * @param cpu    Pointer to the CPU state.
+ * @param offset Signed 8-bit displacement to add to SP.
+ *
+ * @return The 16-bit result of SP + offset.
+ */
 static uint16_t cupid_gb_add_sp_offset(CupidGbCpu *cpu, int8_t offset)
 {
     uint16_t base   = cpu->sp;
@@ -520,8 +827,21 @@ static uint16_t cupid_gb_add_sp_offset(CupidGbCpu *cpu, int8_t offset)
     return (uint16_t)(base + (int16_t)offset);
 }
 
-/* ---------- shift / rotate / bit ---------- */
+// Shift / rotate / bit
 
+/**
+ * @brief Rotate Left Circular (RLC).
+ *
+ * Bit 7 is copied to both bit 0 and the carry flag.
+ *
+ * @param cpu       Pointer to the CPU state.
+ * @param value     The byte to rotate.
+ * @param zero_flag If `true`, the Z flag is set when the result is zero
+ *                  (CB-prefix variant); if `false`, Z is always cleared
+ *                  (accumulator variant RLCA).
+ *
+ * @return The rotated byte.
+ */
 static uint8_t cupid_gb_rlc(CupidGbCpu *cpu, uint8_t value, bool zero_flag)
 {
     uint8_t carry = (uint8_t)(value >> 7u);
@@ -533,6 +853,18 @@ static uint8_t cupid_gb_rlc(CupidGbCpu *cpu, uint8_t value, bool zero_flag)
     return result;
 }
 
+/**
+ * @brief Rotate Right Circular (RRC).
+ *
+ * Bit 0 is copied to both bit 7 and the carry flag.
+ *
+ * @param cpu       Pointer to the CPU state.
+ * @param value     The byte to rotate.
+ * @param zero_flag If `true`, Z is set when the result is zero (CB variant);
+ *                  if `false`, Z is always cleared (RRCA).
+ *
+ * @return The rotated byte.
+ */
 static uint8_t cupid_gb_rrc(CupidGbCpu *cpu, uint8_t value, bool zero_flag)
 {
     uint8_t carry = (uint8_t)(value & 0x01u);
@@ -544,6 +876,18 @@ static uint8_t cupid_gb_rrc(CupidGbCpu *cpu, uint8_t value, bool zero_flag)
     return result;
 }
 
+/**
+ * @brief Rotate Left through carry (RL).
+ *
+ * Bit 7 goes to carry; old carry enters bit 0.
+ *
+ * @param cpu       Pointer to the CPU state.
+ * @param value     The byte to rotate.
+ * @param zero_flag If `true`, Z is set when the result is zero (CB variant);
+ *                  if `false`, Z is always cleared (RLA).
+ *
+ * @return The rotated byte.
+ */
 static uint8_t cupid_gb_rl(CupidGbCpu *cpu, uint8_t value, bool zero_flag)
 {
     uint8_t old_carry = cupid_gb_get_flag(cpu, CUPID_GB_FLAG_C) ? 1u : 0u;
@@ -556,6 +900,18 @@ static uint8_t cupid_gb_rl(CupidGbCpu *cpu, uint8_t value, bool zero_flag)
     return result;
 }
 
+/**
+ * @brief Rotate Right through carry (RR).
+ *
+ * Bit 0 goes to carry; old carry enters bit 7.
+ *
+ * @param cpu       Pointer to the CPU state.
+ * @param value     The byte to rotate.
+ * @param zero_flag If `true`, Z is set when the result is zero (CB variant);
+ *                  if `false`, Z is always cleared (RRA).
+ *
+ * @return The rotated byte.
+ */
 static uint8_t cupid_gb_rr(CupidGbCpu *cpu, uint8_t value, bool zero_flag)
 {
     uint8_t old_carry = cupid_gb_get_flag(cpu, CUPID_GB_FLAG_C) ? 1u : 0u;
@@ -568,6 +924,16 @@ static uint8_t cupid_gb_rr(CupidGbCpu *cpu, uint8_t value, bool zero_flag)
     return result;
 }
 
+/**
+ * @brief Shift Left Arithmetic (SLA).
+ *
+ * Bit 7 is shifted into carry; bit 0 is set to 0.
+ *
+ * @param cpu   Pointer to the CPU state.
+ * @param value The byte to shift.
+ *
+ * @return The shifted byte.
+ */
 static uint8_t cupid_gb_sla(CupidGbCpu *cpu, uint8_t value)
 {
     uint8_t carry = (uint8_t)(value >> 7u);
@@ -579,6 +945,16 @@ static uint8_t cupid_gb_sla(CupidGbCpu *cpu, uint8_t value)
     return result;
 }
 
+/**
+ * @brief Shift Right Arithmetic (SRA).
+ *
+ * Bit 0 is shifted into carry; bit 7 is preserved (sign extension).
+ *
+ * @param cpu   Pointer to the CPU state.
+ * @param value The byte to shift.
+ *
+ * @return The shifted byte.
+ */
 static uint8_t cupid_gb_sra(CupidGbCpu *cpu, uint8_t value)
 {
     uint8_t carry = (uint8_t)(value & 0x01u);
@@ -590,6 +966,16 @@ static uint8_t cupid_gb_sra(CupidGbCpu *cpu, uint8_t value)
     return result;
 }
 
+/**
+ * @brief Swaps the upper and lower nibbles of a byte (SWAP).
+ *
+ * Z is set if result is zero; N, H, C are cleared.
+ *
+ * @param cpu   Pointer to the CPU state.
+ * @param value The byte to swap.
+ *
+ * @return The byte with nibbles exchanged.
+ */
 static uint8_t cupid_gb_swap(CupidGbCpu *cpu, uint8_t value)
 {
     uint8_t result = (uint8_t)((value << 4u) | (value >> 4u));
@@ -599,6 +985,16 @@ static uint8_t cupid_gb_swap(CupidGbCpu *cpu, uint8_t value)
     return result;
 }
 
+/**
+ * @brief Shift Right Logical (SRL).
+ *
+ * Bit 0 is shifted into carry; bit 7 is set to 0.
+ *
+ * @param cpu   Pointer to the CPU state.
+ * @param value The byte to shift.
+ *
+ * @return The shifted byte.
+ */
 static uint8_t cupid_gb_srl(CupidGbCpu *cpu, uint8_t value)
 {
     uint8_t carry = (uint8_t)(value & 0x01u);
@@ -610,6 +1006,15 @@ static uint8_t cupid_gb_srl(CupidGbCpu *cpu, uint8_t value)
     return result;
 }
 
+/**
+ * @brief Tests a single bit of a byte (BIT b,r).
+ *
+ * Sets Z if the tested bit is 0. N is cleared, H is set, C is preserved.
+ *
+ * @param cpu   Pointer to the CPU state.
+ * @param bit   Bit index (0–7) to test.
+ * @param value The byte whose bit is tested.
+ */
 static void cupid_gb_bit(CupidGbCpu *cpu, uint8_t bit, uint8_t value)
 {
     bool carry = cupid_gb_get_flag(cpu, CUPID_GB_FLAG_C);
@@ -620,6 +1025,14 @@ static void cupid_gb_bit(CupidGbCpu *cpu, uint8_t bit, uint8_t value)
     cupid_gb_set_flag(cpu, CUPID_GB_FLAG_C, carry);
 }
 
+/**
+ * @brief Decimal Adjust Accumulator (DAA).
+ *
+ * Adjusts A after a BCD addition or subtraction so that the result is
+ * a valid packed BCD value, and updates Z, H, and C accordingly.
+ *
+ * @param cpu Pointer to the CPU state.
+ */
 static void cupid_gb_daa(CupidGbCpu *cpu)
 {
     uint8_t correction = 0u;
@@ -649,8 +1062,19 @@ static void cupid_gb_daa(CupidGbCpu *cpu)
     cupid_gb_set_flag(cpu, CUPID_GB_FLAG_C, carry);
 }
 
-/* ---------- instruction decode ---------- */
+// Instruction decode
 
+/**
+ * @brief Handles an unsupported or illegal opcode.
+ *
+ * Logs an error with the opcode and current PC, then halts the CPU.
+ *
+ * @param gb       Pointer to the Game Boy state.
+ * @param opcode   The illegal opcode byte.
+ * @param prefixed `true` if this is a CB-prefixed sub-opcode, `false` otherwise.
+ *
+ * @return Always returns 0.
+ */
 static uint8_t cupid_gb_unsupported_opcode(CupidGb *gb, uint16_t opcode, bool prefixed)
 {
     if (prefixed) {
@@ -667,6 +1091,19 @@ static uint8_t cupid_gb_unsupported_opcode(CupidGb *gb, uint16_t opcode, bool pr
     return 0u;
 }
 
+/**
+ * @brief Executes a CB-prefixed opcode.
+ *
+ * Dispatches rotate, shift, BIT, SET, and RES operations on the register
+ * or (HL) operand encoded in the lower 3 bits of @p opcode. Manages
+ * machine-cycle timing for (HL) memory accesses.
+ *
+ * @param gb     Pointer to the Game Boy state.
+ * @param opcode The CB sub-opcode byte (already fetched).
+ *
+ * @return The number of additional machine cycles consumed beyond the two
+ *         already counted for the 0xCB fetch.
+ */
 static uint8_t cupid_gb_execute_cb(CupidGb *gb, uint8_t opcode)
 {
     uint8_t reg   = (uint8_t)(opcode & 0x07u);
@@ -747,6 +1184,20 @@ static uint8_t cupid_gb_execute_cb(CupidGb *gb, uint8_t opcode)
     return is_hl ? 1u : 2u;
 }
 
+/**
+ * @brief Executes a single unprefixed SM83 opcode.
+ *
+ * Decodes and executes the full SM83 instruction set (excluding CB-prefix,
+ * which is delegated to @ref cupid_gb_execute_cb). Timing ticks are
+ * inserted inline to drive the PPU, APU, and timer at the correct
+ * machine-cycle boundaries.
+ *
+ * @param gb     Pointer to the Game Boy state.
+ * @param opcode The opcode byte to execute (already fetched from PC-1).
+ *
+ * @return The number of machine cycles consumed by the instruction
+ *         (the final tick is performed by the caller).
+ */
 uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode)
 {
     if ((opcode & 0xc0u) == 0x40u) {

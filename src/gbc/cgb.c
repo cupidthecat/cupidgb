@@ -1,3 +1,19 @@
+/**
+ * @file cgb.c
+ * @brief Game Boy Color (CGB) hardware extension emulation.
+ *
+ * Covers all CGB-specific hardware that is layered on top of the DMG core:
+ *   - VRAM banking (0xFF4F)
+ *   - WRAM banking (0xFF70)
+ *   - BG and OBJ CGB palette RAM (0xFF68–0xFF6B) with PPU-mode blocking
+ *   - HDMA / GDMA transfers (0xFF51–0xFF55)
+ *   - Double-speed mode preparation (0xFF4D)
+ *   - CGB ppu scanline renderer (BG/Window tile attributes, sprite tile bank)
+ *   - CGB compatibility palettes for DMG-only ROMs with Nintendo licensee codes
+ *
+ * Functions in this file are called from @ref gb.c memory map handlers and
+ * the PPU tick in @ref ppu.c.
+ */
 #include "cupid/gbc/cgb.h"
 
 #include <string.h>
@@ -352,6 +368,20 @@ static const CupidCgbCompatPaletteKey cupid_cgb_compat_palette_keys[] = {
     { 0xb3u, 'R',  true,  &cupid_cgb_compat_auto_29 }
 };
 
+/**
+ * @brief Returns whether the loaded ROM was published by Nintendo.
+ *
+ * Checks the old licensee code field (0x014B). If it equals 0x33, the
+ * new licensee code (0x0144–0x0145) must be "01" to count as Nintendo.
+ * Otherwise old code 0x01 is accepted directly.
+ *
+ * Used by the CGB compatibility-palette lookup to restrict palette
+ * assignment to first-party titles, matching hardware behavior.
+ *
+ * @param gb Pointer to the Game Boy state.
+ *
+ * @return `true` if the ROM has a Nintendo licensee code, `false` otherwise.
+ */
 static bool cupid_cgb_has_nintendo_licensee(const CupidGb *gb)
 {
     if (gb == 0) {
@@ -366,6 +396,17 @@ static bool cupid_cgb_has_nintendo_licensee(const CupidGb *gb)
     return gb->header.old_licensee_code == 0x01u;
 }
 
+/**
+ * @brief Computes the CGB title checksum used for compatibility-palette lookup.
+ *
+ * Sums the bytes at ROM addresses 0x0134–0x0143 (the cartridge title
+ * field) as a `uint8_t`, discarding overflow.
+ *
+ * @param gb Pointer to the Game Boy state.
+ *
+ * @return The 8-bit checksum, or 0 if @p gb or its ROM buffer is NULL, or the
+ *         ROM is too small.
+ */
 static uint8_t cupid_cgb_title_checksum(const CupidGb *gb)
 {
     uint8_t checksum = 0u;
@@ -382,6 +423,16 @@ static uint8_t cupid_cgb_title_checksum(const CupidGb *gb)
     return checksum;
 }
 
+/**
+ * @brief Returns the fourth letter of the ROM title (ROM address 0x0137).
+ *
+ * Used alongside @ref cupid_cgb_title_checksum to disambiguate palette
+ * table entries that share the same checksum.
+ *
+ * @param gb Pointer to the Game Boy state.
+ *
+ * @return The byte at 0x0137, or 0 if the ROM is NULL or too short.
+ */
 static uint8_t cupid_cgb_title_fourth_letter(const CupidGb *gb)
 {
     if (gb == 0 || gb->rom == 0 || gb->rom_size <= 0x0137u) {
@@ -391,6 +442,22 @@ static uint8_t cupid_cgb_title_fourth_letter(const CupidGb *gb)
     return gb->rom[0x0137u];
 }
 
+/**
+ * @brief Looks up the CGB compatibility palette for the loaded ROM.
+ *
+ * Searches `cupid_cgb_compat_palette_keys` for an entry whose checksum
+ * matches the ROM title checksum. Entries that additionally require a
+ * fourth-letter match are only selected when the fourth letter also
+ * matches. Entries without the fourth-letter requirement are kept as a
+ * fallback and returned if no exact match is found.
+ *
+ * Returns the default greyscale palette if @p gb is NULL or the ROM
+ * does not have a Nintendo licensee code.
+ *
+ * @param gb Pointer to the Game Boy state.
+ *
+ * @return Pointer to the matched @ref CupidCgbCompatPaletteSet (never NULL).
+ */
 static const CupidCgbCompatPaletteSet *cupid_cgb_lookup_compat_palette(const CupidGb *gb)
 {
     uint8_t checksum;
@@ -422,6 +489,16 @@ static const CupidCgbCompatPaletteSet *cupid_cgb_lookup_compat_palette(const Cup
     return fallback;
 }
 
+/**
+ * @brief Writes four RGB555 colors into a CGB palette RAM block.
+ *
+ * Each color occupies 2 bytes in palette RAM (little-endian). The
+ * block for @p palette_index starts at byte offset `palette_index * 8`.
+ *
+ * @param palette_ram   Pointer to the 64-byte BG or OBJ palette RAM.
+ * @param palette_index Which palette slot to write (0–7).
+ * @param colors        Array of exactly 4 RGB555 color values.
+ */
 static void cupid_cgb_store_palette(uint8_t *palette_ram, unsigned int palette_index, const uint16_t colors[4])
 {
     unsigned int color_index;
@@ -436,6 +513,18 @@ static void cupid_cgb_store_palette(uint8_t *palette_ram, unsigned int palette_i
     }
 }
 
+/**
+ * @brief Initializes all CGB-specific hardware state.
+ *
+ * Resets VRAM bank to 0, WRAM bank to 1, clears both palette RAMs
+ * (setting all BG colors to white 0x7FFF), and initializes HDMA
+ * source/destination registers. Also sets the polarity bits of several
+ * I/O registers to their power-on values.
+ *
+ * @param gb Pointer to the Game Boy state.
+ *
+ * @note Does nothing if @p gb is NULL.
+ */
 void cupid_cgb_init_state(CupidGb *gb)
 {
     size_t palette_index;
@@ -465,6 +554,17 @@ void cupid_cgb_init_state(CupidGb *gb)
     gb->io_registers[0x70u] = 0xf9u;
 }
 
+/**
+ * @brief Computes the linear VRAM array offset for a given VRAM address.
+ *
+ * In CGB mode, bit 0 of the VRAM bank register (0xFF4F) selects which
+ * 8 KiB bank to access; in DMG mode bank 0 is always used.
+ *
+ * @param gb      Pointer to the Game Boy state.
+ * @param address VRAM address in the range 0x8000–0x9FFF.
+ *
+ * @return Byte offset into `gb->video_ram`, in the range 0x0000–0x3FFF.
+ */
 size_t cupid_cgb_vram_offset(const CupidGb *gb, uint16_t address)
 {
     size_t bank = 0u;
@@ -476,6 +576,19 @@ size_t cupid_cgb_vram_offset(const CupidGb *gb, uint16_t address)
     return bank * 0x2000u + (size_t)(address - 0x8000u);
 }
 
+/**
+ * @brief Computes the linear WRAM array offset for a given WRAM address.
+ *
+ * The fixed bank at 0xC000–0xCFFF always maps to bank 0. In CGB mode
+ * the switchable bank at 0xD000–0xDFFF is mapped according to the WRAM
+ * bank register (0xFF70, values 1–7; 0 is treated as 1). In DMG mode
+ * bank 1 is always used.
+ *
+ * @param gb      Pointer to the Game Boy state.
+ * @param address WRAM address in the range 0xC000–0xDFFF.
+ *
+ * @return Byte offset into the internal WRAM buffer.
+ */
 size_t cupid_cgb_wram_offset(const CupidGb *gb, uint16_t address)
 {
     if (address >= 0xc000u && address <= 0xcfffu) {
@@ -495,6 +608,22 @@ size_t cupid_cgb_wram_offset(const CupidGb *gb, uint16_t address)
     return 0x1000u + (size_t)(address - 0xd000u);
 }
 
+/**
+ * @brief Returns the CGB compatibility palette for the loaded DMG ROM.
+ *
+ * Looks up the palette via @ref cupid_cgb_lookup_compat_palette and
+ * copies the BG, OBJ0, and OBJ1 palette arrays into the provided
+ * output buffers.
+ *
+ * @param gb   Pointer to the Game Boy state.
+ * @param bg   Output array of 4 RGB555 colors for the background palette.
+ * @param obj0 Output array of 4 RGB555 colors for object palette 0.
+ * @param obj1 Output array of 4 RGB555 colors for object palette 1.
+ *
+ * @return `true` if a named compatibility palette was found (i.e. the ROM
+ *         has a matching Nintendo licensee entry); `false` if the default
+ *         greyscale palette is being used or any pointer is NULL.
+ */
 bool cupid_cgb_get_compatibility_palette(const CupidGb *gb,
                                          uint16_t bg[4],
                                          uint16_t obj0[4],
@@ -515,6 +644,18 @@ bool cupid_cgb_get_compatibility_palette(const CupidGb *gb,
            palette_set != cupid_cgb_compat_default;
 }
 
+/**
+ * @brief Applies the CGB compatibility palette to the CGB palette RAM.
+ *
+ * Retrieves the palette via @ref cupid_cgb_get_compatibility_palette and
+ * writes the BG, OBJ0, and OBJ1 palettes into slots 0 of the respective
+ * palette RAMs. Called after a ROM is loaded on a CGB running in DMG
+ * compatibility mode.
+ *
+ * @param gb Pointer to the Game Boy state.
+ *
+ * @note Does nothing if @p gb is NULL.
+ */
 void cupid_cgb_apply_compatibility_palette(CupidGb *gb)
 {
     uint16_t bg[4];
@@ -531,11 +672,32 @@ void cupid_cgb_apply_compatibility_palette(CupidGb *gb)
     cupid_cgb_store_palette(gb->cgb_obj_palette_ram, 1u, obj1);
 }
 
+/**
+ * @brief Returns whether the CGB is running a DMG ROM in compatibility mode.
+ *
+ * Compatibility mode is active when the model is CGB (@ref CUPID_GB_MODEL_CGB)
+ * but `cgb_mode` is `false` (the ROM did not set the CGB flag byte).
+ *
+ * @param gb Pointer to the Game Boy state.
+ *
+ * @return `true` if CGB compatibility mode is active.
+ */
 bool cupid_cgb_compat_active(const CupidGb *gb)
 {
     return gb != 0 && gb->model == CUPID_GB_MODEL_CGB && !gb->cgb_mode;
 }
 
+/**
+ * @brief Returns the CGB background color for a DMG shade index in compatibility mode.
+ *
+ * Reads color @p shade from BG palette slot 0 of the CGB palette RAM.
+ * Only valid when @ref cupid_cgb_compat_active returns `true`.
+ *
+ * @param gb    Pointer to the Game Boy state.
+ * @param shade The DMG shade index (0–3).
+ *
+ * @return The RGB555 color value, or 0 if compatibility mode is not active.
+ */
 uint16_t cupid_cgb_compat_bg_color(const CupidGb *gb, uint8_t shade)
 {
     size_t color_offset;
@@ -549,6 +711,19 @@ uint16_t cupid_cgb_compat_bg_color(const CupidGb *gb, uint8_t shade)
                       ((uint16_t)gb->cgb_bg_palette_ram[color_offset + 1u] << 8u));
 }
 
+/**
+ * @brief Returns the CGB object color for a DMG shade index in compatibility mode.
+ *
+ * Reads color @p shade from the specified OBJ palette slot (0 or 1)
+ * of the CGB OBJ palette RAM. Only valid when @ref cupid_cgb_compat_active
+ * returns `true`.
+ *
+ * @param gb      Pointer to the Game Boy state.
+ * @param palette OBJ palette index (0 or 1).
+ * @param shade   The DMG shade index (0–3).
+ *
+ * @return The RGB555 color value, or 0 if compatibility mode is not active.
+ */
 uint16_t cupid_cgb_compat_obj_color(const CupidGb *gb, unsigned int palette, uint8_t shade)
 {
     size_t base_offset;
@@ -564,6 +739,17 @@ uint16_t cupid_cgb_compat_obj_color(const CupidGb *gb, unsigned int palette, uin
                       ((uint16_t)gb->cgb_obj_palette_ram[color_offset + 1u] << 8u));
 }
 
+/**
+ * @brief Returns whether CGB palette RAM is currently inaccessible to the CPU.
+ *
+ * The palette RAM is blocked during PPU mode 3 (pixel transfer) when the
+ * LCD is enabled, CGB mode is active, and the current scanline is within
+ * the visible area (LY < 144).
+ *
+ * @param gb Pointer to the Game Boy state.
+ *
+ * @return `true` if palette RAM reads/writes should be blocked.
+ */
 static bool cupid_cgb_palette_blocked(const CupidGb *gb)
 {
     uint8_t mode;
@@ -577,6 +763,18 @@ static bool cupid_cgb_palette_blocked(const CupidGb *gb)
     return mode == CUPID_GB_PPU_MODE_TRANSFER;
 }
 
+/**
+ * @brief Reads one byte from CGB BG or OBJ palette RAM via the index register.
+ *
+ * The index is taken from 0xFF68 (BG) or 0xFF6A (OBJ), bits 5–0.
+ * Returns 0xFF if CGB mode is not active, @p gb is NULL, or the
+ * palette RAM is blocked by the PPU.
+ *
+ * @param gb             Pointer to the Game Boy state.
+ * @param object_palette `true` to read from OBJ palette RAM, `false` for BG.
+ *
+ * @return The byte at the selected palette RAM index.
+ */
 static uint8_t cupid_cgb_palette_read(const CupidGb *gb, bool object_palette)
 {
     const uint8_t *palette_ram;
@@ -591,6 +789,21 @@ static uint8_t cupid_cgb_palette_read(const CupidGb *gb, bool object_palette)
     return palette_ram[index];
 }
 
+/**
+ * @brief Writes one byte to CGB BG or OBJ palette RAM via the index register.
+ *
+ * The index is taken from 0xFF68 (BG) or 0xFF6A (OBJ), bits 5–0. If
+ * auto-increment (bit 7) is set, the index is incremented after the
+ * write. The corresponding read-back register (0xFF69 / 0xFF6B) is
+ * updated regardless of palette-blocked status, but the palette RAM
+ * itself is only modified when the PPU is not blocking it.
+ *
+ * @param gb             Pointer to the Game Boy state.
+ * @param object_palette `true` to write to OBJ palette RAM, `false` for BG.
+ * @param value          The byte to write.
+ *
+ * @note Does nothing if @p gb is NULL or CGB mode is not active.
+ */
 static void cupid_cgb_palette_write(CupidGb *gb, bool object_palette, uint8_t value)
 {
     uint8_t *palette_ram;
@@ -619,6 +832,21 @@ static void cupid_cgb_palette_write(CupidGb *gb, bool object_palette, uint8_t va
     gb->io_registers[object_palette ? 0x6bu : 0x69u] = value;
 }
 
+/**
+ * @brief Copies one 16-byte HDMA block from the source address to VRAM.
+ *
+ * Reads 16 bytes beginning at `gb->hdma_source` via @ref cupid_gb_read_u8
+ * and writes them to `gb->hdma_destination` (which must be in the VRAM
+ * range 0x8000–0x9FFF). After the copy, both pointers are advanced by
+ * 16 bytes. The I/O shadow registers (0xFF51–0xFF55) are updated and
+ * `hdma_blocks_remaining` is decremented; when it reaches zero,
+ * `hdma_active` is cleared and 0xFF55 is set to 0xFF.
+ *
+ * @param gb Pointer to the Game Boy state.
+ *
+ * @note Does nothing if @p gb is NULL, CGB mode is inactive, or there
+ *       are no remaining blocks.
+ */
 static void cupid_cgb_hdma_copy_block(CupidGb *gb)
 {
     uint8_t byte_index;
@@ -653,6 +881,28 @@ static void cupid_cgb_hdma_copy_block(CupidGb *gb)
     }
 }
 
+/**
+ * @brief Handles a CPU read from a CGB-specific I/O register.
+ *
+ * Covers the following addresses:
+ *   - 0xFF4C, 0xFF56 — CGB-mode-only registers (0xFF if DMG)
+ *   - 0xFF4D — KEY1 speed switch register (read-back with polarity bits)
+ *   - 0xFF4F — VRAM bank register (bits 7–1 forced to 1)
+ *   - 0xFF51–0xFF55 — HDMA source/destination and control
+ *   - 0xFF68, 0xFF6A — BG/OBJ palette index registers (bit 6 forced to 1)
+ *   - 0xFF69, 0xFF6B — BG/OBJ palette data (via @ref cupid_cgb_palette_read)
+ *   - 0xFF6C — Object priority mode (bits 7–1 forced to 1)
+ *   - 0xFF70 — WRAM bank register (bits 7–3 forced to 1)
+ *
+ * Non-CGB-aware addresses return `false` so the caller can fall through
+ * to DMG register handling.
+ *
+ * @param gb      Pointer to the Game Boy state.
+ * @param address The I/O address being read (0xFF00–0xFFFF).
+ * @param value   Output pointer filled with the register value on success.
+ *
+ * @return `true` if the address was handled, `false` otherwise.
+ */
 bool cupid_cgb_handle_read_register(const CupidGb *gb, uint16_t address, uint8_t *value)
 {
     if (value == 0) {
@@ -704,6 +954,31 @@ bool cupid_cgb_handle_read_register(const CupidGb *gb, uint16_t address, uint8_t
     }
 }
 
+/**
+ * @brief Handles a CPU write to a CGB-specific I/O register.
+ *
+ * Covers the following addresses:
+ *   - 0xFF4C, 0xFF56 — CGB-mode-only registers
+ *   - 0xFF4D — KEY1: arms the double-speed speed switch
+ *   - 0xFF4F — VRAM bank select (bit 0 only)
+ *   - 0xFF51–0xFF54 — HDMA source and destination bytes
+ *   - 0xFF55 — HDMA/GDMA trigger: starts or cancels H-Blank DMA, or
+ *              executes a general-purpose DMA immediately
+ *   - 0xFF68 — BG palette index register
+ *   - 0xFF69 — BG palette data (via @ref cupid_cgb_palette_write)
+ *   - 0xFF6A — OBJ palette index register
+ *   - 0xFF6B — OBJ palette data (via @ref cupid_cgb_palette_write)
+ *   - 0xFF6C — Object priority mode bit
+ *   - 0xFF70 — WRAM bank select (values 1–7; 0 treated as 1)
+ *
+ * @param gb      Pointer to the Game Boy state.
+ * @param address The I/O address being written (0xFF00–0xFFFF).
+ * @param value   The byte value to write.
+ *
+ * @return `true` if the address was handled, `false` otherwise.
+ *
+ * @note Does nothing (returns `false`) if @p gb is NULL.
+ */
 bool cupid_cgb_handle_write_register(CupidGb *gb, uint16_t address, uint8_t value)
 {
     if (gb == 0) {
@@ -802,6 +1077,18 @@ bool cupid_cgb_handle_write_register(CupidGb *gb, uint16_t address, uint8_t valu
     }
 }
 
+/**
+ * @brief Reads a single RGB555 color from a CGB palette RAM block.
+ *
+ * Returns the 16-bit little-endian color stored at the slot for
+ * `palette_number` and `color_index` within @p palette_ram.
+ *
+ * @param palette_ram   Pointer to a 64-byte BG or OBJ palette RAM buffer.
+ * @param palette_number Palette slot index (0–7).
+ * @param color_index   Color index within the palette (0–3).
+ *
+ * @return The RGB555 color value.
+ */
 static uint16_t cupid_cgb_palette_color(const uint8_t *palette_ram, uint8_t palette_number, uint8_t color_index)
 {
     size_t color_offset = (size_t)palette_number * 8u + (size_t)color_index * 2u;
@@ -810,6 +1097,30 @@ static uint16_t cupid_cgb_palette_color(const uint8_t *palette_ram, uint8_t pale
                       ((uint16_t)palette_ram[color_offset + 1u] << 8u));
 }
 
+/**
+ * @brief Renders one CGB scanline into the frame buffer.
+ *
+ * Implements the full CGB background/window/sprite pipeline:
+ *   - BG and Window tiles are fetched from the signed or unsigned tile
+ *     data area (controlled by LCDC bit 4) using the tile attribute byte
+ *     from VRAM bank 1 for flip flags, palette number, and tile bank.
+ *   - The BG priority bit (attribute bit 7) and LCDC master priority
+ *     (bit 0) are tracked per pixel to resolve BG-over-sprite conflicts.
+ *   - Sprites read tile data from the bank selected by OAM attribute
+ *     bit 3; color 0 is transparent; up to 10 sprites per scanline are
+ *     processed with earlier OAM entries taking priority.
+ *
+ * Both `gb->frame_buffer` (shade indices) and `gb->frame_buffer_color`
+ * (RGB555 colors from CGB palette RAM) are written.
+ *
+ * @param gb         Pointer to the Game Boy state.
+ * @param lcdc       The LCDC register value for this scanline.
+ * @param ly         The current scanline number (0–143).
+ * @param base_index Starting offset into the frame buffers for this line
+ *                   (`ly * CUPID_GB_SCREEN_WIDTH`).
+ *
+ * @note Does nothing if @p gb is NULL.
+ */
 void cupid_cgb_render_scanline(CupidGb *gb, uint8_t lcdc, uint8_t ly, size_t base_index)
 {
     uint8_t bg_color_indices[CUPID_GB_SCREEN_WIDTH];
@@ -993,6 +1304,18 @@ void cupid_cgb_render_scanline(CupidGb *gb, uint8_t lcdc, uint8_t ly, size_t bas
     }
 }
 
+/**
+ * @brief Advances H-Blank DMA by one 16-byte block.
+ *
+ * Called once per H-Blank period (from the PPU tick) while an H-Blank
+ * DMA transfer is active. Delegates to @ref cupid_cgb_hdma_copy_block
+ * to transfer the next 16-byte block.
+ *
+ * @param gb Pointer to the Game Boy state.
+ *
+ * @note Does nothing if @p gb is NULL, HDMA is not active, or there are
+ *       no remaining blocks.
+ */
 void cupid_cgb_tick_hdma(CupidGb *gb)
 {
     if (gb == 0 || !gb->hdma_active || gb->hdma_blocks_remaining == 0u) {

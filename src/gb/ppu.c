@@ -1,8 +1,17 @@
-/* =========================================================================
- * PPU – Pixel Processing Unit
- *   Shared between Game Boy (DMG) and Game Boy Color (CGB).
- *   Scanline renderer (BG, Window, Sprites), STAT IRQ, DMA transfer.
- * ========================================================================= */
+/**
+ * @file ppu.c
+ * @brief Pixel Processing Unit (PPU) emulation for Game Boy (DMG) and Game Boy Color (CGB).
+ *
+ * Implements the full PPU pipeline, shared between DMG and CGB:
+ *   - Mode state machine (OAM scan → Transfer → HBlank → VBlank)
+ *   - Scanline renderer: background, window, and sprite (OBJ) layers
+ *   - STAT IRQ edge-detection and delayed-fire logic
+ *   - OAM DMA transfer (with restart and start-delay emulation)
+ *   - CGB compatibility palette rendering (delegated to cgb.c)
+ *
+ * Cycle timing is driven by @ref cupid_gb_tick_ppu, which is called
+ * once per T-cycle from the main step loop.
+ */
 
 #include "cupid/gb/ppu.h"
 
@@ -12,29 +21,74 @@
 #include "cupid/gb/cpu.h"
 #include "cupid/gbc/cgb.h"
 
-/* ---------- helpers ---------- */
+// Helpers
 
+/**
+ * @brief Returns whether the LCD is currently enabled.
+ *
+ * Reads LCDC bit 7.
+ *
+ * @param gb Pointer to the Game Boy state.
+ *
+ * @return `true` if the LCD is enabled, `false` otherwise.
+ */
 bool cupid_gb_lcd_enabled(const CupidGb *gb)
 {
     return (gb->io_registers[CUPID_GB_IO_LCDC] & 0x80u) != 0u;
 }
 
+/**
+ * @brief Returns the current PPU mode from the STAT register (bits 1–0).
+ *
+ * @param gb Pointer to the Game Boy state.
+ *
+ * @return The current PPU mode (0=HBlank, 1=VBlank, 2=OAM, 3=Transfer).
+ */
 static uint8_t cupid_gb_ppu_mode(const CupidGb *gb)
 {
     return (uint8_t)(gb->io_registers[CUPID_GB_IO_STAT] & 0x03u);
 }
 
+/**
+ * @brief Sets the PPU mode in the STAT register (bits 1–0).
+ *
+ * Preserves all other STAT bits.
+ *
+ * @param gb   Pointer to the Game Boy state.
+ * @param mode The mode to set (0=HBlank, 1=VBlank, 2=OAM, 3=Transfer).
+ */
 void cupid_gb_set_ppu_mode(CupidGb *gb, uint8_t mode)
 {
     gb->io_registers[CUPID_GB_IO_STAT] =
         (uint8_t)((gb->io_registers[CUPID_GB_IO_STAT] & 0xfcu) | (mode & 0x03u));
 }
 
+/**
+ * @brief Looks up a 2-bit DMG shade from a palette byte.
+ *
+ * Each palette byte encodes four 2-bit shades packed from LSB (color 0)
+ * to MSB (color 3).
+ *
+ * @param palette     The palette byte (e.g. BGP, OBP0, OBP1).
+ * @param color_index The palette index (0–3).
+ *
+ * @return The 2-bit shade value (0–3).
+ */
 static uint8_t cupid_gb_palette_lookup(uint8_t palette, uint8_t color_index)
 {
     return (uint8_t)((palette >> (color_index * 2u)) & 0x03u);
 }
 
+/**
+ * @brief Integer floor-division by 8, handling negative dividends correctly.
+ *
+ * Unlike C's truncation-toward-zero division, this always rounds toward
+ * negative infinity, which is required for the sprite X-bucket calculation.
+ *
+ * @param value The dividend.
+ *
+ * @return `floor(value / 8)`.
+ */
 static int cupid_gb_floor_div8(int value)
 {
     if (value >= 0) {
@@ -44,6 +98,20 @@ static int cupid_gb_floor_div8(int value)
     return -(((-value) + 7) / 8);
 }
 
+/**
+ * @brief Computes the Mode 3 dot penalty introduced by sprites on the current scanline.
+ *
+ * For each of the up to 10 on-screen sprites, a base penalty of 6 dots is
+ * added. An additional wait per unique 8-pixel X-bucket is then included,
+ * based on the alignment of the sprite within the pixel-fetcher's 8-pixel
+ * grid (accounting for SCX). The total is divided by 4 to convert dots to
+ * T-cycles (machine cycles at 1 MHz).
+ *
+ * @param gb Pointer to the Game Boy state.
+ *
+ * @return The number of extra T-cycles added to Mode 3 by OBJ fetches,
+ *         or 0 if sprites are disabled or @p gb is NULL.
+ */
 static uint16_t cupid_gb_sprite_penalty_cycles(const CupidGb *gb)
 {
     struct SpriteCandidate {
@@ -143,6 +211,18 @@ static uint16_t cupid_gb_sprite_penalty_cycles(const CupidGb *gb)
     return 0u;
 }
 
+/**
+ * @brief Returns the total Mode 3 (pixel transfer) duration for the current scanline.
+ *
+ * The base duration is @ref CUPID_GB_PPU_TRANSFER_CYCLES. One or two
+ * extra cycles are added if SCX mod 8 is non-zero (the fine-scroll penalty),
+ * and sprite penalties from @ref cupid_gb_sprite_penalty_cycles are
+ * appended on top.
+ *
+ * @param gb Pointer to the Game Boy state.
+ *
+ * @return The total Mode 3 duration in T-cycles for the current scanline.
+ */
 static uint16_t cupid_gb_visible_transfer_cycles(const CupidGb *gb)
 {
     uint8_t scx_mod;
@@ -165,6 +245,19 @@ static uint16_t cupid_gb_visible_transfer_cycles(const CupidGb *gb)
     return (uint16_t)(cycles + cupid_gb_sprite_penalty_cycles(gb));
 }
 
+/**
+ * @brief Returns the total scanline duration in T-cycles for a given LY.
+ *
+ * Most scanlines are @ref CUPID_GB_PPU_SCANLINE_CYCLES (456) T-cycles.
+ * Two special cases are handled:
+ *   - LY 0 during LCD startup is only 111 T-cycles (PPU warm-up).
+ *   - LY 153 on DMG is one T-cycle shorter (455) due to a hardware quirk.
+ *
+ * @param gb Pointer to the Game Boy state.
+ * @param ly The scanline number (0–153).
+ *
+ * @return The scanline duration in T-cycles.
+ */
 static uint16_t cupid_gb_scanline_cycles(const CupidGb *gb, uint8_t ly)
 {
     if (gb != 0 && gb->ppu_lcd_startup && ly == 0u) {
@@ -178,8 +271,26 @@ static uint16_t cupid_gb_scanline_cycles(const CupidGb *gb, uint8_t ly)
     return CUPID_GB_PPU_SCANLINE_CYCLES;
 }
 
-/* ---------- scanline renderer ---------- */
+// Scanline renderer
 
+/**
+ * @brief Renders one scanline into the frame buffer.
+ *
+ * Renders the background, window, and sprite (OBJ) layers for the current
+ * LY value using the DMG tile and attribute data in VRAM and OAM. On CGB,
+ * delegates to @ref cupid_cgb_render_scanline instead. On DMG with the CGB
+ * compatibility palette active, also fills `frame_buffer_color`.
+ *
+ * Layer enable flags in LCDC are respected:
+ *   - Bit 0: BG/Window master enable (DMG)
+ *   - Bit 1: OBJ enable
+ *   - Bit 2: OBJ size (8×8 vs 8×16)
+ *   - Bit 5: Window enable
+ *
+ * @param gb Pointer to the Game Boy state.
+ *
+ * @note Does nothing if @p gb is NULL or LY is outside the visible area.
+ */
 static void cupid_gb_render_scanline(CupidGb *gb)
 {
     uint8_t lcdc;
@@ -382,8 +493,23 @@ static void cupid_gb_render_scanline(CupidGb *gb)
     }
 }
 
-/* ---------- STAT IRQ ---------- */
+// STAT IRQ
 
+/**
+ * @brief Recomputes and fires the LCD STAT interrupt signal.
+ *
+ * Evaluates the STAT interrupt sources (LYC=LY coincidence, Mode 0/1/2
+ * enable bits) and drives the STAT IRQ line. A rising edge on the
+ * combined signal triggers @ref cupid_gb_request_interrupt. For VBlank
+ * and Transfer mode transitions, the request is deferred by one T-cycle
+ * via `stat_irq_delay`.
+ *
+ * Should be called whenever STAT, LY, LYC, or the PPU mode changes.
+ *
+ * @param gb Pointer to the Game Boy state.
+ *
+ * @note Does nothing if @p gb is NULL.
+ */
 void cupid_gb_update_stat_irq(CupidGb *gb)
 {
     bool coincidence;
@@ -443,8 +569,22 @@ void cupid_gb_update_stat_irq(CupidGb *gb)
     gb->stat_irq_line = irq_signal;
 }
 
-/* ---------- PPU reset / DMA ---------- */
+// PPU reset / DMA
 
+/**
+ * @brief Resets the PPU to its LCD power-on state.
+ *
+ * Sets ppu_counter and LY to 0, clears frame-ready and window-line
+ * counters, and initiates the 2-scanline warm-up sequence. Puts the
+ * PPU into HBlank mode and recomputes the STAT IRQ.
+ *
+ * Call this when the LCD transitions from disabled to enabled (LCDC bit 7
+ * goes from 0 to 1).
+ *
+ * @param gb Pointer to the Game Boy state.
+ *
+ * @note Does nothing if @p gb is NULL.
+ */
 void cupid_gb_reset_ppu(CupidGb *gb)
 {
     if (gb == 0) {
@@ -462,6 +602,19 @@ void cupid_gb_reset_ppu(CupidGb *gb)
     cupid_gb_update_stat_irq(gb);
 }
 
+/**
+ * @brief Arms an OAM DMA transfer from `source_high << 8`.
+ *
+ * A 2-T-cycle start delay is applied before the DMA becomes active.
+ * If a DMA is already running, the new request is queued as a restart
+ * and takes effect 2 T-cycles later via @ref cupid_gb_tick_dma.
+ *
+ * @param gb          Pointer to the Game Boy state.
+ * @param source_high The high byte of the source address (written to FF46).
+ *                    Values 0xE0–0xFF are remapped to 0xC0–0xDF.
+ *
+ * @note Does nothing if @p gb is NULL.
+ */
 void cupid_gb_run_dma_transfer(CupidGb *gb, uint8_t source_high)
 {
     uint16_t source_base;
@@ -491,6 +644,17 @@ void cupid_gb_run_dma_transfer(CupidGb *gb, uint8_t source_high)
     gb->dma_active = false;
 }
 
+/**
+ * @brief Advances the OAM DMA state machine by one T-cycle.
+ *
+ * Each call handles at most one byte of DMA data. Manages the start
+ * delay, restart delay, active transfer, and completion. Must be called
+ * once per T-cycle from the main tick path.
+ *
+ * @param gb Pointer to the Game Boy state.
+ *
+ * @note Does nothing if @p gb is NULL.
+ */
 void cupid_gb_tick_dma(CupidGb *gb)
 {
     if (gb == 0) {
@@ -530,8 +694,26 @@ void cupid_gb_tick_dma(CupidGb *gb)
     }
 }
 
-/* ---------- PPU tick ---------- */
+// PPU tick
 
+/**
+ * @brief Advances the PPU state machine by the given number of T-cycles.
+ *
+ * For each T-cycle, drives the PPU mode state machine (OAM → Transfer
+ * → HBlank → VBlank) based on the current line position. On mode
+ * transitions it calls @ref cupid_gb_render_scanline (at HBlank entry
+ * for visible lines), fires the VBlank interrupt at LY 144, and
+ * recomputes the STAT IRQ via @ref cupid_gb_update_stat_irq.
+ *
+ * Also decrements the deferred STAT IRQ timer and manages the LCD
+ * warm-up period after LCD enable.
+ *
+ * @param gb     Pointer to the Game Boy state.
+ * @param cycles Number of T-cycles to advance.
+ *
+ * @note Does nothing if @p gb is NULL or the LCD is disabled (state is
+ *       reset to LY=0 / HBlank on every call while the LCD is off).
+ */
 void cupid_gb_tick_ppu(CupidGb *gb, uint16_t cycles)
 {
     if (gb == 0) {

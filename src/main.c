@@ -1,3 +1,20 @@
+/**
+ * @file main.c
+ * @brief cupidgb entry point — argument parsing, ROM loading, and SDL2 launch.
+ *
+ * Startup sequence:
+ *   1. Parse command-line arguments (`--model` and a ROM path).
+ *   2. Attempt to auto-detect the target Game Boy model from the ROM
+ *      filename; fall back to `DMG-ABC` if no hint is found.
+ *   3. Initialize the emulator via @ref cupid_emulator_init.
+ *   4. Load the ROM file and re-apply the model if the cartridge header
+ *      indicates CGB or SGB support.
+ *   5. Set up the battery-backed save path and load any existing save.
+ *   6. Search for an external boot ROM and enter the boot sequence if found.
+ *   7. Initialize and run the SDL2 front-end (@ref cupid_sdl_app_init /
+ *      @ref cupid_sdl_app_run).
+ *   8. Flush the battery-backed save and shut down cleanly.
+ */
 #include "cupid/common/log.h"
 #include "cupid/core/emulator.h"
 #include "cupid/core/system.h"
@@ -8,14 +25,39 @@
 #include <unistd.h>
 #include <string.h>
 
+/**
+ * @brief Returns whether a file-system path exists and is accessible.
+ *
+ * Uses `access(path, F_OK)` to test existence without requiring any
+ * particular permission beyond a directory search.
+ *
+ * @param path The file-system path to test.
+ *
+ * @return `true` if @p path is non-NULL and `access` succeeds.
+ */
 static bool cupid_path_exists(const char *path)
 {
     return path != 0 && access(path, F_OK) == 0;
 }
 
-/*
- * Try to locate and load a boot ROM for the current model.
- * Searches common filenames in bootroms/ and the current directory.
+/**
+ * @brief Searches well-known locations for a boot ROM and loads the first one found.
+ *
+ * For DMG/MGB/SGB models, the following filenames are tried (in order):
+ *   - `bootroms/dmg_boot.bin`, `bootroms/gb_boot.bin`
+ *   - `dmg_boot.bin`, `gb_boot.bin`
+ *
+ * For the CGB model:
+ *   - `bootroms/cgb_boot.bin`, `bootroms/gbc_boot.bin`
+ *   - `cgb_boot.bin`, `gbc_boot.bin`
+ *
+ * If a file is found and loaded successfully via @ref cupid_gb_load_boot_rom_file,
+ * the function returns immediately. If no file is found, an info message
+ * is logged and the emulator will skip the original Nintendo boot sequence.
+ *
+ * @param gb Pointer to the Game Boy state.
+ *
+ * @note Does nothing if @p gb is NULL.
  */
 static void cupid_try_load_boot_rom(CupidGb *gb)
 {
@@ -55,6 +97,26 @@ static void cupid_try_load_boot_rom(CupidGb *gb)
                     (gb->model == CUPID_GB_MODEL_CGB) ? "CGB" : "DMG");
 }
 
+/**
+ * @brief Resolves a ROM path, appending a file extension if the bare path does not exist.
+ *
+ * If @p path exists as-is it is returned unchanged. Otherwise the
+ * extensions `.gb`, `.gbc`, and `.sgb` are tried in sequence. If a
+ * candidate path ends with `.`, the leading `.` of the extension is
+ * skipped to avoid double-dots.
+ *
+ * When a match is found the resolved path is logged and a pointer to
+ * @p resolved_path (the caller-supplied buffer) is returned. If no
+ * candidate exists the original @p path pointer is returned so the
+ * caller can still attempt to open it and report the error naturally.
+ *
+ * @param path               The raw ROM path from the command line.
+ * @param resolved_path      Caller-supplied buffer to hold the resolved path.
+ * @param resolved_path_size Size of @p resolved_path in bytes.
+ *
+ * @return Pointer to the best available path string (either @p path or
+ *         @p resolved_path). Never NULL if @p path is non-NULL.
+ */
 static const char *cupid_resolve_rom_path(const char *path, char *resolved_path, size_t resolved_path_size)
 {
     static const char *const fallback_extensions[] = { ".gb", ".gbc", ".sgb" };
@@ -95,6 +157,25 @@ static const char *cupid_resolve_rom_path(const char *path, char *resolved_path,
     return path;
 }
 
+/**
+ * @brief Heuristically detects the intended Game Boy model from the ROM filename.
+ *
+ * Inspects the filename component (everything after the last `/`) for
+ * well-known substrings in this priority order:
+ *   - `-dmg0` / `_dmg0`                               → @ref CUPID_GB_MODEL_DMG0
+ *   - `-mgb` / `_mgb`                                 → @ref CUPID_GB_MODEL_MGB
+ *   - `-cgb` / `_cgb` / `.gbc` / `(CGB` / `Game Boy Color` → @ref CUPID_GB_MODEL_CGB
+ *   - `-sgb2` / `_sgb2` / `SGB2`                      → @ref CUPID_GB_MODEL_SGB2
+ *   - `-sgb` / `_sgb` / `-S.gb` / `_S.gb` / `SGB Enhanced` / `(SGB` → @ref CUPID_GB_MODEL_SGB
+ *   - `-dmgABC` / `_dmgABC`                            → @ref CUPID_GB_MODEL_DMG_ABC
+ *
+ * If no pattern matches, @p fallback is returned.
+ *
+ * @param path     The ROM file path (may include directory components).
+ * @param fallback The model to return when no pattern is matched.
+ *
+ * @return The detected @ref CupidGbModel, or @p fallback.
+ */
 static CupidGbModel cupid_gb_detect_model_from_path(const char *path,
                                                     CupidGbModel fallback)
 {
@@ -192,7 +273,7 @@ int main(int argc, char **argv)
     cupid_emulator_init(&emulator, target_system);
 
     {
-        /* ----- Game Boy / Game Boy Color path ----- */
+        // Game Boy / Game Boy Color path
         if (!model_explicit) {
             model = cupid_gb_detect_model_from_path(rom_path, model);
         }

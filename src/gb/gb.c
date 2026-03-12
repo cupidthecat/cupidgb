@@ -1,8 +1,17 @@
-/* =========================================================================
- * Game Boy system glue
- *   Initialization, step loop, and the full 0x0000-0xFFFF memory map.
- *   Subsystems (CPU, PPU, APU, timer, cartridge) live in their own files.
- * ========================================================================= */
+/**
+ * @file gb.c
+ * @brief Game Boy system glue — initialization, step loop, and memory map.
+ *
+ * Ties together all Game Boy subsystems (CPU, PPU, APU, timer, cartridge,
+ * SGB, CGB). This file owns:
+ *   - Hardware model selection and HLE boot-profile setup
+ *   - Optional external boot ROM loading and overlay
+ *   - The full 0x0000–0xFFFF memory map (reads and writes)
+ *   - MBC3 real-time clock helpers
+ *   - The per-instruction step function
+ *
+ * All subsystem implementations live in their own translation units.
+ */
 
 #include "cupid/gb/gb.h"
 
@@ -20,8 +29,20 @@
 #include "cupid/gbc/cgb.h"
 #include "cupid/common/log.h"
 
-/* --- serial transfer (memory-map helper) --- */
+// Serial transfer (memory-map helper)
 
+/**
+ * @brief Handles a write to the SC (serial control) register at 0xFF02.
+ *
+ * Updates the serial control register and, if bit 7 is set (transfer
+ * requested), latches the current SB byte and arms the serial counter
+ * for an 8-bit outgoing transfer.
+ *
+ * @param gb    Pointer to the Game Boy state.
+ * @param value The value being written to SC.
+ *
+ * @note Does nothing if @p gb is NULL.
+ */
 static void cupid_gb_handle_serial_transfer(CupidGb *gb, uint8_t value)
 {
     if (gb == 0) {
@@ -38,8 +59,17 @@ static void cupid_gb_handle_serial_transfer(CupidGb *gb, uint8_t value)
     }
 }
 
-/* --- init --- */
+// Init
 
+/**
+ * @brief Returns a short lowercase string name for a hardware model.
+ *
+ * @param model The hardware model to query.
+ *
+ * @return A null-terminated string such as `"dmgabc"`, `"cgb"`, `"sgb2"`.
+ *
+ * @note The returned string is a literal and must not be modified or freed.
+ */
 const char *cupid_gb_model_name(CupidGbModel model)
 {
     switch (model) {
@@ -59,6 +89,16 @@ const char *cupid_gb_model_name(CupidGbModel model)
     }
 }
 
+/**
+ * @brief Sets the hardware model for the emulated Game Boy.
+ *
+ * Must be called before @ref cupid_gb_init or @ref cupid_gb_load_rom.
+ *
+ * @param gb    Pointer to the Game Boy state.
+ * @param model The hardware model to emulate.
+ *
+ * @note Does nothing if @p gb is NULL.
+ */
 void cupid_gb_set_model(CupidGb *gb, CupidGbModel model)
 {
     if (gb == 0) {
@@ -68,6 +108,15 @@ void cupid_gb_set_model(CupidGb *gb, CupidGbModel model)
     gb->model = model;
 }
 
+/**
+ * @brief Applies the post-boot-ROM CPU and I/O register state for the selected model.
+ *
+ * Sets the register file, DIV counter, PPU counter, and a handful of I/O
+ * registers to the values they would have at the end of the boot ROM for
+ * each supported hardware revision (DMG0, DMG-ABC, MGB, CGB, SGB, SGB2).
+ *
+ * @param gb Pointer to the Game Boy state.
+ */
 static void cupid_gb_apply_boot_profile(CupidGb *gb)
 {
     if (gb->model == CUPID_GB_MODEL_DMG0) {
@@ -173,6 +222,18 @@ static void cupid_gb_apply_boot_profile(CupidGb *gb)
     gb->interrupt_flags = 0x01u;
 }
 
+/**
+ * @brief Initializes (or re-initializes) all Game Boy subsystem state.
+ *
+ * Allocates the ROM buffer if one has not already been provided, clears
+ * all hardware state, and applies the HLE post-boot-ROM register profile
+ * for the selected model. Must be called before loading a ROM.
+ *
+ * @param gb Pointer to the Game Boy state to initialize.
+ *
+ * @note The `model` and `rom` fields are preserved across a re-init.
+ * @note Does nothing if @p gb is NULL.
+ */
 void cupid_gb_init(CupidGb *gb)
 {
     CupidGbModel model;
@@ -267,13 +328,23 @@ void cupid_gb_init(CupidGb *gb)
     cupid_gb_sgb_init(gb);
 }
 
-/* --- Boot ROM support --- */
+// Boot ROM support
 
-/*
- * Load an external boot ROM dump from the given file path.
- * DMG boot ROMs are exactly 256 (0x100) bytes.
- * CGB boot ROMs are exactly 2304 (0x900) bytes.
- * Returns true on success.
+/**
+ * @brief Loads an external boot ROM dump from a file.
+ *
+ * DMG boot ROMs must be exactly 256 (0x100) bytes.
+ * CGB boot ROMs must be exactly 2304 (0x900) bytes.
+ * The loaded data is stored in `gb->boot_rom` and the size in
+ * `gb->boot_rom_size`. Call @ref cupid_gb_enter_boot_rom after
+ * this to activate the overlay.
+ *
+ * @param gb   Pointer to the Game Boy state.
+ * @param path Null-terminated path to the boot ROM file.
+ *
+ * @return `true` on success, `false` on any I/O or size error.
+ *
+ * @note Returns `false` if @p gb or @p path is NULL.
  */
 bool cupid_gb_load_boot_rom_file(CupidGb *gb, const char *path)
 {
@@ -316,6 +387,13 @@ bool cupid_gb_load_boot_rom_file(CupidGb *gb, const char *path)
     return true;
 }
 
+/**
+ * @brief Clears the boot ROM buffer and disables the boot ROM overlay.
+ *
+ * @param gb Pointer to the Game Boy state.
+ *
+ * @note Does nothing if @p gb is NULL.
+ */
 void cupid_gb_clear_boot_rom(CupidGb *gb)
 {
     if (gb == 0) {
@@ -326,10 +404,18 @@ void cupid_gb_clear_boot_rom(CupidGb *gb)
     gb->boot_rom_enabled = false;
 }
 
-/*
- * Enter boot ROM mode: reset CPU/PPU/APU to true power-on state
- * so the boot ROM executes from address 0x0000.
- * Call this AFTER loading the boot ROM and the game ROM.
+/**
+ * @brief Resets the CPU and hardware to true power-on state and activates the boot ROM.
+ *
+ * Zeroes all CPU registers, resets all I/O registers, APU, DIV, timer,
+ * and serial state, then maps the boot ROM overlay so execution starts
+ * at address 0x0000. Call this after loading both the boot ROM
+ * (@ref cupid_gb_load_boot_rom_file) and the game ROM
+ * (@ref cupid_gb_load_rom or @ref cupid_gb_load_rom_file).
+ *
+ * @param gb Pointer to the Game Boy state.
+ *
+ * @note Does nothing if @p gb is NULL or no boot ROM has been loaded.
  */
 void cupid_gb_enter_boot_rom(CupidGb *gb)
 {
@@ -337,7 +423,7 @@ void cupid_gb_enter_boot_rom(CupidGb *gb)
         return;
     }
 
-    /* Zero out CPU registers — boot ROM initializes everything */
+    /* Zero out CPU registers - boot ROM initializes everything */
     gb->cpu.a = 0u;
     gb->cpu.f = 0u;
     gb->cpu.b = 0u;
@@ -391,6 +477,16 @@ void cupid_gb_enter_boot_rom(CupidGb *gb)
     gb->window_line_counter = 0u;
 }
 
+/**
+ * @brief Frees all dynamically allocated Game Boy resources.
+ *
+ * Releases the ROM buffer. Safe to call on a partially initialized
+ * or already-cleaned-up instance.
+ *
+ * @param gb Pointer to the Game Boy state.
+ *
+ * @note Does nothing if @p gb is NULL.
+ */
 void cupid_gb_cleanup(CupidGb *gb)
 {
     if (gb == 0) {
@@ -401,8 +497,29 @@ void cupid_gb_cleanup(CupidGb *gb)
     gb->rom = 0;
 }
 
-/* --- memory map: read --- */
+// Memory map: read
 
+/**
+ * @brief Reads one byte from the full 0x0000–0xFFFF Game Boy address space.
+ *
+ * Implements the complete DMG/CGB memory map, including:
+ *   - Boot ROM overlay (0x0000–0x00FF, and 0x0200–0x08FF for CGB)
+ *   - ROM banks via MBC bank-switching logic
+ *   - VRAM (with Mode 3 lock)
+ *   - Cartridge RAM / RTC / MBC7 sensor / HuC registers
+ *   - WRAM and echo RAM
+ *   - OAM (with Mode 2/3 lock)
+ *   - APU I/O registers (with read masks)
+ *   - Wave RAM (with CH3 access conflict handling)
+ *   - P1/JOYP joypad register
+ *   - HRAM and IE
+ *
+ * @param gb      Pointer to the Game Boy state.
+ * @param address The 16-bit address to read.
+ *
+ * @return The byte at @p address, or 0xFF if the address is open-bus,
+ *         locked during DMA, or @p gb is NULL.
+ */
 uint8_t cupid_gb_read_u8(const CupidGb *gb, uint16_t address)
 {
     static const uint8_t apu_read_masks[0x20] = {
@@ -633,8 +750,18 @@ uint8_t cupid_gb_read_u8(const CupidGb *gb, uint16_t address)
     return 0xffu;
 }
 
-/* --- MBC3 real-time clock helpers --- */
+// MBC3 real-time clock helpers
 
+/**
+ * @brief Advances the MBC3 RTC registers using wall-clock time.
+ *
+ * Computes the elapsed real time since `gb->rtc.base_time`, carries it
+ * through seconds → minutes → hours → days, and updates the live RTC
+ * registers. Sets the carry flag in DH if the day counter overflows 511.
+ * Does nothing if the halt flag (DH bit 6) is set.
+ *
+ * @param gb Pointer to the Game Boy state.
+ */
 static void cupid_gb_rtc_update(CupidGb *gb)
 {
     int64_t now = (int64_t)time(NULL);
@@ -671,6 +798,15 @@ static void cupid_gb_rtc_update(CupidGb *gb)
     gb->rtc.base_time = now;
 }
 
+/**
+ * @brief Latches a snapshot of the live MBC3 RTC registers.
+ *
+ * Calls @ref cupid_gb_rtc_update to bring the live registers current,
+ * then copies S/M/H/DL/DH into the latched shadow registers (LS/LM/LH/LDL/LDH).
+ * The latched values are what the game reads via the 0xA000–0xBFFF window.
+ *
+ * @param gb Pointer to the Game Boy state.
+ */
 static void cupid_gb_rtc_latch(CupidGb *gb)
 {
     cupid_gb_rtc_update(gb);
@@ -681,8 +817,27 @@ static void cupid_gb_rtc_latch(CupidGb *gb)
     gb->rtc.ldh = gb->rtc.dh;
 }
 
-/* --- memory map: write --- */
+// Memory map: write
 
+/**
+ * @brief Writes one byte to the full 0x0000–0xFFFF Game Boy address space.
+ *
+ * Implements the complete DMG/CGB memory map for writes, including:
+ *   - MBC register writes (RAM enable, ROM/RAM bank select, mode)
+ *   - MBC3 RTC latch sequence
+ *   - VRAM (with Mode 3 lock)
+ *   - Cartridge RAM / RTC register writes / MBC7 latch / HuC3 commands
+ *   - WRAM and echo RAM
+ *   - OAM (with Mode 2/3 lock and DMG OAM corruption bug emulation)
+ *   - P1/JOYP, LCDC, STAT, LY, LYC, DMA, timer, APU, and boot register
+ *   - HRAM and IE
+ *
+ * @param gb      Pointer to the Game Boy state.
+ * @param address The 16-bit address to write.
+ * @param value   The byte value to write.
+ *
+ * @note Does nothing if @p gb is NULL or the write is blocked by DMA.
+ */
 void cupid_gb_write_u8(CupidGb *gb, uint16_t address, uint8_t value)
 {
     if (gb == 0) {
@@ -1010,8 +1165,23 @@ void cupid_gb_write_u8(CupidGb *gb, uint16_t address, uint8_t value)
     }
 }
 
-/* --- step --- */
+// Step
 
+/**
+ * @brief Executes one SM83 instruction (or one halt/stop cycle).
+ *
+ * Each call to this function advances the emulator by one instruction,
+ * including all mid-instruction PPU/APU/timer ticks. Also handles:
+ *   - Interrupt service routine dispatch (if IME and a pending interrupt)
+ *   - HALT and STOP low-power modes
+ *   - IME enable delay (EI takes effect after the following instruction)
+ *   - Phase-sensitive LDH A,(n) and LDH (n),A handling for DIV/LCDC
+ *
+ * @param gb Pointer to the Game Boy state.
+ *
+ * @return `true` if an instruction (or halt cycle) was executed,
+ *         `false` if @p gb is NULL or no ROM is loaded.
+ */
 bool cupid_gb_step(CupidGb *gb)
 {
     uint8_t cycles;
