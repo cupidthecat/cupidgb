@@ -1,0 +1,54 @@
+# Save states and rewind
+
+CupidGB native states preserve CPU, timer, DMA, serial, graphics, cartridge, SGB, and audio state at an instruction boundary. They include pending core PCM samples. They exclude ROM binaries, boot binaries, host paths, Qt resources, and queued host audio.
+
+## Desktop workflows
+
+Use the state menus or Ctrl+1 through Ctrl+9 and Ctrl+0 to save the numbered slots. Add Shift to load. Slots use `.s0` through `.s9` beside the cartridge. When the primary file is missing, the loader also tries the corresponding `.sn0` through `.sn9` filename. A damaged primary file produces an error; it does not silently select another file.
+
+Load a native state file through File > Load State File or drop a `.s0` through `.s9` or `.sn0` through `.sn9` file onto an open cartridge. State files are rejected as cartridge inputs.
+
+Writes use an atomic file replacement. Loading checks the complete cartridge identity and hardware model. A state captured with an active boot overlay requires the matching local boot binary. Failed validation preserves the running session and its host audio queue. A successful load replaces the emulated state, reapplies current physical input, clears queued host audio, and realigns pacing.
+
+The file content is CupidGB native version 1. Interoperable BESS state imports remain pending. A filename fallback does not imply support for another state format.
+
+## Rewind
+
+Hold Tab to move backward through captured frames. Space with Tab moves backward two snapshots per host interval. Releasing rewind resumes forward emulation with current physical input. Rewind playback intentionally clears host audio; ordinary forward playback retains normal audio generation and queue backpressure.
+
+Settings control the requested history duration and memory budget. The default requests up to 120 seconds within a 256 MiB budget. The buffer evicts its oldest snapshots when either limit is reached. Actual retained duration depends on how well the cartridge's state compresses; the interface reports shorter history when the memory limit is reached. Set the duration to zero to disable capture.
+
+History resets on cartridge replacement, reset, successful disk-state loading, or relevant configuration changes. Failed disk-state loading preserves history. Rewind snapshots stay in memory.
+
+The rewind path caches the identity of the frontend's immutable cartridge. The core context is bound to the instance, ROM pointer, ROM size, and hardware model. A caller that patches ROM bytes in place must discard and recreate this context. Disk-state APIs always recompute the full cartridge hash. Future cheat, patch, or debugger features must honor that cache invalidation rule.
+
+## Native version 1 format
+
+All numeric payload fields use explicit widths and little-endian encoding. Booleans use validated zero or one bytes. Signed timestamps and PCM samples use explicit two's-complement encoding. The format never stores C structure padding, native pointers, native `size_t`, or native boolean representations.
+
+The 128-byte header contains:
+
+| Offset | Bytes | Value |
+| --- | --- | --- |
+| 0 | 8 | `CUPIDGB` followed by a zero byte |
+| 8 | 4 | Format version, currently 1 |
+| 12 | 4 | Complete encoded length |
+| 16 | 4 | Stable hardware model tag |
+| 20 | 4 | Cartridge byte length |
+| 24 | 4 | Required boot length, zero when the saved overlay is inactive |
+| 28 | 4 | Flags; bit 0 means an active boot overlay |
+| 32 | 32 | SHA-256 of the complete cartridge |
+| 64 | 32 | SHA-256 of the required boot binary, otherwise zero |
+| 96 | 32 | SHA-256 of header bytes 0 through 95 followed by the payload |
+
+The payload follows the explicit field order in `src/gb/state.c`. Version 1 currently occupies 300,349 bytes including the header. Adding or reordering hardware fields requires a format revision and a deliberate fixture update.
+
+Loading first verifies version, length, integrity, cartridge/model/boot identity, and field domains. It decodes into a separate candidate that retains the current session's ROM ownership and immutable metadata. Only a completely validated candidate replaces the live state.
+
+## Validation scope
+
+Generated-ROM tests exercise deterministic continuation across the current six hardware profiles, active boot overlays, LCD modes, CGB double speed, pending timer reloads, DMA starts/restarts, and serial phases. Checks compare CPU and memory state, framebuffers, emitted PCM, and the encoded continuation. Additional tests reject every truncation boundary, damaged or invalid fields, wrong inputs, and stale cache bindings while preserving the live instance.
+
+Windows and Linux produced byte-identical 300,349-byte fixtures with SHA-256 `ac3df28d89204f9a5d91c74570cdae32c9ee7a8e5cb7d54e321ef7f20ae9ab5c`. These checks qualify CupidGB native continuation. They do not establish state interoperability or complete underlying hardware accuracy.
+
+Forward runtime measurements must be distinguished from state loading and rewind, which change the guest timeline. A guest-clock rate measured during those operations represents net timeline progress rather than forward emulation throughput.

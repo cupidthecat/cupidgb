@@ -15,8 +15,8 @@ option(CUPIDGB_BUILD_QT "Build the Qt desktop frontend" ON)
 option(CUPIDGB_ENABLE_SANITIZERS "Enable address and undefined behavior sanitizers" OFF)
 
 add_library(cupidgb_core STATIC
-    src/common/log.c src/core/emulator.c src/core/system.c
-    src/gb/gb.c src/gb/cpu.c src/gb/ppu.c src/gb/apu.c
+    src/common/log.c src/common/sha256.c src/core/emulator.c src/core/system.c
+    src/gb/gb.c src/gb/state.c src/gb/cpu.c src/gb/ppu.c src/gb/apu.c
     src/gb/timer.c src/gb/cartridge.c src/gb/sgb.c src/gbc/cgb.c
 )
 target_include_directories(cupidgb_core PUBLIC include)
@@ -54,7 +54,7 @@ if(CUPIDGB_BUILD_QT)
 endif()
 if(CUPIDGB_ENABLE_TESTS)
     enable_testing()
-    foreach(test_name IN ITEMS smoke gb serial ppu apu cpu_timing)
+    foreach(test_name IN ITEMS smoke gb serial ppu apu cpu_timing state)
         add_executable(cupidgb_${test_name} tests/test_${test_name}.c)
         target_link_libraries(cupidgb_${test_name} PRIVATE cupidgb_core)
         # Tests use assert for setup and checks, including in Release builds.

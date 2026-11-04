@@ -166,11 +166,12 @@ typedef struct CupidGbCartridgeHeader {
 
 typedef enum CupidGbModel {
     CUPID_GB_MODEL_DMG_ABC = 0,
-    CUPID_GB_MODEL_DMG0,
-    CUPID_GB_MODEL_MGB,
-    CUPID_GB_MODEL_CGB,
-    CUPID_GB_MODEL_SGB,
-    CUPID_GB_MODEL_SGB2
+    /* Native state model tags are persistent. Do not renumber existing values. */
+    CUPID_GB_MODEL_DMG0 = 1,
+    CUPID_GB_MODEL_MGB = 2,
+    CUPID_GB_MODEL_CGB = 3,
+    CUPID_GB_MODEL_SGB = 4,
+    CUPID_GB_MODEL_SGB2 = 5
 } CupidGbModel;
 
 typedef struct CupidGb {

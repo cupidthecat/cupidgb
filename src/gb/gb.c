@@ -742,39 +742,44 @@ uint8_t cupid_gb_read_u8(const CupidGb *gb, uint16_t address) {
  * Computes the elapsed real time since `gb->rtc.base_time`, carries it
  * through seconds → minutes → hours → days, and updates the live RTC
  * registers. Sets the carry flag in DH if the day counter overflows 511.
- * Does nothing if the halt flag (DH bit 6) is set.
+ * Leaves counters unchanged when halted or when the wall clock moves backward.
+ * The host-time baseline is refreshed in both cases.
  *
  * @param gb Pointer to the Game Boy state.
  */
 static void cupid_gb_rtc_update(CupidGb *gb) {
     int64_t now = (int64_t)time(NULL);
-    int64_t elapsed;
-    int64_t total;
-    int days;
+    uint64_t elapsed;
+    uint64_t remainder;
+    uint64_t total;
+    uint64_t days;
 
     if (gb->rtc.base_time == 0) {
         gb->rtc.base_time = now;
         return;
     }
 
-    elapsed = now - gb->rtc.base_time;
-    if (elapsed <= 0 || (gb->rtc.dh & 0x40u)) { /* halt flag = bit 6 */
+    if (now <= gb->rtc.base_time || (gb->rtc.dh & 0x40u)) { /* halt flag = bit 6 */
         gb->rtc.base_time = now;
         return;
     }
 
-    total = (int64_t)gb->rtc.s + elapsed;
-    gb->rtc.s = (uint8_t)(total % 60);
-    total /= 60;
-    total += (int64_t)gb->rtc.m;
-    gb->rtc.m = (uint8_t)(total % 60);
-    total /= 60;
-    total += (int64_t)gb->rtc.h;
-    gb->rtc.h = (uint8_t)(total % 24);
-    total /= 24;
-    days = ((int)gb->rtc.dl | ((int)(gb->rtc.dh & 0x01u) << 8)) + (int)total;
-    gb->rtc.dl = (uint8_t)((unsigned)days & 0xffu);
-    gb->rtc.dh = (uint8_t)((gb->rtc.dh & 0xfeu) | (((unsigned)days >> 8) & 0x01u));
+    /* Restored timestamps span all signed 64-bit values. The positive distance
+     * may exceed INT64_MAX; unsigned subtraction represents that span exactly.
+     * Divide before adding register values so even UINT64_MAX cannot overflow. */
+    elapsed = (uint64_t)now - (uint64_t)gb->rtc.base_time;
+    remainder = elapsed % 60u + gb->rtc.s;
+    gb->rtc.s = (uint8_t)(remainder % 60u);
+    total = elapsed / 60u + remainder / 60u;
+    remainder = total % 60u + gb->rtc.m;
+    gb->rtc.m = (uint8_t)(remainder % 60u);
+    total = total / 60u + remainder / 60u;
+    remainder = total % 24u + gb->rtc.h;
+    gb->rtc.h = (uint8_t)(remainder % 24u);
+    days = (uint64_t)gb->rtc.dl + ((uint64_t)(gb->rtc.dh & 0x01u) << 8u) + total / 24u +
+           remainder / 24u;
+    gb->rtc.dl = (uint8_t)(days & 0xffu);
+    gb->rtc.dh = (uint8_t)((gb->rtc.dh & 0xfeu) | ((days >> 8u) & 0x01u));
     if (days > 511) {
         gb->rtc.dh = (uint8_t)(gb->rtc.dh | 0x80u); /* carry flag = bit 7 */
     }

@@ -36,6 +36,7 @@
 #include <QPainter>
 #include <QPushButton>
 #include <QSaveFile>
+#include <QScopedValueRollback>
 #include <QSignalBlocker>
 #include <QSlider>
 #include <QStatusBar>
@@ -45,6 +46,7 @@
 #include <cstring>
 
 extern "C" {
+#include "cupid/gb/state.h"
 #include "cupid/gbc/cgb.h"
 }
 
@@ -62,6 +64,13 @@ QRgb rgb555(uint16_t value) {
     const int g = (value >> 5) & 31;
     const int b = (value >> 10) & 31;
     return qRgb((r << 3) | (r >> 2), (g << 3) | (g >> 2), (b << 3) | (b >> 2));
+}
+
+bool isStatePath(const QString &path) {
+    const QString extension = QFileInfo(path).suffix().toLower();
+    const auto digit = [](QChar character) { return character >= '0' && character <= '9'; };
+    return (extension.size() == 2 && extension[0] == 's' && digit(extension[1])) ||
+           (extension.size() == 3 && extension.startsWith("sn") && digit(extension[2]));
 }
 } // namespace
 
@@ -180,7 +189,8 @@ class AudioBuffer final {
     qsizetype maximumQueued_ = 0;
 };
 
-MainWindow::MainWindow(bool isolated, bool automated) : isolated_(isolated), automated_(automated) {
+MainWindow::MainWindow(bool isolated, bool automated, bool audioCheck)
+    : isolated_(isolated), automated_(automated), audioCheck_(audioCheck) {
     setWindowTitle("CupidGB");
     setAcceptDrops(true);
     display_ = new DisplayWidget(this);
@@ -230,6 +240,16 @@ void MainWindow::buildMenus() {
     });
     recentMenu_ = file->addMenu("Open &Recent");
     updateRecentMenu();
+    loadStateFileAction_ = file->addAction("Load State File…");
+    connect(loadStateFileAction_, &QAction::triggered, this, [this] {
+        QScopedValueRollback<bool> operation(stateOperation_, true);
+        const QString path = QFileDialog::getOpenFileName(
+            this, "Load State File", QFileInfo(romPath_).absolutePath(),
+            "State files (*.s? *.sn?);;All files (*)");
+        if (!path.isEmpty())
+            loadStateFile(path);
+        nextFrame_ = clock_.nsecsElapsed();
+    });
     closeAction_ = file->addAction("&Close ROM", QKeySequence("Ctrl+W"));
     connect(closeAction_, &QAction::triggered, this, [this] { closeRom(); });
     file->addSeparator();
@@ -247,6 +267,21 @@ void MainWindow::buildMenus() {
         runFrame();
         clearAudio();
     });
+    auto *saveStates = emulation->addMenu("Save State");
+    auto *loadStates = emulation->addMenu("Load State");
+    for (int ordinal = 1; ordinal <= 10; ++ordinal) {
+        const int slot = ordinal % 10;
+        // The 0 key selects the tenth slot; filenames retain their numeric suffix.
+        const QString title = QString("Slot %1").arg(slot ? slot : 10);
+        saveSlotActions_[size_t(slot)] =
+            saveStates->addAction(title, QKeySequence(QString("Ctrl+%1").arg(slot)));
+        loadSlotActions_[size_t(slot)] =
+            loadStates->addAction(title, QKeySequence(QString("Ctrl+Shift+%1").arg(slot)));
+        connect(saveSlotActions_[size_t(slot)], &QAction::triggered, this,
+                [this, slot] { saveSlot(slot); });
+        connect(loadSlotActions_[size_t(slot)], &QAction::triggered, this,
+                [this, slot] { loadSlot(slot); });
+    }
     auto *view = menuBar()->addMenu("&View");
     auto *fullscreen = view->addAction("&Fullscreen", QKeySequence("Ctrl+F"));
     fullscreen->setCheckable(true);
@@ -273,10 +308,11 @@ void MainWindow::buildMenus() {
         QMessageBox::information(
             this, "Controls",
             "Default controls: arrows, X (A), Z (B), Backspace (Select), Enter (Start).\n"
-            "Hold Space for turbo. Change button mappings in Settings.\n\n"
+            "Hold Space for turbo. Hold Tab to rewind. Change button mappings in Settings.\n\n"
             "Open: Ctrl+O   Reset: Ctrl+R   Pause: Ctrl+P\n"
             "Fullscreen: Ctrl+F   Mute: Ctrl+M   Screenshot: F12\n\n"
-            "Rewind, save states, controllers and debugging tools are not available yet.");
+            "Save state: Ctrl+0–9   Load state: Ctrl+Shift+0–9\n\n"
+            "Controllers and debugging tools are not available yet.");
         setPaused(wasPaused);
     });
     connect(help->addAction("&About CupidGB"), &QAction::triggered, this, [this] {
@@ -308,6 +344,11 @@ void MainWindow::reportError(const QString &message) {
 }
 
 bool MainWindow::openRom(const QString &path) {
+    if (isStatePath(path)) {
+        reportError(
+            "State files cannot be opened as cartridges. Open a cartridge, then load its state.");
+        return false;
+    }
     if (QFileInfo(path).suffix().compare("sav", Qt::CaseInsensitive) == 0) {
         reportError("Battery save files cannot be opened as cartridges.");
         return false;
@@ -423,6 +464,7 @@ bool MainWindow::openRom(const QString &path) {
     if (emulator_)
         cupid_emulator_shutdown(emulator_.get());
     emulator_ = std::move(candidate);
+    resetRewind();
     ++sessionId_;
     romData_ = data;
     romPath_ = absolute;
@@ -443,6 +485,7 @@ bool MainWindow::openRom(const QString &path) {
                                                   : "Boot ROM loaded");
     setupAudio();
     present();
+    rememberFrame();
     refreshActions();
     return true;
 }
@@ -473,6 +516,7 @@ bool MainWindow::closeRom() {
     if (emulator_)
         cupid_emulator_shutdown(emulator_.get());
     emulator_.reset();
+    resetRewind();
     romPath_.clear();
     romData_.clear();
     image_ = {};
@@ -493,7 +537,7 @@ void MainWindow::setupAudio() {
     stopAudio();
     audioConverter_.reset();
     audioBuffer_ = std::make_unique<AudioBuffer>();
-    if (isolated_)
+    if (isolated_ && !audioCheck_)
         return;
     QAudioFormat format;
     format.setSampleRate(CUPID_GB_APU_SAMPLE_RATE);
@@ -566,6 +610,8 @@ void MainWindow::setPaused(bool value) {
 
 void MainWindow::releaseKeys() {
     turbo_ = false;
+    rewind_ = false;
+    physicalJoypad_ = 0xff;
     if (emulator_)
         emulator_->gb.joypad = 0xff;
 }
@@ -580,10 +626,19 @@ void MainWindow::setJoypad(uint8_t mask) {
 }
 
 void MainWindow::tick() {
-    if (!emulator_ || paused_)
+    if (!emulator_ || paused_ || stateOperation_)
         return;
-    pumpAudio();
     const qint64 now = clock_.nsecsElapsed();
+    if (rewind_) {
+        if (now >= nextFrame_) {
+            rewindFrame();
+            if (turbo_)
+                rewindFrame();
+            nextFrame_ = now + frameNanoseconds;
+        }
+        return;
+    }
+    pumpAudio();
     if (!turbo_ && now < nextFrame_)
         return;
     // Bound each event-loop turn so dialogs, input, and close remain responsive.
@@ -607,8 +662,10 @@ bool MainWindow::runFrame() {
         if (!inputTrace_.empty()) {
             const uint64_t frame = (gb.elapsed_cycles - telemetryStartCycles_) / 70224;
             while (inputTraceIndex_ < inputTrace_.size() &&
-                   inputTrace_[inputTraceIndex_].first <= frame)
-                setJoypad(inputTrace_[inputTraceIndex_++].second);
+                   inputTrace_[inputTraceIndex_].first <= frame) {
+                physicalJoypad_ = inputTrace_[inputTraceIndex_++].second;
+                setJoypad(physicalJoypad_);
+            }
         }
         if (!cupid_emulator_step(emulator_.get())) {
             setPaused(true);
@@ -626,6 +683,230 @@ bool MainWindow::runFrame() {
         audioBuffer_->append(converted.constData(), converted.size());
         pumpAudio();
     }
+    present();
+    rememberFrame();
+    return true;
+}
+
+QByteArray MainWindow::captureState(bool reportFailure, bool rewindSnapshot) {
+    if (!emulator_)
+        return {};
+    const size_t size = cupid_gb_state_size(&emulator_->gb);
+    if (!size || size > 16 * 1024 * 1024) {
+        if (reportFailure)
+            reportError("Cannot determine a valid emulator state size.");
+        return {};
+    }
+    QByteArray bytes(qsizetype(size), Qt::Uninitialized);
+    size_t written = 0;
+    const auto result =
+        rewindSnapshot
+            ? cupid_gb_save_state_with_context(&emulator_->gb,
+                                               reinterpret_cast<uint8_t *>(bytes.data()), size,
+                                               &written, rewindContext_.get())
+            : cupid_gb_save_state(&emulator_->gb, reinterpret_cast<uint8_t *>(bytes.data()), size,
+                                  &written);
+    if (result != CUPID_GB_STATE_OK || written > size) {
+        if (reportFailure)
+            reportError("Cannot capture emulator state: " +
+                        QString::fromUtf8(cupid_gb_state_result_name(result)));
+        return {};
+    }
+    bytes.resize(qsizetype(written));
+    return bytes;
+}
+
+bool MainWindow::restoreState(const QByteArray &bytes, bool reportFailure, bool rewindSnapshot) {
+    if (!emulator_)
+        return false;
+    const auto result =
+        rewindSnapshot
+            ? cupid_gb_load_state_with_context(&emulator_->gb,
+                                               reinterpret_cast<const uint8_t *>(bytes.constData()),
+                                               size_t(bytes.size()), rewindContext_.get())
+            : cupid_gb_load_state(&emulator_->gb,
+                                  reinterpret_cast<const uint8_t *>(bytes.constData()),
+                                  size_t(bytes.size()));
+    if (result != CUPID_GB_STATE_OK) {
+        if (reportFailure)
+            reportError("Cannot load emulator state: " +
+                        QString::fromUtf8(cupid_gb_state_result_name(result)));
+        return false;
+    }
+    return true;
+}
+
+QString MainWindow::slotPath(int slot, bool legacy) const {
+    const QFileInfo info(romPath_);
+    return info.dir().filePath(info.completeBaseName() +
+                               QString(legacy ? ".sn%1" : ".s%1").arg(slot));
+}
+
+bool MainWindow::saveSlot(int slot) {
+    if (!emulator_ || slot < 0 || slot > 9)
+        return false;
+    QScopedValueRollback<bool> operation(stateOperation_, true);
+    const QString path = slotPath(slot);
+    const QString canonical = QFileInfo(path).canonicalFilePath();
+#ifdef _WIN32
+    constexpr auto pathCase = Qt::CaseInsensitive;
+#else
+    constexpr auto pathCase = Qt::CaseSensitive;
+#endif
+    if (!canonical.isEmpty() &&
+        (canonical.compare(QFileInfo(romPath_).canonicalFilePath(), pathCase) == 0 ||
+         canonical.compare(QFileInfo(savePath_).canonicalFilePath(), pathCase) == 0)) {
+        reportError(
+            "The state path points to the cartridge or battery save. Choose separate files.");
+        return false;
+    }
+    const QByteArray bytes = captureState();
+    if (bytes.isEmpty())
+        return false;
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit()) {
+        reportError("Cannot save state: " + file.errorString());
+        return false;
+    }
+    statusBar()->showMessage(QString("State saved to slot %1").arg(slot ? slot : 10), 3000);
+    nextFrame_ = clock_.nsecsElapsed();
+    return true;
+}
+
+bool MainWindow::loadSlot(int slot) {
+    if (!emulator_ || slot < 0 || slot > 9)
+        return false;
+    QString path = slotPath(slot);
+    // An existing but unreadable or invalid primary file must not select a different state.
+    if (!QFileInfo::exists(path))
+        path = slotPath(slot, true);
+    if (!loadStateFile(path))
+        return false;
+    statusBar()->showMessage(QString("State loaded from slot %1").arg(slot ? slot : 10), 3000);
+    return true;
+}
+
+bool MainWindow::loadStateFile(const QString &path) {
+    if (!emulator_) {
+        reportError("Open a cartridge before loading a state file.");
+        return false;
+    }
+    QScopedValueRollback<bool> operation(stateOperation_, true);
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly) || file.size() <= 0 || file.size() > 16 * 1024 * 1024) {
+        reportError("Cannot read state file: " + path + "\n" + file.errorString());
+        return false;
+    }
+    const QByteArray bytes = file.readAll();
+    if (bytes.size() != file.size()) {
+        reportError("State file read failed: " + file.errorString());
+        return false;
+    }
+    if (!restoreState(bytes, true))
+        return false;
+    // Host input remains current even when the saved guest frame held another button.
+    setJoypad(physicalJoypad_);
+    rewind_ = false;
+    turbo_ = false;
+    clearAudio();
+    nextFrame_ = clock_.nsecsElapsed();
+    resetRewind();
+    rememberFrame();
+    present();
+    statusBar()->showMessage("State loaded", 3000);
+    return true;
+}
+
+void MainWindow::resetRewind() {
+    rewindStates_.clear();
+    rewindContext_.reset();
+    rewindBytes_ = 0;
+    rewindFailed_ = false;
+    rewind_ = false;
+    rewindSnapshotsCaptured_ = 0;
+    rewindCaptureNanoseconds_ = 0;
+    rewindCaptureMaximumNanoseconds_ = 0;
+}
+
+void MainWindow::rememberFrame() {
+    const int seconds = std::clamp(settings_.value("emulation/rewindSeconds", 120).toInt(), 0, 600);
+    if (!emulator_ || !seconds || rewindFailed_)
+        return;
+    if (!rewindContext_) {
+        auto context = std::make_unique<CupidGbStateContext>();
+        const auto result = cupid_gb_state_context_init(context.get(), &emulator_->gb);
+        if (result != CUPID_GB_STATE_OK) {
+            rewindFailed_ = true;
+            statusBar()->showMessage(
+                "Rewind disabled: cartridge identity could not be initialized");
+            return;
+        }
+        // Cartridge bytes are immutable in this frontend. Reset this context whenever
+        // opening/resetting a cartridge, loading a disk state, or adding ROM-editing support.
+        rewindContext_ = std::move(context);
+    }
+    QElapsedTimer captureTimer;
+    captureTimer.start();
+    const QByteArray state = captureState(false, true);
+    QByteArray compressed = state.isEmpty() ? QByteArray{} : qCompress(state, 1);
+    if (compressed.isEmpty()) {
+        rewindFailed_ = true;
+        statusBar()->showMessage("Rewind disabled: cannot capture emulator state");
+        return;
+    }
+    compressed.squeeze();
+    const qint64 captureTime = captureTimer.nsecsElapsed();
+    ++rewindSnapshotsCaptured_;
+    rewindCaptureNanoseconds_ += captureTime;
+    rewindCaptureMaximumNanoseconds_ = std::max(rewindCaptureMaximumNanoseconds_, captureTime);
+    rewindBytes_ += compressed.capacity() + qsizetype(sizeof(RewindSnapshot));
+    rewindStates_.push_back({std::move(compressed), emulator_->gb.elapsed_cycles});
+    const int budgetMiB = std::clamp(settings_.value("emulation/rewindMiB", 256).toInt(), 16, 256);
+    const qsizetype budget = qsizetype(budgetMiB) * 1024 * 1024;
+    if (rewindStates_.back().compressed.capacity() + qsizetype(sizeof(RewindSnapshot)) > budget) {
+        rewindStates_.clear();
+        rewindBytes_ = 0;
+        rewindFailed_ = true;
+        statusBar()->showMessage("Rewind disabled: one state exceeds the selected memory limit");
+        return;
+    }
+    bool budgetLimited = false;
+    while (rewindStates_.size() > 1 &&
+           (rewindBytes_ > budget || rewindStates_.back().cycles - rewindStates_.front().cycles >
+                                         uint64_t(seconds) * 4194304)) {
+        budgetLimited |= rewindBytes_ > budget;
+        rewindBytes_ -=
+            rewindStates_.front().compressed.capacity() + qsizetype(sizeof(RewindSnapshot));
+        rewindStates_.pop_front();
+    }
+    if (budgetLimited && clock_.elapsed() - lastRewindBudgetNotice_ > 1000) {
+        lastRewindBudgetNotice_ = clock_.elapsed();
+        const double available =
+            double(rewindStates_.back().cycles - rewindStates_.front().cycles) / 4194304;
+        statusBar()->showMessage(QString("Rewind memory limit: %1 seconds retained within %2 MiB")
+                                     .arg(available, 0, 'f', 1)
+                                     .arg(budgetMiB),
+                                 2000);
+    }
+}
+
+bool MainWindow::rewindFrame() {
+    if (!emulator_ || rewindFailed_ || rewindStates_.size() < 2) {
+        statusBar()->showMessage(rewindFailed_ ? "Rewind unavailable: snapshot capture failed"
+                                               : "No earlier rewind history");
+        return false;
+    }
+    // The last entry describes the currently displayed frame. Restore its predecessor.
+    const auto &previous = rewindStates_[rewindStates_.size() - 2];
+    const QByteArray state = qUncompress(previous.compressed);
+    if (state.isEmpty() || !restoreState(state, false, true)) {
+        rewindFailed_ = true;
+        statusBar()->showMessage("Rewind disabled: stored state could not be restored");
+        return false;
+    }
+    setJoypad(physicalJoypad_);
+    rewindBytes_ -= rewindStates_.back().compressed.capacity() + qsizetype(sizeof(RewindSnapshot));
+    rewindStates_.pop_back();
     present();
     return true;
 }
@@ -671,14 +952,23 @@ bool MainWindow::eventFilter(QObject *object, QEvent *event) {
             nextFrame_ = clock_.nsecsElapsed();
             return true;
         }
+        if (key->key() == Qt::Key_Tab) {
+            rewind_ = pressed && !paused_;
+            clearAudio();
+            nextFrame_ = clock_.nsecsElapsed();
+            if (pressed && rewindStates_.size() < 2)
+                statusBar()->showMessage("No earlier rewind history");
+            return true;
+        }
         for (size_t i = 0; i < keys_.size(); ++i) {
             if (key->key() == keys_[i]) {
                 const uint8_t mask = uint8_t(1u << i);
-                auto &gb = emulator_->gb;
                 if (pressed && !paused_) {
-                    setJoypad(gb.joypad & uint8_t(~mask));
+                    physicalJoypad_ &= uint8_t(~mask);
+                    setJoypad(physicalJoypad_);
                 } else {
-                    gb.joypad |= mask;
+                    physicalJoypad_ |= mask;
+                    setJoypad(physicalJoypad_);
                 }
                 return true;
             }
@@ -703,13 +993,20 @@ void MainWindow::dragEnterEvent(QDragEnterEvent *event) {
 }
 
 void MainWindow::dropEvent(QDropEvent *event) {
-    if (event->mimeData()->hasUrls() && event->mimeData()->urls().size() == 1)
-        if (openRom(event->mimeData()->urls().first().toLocalFile()))
+    if (event->mimeData()->hasUrls() && event->mimeData()->urls().size() == 1) {
+        const QString path = event->mimeData()->urls().first().toLocalFile();
+        if (isStatePath(path) ? loadStateFile(path) : openRom(path))
             event->acceptProposedAction();
+    }
 }
 
 void MainWindow::refreshActions() {
-    for (auto *action : {closeAction_, resetAction_, pauseAction_, frameAction_, screenshotAction_})
+    for (auto *action : {closeAction_, resetAction_, pauseAction_, frameAction_, screenshotAction_,
+                         loadStateFileAction_})
+        action->setEnabled(bool(emulator_));
+    for (auto *action : saveSlotActions_)
+        action->setEnabled(bool(emulator_));
+    for (auto *action : loadSlotActions_)
         action->setEnabled(bool(emulator_));
 }
 
@@ -765,15 +1062,36 @@ void MainWindow::configure() {
     volume->setRange(0, 100);
     volume->setValue(settings_.value("audio/volume", 100).toInt());
     form->addRow("Volume", volume);
+    auto *rewindLength = new QComboBox;
+    for (const int seconds : {0, 10, 30, 60, 120, 300, 600})
+        rewindLength->addItem(seconds ? QString("Up to %1 seconds").arg(seconds) : "Disabled",
+                              seconds);
+    rewindLength->setCurrentIndex(
+        rewindLength->findData(settings_.value("emulation/rewindSeconds", 120).toInt()));
+    form->addRow("Rewind history", rewindLength);
+    auto *rewindBudget = new QComboBox;
+    for (const int memory : {16, 32, 64, 128, 256})
+        rewindBudget->addItem(QString("%1 MiB").arg(memory), memory);
+    rewindBudget->setCurrentIndex(
+        rewindBudget->findData(settings_.value("emulation/rewindMiB", 256).toInt()));
+    form->addRow("Rewind memory limit", rewindBudget);
+    const double available =
+        rewindStates_.size() < 2
+            ? 0.0
+            : double(rewindStates_.back().cycles - rewindStates_.front().cycles) / 4194304;
+    form->addRow("Current retained history",
+                 new QLabel(QString("%1 seconds, %2 MiB")
+                                .arg(available, 0, 'f', 1)
+                                .arg(double(rewindBytes_) / (1024 * 1024), 0, 'f', 1)));
     std::array<QKeySequenceEdit *, 8> edits;
     for (size_t i = 0; i < edits.size(); ++i) {
         edits[i] = new QKeySequenceEdit(QKeySequence(keys_[i]));
         form->addRow(buttonNames[i], edits[i]);
     }
     layout->addLayout(form);
-    auto *note =
-        new QLabel("Choose one unmodified key per button. Space is reserved for turbo.\n"
-                   "Rewind, save states, controllers, and debugger tools remain incomplete.");
+    auto *note = new QLabel("Choose one unmodified key per button. Space and Tab are reserved.\n"
+                            "Rewind duration is bounded by the selected memory limit.\n"
+                            "Controllers and debugger tools remain incomplete.");
     note->setWordWrap(true);
     layout->addWidget(note);
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
@@ -784,10 +1102,11 @@ void MainWindow::configure() {
         for (size_t i = 0; i < edits.size(); ++i) {
             const auto sequence = edits[i]->keySequence();
             if (sequence.count() != 1 || sequence[0].keyboardModifiers() != Qt::NoModifier ||
-                sequence[0].key() == Qt::Key_Space || sequence[0].key() == Qt::Key_unknown) {
+                sequence[0].key() == Qt::Key_Space || sequence[0].key() == Qt::Key_Tab ||
+                sequence[0].key() == Qt::Key_unknown) {
                 QMessageBox::warning(
                     &dialog, "Input",
-                    "Choose one unmodified key for each button. Space is reserved.");
+                    "Choose one unmodified key for each button. Space and Tab are reserved.");
                 return;
             }
             values[i] = sequence[0].key();
@@ -805,6 +1124,13 @@ void MainWindow::configure() {
         settings_.setValue("emulation/bootDirectory", boot->text());
         settings_.setValue("video/integerScale", scaling->currentIndex() == 0);
         settings_.setValue("audio/volume", volume->value());
+        if (settings_.value("emulation/rewindSeconds", 120) != rewindLength->currentData() ||
+            settings_.value("emulation/rewindMiB", 256) != rewindBudget->currentData()) {
+            settings_.setValue("emulation/rewindSeconds", rewindLength->currentData());
+            settings_.setValue("emulation/rewindMiB", rewindBudget->currentData());
+            resetRewind();
+            rememberFrame();
+        }
         display_->integerScale = scaling->currentIndex() == 0;
         display_->update();
         if (audio_)
@@ -829,6 +1155,15 @@ bool MainWindow::smokeTest() {
     if (!file.open(QIODevice::WriteOnly) || file.write(rom) != rom.size())
         return false;
     file.close();
+    auto dropFile = [this](const QString &path) {
+        QMimeData mime;
+        mime.setUrls({QUrl::fromLocalFile(path)});
+        QDragEnterEvent enter({1, 1}, Qt::CopyAction, &mime, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(this, &enter);
+        QDropEvent drop(QPointF(1, 1), Qt::CopyAction, &mime, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(this, &drop);
+        return drop.isAccepted();
+    };
     if (!openRom(path) || !runFrame() || image_.size() != QSize(160, 144))
         return false;
     pauseAction_->trigger();
@@ -880,6 +1215,189 @@ bool MainWindow::smokeTest() {
     if (!image_.save(shot) || QImage(shot).size() != image_.size() || !restart() ||
         emulator_->gb.cartridge_ram[23] != 0x5a)
         return false;
+    setPaused(true);
+    const QByteArray checkpoint = captureState();
+    if (checkpoint.isEmpty() || !saveSlot(1) || !saveSlot(0) ||
+        saveSlotActions_[1]->shortcut() != QKeySequence("Ctrl+1") ||
+        loadSlotActions_[0]->shortcut() != QKeySequence("Ctrl+Shift+0"))
+        return false;
+    const QString nativeStatePath = slotPath(1);
+    if (openRom(nativeStatePath) || captureState() != checkpoint)
+        return false;
+    failed_ = false; // State files must never be interpreted as new cartridges.
+    if (!runFrame() || !dropFile(nativeStatePath) || !paused_ || captureState() != checkpoint)
+        return false;
+    if (!runFrame() || !runFrame())
+        return false;
+    const QByteArray expectedReplay = captureState();
+    if (!loadSlot(1) || !paused_ || captureState() != checkpoint || !runFrame() || !runFrame() ||
+        captureState() != expectedReplay)
+        return false;
+    if (!saveSlot(2) || !QFile::rename(slotPath(2), slotPath(2, true)) || !runFrame() ||
+        !loadSlot(2) || captureState() != expectedReplay)
+        return false;
+    QFile corrupt(slotPath(2));
+    if (!corrupt.open(QIODevice::WriteOnly) || corrupt.write("invalid") != 7)
+        return false;
+    corrupt.close();
+    const QByteArray beforeInvalid = captureState();
+    if (loadSlot(2) || !paused_ || captureState() != beforeInvalid)
+        return false;
+    failed_ = false; // A malformed primary must not load the valid legacy state.
+    if (dropFile(slotPath(2)) || !paused_ || captureState() != beforeInvalid)
+        return false;
+    failed_ = false; // A damaged dropped state must preserve the running cartridge.
+    setPaused(false);
+    QApplication::sendEvent(display_, &down);
+    if (!saveSlot(3))
+        return false;
+    QKeyEvent releasedA(QEvent::KeyRelease, Qt::Key_X, Qt::NoModifier);
+    QApplication::sendEvent(display_, &releasedA);
+    if (!loadSlot(3) || paused_ || (emulator_->gb.joypad & 0x10) == 0)
+        return false;
+    const QByteArray runningBeforeInvalid = captureState();
+    if (loadSlot(2) || paused_ || captureState() != runningBeforeInvalid)
+        return false;
+    failed_ = false; // Rejected loads must also preserve an unpaused session.
+    setPaused(true);
+    const QString alternatePath = directory.filePath("different-cartridge.gb");
+    QByteArray alternate = rom;
+    alternate[0x150] = 1;
+    QFile alternateFile(alternatePath);
+    if (!alternateFile.open(QIODevice::WriteOnly) ||
+        alternateFile.write(alternate) != alternate.size())
+        return false;
+    alternateFile.close();
+    QFile originalSlot(slotPath(1));
+    if (!originalSlot.open(QIODevice::ReadOnly))
+        return false;
+    const QByteArray originalBytes = originalSlot.readAll();
+    originalSlot.close();
+    if (!openRom(alternatePath))
+        return false;
+    setPaused(true);
+    QFile wrongSlot(slotPath(1));
+    if (!wrongSlot.open(QIODevice::WriteOnly) ||
+        wrongSlot.write(originalBytes) != originalBytes.size())
+        return false;
+    wrongSlot.close();
+    const QByteArray beforeWrongRom = captureState();
+    if (loadSlot(1) || !paused_ || captureState() != beforeWrongRom)
+        return false;
+    failed_ = false; // A state belonging to another cartridge must preserve this session.
+    if (dropFile(nativeStatePath) || !paused_ || captureState() != beforeWrongRom)
+        return false;
+    failed_ = false;
+    if (!openRom(path))
+        return false;
+    setPaused(true);
+    resetRewind();
+    rememberFrame();
+    for (int i = 0; i < 6; ++i)
+        if (!runFrame())
+            return false;
+    const QByteArray forwardState = captureState();
+    for (int i = 0; i < 3; ++i)
+        if (!rewindFrame())
+            return false;
+    for (int i = 0; i < 3; ++i)
+        if (!runFrame())
+            return false;
+    if (captureState() != forwardState)
+        return false;
+    const auto beforeRewind = emulator_->gb.elapsed_cycles;
+    setPaused(false);
+    QKeyEvent rightDown(QEvent::KeyPress, Qt::Key_Right, Qt::NoModifier);
+    QKeyEvent rightUp(QEvent::KeyRelease, Qt::Key_Right, Qt::NoModifier);
+    QApplication::sendEvent(display_, &rightDown);
+    QKeyEvent rewindDown(QEvent::KeyPress, Qt::Key_Tab, Qt::NoModifier);
+    QKeyEvent rewindUp(QEvent::KeyRelease, Qt::Key_Tab, Qt::ControlModifier);
+    QApplication::sendEvent(display_, &rewindDown);
+    tick();
+    QApplication::sendEvent(display_, &rewindUp);
+    if (rewind_ || emulator_->gb.elapsed_cycles >= beforeRewind || (emulator_->gb.joypad & 1) != 0)
+        return false;
+    QApplication::sendEvent(display_, &rightUp);
+    if ((emulator_->gb.joypad & 1) == 0)
+        return false;
+    setPaused(true);
+    const QByteArray beforeBudget = captureState();
+    settings_.setValue("emulation/rewindMiB", 16);
+    resetRewind();
+    uint32_t random = 0x619ad325;
+    auto randomize = [&random](auto &bytes) {
+        for (auto &byte : bytes) {
+            random ^= random << 13;
+            random ^= random >> 17;
+            random ^= random << 5;
+            byte = uint8_t(random);
+        }
+    };
+    for (int i = 0; i < 100; ++i) {
+        randomize(emulator_->gb.cartridge_ram);
+        randomize(emulator_->gb.work_ram);
+        randomize(emulator_->gb.video_ram);
+        rememberFrame();
+    }
+    if (rewindFailed_ || rewindBytes_ > 16 * 1024 * 1024 || rewindStates_.size() >= 100 ||
+        rewindStates_.size() < 2)
+        return false;
+    settings_.setValue("emulation/rewindSeconds", 0);
+    resetRewind();
+    rememberFrame();
+    if (!rewindStates_.empty())
+        return false;
+    settings_.setValue("emulation/rewindMiB", 256);
+    if (!restoreState(beforeBudget, true))
+        return false;
+    settings_.setValue("emulation/rewindSeconds", 1);
+    resetRewind();
+    rememberFrame();
+    const uint64_t durationStart = emulator_->gb.elapsed_cycles;
+    for (int i = 0; i < 90; ++i)
+        if (!runFrame())
+            return false;
+    // Guest execution exceeds the duration limit while memory remains far below its limit.
+    if (rewindFailed_ || emulator_->gb.elapsed_cycles - durationStart <= 4194304 ||
+        rewindStates_.size() < 2 || rewindStates_.size() >= 91 ||
+        rewindStates_.front().cycles <= durationStart ||
+        rewindStates_.back().cycles - rewindStates_.front().cycles > 4194304 ||
+        rewindBytes_ >= 16 * 1024 * 1024)
+        return false;
+    settings_.setValue("emulation/rewindSeconds", 120);
+    if (!restoreState(beforeBudget, true))
+        return false;
+    resetRewind();
+    rememberFrame();
+    if (audioCheck_) {
+        if (!audio_ || audioErrorEvents_) {
+            qCritical("Audio workflow check requires a working audio output device");
+            return false;
+        }
+        auto waitForward = [this] {
+            setPaused(false);
+            const uint64_t before = generatedAudioFrames_;
+            QEventLoop loop;
+            QTimer::singleShot(350, Qt::PreciseTimer, &loop, &QEventLoop::quit);
+            loop.exec();
+            return audio_ && audio_->error() == QAudio::NoError && audio_->processedUSecs() > 0 &&
+                   generatedAudioFrames_ > before;
+        };
+        if (!waitForward() || !saveSlot(9) || !waitForward())
+            return false;
+        if (!loadSlot(9) || audioBuffer_->bytesAvailable() != 0 || !waitForward())
+            return false;
+        const uint64_t beforeBackwards = emulator_->gb.elapsed_cycles;
+        QApplication::sendEvent(display_, &rewindDown);
+        QEventLoop backwardsLoop;
+        QTimer::singleShot(75, Qt::PreciseTimer, &backwardsLoop, &QEventLoop::quit);
+        backwardsLoop.exec();
+        QApplication::sendEvent(display_, &rewindUp);
+        if (rewind_ || emulator_->gb.elapsed_cycles >= beforeBackwards ||
+            audioBuffer_->bytesAvailable() != 0 || !waitForward() || audioErrorEvents_)
+            return false;
+        qInfo("CupidGB real-audio save/load and rewind transition checks passed");
+    }
     if (!closeRom() || closeAction_->isEnabled())
         return false;
     settings_.setValue("input/4", int(Qt::Key_A));
@@ -902,6 +1420,9 @@ bool MainWindow::smokeTest() {
         return false;
     if (!closeRom())
         return false;
+    if (dropFile(nativeStatePath) || emulator_)
+        return false;
+    failed_ = false; // Loading a dropped state requires an active cartridge.
     qInfo("CupidGB Qt workflow smoke test passed");
     return !failed_;
 }
@@ -910,6 +1431,9 @@ void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
     telemetryStartCycles_ = emulator_->gb.elapsed_cycles;
     presentedImages_ = 0;
     generatedAudioFrames_ = 0;
+    rewindSnapshotsCaptured_ = 0;
+    rewindCaptureNanoseconds_ = 0;
+    rewindCaptureMaximumNanoseconds_ = 0;
     audioIdleEvents_ = 0;
     display_->paintCount = 0;
     display_->lastPaintAt = 0;
@@ -950,6 +1474,16 @@ void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
             {"platform", QGuiApplication::platformName()},
             {"execution_failed", failed_}};
         report.insert("input_events_applied", double(inputTraceIndex_));
+        report.insert("rewind_snapshots_captured", double(rewindSnapshotsCaptured_));
+        report.insert("rewind_capture_total_ms", double(rewindCaptureNanoseconds_) / 1e6);
+        report.insert("rewind_capture_maximum_ms", double(rewindCaptureMaximumNanoseconds_) / 1e6);
+        report.insert("rewind_memory_bytes", double(rewindBytes_));
+        report.insert("rewind_history_seconds",
+                      rewindStates_.size() < 2
+                          ? 0.0
+                          : double(rewindStates_.back().cycles - rewindStates_.front().cycles) /
+                                4194304);
+        report.insert("rewind_capture_failed", rewindFailed_);
         report.insert("hardware_model", cupid_gb_model_name(emulator_->gb.model));
         report.insert("rom_sha256",
                       QString::fromLatin1(
