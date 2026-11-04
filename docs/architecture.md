@@ -1,73 +1,17 @@
-# Architecture notes
+# Architecture
 
-## Design goals
+CupidGB keeps hardware emulation separate from host services.
 
-- Keep emulator logic independent from Linux-specific frontend code.
-- Make each hardware family a separate subsystem when complexity grows.
-- Prefer small modules with explicit headers over giant source files.
+- `src/gb` owns the SM83 CPU, memory map, timer, serial clock, DMA, graphics, audio, cartridge controllers, and SGB behavior.
+- `src/gbc` owns CGB banking, palettes, DMA extensions, double-speed behavior, and color rendering.
+- `src/core` owns the thin emulator lifecycle and GB/GBC system selection.
+- `src/frontend/qt` owns windows, input mapping, host audio, settings, ROM workflows, and presentation.
+- `tools/rom_runner.c` runs bounded ROM checks without a GUI. `scripts/run_rom_suite.py` records explicit test verdicts and private evidence.
 
-## Suggested long-term layout
+The `cupidgb_core` static library has no Qt dependency. Configure with `-DCUPIDGB_BUILD_QT=OFF` for core tools and tests. The desktop executable links Qt Widgets and Multimedia.
 
-```text
-include/cupid/
-├── common/
-├── core/
-├── gb/
-├── gbc/
-└── gba/
+The core uses M-cycles for CPU/timer work. `CupidGb.elapsed_cycles` counts base-speed T-cycles, including execution with the LCD disabled. CGB double speed advances CPU and timer work twice as often as the PPU/audio domain. Frontend pacing must use guest time rather than assuming one completed image per instruction budget.
 
-src/
-├── common/
-├── core/
-├── gb/
-├── gbc/
-├── gba/
-└── platform/
-    └── sdl/
-```
+The public C API currently exposes hardware state through `CupidGb`. Portable save states need an explicit versioned format; serializing the struct would persist pointers and ABI-dependent padding. Until such a format exists, the frontend must not present save-state support.
 
-## Core boundaries
-
-### `core`
-
-Owns top-level orchestration:
-
-- emulator lifecycle
-- configuration
-- system selection
-- main stepping loop
-- shared scheduling and timing
-
-### `gb`, `gbc`, `gba`
-
-Own system-specific hardware implementations:
-
-- CPU
-- MMU / bus
-- PPU
-- APU
-- timer
-- interrupts
-- cartridge / mapper support
-
-### `platform/sdl`
-
-Owns Linux-facing application services:
-
-- window creation
-- input mapping
-- audio output
-- frame presentation
-- file dialogs or save-path handling
-
-## Recommended implementation order
-
-1. ROM header parser
-2. cartridge mapper abstraction
-3. bus / memory map
-4. `GB` CPU instruction decoding
-5. timers and interrupts
-6. PPU scanline pipeline
-7. SDL frontend
-8. `GBC` feature expansion
-9. `GBA` architecture split into dedicated modules
+Remaining hardware and desktop requirements are tracked in [the parity checklist](parity.md). Source presence alone does not establish runtime compatibility.

@@ -34,339 +34,427 @@ typedef struct CupidCgbCompatPaletteKey {
     const CupidCgbCompatPaletteSet *palette_set;
 } CupidCgbCompatPaletteKey;
 
-#define CUPID_CGB_RGB8(r, g, b) \
-    (uint16_t)((((uint16_t)((b) >> 3u)) << 10u) | \
-               (((uint16_t)((g) >> 3u)) << 5u) | \
+#define CUPID_CGB_RGB8(r, g, b)                                                                    \
+    (uint16_t)((((uint16_t)((b) >> 3u)) << 10u) | (((uint16_t)((g) >> 3u)) << 5u) |                \
                ((uint16_t)((r) >> 3u)))
 
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_00 = {
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x7b,0xff,0x31), CUPID_CGB_RGB8(0x00,0x63,0xc5), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0x84,0x84), CUPID_CGB_RGB8(0x94,0x3a,0x3a), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0x84,0x84), CUPID_CGB_RGB8(0x94,0x3a,0x3a), CUPID_CGB_RGB8(0x00,0x00,0x00) }
-};
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x7b, 0xff, 0x31),
+     CUPID_CGB_RGB8(0x00, 0x63, 0xc5), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
+     CUPID_CGB_RGB8(0x94, 0x3a, 0x3a), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
+     CUPID_CGB_RGB8(0x94, 0x3a, 0x3a), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_02 = {
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0x9c,0x00), CUPID_CGB_RGB8(0xff,0x00,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0x9c,0x00), CUPID_CGB_RGB8(0xff,0x00,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0x9c,0x00), CUPID_CGB_RGB8(0xff,0x00,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) }
-};
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x9c, 0x00),
+     CUPID_CGB_RGB8(0xff, 0x00, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x9c, 0x00),
+     CUPID_CGB_RGB8(0xff, 0x00, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x9c, 0x00),
+     CUPID_CGB_RGB8(0xff, 0x00, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_03 = {
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0xff,0x00), CUPID_CGB_RGB8(0xff,0x00,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0xff,0x00), CUPID_CGB_RGB8(0xff,0x00,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0xff,0x00), CUPID_CGB_RGB8(0xff,0x00,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) }
-};
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0xff, 0x00),
+     CUPID_CGB_RGB8(0xff, 0x00, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0xff, 0x00),
+     CUPID_CGB_RGB8(0xff, 0x00, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0xff, 0x00),
+     CUPID_CGB_RGB8(0xff, 0x00, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_default_palette = {
-    { 0x7fffu, 0x56b5u, 0x2d6bu, 0x0000u },
-    { 0x7fffu, 0x56b5u, 0x2d6bu, 0x0000u },
-    { 0x7fffu, 0x56b5u, 0x2d6bu, 0x0000u }
-};
-static const CupidCgbCompatPaletteSet *const cupid_cgb_compat_default = &cupid_cgb_compat_default_palette;
+    {0x7fffu, 0x56b5u, 0x2d6bu, 0x0000u},
+    {0x7fffu, 0x56b5u, 0x2d6bu, 0x0000u},
+    {0x7fffu, 0x56b5u, 0x2d6bu, 0x0000u}};
+static const CupidCgbCompatPaletteSet *const cupid_cgb_compat_default =
+    &cupid_cgb_compat_default_palette;
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_04 = {
-    { CUPID_CGB_RGB8(0xa5,0x9c,0xff), CUPID_CGB_RGB8(0xff,0xff,0x00), CUPID_CGB_RGB8(0x00,0x63,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xa5,0x9c,0xff), CUPID_CGB_RGB8(0xff,0xff,0x00), CUPID_CGB_RGB8(0x00,0x63,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xa5,0x9c,0xff), CUPID_CGB_RGB8(0xff,0xff,0x00), CUPID_CGB_RGB8(0x00,0x63,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) }
-};
+    {CUPID_CGB_RGB8(0xa5, 0x9c, 0xff), CUPID_CGB_RGB8(0xff, 0xff, 0x00),
+     CUPID_CGB_RGB8(0x00, 0x63, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xa5, 0x9c, 0xff), CUPID_CGB_RGB8(0xff, 0xff, 0x00),
+     CUPID_CGB_RGB8(0x00, 0x63, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xa5, 0x9c, 0xff), CUPID_CGB_RGB8(0xff, 0xff, 0x00),
+     CUPID_CGB_RGB8(0x00, 0x63, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_05 = {
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0xad,0x63), CUPID_CGB_RGB8(0x84,0x31,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0xad,0x63), CUPID_CGB_RGB8(0x84,0x31,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0xad,0x63), CUPID_CGB_RGB8(0x84,0x31,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) }
-};
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0xad, 0x63),
+     CUPID_CGB_RGB8(0x84, 0x31, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0xad, 0x63),
+     CUPID_CGB_RGB8(0x84, 0x31, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0xad, 0x63),
+     CUPID_CGB_RGB8(0x84, 0x31, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_06 = {
-    { CUPID_CGB_RGB8(0x00,0x00,0x00), CUPID_CGB_RGB8(0x00,0x84,0x84), CUPID_CGB_RGB8(0xff,0xde,0x00), CUPID_CGB_RGB8(0xff,0xff,0xff) },
-    { CUPID_CGB_RGB8(0x00,0x00,0x00), CUPID_CGB_RGB8(0x00,0x84,0x84), CUPID_CGB_RGB8(0xff,0xde,0x00), CUPID_CGB_RGB8(0xff,0xff,0xff) },
-    { CUPID_CGB_RGB8(0x00,0x00,0x00), CUPID_CGB_RGB8(0x00,0x84,0x84), CUPID_CGB_RGB8(0xff,0xde,0x00), CUPID_CGB_RGB8(0xff,0xff,0xff) }
-};
+    {CUPID_CGB_RGB8(0x00, 0x00, 0x00), CUPID_CGB_RGB8(0x00, 0x84, 0x84),
+     CUPID_CGB_RGB8(0xff, 0xde, 0x00), CUPID_CGB_RGB8(0xff, 0xff, 0xff)},
+    {CUPID_CGB_RGB8(0x00, 0x00, 0x00), CUPID_CGB_RGB8(0x00, 0x84, 0x84),
+     CUPID_CGB_RGB8(0xff, 0xde, 0x00), CUPID_CGB_RGB8(0xff, 0xff, 0xff)},
+    {CUPID_CGB_RGB8(0x00, 0x00, 0x00), CUPID_CGB_RGB8(0x00, 0x84, 0x84),
+     CUPID_CGB_RGB8(0xff, 0xde, 0x00), CUPID_CGB_RGB8(0xff, 0xff, 0xff)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_07 = {
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xa5,0xa5,0xa5), CUPID_CGB_RGB8(0x52,0x52,0x52), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xa5,0xa5,0xa5), CUPID_CGB_RGB8(0x52,0x52,0x52), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xa5,0xa5,0xa5), CUPID_CGB_RGB8(0x52,0x52,0x52), CUPID_CGB_RGB8(0x00,0x00,0x00) }
-};
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xa5, 0xa5, 0xa5),
+     CUPID_CGB_RGB8(0x52, 0x52, 0x52), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xa5, 0xa5, 0xa5),
+     CUPID_CGB_RGB8(0x52, 0x52, 0x52), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xa5, 0xa5, 0xa5),
+     CUPID_CGB_RGB8(0x52, 0x52, 0x52), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_09 = {
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0xce,0x00), CUPID_CGB_RGB8(0x9c,0x63,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0xce,0x00), CUPID_CGB_RGB8(0x9c,0x63,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0xce,0x00), CUPID_CGB_RGB8(0x9c,0x63,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) }
-};
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0xce, 0x00),
+     CUPID_CGB_RGB8(0x9c, 0x63, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0xce, 0x00),
+     CUPID_CGB_RGB8(0x9c, 0x63, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0xce, 0x00),
+     CUPID_CGB_RGB8(0x9c, 0x63, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_10 = {
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xad,0xad,0x84), CUPID_CGB_RGB8(0x42,0x73,0x7b), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0x73,0x00), CUPID_CGB_RGB8(0x94,0x42,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xad,0xad,0x84), CUPID_CGB_RGB8(0x42,0x73,0x7b), CUPID_CGB_RGB8(0x00,0x00,0x00) }
-};
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xad, 0xad, 0x84),
+     CUPID_CGB_RGB8(0x42, 0x73, 0x7b), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x73, 0x00),
+     CUPID_CGB_RGB8(0x94, 0x42, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xad, 0xad, 0x84),
+     CUPID_CGB_RGB8(0x42, 0x73, 0x7b), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_11 = {
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x63,0xa5,0xff), CUPID_CGB_RGB8(0x00,0x00,0xff), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0x84,0x84), CUPID_CGB_RGB8(0x94,0x3a,0x3a), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x63,0xa5,0xff), CUPID_CGB_RGB8(0x00,0x00,0xff), CUPID_CGB_RGB8(0x00,0x00,0x00) }
-};
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x63, 0xa5, 0xff),
+     CUPID_CGB_RGB8(0x00, 0x00, 0xff), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
+     CUPID_CGB_RGB8(0x94, 0x3a, 0x3a), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x63, 0xa5, 0xff),
+     CUPID_CGB_RGB8(0x00, 0x00, 0xff), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_12 = {
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x8c,0x8c,0xde), CUPID_CGB_RGB8(0x52,0x52,0x8c), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0x84,0x84), CUPID_CGB_RGB8(0x94,0x3a,0x3a), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x8c,0x8c,0xde), CUPID_CGB_RGB8(0x52,0x52,0x8c), CUPID_CGB_RGB8(0x00,0x00,0x00) }
-};
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x8c, 0x8c, 0xde),
+     CUPID_CGB_RGB8(0x52, 0x52, 0x8c), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
+     CUPID_CGB_RGB8(0x94, 0x3a, 0x3a), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x8c, 0x8c, 0xde),
+     CUPID_CGB_RGB8(0x52, 0x52, 0x8c), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_13 = {
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0x84,0x84), CUPID_CGB_RGB8(0x94,0x3a,0x3a), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x7b,0xff,0x31), CUPID_CGB_RGB8(0x00,0x84,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0x84,0x84), CUPID_CGB_RGB8(0x94,0x3a,0x3a), CUPID_CGB_RGB8(0x00,0x00,0x00) }
-};
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
+     CUPID_CGB_RGB8(0x94, 0x3a, 0x3a), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x7b, 0xff, 0x31),
+     CUPID_CGB_RGB8(0x00, 0x84, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
+     CUPID_CGB_RGB8(0x94, 0x3a, 0x3a), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_14 = {
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x7b,0xff,0x31), CUPID_CGB_RGB8(0x00,0x63,0xc5), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0x84,0x84), CUPID_CGB_RGB8(0x94,0x3a,0x3a), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x7b,0xff,0x31), CUPID_CGB_RGB8(0x00,0x63,0xc5), CUPID_CGB_RGB8(0x00,0x00,0x00) }
-};
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x7b, 0xff, 0x31),
+     CUPID_CGB_RGB8(0x00, 0x63, 0xc5), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
+     CUPID_CGB_RGB8(0x94, 0x3a, 0x3a), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x7b, 0xff, 0x31),
+     CUPID_CGB_RGB8(0x00, 0x63, 0xc5), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_15 = {
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x63,0xa5,0xff), CUPID_CGB_RGB8(0x00,0x00,0xff), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x63,0xa5,0xff), CUPID_CGB_RGB8(0x00,0x00,0xff), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0x84,0x84), CUPID_CGB_RGB8(0x94,0x3a,0x3a), CUPID_CGB_RGB8(0x00,0x00,0x00) }
-};
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x63, 0xa5, 0xff),
+     CUPID_CGB_RGB8(0x00, 0x00, 0xff), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x63, 0xa5, 0xff),
+     CUPID_CGB_RGB8(0x00, 0x00, 0xff), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
+     CUPID_CGB_RGB8(0x94, 0x3a, 0x3a), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_16 = {
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x8c,0x8c,0xde), CUPID_CGB_RGB8(0x52,0x52,0x8c), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xc5,0x42), CUPID_CGB_RGB8(0xff,0xd6,0x00), CUPID_CGB_RGB8(0x94,0x3a,0x00), CUPID_CGB_RGB8(0x4a,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xc5,0x42), CUPID_CGB_RGB8(0xff,0xd6,0x00), CUPID_CGB_RGB8(0x94,0x3a,0x00), CUPID_CGB_RGB8(0x4a,0x00,0x00) }
-};
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x8c, 0x8c, 0xde),
+     CUPID_CGB_RGB8(0x52, 0x52, 0x8c), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xc5, 0x42), CUPID_CGB_RGB8(0xff, 0xd6, 0x00),
+     CUPID_CGB_RGB8(0x94, 0x3a, 0x00), CUPID_CGB_RGB8(0x4a, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xc5, 0x42), CUPID_CGB_RGB8(0xff, 0xd6, 0x00),
+     CUPID_CGB_RGB8(0x94, 0x3a, 0x00), CUPID_CGB_RGB8(0x4a, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_17 = {
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xad,0xad,0x84), CUPID_CGB_RGB8(0x42,0x73,0x7b), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0x73,0x00), CUPID_CGB_RGB8(0x94,0x42,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0x73,0x00), CUPID_CGB_RGB8(0x94,0x42,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) }
-};
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xad, 0xad, 0x84),
+     CUPID_CGB_RGB8(0x42, 0x73, 0x7b), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x73, 0x00),
+     CUPID_CGB_RGB8(0x94, 0x42, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x73, 0x00),
+     CUPID_CGB_RGB8(0x94, 0x42, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_18 = {
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x7b,0xff,0x00), CUPID_CGB_RGB8(0xb5,0x73,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0x84,0x84), CUPID_CGB_RGB8(0x94,0x3a,0x3a), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0x84,0x84), CUPID_CGB_RGB8(0x94,0x3a,0x3a), CUPID_CGB_RGB8(0x00,0x00,0x00) }
-};
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x7b, 0xff, 0x00),
+     CUPID_CGB_RGB8(0xb5, 0x73, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
+     CUPID_CGB_RGB8(0x94, 0x3a, 0x3a), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
+     CUPID_CGB_RGB8(0x94, 0x3a, 0x3a), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_19 = {
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x52,0xff,0x00), CUPID_CGB_RGB8(0xff,0x42,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0x84,0x84), CUPID_CGB_RGB8(0x94,0x3a,0x3a), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0x84,0x84), CUPID_CGB_RGB8(0x94,0x3a,0x3a), CUPID_CGB_RGB8(0x00,0x00,0x00) }
-};
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x52, 0xff, 0x00),
+     CUPID_CGB_RGB8(0xff, 0x42, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
+     CUPID_CGB_RGB8(0x94, 0x3a, 0x3a), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
+     CUPID_CGB_RGB8(0x94, 0x3a, 0x3a), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_20 = {
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0x9c,0x00), CUPID_CGB_RGB8(0xff,0x00,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0x84,0x84), CUPID_CGB_RGB8(0x94,0x3a,0x3a), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0x84,0x84), CUPID_CGB_RGB8(0x94,0x3a,0x3a), CUPID_CGB_RGB8(0x00,0x00,0x00) }
-};
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x9c, 0x00),
+     CUPID_CGB_RGB8(0xff, 0x00, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
+     CUPID_CGB_RGB8(0x94, 0x3a, 0x3a), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
+     CUPID_CGB_RGB8(0x94, 0x3a, 0x3a), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_21 = {
-    { CUPID_CGB_RGB8(0xa5,0x9c,0xff), CUPID_CGB_RGB8(0xff,0xff,0x00), CUPID_CGB_RGB8(0x00,0x63,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0x63,0x52), CUPID_CGB_RGB8(0xd6,0x00,0x00), CUPID_CGB_RGB8(0x63,0x00,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0x63,0x52), CUPID_CGB_RGB8(0xd6,0x00,0x00), CUPID_CGB_RGB8(0x63,0x00,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) }
-};
+    {CUPID_CGB_RGB8(0xa5, 0x9c, 0xff), CUPID_CGB_RGB8(0xff, 0xff, 0x00),
+     CUPID_CGB_RGB8(0x00, 0x63, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0x63, 0x52), CUPID_CGB_RGB8(0xd6, 0x00, 0x00),
+     CUPID_CGB_RGB8(0x63, 0x00, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0x63, 0x52), CUPID_CGB_RGB8(0xd6, 0x00, 0x00),
+     CUPID_CGB_RGB8(0x63, 0x00, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_22 = {
-    { CUPID_CGB_RGB8(0xb5,0xb5,0xff), CUPID_CGB_RGB8(0xff,0xff,0x94), CUPID_CGB_RGB8(0xad,0x5a,0x42), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0x00,0x00,0x00), CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0x84,0x84), CUPID_CGB_RGB8(0x94,0x3a,0x3a) },
-    { CUPID_CGB_RGB8(0x00,0x00,0x00), CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0x84,0x84), CUPID_CGB_RGB8(0x94,0x3a,0x3a) }
-};
+    {CUPID_CGB_RGB8(0xb5, 0xb5, 0xff), CUPID_CGB_RGB8(0xff, 0xff, 0x94),
+     CUPID_CGB_RGB8(0xad, 0x5a, 0x42), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0x00, 0x00, 0x00), CUPID_CGB_RGB8(0xff, 0xff, 0xff),
+     CUPID_CGB_RGB8(0xff, 0x84, 0x84), CUPID_CGB_RGB8(0x94, 0x3a, 0x3a)},
+    {CUPID_CGB_RGB8(0x00, 0x00, 0x00), CUPID_CGB_RGB8(0xff, 0xff, 0xff),
+     CUPID_CGB_RGB8(0xff, 0x84, 0x84), CUPID_CGB_RGB8(0x94, 0x3a, 0x3a)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_23 = {
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x8c,0x8c,0xde), CUPID_CGB_RGB8(0x52,0x52,0x8c), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xc5,0x42), CUPID_CGB_RGB8(0xff,0xd6,0x00), CUPID_CGB_RGB8(0x94,0x3a,0x00), CUPID_CGB_RGB8(0x4a,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xc5,0x42), CUPID_CGB_RGB8(0xff,0xd6,0x00), CUPID_CGB_RGB8(0x94,0x3a,0x00), CUPID_CGB_RGB8(0x4a,0x00,0x00) }
-};
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x8c, 0x8c, 0xde),
+     CUPID_CGB_RGB8(0x52, 0x52, 0x8c), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xc5, 0x42), CUPID_CGB_RGB8(0xff, 0xd6, 0x00),
+     CUPID_CGB_RGB8(0x94, 0x3a, 0x00), CUPID_CGB_RGB8(0x4a, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xc5, 0x42), CUPID_CGB_RGB8(0xff, 0xd6, 0x00),
+     CUPID_CGB_RGB8(0x94, 0x3a, 0x00), CUPID_CGB_RGB8(0x4a, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_24 = {
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x8c,0x8c,0xde), CUPID_CGB_RGB8(0x52,0x52,0x8c), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0x84,0x84), CUPID_CGB_RGB8(0x94,0x3a,0x3a), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0x84,0x84), CUPID_CGB_RGB8(0x94,0x3a,0x3a), CUPID_CGB_RGB8(0x00,0x00,0x00) }
-};
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x8c, 0x8c, 0xde),
+     CUPID_CGB_RGB8(0x52, 0x52, 0x8c), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
+     CUPID_CGB_RGB8(0x94, 0x3a, 0x3a), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
+     CUPID_CGB_RGB8(0x94, 0x3a, 0x3a), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_25 = {
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x7b,0xff,0x31), CUPID_CGB_RGB8(0x00,0x84,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0x84,0x84), CUPID_CGB_RGB8(0x94,0x3a,0x3a), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0x84,0x84), CUPID_CGB_RGB8(0x94,0x3a,0x3a), CUPID_CGB_RGB8(0x00,0x00,0x00) }
-};
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x7b, 0xff, 0x31),
+     CUPID_CGB_RGB8(0x00, 0x84, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
+     CUPID_CGB_RGB8(0x94, 0x3a, 0x3a), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
+     CUPID_CGB_RGB8(0x94, 0x3a, 0x3a), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_26 = {
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0xad,0x63), CUPID_CGB_RGB8(0x84,0x31,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x63,0xa5,0xff), CUPID_CGB_RGB8(0x00,0x00,0xff), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x63,0xa5,0xff), CUPID_CGB_RGB8(0x00,0x00,0xff), CUPID_CGB_RGB8(0x00,0x00,0x00) }
-};
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0xad, 0x63),
+     CUPID_CGB_RGB8(0x84, 0x31, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x63, 0xa5, 0xff),
+     CUPID_CGB_RGB8(0x00, 0x00, 0xff), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x63, 0xa5, 0xff),
+     CUPID_CGB_RGB8(0x00, 0x00, 0xff), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_27 = {
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0xad,0x63), CUPID_CGB_RGB8(0x84,0x31,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x7b,0xff,0x31), CUPID_CGB_RGB8(0x00,0x84,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x7b,0xff,0x31), CUPID_CGB_RGB8(0x00,0x84,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) }
-};
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0xad, 0x63),
+     CUPID_CGB_RGB8(0x84, 0x31, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x7b, 0xff, 0x31),
+     CUPID_CGB_RGB8(0x00, 0x84, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x7b, 0xff, 0x31),
+     CUPID_CGB_RGB8(0x00, 0x84, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_29 = {
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x52,0xff,0x00), CUPID_CGB_RGB8(0xff,0x42,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x52,0xff,0x00), CUPID_CGB_RGB8(0xff,0x42,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x5a,0xbd,0xff), CUPID_CGB_RGB8(0xff,0x00,0x00), CUPID_CGB_RGB8(0x00,0x00,0xff) }
-};
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x52, 0xff, 0x00),
+     CUPID_CGB_RGB8(0xff, 0x42, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x52, 0xff, 0x00),
+     CUPID_CGB_RGB8(0xff, 0x42, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x5a, 0xbd, 0xff),
+     CUPID_CGB_RGB8(0xff, 0x00, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0xff)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_30 = {
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0x9c,0x00), CUPID_CGB_RGB8(0xff,0x00,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0x9c,0x00), CUPID_CGB_RGB8(0xff,0x00,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x5a,0xbd,0xff), CUPID_CGB_RGB8(0xff,0x00,0x00), CUPID_CGB_RGB8(0x00,0x00,0xff) }
-};
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x9c, 0x00),
+     CUPID_CGB_RGB8(0xff, 0x00, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x9c, 0x00),
+     CUPID_CGB_RGB8(0xff, 0x00, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x5a, 0xbd, 0xff),
+     CUPID_CGB_RGB8(0xff, 0x00, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0xff)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_31 = {
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0xff,0x00), CUPID_CGB_RGB8(0xff,0x00,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0xff,0x00), CUPID_CGB_RGB8(0xff,0x00,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x5a,0xbd,0xff), CUPID_CGB_RGB8(0xff,0x00,0x00), CUPID_CGB_RGB8(0x00,0x00,0xff) }
-};
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0xff, 0x00),
+     CUPID_CGB_RGB8(0xff, 0x00, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0xff, 0x00),
+     CUPID_CGB_RGB8(0xff, 0x00, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x5a, 0xbd, 0xff),
+     CUPID_CGB_RGB8(0xff, 0x00, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0xff)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_32 = {
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xad,0xad,0x84), CUPID_CGB_RGB8(0x42,0x73,0x7b), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0x73,0x00), CUPID_CGB_RGB8(0x94,0x42,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x5a,0xbd,0xff), CUPID_CGB_RGB8(0xff,0x00,0x00), CUPID_CGB_RGB8(0x00,0x00,0xff) }
-};
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xad, 0xad, 0x84),
+     CUPID_CGB_RGB8(0x42, 0x73, 0x7b), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x73, 0x00),
+     CUPID_CGB_RGB8(0x94, 0x42, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x5a, 0xbd, 0xff),
+     CUPID_CGB_RGB8(0xff, 0x00, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0xff)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_33 = {
-    { CUPID_CGB_RGB8(0xff,0xff,0x9c), CUPID_CGB_RGB8(0x94,0xb5,0xff), CUPID_CGB_RGB8(0x63,0x94,0x73), CUPID_CGB_RGB8(0x00,0x3a,0x3a) },
-    { CUPID_CGB_RGB8(0xff,0xc5,0x42), CUPID_CGB_RGB8(0xff,0xd6,0x00), CUPID_CGB_RGB8(0x94,0x3a,0x00), CUPID_CGB_RGB8(0x4a,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0x84,0x84), CUPID_CGB_RGB8(0x94,0x3a,0x3a), CUPID_CGB_RGB8(0x00,0x00,0x00) }
-};
+    {CUPID_CGB_RGB8(0xff, 0xff, 0x9c), CUPID_CGB_RGB8(0x94, 0xb5, 0xff),
+     CUPID_CGB_RGB8(0x63, 0x94, 0x73), CUPID_CGB_RGB8(0x00, 0x3a, 0x3a)},
+    {CUPID_CGB_RGB8(0xff, 0xc5, 0x42), CUPID_CGB_RGB8(0xff, 0xd6, 0x00),
+     CUPID_CGB_RGB8(0x94, 0x3a, 0x00), CUPID_CGB_RGB8(0x4a, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
+     CUPID_CGB_RGB8(0x94, 0x3a, 0x3a), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_34 = {
-    { CUPID_CGB_RGB8(0x6b,0xff,0x00), CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0x52,0x4a), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x63,0xa5,0xff), CUPID_CGB_RGB8(0x00,0x00,0xff) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0xad,0x63), CUPID_CGB_RGB8(0x84,0x31,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) }
-};
+    {CUPID_CGB_RGB8(0x6b, 0xff, 0x00), CUPID_CGB_RGB8(0xff, 0xff, 0xff),
+     CUPID_CGB_RGB8(0xff, 0x52, 0x4a), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0xff, 0xff),
+     CUPID_CGB_RGB8(0x63, 0xa5, 0xff), CUPID_CGB_RGB8(0x00, 0x00, 0xff)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0xad, 0x63),
+     CUPID_CGB_RGB8(0x84, 0x31, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_35 = {
-    { CUPID_CGB_RGB8(0x52,0xde,0x00), CUPID_CGB_RGB8(0xff,0x84,0x00), CUPID_CGB_RGB8(0xff,0xff,0x00), CUPID_CGB_RGB8(0xff,0xff,0xff) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x63,0xa5,0xff), CUPID_CGB_RGB8(0x00,0x00,0xff) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0x84,0x84), CUPID_CGB_RGB8(0x94,0x3a,0x3a), CUPID_CGB_RGB8(0x00,0x00,0x00) }
-};
+    {CUPID_CGB_RGB8(0x52, 0xde, 0x00), CUPID_CGB_RGB8(0xff, 0x84, 0x00),
+     CUPID_CGB_RGB8(0xff, 0xff, 0x00), CUPID_CGB_RGB8(0xff, 0xff, 0xff)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0xff, 0xff),
+     CUPID_CGB_RGB8(0x63, 0xa5, 0xff), CUPID_CGB_RGB8(0x00, 0x00, 0xff)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
+     CUPID_CGB_RGB8(0x94, 0x3a, 0x3a), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_36 = {
-    { CUPID_CGB_RGB8(0xa5,0x9c,0xff), CUPID_CGB_RGB8(0xff,0xff,0x00), CUPID_CGB_RGB8(0x00,0x63,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0x63,0x52), CUPID_CGB_RGB8(0xd6,0x00,0x00), CUPID_CGB_RGB8(0x63,0x00,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0x00,0x00,0xff), CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0xff,0x7b), CUPID_CGB_RGB8(0x00,0x84,0xff) }
-};
+    {CUPID_CGB_RGB8(0xa5, 0x9c, 0xff), CUPID_CGB_RGB8(0xff, 0xff, 0x00),
+     CUPID_CGB_RGB8(0x00, 0x63, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0x63, 0x52), CUPID_CGB_RGB8(0xd6, 0x00, 0x00),
+     CUPID_CGB_RGB8(0x63, 0x00, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0x00, 0x00, 0xff), CUPID_CGB_RGB8(0xff, 0xff, 0xff),
+     CUPID_CGB_RGB8(0xff, 0xff, 0x7b), CUPID_CGB_RGB8(0x00, 0x84, 0xff)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_37 = {
-    { CUPID_CGB_RGB8(0xff,0xff,0xce), CUPID_CGB_RGB8(0x63,0xef,0xef), CUPID_CGB_RGB8(0x9c,0x84,0x31), CUPID_CGB_RGB8(0x5a,0x5a,0x5a) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0x73,0x00), CUPID_CGB_RGB8(0x94,0x42,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x63,0xa5,0xff), CUPID_CGB_RGB8(0x00,0x00,0xff), CUPID_CGB_RGB8(0x00,0x00,0x00) }
-};
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xce), CUPID_CGB_RGB8(0x63, 0xef, 0xef),
+     CUPID_CGB_RGB8(0x9c, 0x84, 0x31), CUPID_CGB_RGB8(0x5a, 0x5a, 0x5a)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x73, 0x00),
+     CUPID_CGB_RGB8(0x94, 0x42, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x63, 0xa5, 0xff),
+     CUPID_CGB_RGB8(0x00, 0x00, 0xff), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_38 = {
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x63,0xa5,0xff), CUPID_CGB_RGB8(0x00,0x00,0xff), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0x84,0x84), CUPID_CGB_RGB8(0x94,0x3a,0x3a), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0xff,0x7b), CUPID_CGB_RGB8(0x00,0x84,0xff), CUPID_CGB_RGB8(0xff,0x00,0x00) }
-};
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x63, 0xa5, 0xff),
+     CUPID_CGB_RGB8(0x00, 0x00, 0xff), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
+     CUPID_CGB_RGB8(0x94, 0x3a, 0x3a), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0xff, 0x7b),
+     CUPID_CGB_RGB8(0x00, 0x84, 0xff), CUPID_CGB_RGB8(0xff, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_39 = {
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x8c,0x8c,0xde), CUPID_CGB_RGB8(0x52,0x52,0x8c), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xc5,0x42), CUPID_CGB_RGB8(0xff,0xd6,0x00), CUPID_CGB_RGB8(0x94,0x3a,0x00), CUPID_CGB_RGB8(0x4a,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x5a,0xbd,0xff), CUPID_CGB_RGB8(0xff,0x00,0x00), CUPID_CGB_RGB8(0x00,0x00,0xff) }
-};
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x8c, 0x8c, 0xde),
+     CUPID_CGB_RGB8(0x52, 0x52, 0x8c), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xc5, 0x42), CUPID_CGB_RGB8(0xff, 0xd6, 0x00),
+     CUPID_CGB_RGB8(0x94, 0x3a, 0x00), CUPID_CGB_RGB8(0x4a, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x5a, 0xbd, 0xff),
+     CUPID_CGB_RGB8(0xff, 0x00, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0xff)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_40 = {
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x8c,0x8c,0xde), CUPID_CGB_RGB8(0x52,0x52,0x8c), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0x84,0x84), CUPID_CGB_RGB8(0x94,0x3a,0x3a), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0xad,0x63), CUPID_CGB_RGB8(0x84,0x31,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) }
-};
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x8c, 0x8c, 0xde),
+     CUPID_CGB_RGB8(0x52, 0x52, 0x8c), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
+     CUPID_CGB_RGB8(0x94, 0x3a, 0x3a), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0xad, 0x63),
+     CUPID_CGB_RGB8(0x84, 0x31, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_41 = {
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x7b,0xff,0x31), CUPID_CGB_RGB8(0x00,0x84,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0x84,0x84), CUPID_CGB_RGB8(0x94,0x3a,0x3a), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x63,0xa5,0xff), CUPID_CGB_RGB8(0x00,0x00,0xff), CUPID_CGB_RGB8(0x00,0x00,0x00) }
-};
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x7b, 0xff, 0x31),
+     CUPID_CGB_RGB8(0x00, 0x84, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
+     CUPID_CGB_RGB8(0x94, 0x3a, 0x3a), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x63, 0xa5, 0xff),
+     CUPID_CGB_RGB8(0x00, 0x00, 0xff), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_42 = {
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0xad,0x63), CUPID_CGB_RGB8(0x84,0x31,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x63,0xa5,0xff), CUPID_CGB_RGB8(0x00,0x00,0xff), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x7b,0xff,0x31), CUPID_CGB_RGB8(0x00,0x84,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) }
-};
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0xad, 0x63),
+     CUPID_CGB_RGB8(0x84, 0x31, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x63, 0xa5, 0xff),
+     CUPID_CGB_RGB8(0x00, 0x00, 0xff), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x7b, 0xff, 0x31),
+     CUPID_CGB_RGB8(0x00, 0x84, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_44 = {
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0x84,0x84), CUPID_CGB_RGB8(0x94,0x3a,0x3a), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x00,0xff,0x00), CUPID_CGB_RGB8(0x31,0x84,0x00), CUPID_CGB_RGB8(0x00,0x4a,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x63,0xa5,0xff), CUPID_CGB_RGB8(0x00,0x00,0xff), CUPID_CGB_RGB8(0x00,0x00,0x00) }
-};
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
+     CUPID_CGB_RGB8(0x94, 0x3a, 0x3a), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x00, 0xff, 0x00),
+     CUPID_CGB_RGB8(0x31, 0x84, 0x00), CUPID_CGB_RGB8(0x00, 0x4a, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x63, 0xa5, 0xff),
+     CUPID_CGB_RGB8(0x00, 0x00, 0xff), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_45 = {
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0xad,0x63), CUPID_CGB_RGB8(0x84,0x31,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x7b,0xff,0x31), CUPID_CGB_RGB8(0x00,0x84,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x63,0xa5,0xff), CUPID_CGB_RGB8(0x00,0x00,0xff), CUPID_CGB_RGB8(0x00,0x00,0x00) }
-};
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0xad, 0x63),
+     CUPID_CGB_RGB8(0x84, 0x31, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x7b, 0xff, 0x31),
+     CUPID_CGB_RGB8(0x00, 0x84, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x63, 0xa5, 0xff),
+     CUPID_CGB_RGB8(0x00, 0x00, 0xff), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_46 = {
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x63,0xa5,0xff), CUPID_CGB_RGB8(0x00,0x00,0xff), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0x00), CUPID_CGB_RGB8(0xff,0x00,0x00), CUPID_CGB_RGB8(0x63,0x00,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x7b,0xff,0x31), CUPID_CGB_RGB8(0x00,0x84,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) }
-};
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x63, 0xa5, 0xff),
+     CUPID_CGB_RGB8(0x00, 0x00, 0xff), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0x00), CUPID_CGB_RGB8(0xff, 0x00, 0x00),
+     CUPID_CGB_RGB8(0x63, 0x00, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x7b, 0xff, 0x31),
+     CUPID_CGB_RGB8(0x00, 0x84, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_47 = {
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xad,0xad,0x84), CUPID_CGB_RGB8(0x42,0x73,0x7b), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0xad,0x63), CUPID_CGB_RGB8(0x84,0x31,0x00), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x63,0xa5,0xff), CUPID_CGB_RGB8(0x00,0x00,0xff), CUPID_CGB_RGB8(0x00,0x00,0x00) }
-};
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xad, 0xad, 0x84),
+     CUPID_CGB_RGB8(0x42, 0x73, 0x7b), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0xad, 0x63),
+     CUPID_CGB_RGB8(0x84, 0x31, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x63, 0xa5, 0xff),
+     CUPID_CGB_RGB8(0x00, 0x00, 0xff), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_50 = {
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x7b,0xff,0x31), CUPID_CGB_RGB8(0x00,0x63,0xc5), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0xff,0x84,0x84), CUPID_CGB_RGB8(0x94,0x3a,0x3a), CUPID_CGB_RGB8(0x00,0x00,0x00) },
-    { CUPID_CGB_RGB8(0xff,0xff,0xff), CUPID_CGB_RGB8(0x63,0xa5,0xff), CUPID_CGB_RGB8(0x00,0x00,0xff), CUPID_CGB_RGB8(0x00,0x00,0x00) }
-};
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x7b, 0xff, 0x31),
+     CUPID_CGB_RGB8(0x00, 0x63, 0xc5), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
+     CUPID_CGB_RGB8(0x94, 0x3a, 0x3a), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
+    {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x63, 0xa5, 0xff),
+     CUPID_CGB_RGB8(0x00, 0x00, 0xff), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 
 static const CupidCgbCompatPaletteKey cupid_cgb_compat_palette_keys[] = {
-    { 0x00u, 0x00u, false, &cupid_cgb_compat_auto_00 },
-    { 0x88u, 0x00u, false, &cupid_cgb_compat_auto_04 },
-    { 0x16u, 0x00u, false, &cupid_cgb_compat_auto_05 },
-    { 0x36u, 0x00u, false, &cupid_cgb_compat_auto_35 },
-    { 0xd1u, 0x00u, false, &cupid_cgb_compat_auto_34 },
-    { 0xdbu, 0x00u, false, &cupid_cgb_compat_auto_03 },
-    { 0xf2u, 0x00u, false, &cupid_cgb_compat_auto_31 },
-    { 0x3cu, 0x00u, false, &cupid_cgb_compat_auto_15 },
-    { 0x8cu, 0x00u, false, &cupid_cgb_compat_auto_10 },
-    { 0x92u, 0x00u, false, &cupid_cgb_compat_auto_05 },
-    { 0x3du, 0x00u, false, &cupid_cgb_compat_auto_19 },
-    { 0x5cu, 0x00u, false, &cupid_cgb_compat_auto_36 },
-    { 0x58u, 0x00u, false, &cupid_cgb_compat_auto_07 },
-    { 0xc9u, 0x00u, false, &cupid_cgb_compat_auto_37 },
-    { 0x3eu, 0x00u, false, &cupid_cgb_compat_auto_30 },
-    { 0x70u, 0x00u, false, &cupid_cgb_compat_auto_44 },
-    { 0x1du, 0x00u, false, &cupid_cgb_compat_auto_21 },
-    { 0x59u, 0x00u, false, &cupid_cgb_compat_auto_32 },
-    { 0x69u, 0x00u, false, &cupid_cgb_compat_auto_31 },
-    { 0x19u, 0x00u, false, &cupid_cgb_compat_auto_20 },
-    { 0x35u, 0x00u, false, &cupid_cgb_compat_auto_05 },
-    { 0xa8u, 0x00u, false, &cupid_cgb_compat_auto_33 },
-    { 0x14u, 0x00u, false, &cupid_cgb_compat_auto_13 },
-    { 0xaau, 0x00u, false, &cupid_cgb_compat_auto_14 },
-    { 0x75u, 0x00u, false, &cupid_cgb_compat_auto_05 },
-    { 0x95u, 0x00u, false, &cupid_cgb_compat_auto_29 },
-    { 0x99u, 0x00u, false, &cupid_cgb_compat_auto_05 },
-    { 0x34u, 0x00u, false, &cupid_cgb_compat_auto_18 },
-    { 0x6fu, 0x00u, false, &cupid_cgb_compat_auto_09 },
-    { 0x15u, 0x00u, false, &cupid_cgb_compat_auto_03 },
-    { 0xffu, 0x00u, false, &cupid_cgb_compat_auto_02 },
-    { 0x97u, 0x00u, false, &cupid_cgb_compat_auto_26 },
-    { 0x4bu, 0x00u, false, &cupid_cgb_compat_auto_25 },
-    { 0x90u, 0x00u, false, &cupid_cgb_compat_auto_25 },
-    { 0x17u, 0x00u, false, &cupid_cgb_compat_auto_41 },
-    { 0x10u, 0x00u, false, &cupid_cgb_compat_auto_42 },
-    { 0x39u, 0x00u, false, &cupid_cgb_compat_auto_26 },
-    { 0xf7u, 0x00u, false, &cupid_cgb_compat_auto_45 },
-    { 0xf6u, 0x00u, false, &cupid_cgb_compat_auto_42 },
-    { 0xa2u, 0x00u, false, &cupid_cgb_compat_auto_45 },
-    { 0x49u, 0x00u, false, &cupid_cgb_compat_auto_36 },
-    { 0x4eu, 0x00u, false, &cupid_cgb_compat_auto_38 },
-    { 0x43u, 0x00u, false, &cupid_cgb_compat_auto_26 },
-    { 0x68u, 0x00u, false, &cupid_cgb_compat_auto_42 },
-    { 0xe0u, 0x00u, false, &cupid_cgb_compat_auto_30 },
-    { 0x8bu, 0x00u, false, &cupid_cgb_compat_auto_41 },
-    { 0xf0u, 0x00u, false, &cupid_cgb_compat_auto_34 },
-    { 0xceu, 0x00u, false, &cupid_cgb_compat_auto_34 },
-    { 0x0cu, 0x00u, false, &cupid_cgb_compat_auto_05 },
-    { 0x29u, 0x00u, false, &cupid_cgb_compat_auto_42 },
-    { 0xe8u, 0x00u, false, &cupid_cgb_compat_auto_06 },
-    { 0xb7u, 0x00u, false, &cupid_cgb_compat_auto_05 },
-    { 0x86u, 0x00u, false, &cupid_cgb_compat_auto_33 },
-    { 0x9au, 0x00u, false, &cupid_cgb_compat_auto_25 },
-    { 0x52u, 0x00u, false, &cupid_cgb_compat_auto_42 },
-    { 0x01u, 0x00u, false, &cupid_cgb_compat_auto_42 },
-    { 0x9du, 0x00u, false, &cupid_cgb_compat_auto_40 },
-    { 0x71u, 0x00u, false, &cupid_cgb_compat_auto_02 },
-    { 0x9cu, 0x00u, false, &cupid_cgb_compat_auto_16 },
-    { 0xbdu, 0x00u, false, &cupid_cgb_compat_auto_25 },
-    { 0x5du, 0x00u, false, &cupid_cgb_compat_auto_42 },
-    { 0x6du, 0x00u, false, &cupid_cgb_compat_auto_42 },
-    { 0x67u, 0x00u, false, &cupid_cgb_compat_auto_05 },
-    { 0x3fu, 0x00u, false, &cupid_cgb_compat_auto_00 },
-    { 0x6bu, 0x00u, false, &cupid_cgb_compat_auto_39 },
-    { 0xb3u, 'B',  true,  &cupid_cgb_compat_auto_36 },
-    { 0x46u, 'E',  true,  &cupid_cgb_compat_auto_22 },
-    { 0x28u, 'F',  true,  &cupid_cgb_compat_auto_25 },
-    { 0xa5u, 'A',  true,  &cupid_cgb_compat_auto_06 },
-    { 0xc6u, 'A',  true,  &cupid_cgb_compat_auto_32 },
-    { 0xd3u, 'R',  true,  &cupid_cgb_compat_auto_12 },
-    { 0x27u, 'B',  true,  &cupid_cgb_compat_auto_36 },
-    { 0x61u, 'E',  true,  &cupid_cgb_compat_auto_11 },
-    { 0x18u, 'K',  true,  &cupid_cgb_compat_auto_39 },
-    { 0x66u, 'E',  true,  &cupid_cgb_compat_auto_18 },
-    { 0x6au, 'K',  true,  &cupid_cgb_compat_auto_39 },
-    { 0xbfu, ' ',  true,  &cupid_cgb_compat_auto_24 },
-    { 0x0du, 'R',  true,  &cupid_cgb_compat_auto_31 },
-    { 0xf4u, '-',  true,  &cupid_cgb_compat_auto_50 },
-    { 0xb3u, 'U',  true,  &cupid_cgb_compat_auto_17 },
-    { 0x46u, 'R',  true,  &cupid_cgb_compat_auto_46 },
-    { 0x28u, 'A',  true,  &cupid_cgb_compat_auto_06 },
-    { 0xa5u, 'R',  true,  &cupid_cgb_compat_auto_27 },
-    { 0xc6u, ' ',  true,  &cupid_cgb_compat_auto_00 },
-    { 0xd3u, 'I',  true,  &cupid_cgb_compat_auto_47 },
-    { 0x27u, 'N',  true,  &cupid_cgb_compat_auto_41 },
-    { 0x61u, 'A',  true,  &cupid_cgb_compat_auto_41 },
-    { 0x18u, 'I',  true,  &cupid_cgb_compat_auto_00 },
-    { 0x66u, 'L',  true,  &cupid_cgb_compat_auto_00 },
-    { 0x6au, 'I',  true,  &cupid_cgb_compat_auto_19 },
-    { 0xbfu, 'C',  true,  &cupid_cgb_compat_auto_34 },
-    { 0x0du, 'E',  true,  &cupid_cgb_compat_auto_23 },
-    { 0xf4u, ' ',  true,  &cupid_cgb_compat_auto_18 },
-    { 0xb3u, 'R',  true,  &cupid_cgb_compat_auto_29 }
-};
+    {0x00u, 0x00u, false, &cupid_cgb_compat_auto_00},
+    {0x88u, 0x00u, false, &cupid_cgb_compat_auto_04},
+    {0x16u, 0x00u, false, &cupid_cgb_compat_auto_05},
+    {0x36u, 0x00u, false, &cupid_cgb_compat_auto_35},
+    {0xd1u, 0x00u, false, &cupid_cgb_compat_auto_34},
+    {0xdbu, 0x00u, false, &cupid_cgb_compat_auto_03},
+    {0xf2u, 0x00u, false, &cupid_cgb_compat_auto_31},
+    {0x3cu, 0x00u, false, &cupid_cgb_compat_auto_15},
+    {0x8cu, 0x00u, false, &cupid_cgb_compat_auto_10},
+    {0x92u, 0x00u, false, &cupid_cgb_compat_auto_05},
+    {0x3du, 0x00u, false, &cupid_cgb_compat_auto_19},
+    {0x5cu, 0x00u, false, &cupid_cgb_compat_auto_36},
+    {0x58u, 0x00u, false, &cupid_cgb_compat_auto_07},
+    {0xc9u, 0x00u, false, &cupid_cgb_compat_auto_37},
+    {0x3eu, 0x00u, false, &cupid_cgb_compat_auto_30},
+    {0x70u, 0x00u, false, &cupid_cgb_compat_auto_44},
+    {0x1du, 0x00u, false, &cupid_cgb_compat_auto_21},
+    {0x59u, 0x00u, false, &cupid_cgb_compat_auto_32},
+    {0x69u, 0x00u, false, &cupid_cgb_compat_auto_31},
+    {0x19u, 0x00u, false, &cupid_cgb_compat_auto_20},
+    {0x35u, 0x00u, false, &cupid_cgb_compat_auto_05},
+    {0xa8u, 0x00u, false, &cupid_cgb_compat_auto_33},
+    {0x14u, 0x00u, false, &cupid_cgb_compat_auto_13},
+    {0xaau, 0x00u, false, &cupid_cgb_compat_auto_14},
+    {0x75u, 0x00u, false, &cupid_cgb_compat_auto_05},
+    {0x95u, 0x00u, false, &cupid_cgb_compat_auto_29},
+    {0x99u, 0x00u, false, &cupid_cgb_compat_auto_05},
+    {0x34u, 0x00u, false, &cupid_cgb_compat_auto_18},
+    {0x6fu, 0x00u, false, &cupid_cgb_compat_auto_09},
+    {0x15u, 0x00u, false, &cupid_cgb_compat_auto_03},
+    {0xffu, 0x00u, false, &cupid_cgb_compat_auto_02},
+    {0x97u, 0x00u, false, &cupid_cgb_compat_auto_26},
+    {0x4bu, 0x00u, false, &cupid_cgb_compat_auto_25},
+    {0x90u, 0x00u, false, &cupid_cgb_compat_auto_25},
+    {0x17u, 0x00u, false, &cupid_cgb_compat_auto_41},
+    {0x10u, 0x00u, false, &cupid_cgb_compat_auto_42},
+    {0x39u, 0x00u, false, &cupid_cgb_compat_auto_26},
+    {0xf7u, 0x00u, false, &cupid_cgb_compat_auto_45},
+    {0xf6u, 0x00u, false, &cupid_cgb_compat_auto_42},
+    {0xa2u, 0x00u, false, &cupid_cgb_compat_auto_45},
+    {0x49u, 0x00u, false, &cupid_cgb_compat_auto_36},
+    {0x4eu, 0x00u, false, &cupid_cgb_compat_auto_38},
+    {0x43u, 0x00u, false, &cupid_cgb_compat_auto_26},
+    {0x68u, 0x00u, false, &cupid_cgb_compat_auto_42},
+    {0xe0u, 0x00u, false, &cupid_cgb_compat_auto_30},
+    {0x8bu, 0x00u, false, &cupid_cgb_compat_auto_41},
+    {0xf0u, 0x00u, false, &cupid_cgb_compat_auto_34},
+    {0xceu, 0x00u, false, &cupid_cgb_compat_auto_34},
+    {0x0cu, 0x00u, false, &cupid_cgb_compat_auto_05},
+    {0x29u, 0x00u, false, &cupid_cgb_compat_auto_42},
+    {0xe8u, 0x00u, false, &cupid_cgb_compat_auto_06},
+    {0xb7u, 0x00u, false, &cupid_cgb_compat_auto_05},
+    {0x86u, 0x00u, false, &cupid_cgb_compat_auto_33},
+    {0x9au, 0x00u, false, &cupid_cgb_compat_auto_25},
+    {0x52u, 0x00u, false, &cupid_cgb_compat_auto_42},
+    {0x01u, 0x00u, false, &cupid_cgb_compat_auto_42},
+    {0x9du, 0x00u, false, &cupid_cgb_compat_auto_40},
+    {0x71u, 0x00u, false, &cupid_cgb_compat_auto_02},
+    {0x9cu, 0x00u, false, &cupid_cgb_compat_auto_16},
+    {0xbdu, 0x00u, false, &cupid_cgb_compat_auto_25},
+    {0x5du, 0x00u, false, &cupid_cgb_compat_auto_42},
+    {0x6du, 0x00u, false, &cupid_cgb_compat_auto_42},
+    {0x67u, 0x00u, false, &cupid_cgb_compat_auto_05},
+    {0x3fu, 0x00u, false, &cupid_cgb_compat_auto_00},
+    {0x6bu, 0x00u, false, &cupid_cgb_compat_auto_39},
+    {0xb3u, 'B', true, &cupid_cgb_compat_auto_36},
+    {0x46u, 'E', true, &cupid_cgb_compat_auto_22},
+    {0x28u, 'F', true, &cupid_cgb_compat_auto_25},
+    {0xa5u, 'A', true, &cupid_cgb_compat_auto_06},
+    {0xc6u, 'A', true, &cupid_cgb_compat_auto_32},
+    {0xd3u, 'R', true, &cupid_cgb_compat_auto_12},
+    {0x27u, 'B', true, &cupid_cgb_compat_auto_36},
+    {0x61u, 'E', true, &cupid_cgb_compat_auto_11},
+    {0x18u, 'K', true, &cupid_cgb_compat_auto_39},
+    {0x66u, 'E', true, &cupid_cgb_compat_auto_18},
+    {0x6au, 'K', true, &cupid_cgb_compat_auto_39},
+    {0xbfu, ' ', true, &cupid_cgb_compat_auto_24},
+    {0x0du, 'R', true, &cupid_cgb_compat_auto_31},
+    {0xf4u, '-', true, &cupid_cgb_compat_auto_50},
+    {0xb3u, 'U', true, &cupid_cgb_compat_auto_17},
+    {0x46u, 'R', true, &cupid_cgb_compat_auto_46},
+    {0x28u, 'A', true, &cupid_cgb_compat_auto_06},
+    {0xa5u, 'R', true, &cupid_cgb_compat_auto_27},
+    {0xc6u, ' ', true, &cupid_cgb_compat_auto_00},
+    {0xd3u, 'I', true, &cupid_cgb_compat_auto_47},
+    {0x27u, 'N', true, &cupid_cgb_compat_auto_41},
+    {0x61u, 'A', true, &cupid_cgb_compat_auto_41},
+    {0x18u, 'I', true, &cupid_cgb_compat_auto_00},
+    {0x66u, 'L', true, &cupid_cgb_compat_auto_00},
+    {0x6au, 'I', true, &cupid_cgb_compat_auto_19},
+    {0xbfu, 'C', true, &cupid_cgb_compat_auto_34},
+    {0x0du, 'E', true, &cupid_cgb_compat_auto_23},
+    {0xf4u, ' ', true, &cupid_cgb_compat_auto_18},
+    {0xb3u, 'R', true, &cupid_cgb_compat_auto_29}};
 
 /**
  * @brief Returns whether the loaded ROM was published by Nintendo.
@@ -382,15 +470,13 @@ static const CupidCgbCompatPaletteKey cupid_cgb_compat_palette_keys[] = {
  *
  * @return `true` if the ROM has a Nintendo licensee code, `false` otherwise.
  */
-static bool cupid_cgb_has_nintendo_licensee(const CupidGb *gb)
-{
+static bool cupid_cgb_has_nintendo_licensee(const CupidGb *gb) {
     if (gb == 0) {
         return false;
     }
 
     if (gb->header.old_licensee_code == 0x33u) {
-        return gb->header.new_licensee_code[0] == '0' &&
-               gb->header.new_licensee_code[1] == '1';
+        return gb->header.new_licensee_code[0] == '0' && gb->header.new_licensee_code[1] == '1';
     }
 
     return gb->header.old_licensee_code == 0x01u;
@@ -407,8 +493,7 @@ static bool cupid_cgb_has_nintendo_licensee(const CupidGb *gb)
  * @return The 8-bit checksum, or 0 if @p gb or its ROM buffer is NULL, or the
  *         ROM is too small.
  */
-static uint8_t cupid_cgb_title_checksum(const CupidGb *gb)
-{
+static uint8_t cupid_cgb_title_checksum(const CupidGb *gb) {
     uint8_t checksum = 0u;
     size_t index;
 
@@ -433,8 +518,7 @@ static uint8_t cupid_cgb_title_checksum(const CupidGb *gb)
  *
  * @return The byte at 0x0137, or 0 if the ROM is NULL or too short.
  */
-static uint8_t cupid_cgb_title_fourth_letter(const CupidGb *gb)
-{
+static uint8_t cupid_cgb_title_fourth_letter(const CupidGb *gb) {
     if (gb == 0 || gb->rom == 0 || gb->rom_size <= 0x0137u) {
         return 0u;
     }
@@ -458,8 +542,7 @@ static uint8_t cupid_cgb_title_fourth_letter(const CupidGb *gb)
  *
  * @return Pointer to the matched @ref CupidCgbCompatPaletteSet (never NULL).
  */
-static const CupidCgbCompatPaletteSet *cupid_cgb_lookup_compat_palette(const CupidGb *gb)
-{
+static const CupidCgbCompatPaletteSet *cupid_cgb_lookup_compat_palette(const CupidGb *gb) {
     uint8_t checksum;
     uint8_t fourth_letter;
     size_t index;
@@ -471,7 +554,9 @@ static const CupidCgbCompatPaletteSet *cupid_cgb_lookup_compat_palette(const Cup
 
     checksum = cupid_cgb_title_checksum(gb);
     fourth_letter = cupid_cgb_title_fourth_letter(gb);
-    for (index = 0u; index < sizeof(cupid_cgb_compat_palette_keys) / sizeof(cupid_cgb_compat_palette_keys[0]); ++index) {
+    for (index = 0u;
+         index < sizeof(cupid_cgb_compat_palette_keys) / sizeof(cupid_cgb_compat_palette_keys[0]);
+         ++index) {
         const CupidCgbCompatPaletteKey *key = &cupid_cgb_compat_palette_keys[index];
 
         if (key->title_checksum != checksum) {
@@ -499,8 +584,8 @@ static const CupidCgbCompatPaletteSet *cupid_cgb_lookup_compat_palette(const Cup
  * @param palette_index Which palette slot to write (0–7).
  * @param colors        Array of exactly 4 RGB555 color values.
  */
-static void cupid_cgb_store_palette(uint8_t *palette_ram, unsigned int palette_index, const uint16_t colors[4])
-{
+static void cupid_cgb_store_palette(uint8_t *palette_ram, unsigned int palette_index,
+                                    const uint16_t colors[4]) {
     unsigned int color_index;
     size_t base_offset = (size_t)palette_index * 8u;
 
@@ -525,8 +610,7 @@ static void cupid_cgb_store_palette(uint8_t *palette_ram, unsigned int palette_i
  *
  * @note Does nothing if @p gb is NULL.
  */
-void cupid_cgb_init_state(CupidGb *gb)
-{
+void cupid_cgb_init_state(CupidGb *gb) {
     size_t palette_index;
 
     if (gb == 0) {
@@ -565,8 +649,7 @@ void cupid_cgb_init_state(CupidGb *gb)
  *
  * @return Byte offset into `gb->video_ram`, in the range 0x0000–0x3FFF.
  */
-size_t cupid_cgb_vram_offset(const CupidGb *gb, uint16_t address)
-{
+size_t cupid_cgb_vram_offset(const CupidGb *gb, uint16_t address) {
     size_t bank = 0u;
 
     if (gb != 0 && gb->cgb_mode) {
@@ -589,8 +672,7 @@ size_t cupid_cgb_vram_offset(const CupidGb *gb, uint16_t address)
  *
  * @return Byte offset into the internal WRAM buffer.
  */
-size_t cupid_cgb_wram_offset(const CupidGb *gb, uint16_t address)
-{
+size_t cupid_cgb_wram_offset(const CupidGb *gb, uint16_t address) {
     if (address >= 0xc000u && address <= 0xcfffu) {
         return (size_t)(address - 0xc000u);
     }
@@ -624,11 +706,8 @@ size_t cupid_cgb_wram_offset(const CupidGb *gb, uint16_t address)
  *         has a matching Nintendo licensee entry); `false` if the default
  *         greyscale palette is being used or any pointer is NULL.
  */
-bool cupid_cgb_get_compatibility_palette(const CupidGb *gb,
-                                         uint16_t bg[4],
-                                         uint16_t obj0[4],
-                                         uint16_t obj1[4])
-{
+bool cupid_cgb_get_compatibility_palette(const CupidGb *gb, uint16_t bg[4], uint16_t obj0[4],
+                                         uint16_t obj1[4]) {
     const CupidCgbCompatPaletteSet *palette_set;
 
     if (bg == 0 || obj0 == 0 || obj1 == 0) {
@@ -656,8 +735,7 @@ bool cupid_cgb_get_compatibility_palette(const CupidGb *gb,
  *
  * @note Does nothing if @p gb is NULL.
  */
-void cupid_cgb_apply_compatibility_palette(CupidGb *gb)
-{
+void cupid_cgb_apply_compatibility_palette(CupidGb *gb) {
     uint16_t bg[4];
     uint16_t obj0[4];
     uint16_t obj1[4];
@@ -682,8 +760,7 @@ void cupid_cgb_apply_compatibility_palette(CupidGb *gb)
  *
  * @return `true` if CGB compatibility mode is active.
  */
-bool cupid_cgb_compat_active(const CupidGb *gb)
-{
+bool cupid_cgb_compat_active(const CupidGb *gb) {
     return gb != 0 && gb->model == CUPID_GB_MODEL_CGB && !gb->cgb_mode;
 }
 
@@ -698,8 +775,7 @@ bool cupid_cgb_compat_active(const CupidGb *gb)
  *
  * @return The RGB555 color value, or 0 if compatibility mode is not active.
  */
-uint16_t cupid_cgb_compat_bg_color(const CupidGb *gb, uint8_t shade)
-{
+uint16_t cupid_cgb_compat_bg_color(const CupidGb *gb, uint8_t shade) {
     size_t color_offset;
 
     if (!cupid_cgb_compat_active(gb)) {
@@ -724,8 +800,7 @@ uint16_t cupid_cgb_compat_bg_color(const CupidGb *gb, uint8_t shade)
  *
  * @return The RGB555 color value, or 0 if compatibility mode is not active.
  */
-uint16_t cupid_cgb_compat_obj_color(const CupidGb *gb, unsigned int palette, uint8_t shade)
-{
+uint16_t cupid_cgb_compat_obj_color(const CupidGb *gb, unsigned int palette, uint8_t shade) {
     size_t base_offset;
     size_t color_offset;
 
@@ -750,8 +825,7 @@ uint16_t cupid_cgb_compat_obj_color(const CupidGb *gb, unsigned int palette, uin
  *
  * @return `true` if palette RAM reads/writes should be blocked.
  */
-static bool cupid_cgb_palette_blocked(const CupidGb *gb)
-{
+static bool cupid_cgb_palette_blocked(const CupidGb *gb) {
     uint8_t mode;
 
     if (gb == 0 || !gb->cgb_mode || !cupid_gb_lcd_enabled(gb) ||
@@ -775,8 +849,7 @@ static bool cupid_cgb_palette_blocked(const CupidGb *gb)
  *
  * @return The byte at the selected palette RAM index.
  */
-static uint8_t cupid_cgb_palette_read(const CupidGb *gb, bool object_palette)
-{
+static uint8_t cupid_cgb_palette_read(const CupidGb *gb, bool object_palette) {
     const uint8_t *palette_ram;
     uint8_t index;
 
@@ -804,8 +877,7 @@ static uint8_t cupid_cgb_palette_read(const CupidGb *gb, bool object_palette)
  *
  * @note Does nothing if @p gb is NULL or CGB mode is not active.
  */
-static void cupid_cgb_palette_write(CupidGb *gb, bool object_palette, uint8_t value)
-{
+static void cupid_cgb_palette_write(CupidGb *gb, bool object_palette, uint8_t value) {
     uint8_t *palette_ram;
     uint8_t index_register;
     uint8_t index;
@@ -825,8 +897,8 @@ static void cupid_cgb_palette_write(CupidGb *gb, bool object_palette, uint8_t va
     }
 
     if (auto_increment) {
-        gb->io_registers[index_register] = (uint8_t)((gb->io_registers[index_register] & 0x80u) |
-                                                     ((index + 1u) & 0x3fu));
+        gb->io_registers[index_register] =
+            (uint8_t)((gb->io_registers[index_register] & 0x80u) | ((index + 1u) & 0x3fu));
     }
 
     gb->io_registers[object_palette ? 0x6bu : 0x69u] = value;
@@ -847,8 +919,7 @@ static void cupid_cgb_palette_write(CupidGb *gb, bool object_palette, uint8_t va
  * @note Does nothing if @p gb is NULL, CGB mode is inactive, or there
  *       are no remaining blocks.
  */
-static void cupid_cgb_hdma_copy_block(CupidGb *gb)
-{
+static void cupid_cgb_hdma_copy_block(CupidGb *gb) {
     uint8_t byte_index;
 
     if (gb == 0 || !gb->cgb_mode || gb->hdma_blocks_remaining == 0u) {
@@ -875,9 +946,8 @@ static void cupid_cgb_hdma_copy_block(CupidGb *gb)
         gb->hdma_active = false;
         gb->io_registers[0x55u] = 0xffu;
     } else {
-        gb->io_registers[0x55u] = gb->hdma_active
-            ? (uint8_t)((gb->hdma_blocks_remaining - 1u) & 0x7fu)
-            : 0xffu;
+        gb->io_registers[0x55u] =
+            gb->hdma_active ? (uint8_t)((gb->hdma_blocks_remaining - 1u) & 0x7fu) : 0xffu;
     }
 }
 
@@ -903,54 +973,56 @@ static void cupid_cgb_hdma_copy_block(CupidGb *gb)
  *
  * @return `true` if the address was handled, `false` otherwise.
  */
-bool cupid_cgb_handle_read_register(const CupidGb *gb, uint16_t address, uint8_t *value)
-{
+bool cupid_cgb_handle_read_register(const CupidGb *gb, uint16_t address, uint8_t *value) {
     if (value == 0) {
         return false;
     }
 
     switch (address) {
-    case 0xff4cu:
-    case 0xff56u:
-        *value = gb != 0 && gb->cgb_mode ? gb->io_registers[address - 0xff00u] : 0xffu;
-        return true;
-    case 0xff4du:
-        if (gb == 0 || !gb->cgb_mode) {
-            *value = 0xffu;
-        } else {
-            *value = (uint8_t)(0x7eu | (gb->io_registers[0x4du] & 0x81u));
-        }
-        return true;
-    case 0xff4fu:
-        *value = gb != 0 && gb->cgb_mode ? (uint8_t)(0xfeu | (gb->cgb_vram_bank & 0x01u)) : 0xffu;
-        return true;
-    case 0xff51u:
-    case 0xff52u:
-    case 0xff53u:
-    case 0xff54u:
-    case 0xff55u:
-        *value = gb != 0 && gb->cgb_mode ? gb->io_registers[address - 0xff00u] : 0xffu;
-        return true;
-    case 0xff68u:
-        *value = gb != 0 && gb->cgb_mode ? (uint8_t)(0x40u | gb->io_registers[0x68u]) : 0xffu;
-        return true;
-    case 0xff69u:
-        *value = cupid_cgb_palette_read(gb, false);
-        return true;
-    case 0xff6au:
-        *value = gb != 0 && gb->cgb_mode ? (uint8_t)(0x40u | gb->io_registers[0x6au]) : 0xffu;
-        return true;
-    case 0xff6bu:
-        *value = cupid_cgb_palette_read(gb, true);
-        return true;
-    case 0xff6cu:
-        *value = gb != 0 && gb->cgb_mode ? (uint8_t)(0xfeu | (gb->io_registers[0x6cu] & 0x01u)) : 0xffu;
-        return true;
-    case 0xff70u:
-        *value = gb != 0 && gb->cgb_mode ? (uint8_t)(0xf8u | (gb->cgb_wram_bank & 0x07u)) : 0xffu;
-        return true;
-    default:
-        return false;
+        case 0xff4cu:
+        case 0xff56u:
+            *value = gb != 0 && gb->cgb_mode ? gb->io_registers[address - 0xff00u] : 0xffu;
+            return true;
+        case 0xff4du:
+            if (gb == 0 || !gb->cgb_mode) {
+                *value = 0xffu;
+            } else {
+                *value = (uint8_t)(0x7eu | (gb->io_registers[0x4du] & 0x81u));
+            }
+            return true;
+        case 0xff4fu:
+            *value =
+                gb != 0 && gb->cgb_mode ? (uint8_t)(0xfeu | (gb->cgb_vram_bank & 0x01u)) : 0xffu;
+            return true;
+        case 0xff51u:
+        case 0xff52u:
+        case 0xff53u:
+        case 0xff54u:
+        case 0xff55u:
+            *value = gb != 0 && gb->cgb_mode ? gb->io_registers[address - 0xff00u] : 0xffu;
+            return true;
+        case 0xff68u:
+            *value = gb != 0 && gb->cgb_mode ? (uint8_t)(0x40u | gb->io_registers[0x68u]) : 0xffu;
+            return true;
+        case 0xff69u:
+            *value = cupid_cgb_palette_read(gb, false);
+            return true;
+        case 0xff6au:
+            *value = gb != 0 && gb->cgb_mode ? (uint8_t)(0x40u | gb->io_registers[0x6au]) : 0xffu;
+            return true;
+        case 0xff6bu:
+            *value = cupid_cgb_palette_read(gb, true);
+            return true;
+        case 0xff6cu:
+            *value = gb != 0 && gb->cgb_mode ? (uint8_t)(0xfeu | (gb->io_registers[0x6cu] & 0x01u))
+                                             : 0xffu;
+            return true;
+        case 0xff70u:
+            *value =
+                gb != 0 && gb->cgb_mode ? (uint8_t)(0xf8u | (gb->cgb_wram_bank & 0x07u)) : 0xffu;
+            return true;
+        default:
+            return false;
     }
 }
 
@@ -979,101 +1051,101 @@ bool cupid_cgb_handle_read_register(const CupidGb *gb, uint16_t address, uint8_t
  *
  * @note Does nothing (returns `false`) if @p gb is NULL.
  */
-bool cupid_cgb_handle_write_register(CupidGb *gb, uint16_t address, uint8_t value)
-{
+bool cupid_cgb_handle_write_register(CupidGb *gb, uint16_t address, uint8_t value) {
     if (gb == 0) {
         return false;
     }
 
     switch (address) {
-    case 0xff4cu:
-    case 0xff56u:
-        if (gb->cgb_mode) {
-            gb->io_registers[address - 0xff00u] = value;
-        }
-        return true;
-    case 0xff4du:
-        if (gb->cgb_mode) {
-            gb->speed_switch_armed = (value & 0x01u) != 0u;
-            gb->io_registers[0x4du] = (uint8_t)((gb->double_speed ? 0x80u : 0x00u) |
-                                                (gb->speed_switch_armed ? 0x01u : 0x00u));
-        }
-        return true;
-    case 0xff4fu:
-        if (gb->cgb_mode) {
-            gb->cgb_vram_bank = (uint8_t)(value & 0x01u);
-            gb->io_registers[0x4fu] = (uint8_t)(0xfeu | gb->cgb_vram_bank);
-        }
-        return true;
-    case 0xff51u:
-    case 0xff52u:
-    case 0xff53u:
-    case 0xff54u:
-        if (gb->cgb_mode) {
-            gb->io_registers[address - 0xff00u] = value;
-            gb->hdma_source = (uint16_t)(((uint16_t)gb->io_registers[0x51u] << 8u) |
-                                         (uint16_t)(gb->io_registers[0x52u] & 0xf0u));
-            gb->hdma_destination = (uint16_t)(0x8000u |
-                                              (((uint16_t)gb->io_registers[0x53u] & 0x1fu) << 8u) |
-                                              (uint16_t)(gb->io_registers[0x54u] & 0xf0u));
-        }
-        return true;
-    case 0xff55u:
-        if (gb->cgb_mode) {
-            if (gb->hdma_active && (value & 0x80u) == 0u) {
-                gb->hdma_active = false;
-                gb->io_registers[0x55u] = (uint8_t)(0x80u | ((gb->hdma_blocks_remaining - 1u) & 0x7fu));
-            } else {
+        case 0xff4cu:
+        case 0xff56u:
+            if (gb->cgb_mode) {
+                gb->io_registers[address - 0xff00u] = value;
+            }
+            return true;
+        case 0xff4du:
+            if (gb->cgb_mode) {
+                gb->speed_switch_armed = (value & 0x01u) != 0u;
+                gb->io_registers[0x4du] = (uint8_t)((gb->double_speed ? 0x80u : 0x00u) |
+                                                    (gb->speed_switch_armed ? 0x01u : 0x00u));
+            }
+            return true;
+        case 0xff4fu:
+            if (gb->cgb_mode) {
+                gb->cgb_vram_bank = (uint8_t)(value & 0x01u);
+                gb->io_registers[0x4fu] = (uint8_t)(0xfeu | gb->cgb_vram_bank);
+            }
+            return true;
+        case 0xff51u:
+        case 0xff52u:
+        case 0xff53u:
+        case 0xff54u:
+            if (gb->cgb_mode) {
+                gb->io_registers[address - 0xff00u] = value;
                 gb->hdma_source = (uint16_t)(((uint16_t)gb->io_registers[0x51u] << 8u) |
                                              (uint16_t)(gb->io_registers[0x52u] & 0xf0u));
-                gb->hdma_destination = (uint16_t)(0x8000u |
-                                                  (((uint16_t)gb->io_registers[0x53u] & 0x1fu) << 8u) |
-                                                  (uint16_t)(gb->io_registers[0x54u] & 0xf0u));
-                gb->hdma_blocks_remaining = (uint8_t)((value & 0x7fu) + 1u);
-                gb->hdma_active = (value & 0x80u) != 0u;
-                gb->io_registers[0x55u] = gb->hdma_active
-                    ? (uint8_t)((gb->hdma_blocks_remaining - 1u) & 0x7fu)
-                    : 0xffu;
-                if (!gb->hdma_active) {
-                    while (gb->hdma_blocks_remaining > 0u) {
-                        cupid_cgb_hdma_copy_block(gb);
+                gb->hdma_destination =
+                    (uint16_t)(0x8000u | (((uint16_t)gb->io_registers[0x53u] & 0x1fu) << 8u) |
+                               (uint16_t)(gb->io_registers[0x54u] & 0xf0u));
+            }
+            return true;
+        case 0xff55u:
+            if (gb->cgb_mode) {
+                if (gb->hdma_active && (value & 0x80u) == 0u) {
+                    gb->hdma_active = false;
+                    gb->io_registers[0x55u] =
+                        (uint8_t)(0x80u | ((gb->hdma_blocks_remaining - 1u) & 0x7fu));
+                } else {
+                    gb->hdma_source = (uint16_t)(((uint16_t)gb->io_registers[0x51u] << 8u) |
+                                                 (uint16_t)(gb->io_registers[0x52u] & 0xf0u));
+                    gb->hdma_destination =
+                        (uint16_t)(0x8000u | (((uint16_t)gb->io_registers[0x53u] & 0x1fu) << 8u) |
+                                   (uint16_t)(gb->io_registers[0x54u] & 0xf0u));
+                    gb->hdma_blocks_remaining = (uint8_t)((value & 0x7fu) + 1u);
+                    gb->hdma_active = (value & 0x80u) != 0u;
+                    gb->io_registers[0x55u] =
+                        gb->hdma_active ? (uint8_t)((gb->hdma_blocks_remaining - 1u) & 0x7fu)
+                                        : 0xffu;
+                    if (!gb->hdma_active) {
+                        while (gb->hdma_blocks_remaining > 0u) {
+                            cupid_cgb_hdma_copy_block(gb);
+                        }
                     }
                 }
             }
-        }
-        return true;
-    case 0xff68u:
-        if (gb->cgb_mode) {
-            gb->io_registers[0x68u] = (uint8_t)(value & 0xbfu);
-        }
-        return true;
-    case 0xff69u:
-        cupid_cgb_palette_write(gb, false, value);
-        return true;
-    case 0xff6au:
-        if (gb->cgb_mode) {
-            gb->io_registers[0x6au] = (uint8_t)(value & 0xbfu);
-        }
-        return true;
-    case 0xff6bu:
-        cupid_cgb_palette_write(gb, true, value);
-        return true;
-    case 0xff6cu:
-        if (gb->cgb_mode) {
-            gb->io_registers[0x6cu] = (uint8_t)(0xfeu | (value & 0x01u));
-        }
-        return true;
-    case 0xff70u:
-        if (gb->cgb_mode) {
-            gb->cgb_wram_bank = (uint8_t)(value & 0x07u);
-            if (gb->cgb_wram_bank == 0u) {
-                gb->cgb_wram_bank = 1u;
+            return true;
+        case 0xff68u:
+            if (gb->cgb_mode) {
+                gb->io_registers[0x68u] = (uint8_t)(value & 0xbfu);
             }
-            gb->io_registers[0x70u] = (uint8_t)(0xf8u | gb->cgb_wram_bank);
-        }
-        return true;
-    default:
-        return false;
+            return true;
+        case 0xff69u:
+            cupid_cgb_palette_write(gb, false, value);
+            return true;
+        case 0xff6au:
+            if (gb->cgb_mode) {
+                gb->io_registers[0x6au] = (uint8_t)(value & 0xbfu);
+            }
+            return true;
+        case 0xff6bu:
+            cupid_cgb_palette_write(gb, true, value);
+            return true;
+        case 0xff6cu:
+            if (gb->cgb_mode) {
+                gb->io_registers[0x6cu] = (uint8_t)(0xfeu | (value & 0x01u));
+            }
+            return true;
+        case 0xff70u:
+            if (gb->cgb_mode) {
+                gb->cgb_wram_bank = (uint8_t)(value & 0x07u);
+                if (gb->cgb_wram_bank == 0u) {
+                    gb->cgb_wram_bank = 1u;
+                }
+                gb->io_registers[0x70u] = (uint8_t)(0xf8u | gb->cgb_wram_bank);
+            }
+            return true;
+        default:
+            return false;
     }
 }
 
@@ -1089,8 +1161,8 @@ bool cupid_cgb_handle_write_register(CupidGb *gb, uint16_t address, uint8_t valu
  *
  * @return The RGB555 color value.
  */
-static uint16_t cupid_cgb_palette_color(const uint8_t *palette_ram, uint8_t palette_number, uint8_t color_index)
-{
+static uint16_t cupid_cgb_palette_color(const uint8_t *palette_ram, uint8_t palette_number,
+                                        uint8_t color_index) {
     size_t color_offset = (size_t)palette_number * 8u + (size_t)color_index * 2u;
 
     return (uint16_t)((uint16_t)palette_ram[color_offset] |
@@ -1121,8 +1193,7 @@ static uint16_t cupid_cgb_palette_color(const uint8_t *palette_ram, uint8_t pale
  *
  * @note Does nothing if @p gb is NULL.
  */
-void cupid_cgb_render_scanline(CupidGb *gb, uint8_t lcdc, uint8_t ly, size_t base_index)
-{
+void cupid_cgb_render_scanline(CupidGb *gb, uint8_t lcdc, uint8_t ly, size_t base_index) {
     uint8_t bg_color_indices[CUPID_GB_SCREEN_WIDTH];
     uint8_t bg_priority[CUPID_GB_SCREEN_WIDTH];
     bool window_visible = false;
@@ -1160,8 +1231,8 @@ void cupid_cgb_render_scanline(CupidGb *gb, uint8_t lcdc, uint8_t ly, size_t bas
         uint8_t color_index;
         uint8_t palette_number;
 
-        if ((lcdc & 0x20u) != 0u && (int)ly >= (int)wy &&
-            wx_screen < CUPID_GB_SCREEN_WIDTH && x >= wx_screen) {
+        if ((lcdc & 0x20u) != 0u && (int)ly >= (int)wy && wx_screen < CUPID_GB_SCREEN_WIDTH &&
+            x >= wx_screen) {
             use_window = true;
             window_visible = true;
         }
@@ -1204,8 +1275,8 @@ void cupid_cgb_render_scanline(CupidGb *gb, uint8_t lcdc, uint8_t ly, size_t bas
         low = gb->video_ram[tile_bank_base + tile_address + tile_line];
         high = gb->video_ram[tile_bank_base + tile_address + tile_line + 1u];
         bit_index = (uint8_t)(7u - (pixel_x & 0x07u));
-        color_index = (uint8_t)((((high >> bit_index) & 0x01u) << 1u) |
-                                ((low >> bit_index) & 0x01u));
+        color_index =
+            (uint8_t)((((high >> bit_index) & 0x01u) << 1u) | ((low >> bit_index) & 0x01u));
         palette_number = (uint8_t)(attributes & 0x07u);
 
         gb->frame_buffer[base_index + x] = color_index;
@@ -1223,7 +1294,7 @@ void cupid_cgb_render_scanline(CupidGb *gb, uint8_t lcdc, uint8_t ly, size_t bas
         int obj_height = ((lcdc & 0x04u) != 0u) ? 16 : 8;
         unsigned int sprite_count = 0u;
         unsigned int i;
-        bool sprite_drawn[CUPID_GB_SCREEN_WIDTH] = { false };
+        bool sprite_drawn[CUPID_GB_SCREEN_WIDTH] = {false};
 
         for (i = 0u; i < 40u && sprite_count < 10u; ++i) {
             int obj_y = (int)gb->object_attribute_memory[i * 4u] - 16;
@@ -1277,7 +1348,8 @@ void cupid_cgb_render_scanline(CupidGb *gb, uint8_t lcdc, uint8_t ly, size_t bas
                     bit_pos = (uint8_t)px;
                 }
 
-                if (screen_x < 0 || screen_x >= (int)CUPID_GB_SCREEN_WIDTH || sprite_drawn[screen_x]) {
+                if (screen_x < 0 || screen_x >= (int)CUPID_GB_SCREEN_WIDTH ||
+                    sprite_drawn[screen_x]) {
                     continue;
                 }
 
@@ -1286,19 +1358,17 @@ void cupid_cgb_render_scanline(CupidGb *gb, uint8_t lcdc, uint8_t ly, size_t bas
                 if (color_index == 0u) {
                     continue;
                 }
+                /* BG priority must not expose an otherwise obscured object. */
+                sprite_drawn[screen_x] = true;
 
-                bg_wins = bg_color_indices[screen_x] != 0u &&
-                          (lcdc & 0x01u) != 0u &&
+                bg_wins = bg_color_indices[screen_x] != 0u && (lcdc & 0x01u) != 0u &&
                           (bg_priority[screen_x] != 0u || (attrs & 0x80u) != 0u);
                 if (bg_wins) {
                     continue;
                 }
 
-                gb->frame_buffer_color[base_index + (size_t)screen_x] =
-                    cupid_cgb_palette_color(gb->cgb_obj_palette_ram,
-                                           (uint8_t)(attrs & 0x07u),
-                                           color_index);
-                sprite_drawn[screen_x] = true;
+                gb->frame_buffer_color[base_index + (size_t)screen_x] = cupid_cgb_palette_color(
+                    gb->cgb_obj_palette_ram, (uint8_t)(attrs & 0x07u), color_index);
             }
         }
     }
@@ -1316,8 +1386,7 @@ void cupid_cgb_render_scanline(CupidGb *gb, uint8_t lcdc, uint8_t ly, size_t bas
  * @note Does nothing if @p gb is NULL, HDMA is not active, or there are
  *       no remaining blocks.
  */
-void cupid_cgb_tick_hdma(CupidGb *gb)
-{
+void cupid_cgb_tick_hdma(CupidGb *gb) {
     if (gb == 0 || !gb->hdma_active || gb->hdma_blocks_remaining == 0u) {
         return;
     }

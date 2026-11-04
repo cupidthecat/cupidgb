@@ -1,3 +1,6 @@
+/* Hardware timing portions: Copyright (c) 2015-2026 Lior Halphon.
+ * Distributed under the Expat License; see LICENSES/hardware.txt.
+ */
 /**
  * @file timer.c
  * @brief Game Boy timer subsystem (DIV / TIMA / TMA / TAC).
@@ -18,10 +21,27 @@
 
 #include <stdio.h>
 
-#include "cupid/gb/gb.h"
-#include "cupid/gb/cpu.h"
-#include "cupid/gb/ppu.h"
 #include "cupid/gb/apu.h"
+#include "cupid/gb/cpu.h"
+#include "cupid/gb/gb.h"
+#include "cupid/gb/ppu.h"
+
+/* The timer counter uses M-cycle units, so DIV bits 2 and 7 become bits 0 and 5.
+ * Every falling DIV edge toggles the serial clock; only its falling phase shifts. */
+static void cupid_gb_serial_div_changed(CupidGb *gb, uint16_t old_counter, uint16_t new_counter) {
+    uint16_t mask = gb->cgb_mode && (gb->io_registers[0x02u] & 2u) ? 1u : 32u;
+    if ((old_counter & (uint16_t)~new_counter & mask) != 0u) {
+        cupid_gb_serial_master_edge(gb);
+    }
+}
+
+static void cupid_gb_apu_div_changed(CupidGb *gb, uint16_t old_counter, uint16_t new_counter) {
+    /* DIV is stored in M-cycle units; APU clocks on T-cycle bit 12 or 13. */
+    uint16_t mask = gb->double_speed ? 0x800u : 0x400u;
+    if ((old_counter & (uint16_t)~new_counter & mask) != 0u) {
+        cupid_gb_apu_div_event(gb);
+    }
+}
 
 /**
  * @brief Returns the full 16-bit internal timer counter.
@@ -35,8 +55,7 @@
  *
  * @return The 16-bit internal counter value.
  */
-static uint16_t cupid_gb_timer_internal_counter(const CupidGb *gb)
-{
+static uint16_t cupid_gb_timer_internal_counter(const CupidGb *gb) {
     return (uint16_t)(((uint16_t)gb->io_registers[0x04u] << 6u) | (gb->div_counter & 0x003fu));
 }
 
@@ -57,8 +76,7 @@ static uint16_t cupid_gb_timer_internal_counter(const CupidGb *gb)
  *
  * @return `true` if the selected counter bit is set and the timer is enabled.
  */
-static bool cupid_gb_timer_input_signal(uint16_t counter, uint8_t tac)
-{
+static bool cupid_gb_timer_input_signal(uint16_t counter, uint8_t tac) {
     uint16_t mask;
 
     if ((tac & 0x04u) == 0u) {
@@ -66,10 +84,18 @@ static bool cupid_gb_timer_input_signal(uint16_t counter, uint8_t tac)
     }
 
     switch (tac & 0x03u) {
-    case 0u: mask = 1u << 7u; break;
-    case 1u: mask = 1u << 1u; break;
-    case 2u: mask = 1u << 3u; break;
-    default: mask = 1u << 5u; break;
+        case 0u:
+            mask = 1u << 7u;
+            break;
+        case 1u:
+            mask = 1u << 1u;
+            break;
+        case 2u:
+            mask = 1u << 3u;
+            break;
+        default:
+            mask = 1u << 5u;
+            break;
     }
 
     return (counter & mask) != 0u;
@@ -86,8 +112,7 @@ static bool cupid_gb_timer_input_signal(uint16_t counter, uint8_t tac)
  *
  * @param gb Pointer to the Game Boy state.
  */
-static void cupid_gb_timer_increment_tima(CupidGb *gb)
-{
+static void cupid_gb_timer_increment_tima(CupidGb *gb) {
     if (gb->io_registers[0x05u] == 0xffu) {
         gb->io_registers[0x05u] = 0x00u;
         gb->tima_overflow_delay = 1u;
@@ -112,8 +137,7 @@ static void cupid_gb_timer_increment_tima(CupidGb *gb)
  *
  * @note Does nothing if @p gb is NULL.
  */
-void cupid_gb_timer_apply_tima_write(CupidGb *gb, uint8_t value)
-{
+void cupid_gb_timer_apply_tima_write(CupidGb *gb, uint8_t value) {
     if (gb == 0) {
         return;
     }
@@ -141,8 +165,7 @@ void cupid_gb_timer_apply_tima_write(CupidGb *gb, uint8_t value)
  *
  * @note Does nothing if @p gb is NULL.
  */
-void cupid_gb_timer_apply_tma_write(CupidGb *gb, uint8_t value)
-{
+void cupid_gb_timer_apply_tma_write(CupidGb *gb, uint8_t value) {
     if (gb == 0) {
         return;
     }
@@ -165,8 +188,7 @@ void cupid_gb_timer_apply_tma_write(CupidGb *gb, uint8_t value)
  *
  * @note Does nothing if @p gb is NULL.
  */
-void cupid_gb_timer_apply_div_reset(CupidGb *gb)
-{
+void cupid_gb_timer_apply_div_reset(CupidGb *gb) {
     uint16_t old_counter;
     uint8_t tac;
 
@@ -176,13 +198,14 @@ void cupid_gb_timer_apply_div_reset(CupidGb *gb)
 
     old_counter = cupid_gb_timer_internal_counter(gb);
     tac = gb->io_registers[0x07u];
-    if (cupid_gb_timer_input_signal(old_counter, tac) &&
-        !cupid_gb_timer_input_signal(0u, tac)) {
+    if (cupid_gb_timer_input_signal(old_counter, tac) && !cupid_gb_timer_input_signal(0u, tac)) {
         cupid_gb_timer_increment_tima(gb);
     }
 
     gb->io_registers[0x04u] = 0u;
     gb->div_counter = 0u;
+    cupid_gb_serial_div_changed(gb, old_counter, 0u);
+    cupid_gb_apu_div_changed(gb, old_counter, 0u);
 }
 
 /**
@@ -198,8 +221,7 @@ void cupid_gb_timer_apply_div_reset(CupidGb *gb)
  *
  * @note Does nothing if @p gb is NULL.
  */
-void cupid_gb_timer_apply_tac_write(CupidGb *gb, uint8_t value)
-{
+void cupid_gb_timer_apply_tac_write(CupidGb *gb, uint8_t value) {
     uint16_t counter;
     uint8_t old_tac;
     uint8_t new_tac;
@@ -221,10 +243,10 @@ void cupid_gb_timer_apply_tac_write(CupidGb *gb, uint8_t value)
 }
 
 /**
- * @brief Advances the internal serial clock by one step and transfers a bit if due.
+ * @brief Toggles the internal serial clock and transfers a bit on its falling edge.
  *
- * The serial controller runs off a 7-bit counter that wraps every 128
- * steps. On each wrap, if the internal clock is selected (SC bit 0)
+ * Falling edges of the selected DIV bit toggle the master clock.
+ * On its falling phase, if the internal clock is selected (SC bit 0)
  * and the transfer-start flag is set (SC bit 7), one bit is shifted
  * out of SB (the outgoing bit is replaced by 1, simulating an
  * unconnected cable). When all 8 bits have been transferred, the
@@ -235,18 +257,13 @@ void cupid_gb_timer_apply_tac_write(CupidGb *gb, uint8_t value)
  *
  * @note Does nothing if @p gb is NULL.
  */
-static void cupid_gb_tick_serial(CupidGb *gb)
-{
-    uint8_t old_counter;
-
+void cupid_gb_serial_master_edge(CupidGb *gb) {
     if (gb == 0) {
         return;
     }
 
-    old_counter = gb->serial_counter;
-    gb->serial_counter = (uint8_t)((gb->serial_counter + 1u) & 0x7fu);
-
-    if (old_counter != 0x7fu) {
+    gb->serial_master_clock = !gb->serial_master_clock;
+    if (gb->serial_master_clock) {
         return;
     }
 
@@ -275,15 +292,14 @@ static void cupid_gb_tick_serial(CupidGb *gb)
  *   3. Services any pending TIMA overflow delay: reloads TIMA from TMA
  *      and requests the TIMER interrupt after the one-cycle delay.
  *   4. Checks for a TIMA falling edge and increments TIMA if detected.
- *   5. Calls @ref cupid_gb_tick_serial.
+ *   5. Advances the serial clock from falling DIV edges.
  *
  * @param gb Pointer to the Game Boy state.
  */
-static void cupid_gb_tick_system_mcycle(CupidGb *gb)
-{
+static void cupid_gb_tick_system_mcycle(CupidGb *gb) {
     uint16_t old_counter;
     uint16_t new_counter;
-    uint8_t  tac;
+    uint8_t tac;
 
     gb->tima_reload_just_happened = false;
 
@@ -313,8 +329,8 @@ static void cupid_gb_tick_system_mcycle(CupidGb *gb)
         cupid_gb_timer_increment_tima(gb);
     }
 
-    cupid_gb_tick_serial(gb);
-
+    cupid_gb_serial_div_changed(gb, old_counter, new_counter);
+    cupid_gb_apu_div_changed(gb, old_counter, new_counter);
 }
 
 /**
@@ -330,8 +346,7 @@ static void cupid_gb_tick_system_mcycle(CupidGb *gb)
  * @param gb     Pointer to the Game Boy state.
  * @param cycles Number of M-cycles to advance.
  */
-void cupid_gb_tick(CupidGb *gb, uint16_t cycles)
-{
+void cupid_gb_tick(CupidGb *gb, uint16_t cycles) {
     uint16_t i;
 
     for (i = 0u; i < cycles; ++i) {
@@ -339,11 +354,13 @@ void cupid_gb_tick(CupidGb *gb, uint16_t cycles)
         cupid_gb_tick_dma(gb);
 
         if (!gb->double_speed) {
+            gb->elapsed_cycles += 4u;
             cupid_gb_tick_ppu(gb, 1u);
             cupid_gb_tick_apu(gb, 4u);
         } else {
             gb->speed_phase = !gb->speed_phase;
             if (!gb->speed_phase) {
+                gb->elapsed_cycles += 4u;
                 cupid_gb_tick_ppu(gb, 1u);
                 cupid_gb_tick_apu(gb, 4u);
             }

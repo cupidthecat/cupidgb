@@ -10,5 +10,6 @@ void cupid_gb_timer_apply_div_reset(CupidGb *gb);
 void cupid_gb_timer_apply_tac_write(CupidGb *gb, uint8_t value);
 void cupid_gb_timer_apply_tima_write(CupidGb *gb, uint8_t value);
 void cupid_gb_timer_apply_tma_write(CupidGb *gb, uint8_t value);
+void cupid_gb_serial_master_edge(CupidGb *gb);
 
 #endif
