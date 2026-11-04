@@ -29,11 +29,11 @@ The Qt frontend has runtime checks on Windows and Linux. The table separates imp
 | Area | Implemented | Pending parity work |
 | --- | --- | --- |
 | ROM lifecycle | Open, recent files, drag/drop, reset, close; failed opens preserve current cartridge | Separate cartridge instances, hot swap semantics, explicit reload workflow |
-| Defaults | Automatic model, 2x integer scale, arrows, X=A, Z=B, Backspace=Select, Enter=Start, Space=turbo | Exact palettes, color correction, blending, 120-second rewind, Shift slow motion |
+| Defaults | Automatic model, 2x integer scale, arrows, X=A, Z=B, Backspace=Select, Enter=Start, Space=turbo, Tab=rewind with up to 120 seconds requested | Exact palettes, color correction, blending, Shift slow motion |
 | Keyboard | Persistent eight-button remapping, duplicate-key checks, release on deactivation or modifier changes | Remap turbo/rewind/slow/rapid A/B, complete hotkey conflict handling |
 | Display | Integer/aspect scaling, fullscreen, native framebuffer screenshots | Fill mode, scale presets, filters, correction, temperature, blending, palettes, configurable borders, OSD, vsync |
 | Audio | Volume/mute, host-format negotiation and streaming conversion, bounded queue with backpressure, runtime metrics | Device selection, filters/interference, recording, reported idle-event reduction and audible quality validation |
-| Saving | Periodic and lifecycle battery SRAM flush, atomic writes, read/write errors, cartridge-overwrite guard | RTC persistence, ten state slots, dropped state files, undo/recovery |
+| Saving | Battery SRAM flush, atomic writes, ten native state slots, dropped state files, transactional rejection, bounded rewind | RTC battery persistence, interoperable state imports, automatic model handling |
 | Controllers | None | Device/axis mapping, hotkeys, rumble, background behavior, four SGB players |
 | Tools | Bounded headless runner and frontend measurement reports | Debugger console, break/continue/step/next/finish/backstep, symbols, memory editor, tiles/maps/OAM/palette views, layer/channel toggles |
 | Cheats | None | Import/create/edit/delete, global/per-cheat toggles, persistence, value search |
@@ -41,7 +41,7 @@ The Qt frontend has runtime checks on Windows and Linux. The table separates imp
 | Capture/music | PNG screenshots | Audio recording, GBS playback and track controls |
 | Platform | Qt dialogs/settings/window geometry; local Windows deployment check | File associations, Linux desktop entry, release packaging and installation coverage |
 
-Default desktop shortcuts: Ctrl+O open, Ctrl+R reset, Ctrl+P pause, Ctrl+F fullscreen, Ctrl+M mute, F12 screenshot. State workflows require Ctrl+0 through Ctrl+9 to save and Ctrl+Shift+0 through Ctrl+Shift+9 to load. Unimplemented actions must remain absent or clearly disabled.
+Default desktop shortcuts: Ctrl+O open, Ctrl+R reset, Ctrl+P pause, Ctrl+F fullscreen, Ctrl+M mute, F12 screenshot. State workflows use Ctrl+0 through Ctrl+9 to save and Ctrl+Shift+0 through Ctrl+Shift+9 to load. Unimplemented actions must remain absent or clearly disabled.
 
 ## Evidence rules
 

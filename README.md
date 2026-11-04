@@ -4,21 +4,22 @@ CupidGB is a Game Boy and Game Boy Color emulator with a C hardware core and a Q
 
 ## Desktop
 
-Open a cartridge with Ctrl+O, drag a `.gb` or `.gbc` file onto the window, or supply its path on the command line. The frontend provides recent files, pause/reset, frame advance, fullscreen, screenshots, keyboard configuration, volume/mute, and battery SRAM persistence. Settings are stored per user.
+Open a cartridge with Ctrl+O, drag a `.gb` or `.gbc` file onto the window, or supply its path on the command line. The frontend provides recent files, pause/reset, frame advance, fullscreen, screenshots, keyboard configuration, volume/mute, battery SRAM persistence, ten native state slots, and rewind. Settings are stored per user.
 
 | Control | Default |
 | --- | --- |
 | Direction pad | Arrow keys |
 | A / B | X / Z |
 | Select / Start | Backspace / Enter |
-| Turbo | Hold Space |
+| Turbo / rewind | Hold Space / hold Tab |
+| Save / load slot | Ctrl+digit / Ctrl+Shift+digit |
 | Open / reset / pause | Ctrl+O / Ctrl+R / Ctrl+P |
 | Fullscreen / mute | Ctrl+F / Ctrl+M |
 | Screenshot | F12 |
 
 Use Settings to select a hardware profile, configure keys, choose a boot-ROM directory, change volume, or select integer/aspect scaling. Boot ROMs are optional local inputs; none are distributed. Without one, the core uses an approximate startup profile.
 
-Battery SRAM is saved next to the cartridge as `.sav`, periodically and when resetting, changing, or closing the cartridge. Save states, rewind, controllers, debugger tools, RTC persistence, and advanced display/audio features remain incomplete. See [the parity checklist](docs/parity.md) for the full scope.
+Battery SRAM is saved next to the cartridge as `.sav`, periodically and when resetting, changing, or closing the cartridge. State files and rewind use the versioned CupidGB native format. Controllers, debugger tools, RTC battery persistence, interoperable state imports, and advanced display/audio features remain incomplete. See [save states and rewind](docs/save-states.md) for controls and file behavior, and [the parity checklist](docs/parity.md) for the full scope.
 
 ## Build
 
@@ -52,12 +53,13 @@ For core-only tools and tests, configure with `-DCUPIDGB_BUILD_QT=OFF`. GCC/Clan
 
 ```sh
 ./build/cupidgb --smoke-test
+./build/cupidgb --smoke-test --audio-check
 python3 scripts/test_rom_runner.py ./build/cupidgb_rom_runner
 python3 scripts/run_rom_suite.py ./build/cupidgb_rom_runner /private/test-roms --model dmg --protocol register --output .local-research/suite.json
 ./build/cupidgb_rom_runner --model cgb --protocol none --frames 600 --image .local-research/frame.ppm --audio .local-research/audio.pcm /private/cartridge.gbc
 ```
 
-The frontend smoke check uses an isolated settings directory and a generated disposable cartridge. It checks a bounded workflow; it does not establish real-game playability, audible output quality, or sustained pacing.
+The frontend smoke check uses an isolated settings directory and a generated disposable cartridge. Add `--audio-check` to require a real audio device and exercise playback across state loading and rewind. The default check uses no audio device. It checks a bounded workflow; it does not establish real-game playability, audible output quality, or sustained pacing.
 
 For a real frontend measurement with host audio enabled:
 

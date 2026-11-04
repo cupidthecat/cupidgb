@@ -6,11 +6,13 @@
 #include <QSettings>
 #include <QTimer>
 #include <array>
+#include <deque>
 #include <memory>
 #include <vector>
 
 extern "C" {
 #include "cupid/core/emulator.h"
+#include "cupid/gb/state.h"
 }
 
 class QAction;
@@ -24,7 +26,7 @@ class AudioConverter;
 
 class MainWindow final : public QMainWindow {
   public:
-    explicit MainWindow(bool isolated = false, bool automated = false);
+    explicit MainWindow(bool isolated = false, bool automated = false, bool audioCheck = false);
     ~MainWindow() override;
     bool openRom(const QString &path);
     bool smokeTest();
@@ -55,6 +57,15 @@ class MainWindow final : public QMainWindow {
     void clearAudio();
     void pumpAudio();
     void screenshot();
+    QByteArray captureState(bool reportFailure = true, bool rewindSnapshot = false);
+    bool restoreState(const QByteArray &state, bool reportFailure, bool rewindSnapshot = false);
+    QString slotPath(int slot, bool legacy = false) const;
+    bool saveSlot(int slot);
+    bool loadSlot(int slot);
+    bool loadStateFile(const QString &path);
+    void resetRewind();
+    void rememberFrame();
+    bool rewindFrame();
     void reportError(const QString &message);
     void refreshActions();
 
@@ -82,12 +93,33 @@ class MainWindow final : public QMainWindow {
     QAction *resetAction_ = nullptr;
     QAction *frameAction_ = nullptr;
     QAction *screenshotAction_ = nullptr;
+    QAction *loadStateFileAction_ = nullptr;
+    std::array<QAction *, 10> saveSlotActions_{};
+    std::array<QAction *, 10> loadSlotActions_{};
     std::array<int, 8> keys_{};
+    uint8_t physicalJoypad_ = 0xff;
     bool paused_ = false;
     bool turbo_ = false;
+    bool rewind_ = false;
+    bool stateOperation_ = false;
+    bool rewindFailed_ = false;
+
+    struct RewindSnapshot {
+        QByteArray compressed;
+        uint64_t cycles;
+    };
+
+    std::deque<RewindSnapshot> rewindStates_;
+    std::unique_ptr<CupidGbStateContext> rewindContext_;
+    qsizetype rewindBytes_ = 0;
+    qint64 lastRewindBudgetNotice_ = 0;
+    uint64_t rewindSnapshotsCaptured_ = 0;
+    qint64 rewindCaptureNanoseconds_ = 0;
+    qint64 rewindCaptureMaximumNanoseconds_ = 0;
     bool isolated_ = false;
     bool failed_ = false;
     bool automated_ = false;
+    bool audioCheck_ = false;
     QElapsedTimer telemetryClock_;
     uint64_t telemetryStartCycles_ = 0;
     uint64_t presentedImages_ = 0;

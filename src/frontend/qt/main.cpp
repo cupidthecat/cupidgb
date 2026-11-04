@@ -15,6 +15,7 @@ int main(int argc, char **argv) {
     parser.addHelpOption();
     parser.addVersionOption();
     parser.addOption({"smoke-test", "Run isolated frontend workflow checks and exit."});
+    parser.addOption({"audio-check", "Require real audio during --smoke-test."});
     parser.addOption(
         {"run-seconds", "Run the frontend for a bounded duration and exit.", "seconds"});
     parser.addOption({"report", "Write bounded frontend measurements as JSON.", "path"});
@@ -23,6 +24,9 @@ int main(int argc, char **argv) {
     parser.addPositionalArgument("rom", "Optional .gb or .gbc cartridge path.");
     parser.process(app);
     const bool smoke = parser.isSet("smoke-test");
+    const bool audioCheck = parser.isSet("audio-check");
+    if (audioCheck && !smoke)
+        parser.showHelp(1);
     const bool bounded = parser.isSet("run-seconds");
     QTemporaryDir temporary;
     if (smoke || bounded) {
@@ -31,7 +35,7 @@ int main(int argc, char **argv) {
         QSettings::setDefaultFormat(QSettings::IniFormat);
         QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, temporary.path());
     }
-    MainWindow window(smoke, bounded);
+    MainWindow window(smoke, bounded, audioCheck);
     window.show();
     if (smoke)
         return window.smokeTest() ? 0 : 1;
