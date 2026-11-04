@@ -1,3 +1,6 @@
+/* Hardware timing portions: Copyright (c) 2015-2026 Lior Halphon.
+ * Distributed under the Expat License; see LICENSES/hardware.txt.
+ */
 /**
  * @file gb.c
  * @brief Game Boy system glue — initialization, step loop, and memory map.
@@ -15,19 +18,19 @@
 
 #include "cupid/gb/gb.h"
 
-#include <stdlib.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
+#include "cupid/common/log.h"
+#include "cupid/gb/apu.h"
+#include "cupid/gb/cartridge.h"
 #include "cupid/gb/cpu.h"
 #include "cupid/gb/ppu.h"
-#include "cupid/gb/apu.h"
-#include "cupid/gb/timer.h"
-#include "cupid/gb/cartridge.h"
 #include "cupid/gb/sgb.h"
+#include "cupid/gb/timer.h"
 #include "cupid/gbc/cgb.h"
-#include "cupid/common/log.h"
 
 // Serial transfer (memory-map helper)
 
@@ -43,16 +46,20 @@
  *
  * @note Does nothing if @p gb is NULL.
  */
-static void cupid_gb_handle_serial_transfer(CupidGb *gb, uint8_t value)
-{
+static void cupid_gb_handle_serial_transfer(CupidGb *gb, uint8_t value) {
     if (gb == 0) {
         return;
     }
 
-    gb->io_registers[0x02u] = (uint8_t)(0x7eu | (value & 0x81u));
+    /* SC bit 1 selects the fast clock only in CGB mode. A control write
+     * completes a high clock phase before installing the new control value. */
+    gb->serial_bits_remaining = 8u;
+    if (gb->serial_master_clock) {
+        cupid_gb_serial_master_edge(gb);
+    }
+    gb->io_registers[0x02u] = (uint8_t)((gb->cgb_mode ? 0x7cu : 0x7eu) | (value & 0x83u));
 
     if ((value & 0x80u) != 0u) {
-        gb->serial_bits_remaining = 8u;
         gb->serial_tx_latch = gb->io_registers[0x01u];
     } else {
         gb->serial_bits_remaining = 0u;
@@ -70,22 +77,21 @@ static void cupid_gb_handle_serial_transfer(CupidGb *gb, uint8_t value)
  *
  * @note The returned string is a literal and must not be modified or freed.
  */
-const char *cupid_gb_model_name(CupidGbModel model)
-{
+const char *cupid_gb_model_name(CupidGbModel model) {
     switch (model) {
-    case CUPID_GB_MODEL_DMG0:
-        return "dmg0";
-    case CUPID_GB_MODEL_MGB:
-        return "mgb";
-    case CUPID_GB_MODEL_CGB:
-        return "cgb";
-    case CUPID_GB_MODEL_SGB:
-        return "sgb";
-    case CUPID_GB_MODEL_SGB2:
-        return "sgb2";
-    case CUPID_GB_MODEL_DMG_ABC:
-    default:
-        return "dmgabc";
+        case CUPID_GB_MODEL_DMG0:
+            return "dmg0";
+        case CUPID_GB_MODEL_MGB:
+            return "mgb";
+        case CUPID_GB_MODEL_CGB:
+            return "cgb";
+        case CUPID_GB_MODEL_SGB:
+            return "sgb";
+        case CUPID_GB_MODEL_SGB2:
+            return "sgb2";
+        case CUPID_GB_MODEL_DMG_ABC:
+        default:
+            return "dmgabc";
     }
 }
 
@@ -99,8 +105,7 @@ const char *cupid_gb_model_name(CupidGbModel model)
  *
  * @note Does nothing if @p gb is NULL.
  */
-void cupid_gb_set_model(CupidGb *gb, CupidGbModel model)
-{
+void cupid_gb_set_model(CupidGb *gb, CupidGbModel model) {
     if (gb == 0) {
         return;
     }
@@ -117,8 +122,7 @@ void cupid_gb_set_model(CupidGb *gb, CupidGbModel model)
  *
  * @param gb Pointer to the Game Boy state.
  */
-static void cupid_gb_apply_boot_profile(CupidGb *gb)
-{
+static void cupid_gb_apply_boot_profile(CupidGb *gb) {
     if (gb->model == CUPID_GB_MODEL_DMG0) {
         gb->cpu.a = 0x01u;
         gb->cpu.f = 0x00u;
@@ -134,7 +138,6 @@ static void cupid_gb_apply_boot_profile(CupidGb *gb)
         gb->io_registers[CUPID_GB_IO_LY] = 0x91u;
         gb->div_counter = 12u;
         gb->ppu_counter = 0x29u;
-        gb->serial_counter = 0u;
     } else if (gb->model == CUPID_GB_MODEL_CGB) {
         gb->cpu.a = 0x11u;
         gb->cpu.f = 0x80u;
@@ -150,7 +153,6 @@ static void cupid_gb_apply_boot_profile(CupidGb *gb)
         gb->io_registers[CUPID_GB_IO_LY] = 0x00u;
         gb->div_counter = 52u;
         gb->ppu_counter = 0u;
-        gb->serial_counter = 116u;
     } else if (gb->model == CUPID_GB_MODEL_SGB) {
         gb->cpu.a = 0x01u;
         gb->cpu.f = 0x00u;
@@ -166,7 +168,6 @@ static void cupid_gb_apply_boot_profile(CupidGb *gb)
         gb->io_registers[CUPID_GB_IO_LY] = 0xffu;
         gb->div_counter = 24u;
         gb->ppu_counter = 0u;
-        gb->serial_counter = 116u;
     } else if (gb->model == CUPID_GB_MODEL_SGB2) {
         gb->cpu.a = 0xffu;
         gb->cpu.f = 0x00u;
@@ -182,7 +183,6 @@ static void cupid_gb_apply_boot_profile(CupidGb *gb)
         gb->io_registers[CUPID_GB_IO_LY] = 0xffu;
         gb->div_counter = 24u;
         gb->ppu_counter = 0u;
-        gb->serial_counter = 116u;
     } else if (gb->model == CUPID_GB_MODEL_MGB) {
         gb->cpu.a = 0xffu;
         gb->cpu.f = 0xb0u;
@@ -198,7 +198,6 @@ static void cupid_gb_apply_boot_profile(CupidGb *gb)
         gb->io_registers[CUPID_GB_IO_LY] = 0x00u;
         gb->div_counter = 51u;
         gb->ppu_counter = 0u;
-        gb->serial_counter = 116u;
     } else {
         gb->cpu.a = 0x01u;
         gb->cpu.f = 0xb0u;
@@ -214,7 +213,6 @@ static void cupid_gb_apply_boot_profile(CupidGb *gb)
         gb->io_registers[CUPID_GB_IO_LY] = 0x00u;
         gb->div_counter = 51u;
         gb->ppu_counter = 0u;
-        gb->serial_counter = 116u;
     }
 
     gb->cpu.sp = 0xfffeu;
@@ -234,8 +232,7 @@ static void cupid_gb_apply_boot_profile(CupidGb *gb)
  * @note The `model` and `rom` fields are preserved across a re-init.
  * @note Does nothing if @p gb is NULL.
  */
-void cupid_gb_init(CupidGb *gb)
-{
+void cupid_gb_init(CupidGb *gb) {
     CupidGbModel model;
     uint8_t *rom;
 
@@ -262,7 +259,7 @@ void cupid_gb_init(CupidGb *gb)
     cupid_gb_apply_boot_profile(gb);
     gb->io_registers[CUPID_GB_IO_LCDC] = 0x91u;
     gb->io_registers[0x01u] = 0x00u;
-    gb->io_registers[0x02u] = 0x00u;
+    gb->io_registers[0x02u] = 0x7eu;
     gb->io_registers[0x05u] = 0x00u;
     gb->io_registers[0x06u] = 0x00u;
     gb->io_registers[0x07u] = 0x00u;
@@ -292,32 +289,28 @@ void cupid_gb_init(CupidGb *gb)
     gb->io_registers[0x23u] = 0xbfu; /* NR44 */
     gb->io_registers[0x24u] = 0x77u; /* NR50 */
     gb->io_registers[0x25u] = 0xf3u; /* NR51 */
-    gb->io_registers[0x26u] =
-        (gb->model == CUPID_GB_MODEL_SGB || gb->model == CUPID_GB_MODEL_SGB2)
-            ? 0xf0u
-            : 0xf1u; /* NR52 */
+    gb->io_registers[0x26u] = (gb->model == CUPID_GB_MODEL_SGB || gb->model == CUPID_GB_MODEL_SGB2)
+                                  ? 0xf0u
+                                  : 0xf1u; /* NR52 */
     /* Sync APU struct with boot-ROM state */
     gb->apu.apu_on = true;
-    gb->apu.fs_counter = 8191u;
-    gb->apu.ch1_dac        = true;
-    gb->apu.ch1_on         =
-        !(gb->model == CUPID_GB_MODEL_SGB || gb->model == CUPID_GB_MODEL_SGB2);
-    gb->apu.ch1_duty       = 2u;   /* 50% (NR11 = 0xBF) */
-    gb->apu.ch1_len        = 63u;  /* NR11 length bits = 0x3F → 64-63=1 → stored 1 */
-    gb->apu.ch1_vol        = 15u;
-    gb->apu.ch1_env_add    = false;
+    gb->apu.ch1_dac = true;
+    gb->apu.ch1_on = !(gb->model == CUPID_GB_MODEL_SGB || gb->model == CUPID_GB_MODEL_SGB2);
+    gb->apu.ch1_duty = 2u; /* 50% (NR11 = 0xBF) */
+    gb->apu.ch1_len = 63u; /* NR11 length bits = 0x3F → 64-63=1 → stored 1 */
+    gb->apu.ch1_vol = 15u;
+    gb->apu.ch1_env_add = false;
     gb->apu.ch1_env_period = 3u;
-    gb->apu.ch1_env_timer  = 3u;
-    gb->apu.ch1_freq       = 0u;
-    gb->apu.ch1_timer      = 8192u;
-    gb->apu.ch4_lfsr       = 0x7fffu;
+    gb->apu.ch1_env_timer = 3u;
+    gb->apu.ch1_freq = 0u;
+    gb->apu.ch1_timer = 8192u;
+    gb->apu.ch4_lfsr = 0x7fffu;
     cupid_cgb_init_state(gb);
-    gb->io_registers[0x4du] = 0x00u;  /* KEY1: normal speed, switch not armed */
-    gb->io_registers[0x00u] =
-        (gb->model == CUPID_GB_MODEL_SGB || gb->model == CUPID_GB_MODEL_SGB2)
-            ? 0xffu
-            : 0xcfu;                 /* P1 */
-    gb->joypad = 0xffu;               /* all buttons released (0=pressed) */
+    gb->io_registers[0x4du] = 0x00u; /* KEY1: normal speed, switch not armed */
+    gb->io_registers[0x00u] = (gb->model == CUPID_GB_MODEL_SGB || gb->model == CUPID_GB_MODEL_SGB2)
+                                  ? 0xffu
+                                  : 0xcfu; /* P1 */
+    gb->joypad = 0xffu;                    /* all buttons released (0=pressed) */
     gb->frame_ready = false;
     gb->stat_irq_delay = 0u;
     gb->ppu_lcd_warmup_lines = 0u;
@@ -346,8 +339,7 @@ void cupid_gb_init(CupidGb *gb)
  *
  * @note Returns `false` if @p gb or @p path is NULL.
  */
-bool cupid_gb_load_boot_rom_file(CupidGb *gb, const char *path)
-{
+bool cupid_gb_load_boot_rom_file(CupidGb *gb, const char *path) {
     FILE *fp;
     long file_size;
 
@@ -365,8 +357,8 @@ bool cupid_gb_load_boot_rom_file(CupidGb *gb, const char *path)
     fseek(fp, 0, SEEK_SET);
 
     if (file_size != 0x0100 && file_size != 0x0900) {
-        cupid_log_errorf("Boot ROM '%s' has invalid size %ld (expected 256 or 2304 bytes)",
-                         path, file_size);
+        cupid_log_errorf("Boot ROM '%s' has invalid size %ld (expected 256 or 2304 bytes)", path,
+                         file_size);
         fclose(fp);
         return false;
     }
@@ -394,8 +386,7 @@ bool cupid_gb_load_boot_rom_file(CupidGb *gb, const char *path)
  *
  * @note Does nothing if @p gb is NULL.
  */
-void cupid_gb_clear_boot_rom(CupidGb *gb)
-{
+void cupid_gb_clear_boot_rom(CupidGb *gb) {
     if (gb == 0) {
         return;
     }
@@ -417,8 +408,7 @@ void cupid_gb_clear_boot_rom(CupidGb *gb)
  *
  * @note Does nothing if @p gb is NULL or no boot ROM has been loaded.
  */
-void cupid_gb_enter_boot_rom(CupidGb *gb)
-{
+void cupid_gb_enter_boot_rom(CupidGb *gb) {
     if (gb == 0 || gb->boot_rom_size == 0u) {
         return;
     }
@@ -433,7 +423,7 @@ void cupid_gb_enter_boot_rom(CupidGb *gb)
     gb->cpu.h = 0u;
     gb->cpu.l = 0u;
     gb->cpu.sp = 0u;
-    gb->cpu.pc = 0x0000u;  /* start executing boot ROM from address 0 */
+    gb->cpu.pc = 0x0000u; /* start executing boot ROM from address 0 */
     gb->cpu.ime = false;
     gb->cpu.ime_delay = 0u;
     gb->cpu.halted = false;
@@ -443,6 +433,7 @@ void cupid_gb_enter_boot_rom(CupidGb *gb)
     /* Reset IO to power-on defaults */
     memset(gb->io_registers, 0x00u, sizeof(gb->io_registers));
     gb->io_registers[0x00u] = 0xcfu; /* P1: no buttons selected */
+    gb->io_registers[0x02u] = 0x7eu; /* SC: disconnected, fast clock not selected. */
 
     /* Reset PPU state */
     gb->io_registers[CUPID_GB_IO_LCDC] = 0x00u; /* LCD off at power-on */
@@ -460,7 +451,7 @@ void cupid_gb_enter_boot_rom(CupidGb *gb)
     /* Reset DIV, timers, serial */
     gb->div_counter = 0u;
     gb->ppu_counter = 0u;
-    gb->serial_counter = 0u;
+    gb->serial_master_clock = false;
     gb->interrupt_flags = 0x00u;
     gb->interrupt_enable = 0x00u;
 
@@ -487,8 +478,7 @@ void cupid_gb_enter_boot_rom(CupidGb *gb)
  *
  * @note Does nothing if @p gb is NULL.
  */
-void cupid_gb_cleanup(CupidGb *gb)
-{
+void cupid_gb_cleanup(CupidGb *gb) {
     if (gb == 0) {
         return;
     }
@@ -520,14 +510,11 @@ void cupid_gb_cleanup(CupidGb *gb)
  * @return The byte at @p address, or 0xFF if the address is open-bus,
  *         locked during DMA, or @p gb is NULL.
  */
-uint8_t cupid_gb_read_u8(const CupidGb *gb, uint16_t address)
-{
+uint8_t cupid_gb_read_u8(const CupidGb *gb, uint16_t address) {
     static const uint8_t apu_read_masks[0x20] = {
-        0x80u, 0x3fu, 0x00u, 0xffu, 0xbfu, 0xffu, 0x3fu, 0x00u,
-        0xffu, 0xbfu, 0x7fu, 0xffu, 0x9fu, 0xffu, 0xbfu, 0xffu,
-        0xffu, 0x00u, 0x00u, 0xbfu, 0x00u, 0x00u, 0x70u, 0xffu,
-        0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu
-    };
+        0x80u, 0x3fu, 0x00u, 0xffu, 0xbfu, 0xffu, 0x3fu, 0x00u, 0xffu, 0xbfu, 0x7fu,
+        0xffu, 0x9fu, 0xffu, 0xbfu, 0xffu, 0xffu, 0x00u, 0x00u, 0xbfu, 0x00u, 0x00u,
+        0x70u, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu};
 
     if (gb == 0) {
         return 0xffu;
@@ -545,8 +532,7 @@ uint8_t cupid_gb_read_u8(const CupidGb *gb, uint16_t address)
                 return gb->boot_rom[address];
             }
             /* CGB boot ROM: also 0x0200-0x08FF */
-            if (gb->boot_rom_size > 0x0100u &&
-                address >= 0x0200u && address <= 0x08ffu) {
+            if (gb->boot_rom_size > 0x0100u && address >= 0x0200u && address <= 0x08ffu) {
                 return gb->boot_rom[address];
             }
         }
@@ -594,12 +580,18 @@ uint8_t cupid_gb_read_u8(const CupidGb *gb, uint16_t address)
         /* MBC3: RTC register reads when selected */
         if (gb->header.mbc_type == CUPID_GB_MBC3 && gb->rtc_register >= 0x08u) {
             switch (gb->rtc_register) {
-            case 0x08u: return gb->rtc.ls;
-            case 0x09u: return gb->rtc.lm;
-            case 0x0au: return gb->rtc.lh;
-            case 0x0bu: return gb->rtc.ldl;
-            case 0x0cu: return gb->rtc.ldh;
-            default:    return 0xffu;
+                case 0x08u:
+                    return gb->rtc.ls;
+                case 0x09u:
+                    return gb->rtc.lm;
+                case 0x0au:
+                    return gb->rtc.lh;
+                case 0x0bu:
+                    return gb->rtc.ldl;
+                case 0x0cu:
+                    return gb->rtc.ldh;
+                default:
+                    return 0xffu;
             }
         }
         /* MBC7: accelerometer / EEPROM registers */
@@ -648,8 +640,7 @@ uint8_t cupid_gb_read_u8(const CupidGb *gb, uint16_t address)
 
         if (cupid_gb_lcd_enabled(gb) &&
             gb->io_registers[CUPID_GB_IO_LY] < CUPID_GB_PPU_VISIBLE_SCANLINES &&
-            (gb->ppu_line_boundary_hold ||
-             mode == CUPID_GB_PPU_MODE_OAM ||
+            (gb->ppu_line_boundary_hold || mode == CUPID_GB_PPU_MODE_OAM ||
              mode == CUPID_GB_PPU_MODE_TRANSFER)) {
             return 0xffu;
         }
@@ -662,12 +653,9 @@ uint8_t cupid_gb_read_u8(const CupidGb *gb, uint16_t address)
 
     if (address == 0xff26u) {
         /* NR52: rebuild on-the-fly with current channel status */
-        return (uint8_t)(
-            (gb->apu.apu_on ? 0x80u : 0u) | 0x70u |
-            (gb->apu.ch4_on ? 0x08u : 0u) |
-            (gb->apu.ch3_on ? 0x04u : 0u) |
-            (gb->apu.ch2_on ? 0x02u : 0u) |
-            (gb->apu.ch1_on ? 0x01u : 0u));
+        return (uint8_t)((gb->apu.apu_on ? 0x80u : 0u) | 0x70u | (gb->apu.ch4_on ? 0x08u : 0u) |
+                         (gb->apu.ch3_on ? 0x04u : 0u) | (gb->apu.ch2_on ? 0x02u : 0u) |
+                         (gb->apu.ch1_on ? 0x01u : 0u));
     }
 
     if (address == 0xff00u) {
@@ -694,14 +682,11 @@ uint8_t cupid_gb_read_u8(const CupidGb *gb, uint16_t address)
     }
 
     if (address == 0xff02u) {
-        return (uint8_t)(0x7eu | (gb->io_registers[0x02u] & 0x81u));
+        return (uint8_t)((gb->cgb_mode ? 0x7cu : 0x7eu) | (gb->io_registers[0x02u] & 0x83u));
     }
 
-    if (address == 0xff03u ||
-        (address >= 0xff08u && address <= 0xff0eu) ||
-        address == 0xff4eu ||
-        (address >= 0xff50u && address <= 0xff67u) ||
-        (address >= 0xff6du && address <= 0xff6fu) ||
+    if (address == 0xff03u || (address >= 0xff08u && address <= 0xff0eu) || address == 0xff4eu ||
+        (address >= 0xff50u && address <= 0xff67u) || (address >= 0xff6du && address <= 0xff6fu) ||
         (address >= 0xff71u && address <= 0xff7fu)) {
         return 0xffu;
     }
@@ -719,13 +704,12 @@ uint8_t cupid_gb_read_u8(const CupidGb *gb, uint16_t address)
     }
 
     if (address >= 0xff10u && address <= 0xff2fu) {
-        return (uint8_t)(gb->io_registers[address - 0xff00u] |
-                         apu_read_masks[address - 0xff10u]);
+        return (uint8_t)(gb->io_registers[address - 0xff00u] | apu_read_masks[address - 0xff10u]);
     }
 
     if (address >= 0xff30u && address <= 0xff3fu) {
         if (gb->apu.apu_on && gb->apu.ch3_on) {
-            if (!gb->cgb_mode) {
+            if (gb->model != CUPID_GB_MODEL_CGB) {
                 if (gb->apu.ch3_wave_access_ticks == 0u) {
                     return 0xffu;
                 }
@@ -762,8 +746,7 @@ uint8_t cupid_gb_read_u8(const CupidGb *gb, uint16_t address)
  *
  * @param gb Pointer to the Game Boy state.
  */
-static void cupid_gb_rtc_update(CupidGb *gb)
-{
+static void cupid_gb_rtc_update(CupidGb *gb) {
     int64_t now = (int64_t)time(NULL);
     int64_t elapsed;
     int64_t total;
@@ -807,8 +790,7 @@ static void cupid_gb_rtc_update(CupidGb *gb)
  *
  * @param gb Pointer to the Game Boy state.
  */
-static void cupid_gb_rtc_latch(CupidGb *gb)
-{
+static void cupid_gb_rtc_latch(CupidGb *gb) {
     cupid_gb_rtc_update(gb);
     gb->rtc.ls = gb->rtc.s;
     gb->rtc.lm = gb->rtc.m;
@@ -838,8 +820,7 @@ static void cupid_gb_rtc_latch(CupidGb *gb)
  *
  * @note Does nothing if @p gb is NULL or the write is blocked by DMA.
  */
-void cupid_gb_write_u8(CupidGb *gb, uint16_t address, uint8_t value)
-{
+void cupid_gb_write_u8(CupidGb *gb, uint16_t address, uint8_t value) {
     if (gb == 0) {
         return;
     }
@@ -862,127 +843,126 @@ void cupid_gb_write_u8(CupidGb *gb, uint16_t address, uint8_t value)
 
     if (address <= 0x1fffu) {
         switch (gb->header.mbc_type) {
-        case CUPID_GB_MBC1:
-        case CUPID_GB_MBC3:
-        case CUPID_GB_MBC5:
-        case CUPID_GB_MBC6:
-        case CUPID_GB_MBC7:
-        case CUPID_GB_MMM01:
-            gb->ram_enabled = (value & 0x0fu) == 0x0au;
-            break;
-        case CUPID_GB_HUC1:
-            if (value == 0x0eu) {
-                gb->huc1_ir_mode = true;
-                gb->ram_enabled = false;
-            } else {
-                gb->huc1_ir_mode = false;
+            case CUPID_GB_MBC1:
+            case CUPID_GB_MBC3:
+            case CUPID_GB_MBC5:
+            case CUPID_GB_MBC6:
+            case CUPID_GB_MBC7:
+            case CUPID_GB_MMM01:
                 gb->ram_enabled = (value & 0x0fu) == 0x0au;
-            }
-            break;
-        case CUPID_GB_HUC3:
-            gb->huc3_mode = value;
-            gb->ram_enabled = ((value & 0x0fu) == 0x0au);
-            break;
-        default:
-            break;
+                break;
+            case CUPID_GB_HUC1:
+                if (value == 0x0eu) {
+                    gb->huc1_ir_mode = true;
+                    gb->ram_enabled = false;
+                } else {
+                    gb->huc1_ir_mode = false;
+                    gb->ram_enabled = (value & 0x0fu) == 0x0au;
+                }
+                break;
+            case CUPID_GB_HUC3:
+                gb->huc3_mode = value;
+                gb->ram_enabled = ((value & 0x0fu) == 0x0au);
+                break;
+            default:
+                break;
         }
         return;
     }
 
     if (address <= 0x3fffu) {
         switch (gb->header.mbc_type) {
-        case CUPID_GB_MBC1:
-        case CUPID_GB_HUC1:
-            gb->mbc1_bank_low5 = (uint8_t)(value & 0x1fu);
-            if (gb->mbc1_bank_low5 == 0u) {
-                gb->mbc1_bank_low5 = 1u;
-            }
-            gb->current_rom_bank = cupid_gb_effective_rom_bank(gb, false);
-            break;
-        case CUPID_GB_MBC3:
-        case CUPID_GB_HUC3:
-            gb->current_rom_bank = (size_t)(value & 0x7fu);
-            if (gb->current_rom_bank == 0u) {
-                gb->current_rom_bank = 1u;
-            }
-            break;
-        case CUPID_GB_MBC5:
-            if (address <= 0x2fffu) {
-                gb->mbc5_rom_bank = (uint16_t)(
-                    (gb->mbc5_rom_bank & 0x0100u) | value);
-            } else {
-                gb->mbc5_rom_bank = (uint16_t)(
-                    (gb->mbc5_rom_bank & 0x00ffu) | ((uint16_t)(value & 0x01u) << 8u));
-            }
-            gb->current_rom_bank = (size_t)gb->mbc5_rom_bank;
-            break;
-        case CUPID_GB_MBC6:
-        case CUPID_GB_MBC7:
-        case CUPID_GB_MMM01:
-            gb->current_rom_bank = (size_t)(value & 0x7fu);
-            if (gb->current_rom_bank == 0u) {
-                gb->current_rom_bank = 1u;
-            }
-            break;
-        default:
-            break;
+            case CUPID_GB_MBC1:
+            case CUPID_GB_HUC1:
+                gb->mbc1_bank_low5 = (uint8_t)(value & 0x1fu);
+                if (gb->mbc1_bank_low5 == 0u) {
+                    gb->mbc1_bank_low5 = 1u;
+                }
+                gb->current_rom_bank = cupid_gb_effective_rom_bank(gb, false);
+                break;
+            case CUPID_GB_MBC3:
+            case CUPID_GB_HUC3:
+                gb->current_rom_bank = (size_t)(value & 0x7fu);
+                if (gb->current_rom_bank == 0u) {
+                    gb->current_rom_bank = 1u;
+                }
+                break;
+            case CUPID_GB_MBC5:
+                if (address <= 0x2fffu) {
+                    gb->mbc5_rom_bank = (uint16_t)((gb->mbc5_rom_bank & 0x0100u) | value);
+                } else {
+                    gb->mbc5_rom_bank = (uint16_t)((gb->mbc5_rom_bank & 0x00ffu) |
+                                                   ((uint16_t)(value & 0x01u) << 8u));
+                }
+                gb->current_rom_bank = (size_t)gb->mbc5_rom_bank;
+                break;
+            case CUPID_GB_MBC6:
+            case CUPID_GB_MBC7:
+            case CUPID_GB_MMM01:
+                gb->current_rom_bank = (size_t)(value & 0x7fu);
+                if (gb->current_rom_bank == 0u) {
+                    gb->current_rom_bank = 1u;
+                }
+                break;
+            default:
+                break;
         }
         return;
     }
 
     if (address <= 0x5fffu) {
         switch (gb->header.mbc_type) {
-        case CUPID_GB_MBC1:
-        case CUPID_GB_HUC1:
-            gb->mbc1_bank_high2 = (uint8_t)(value & 0x03u);
-            gb->current_rom_bank = cupid_gb_effective_rom_bank(gb, false);
-            gb->current_ram_bank = cupid_gb_effective_ram_bank(gb);
-            break;
-        case CUPID_GB_MBC3:
-        case CUPID_GB_HUC3:
-            if (value <= 0x03u) {
-                gb->current_ram_bank = (size_t)value;
-                gb->rtc_register = 0u;
-            } else if (value >= 0x08u && value <= 0x0cu) {
-                gb->rtc_register = value;
-            }
-            break;
-        case CUPID_GB_MBC5:
-            if (gb->header.has_rumble) {
-                gb->current_ram_bank = (size_t)(value & 0x07u);
-                /* bit 3 = rumble motor (ignored in emulation) */
-            } else {
-                gb->current_ram_bank = (size_t)(value & 0x0fu);
-            }
-            break;
-        case CUPID_GB_MBC6:
-        case CUPID_GB_MBC7:
-        case CUPID_GB_MMM01:
-            gb->current_ram_bank = (size_t)(value & 0x03u);
-            break;
-        default:
-            break;
+            case CUPID_GB_MBC1:
+            case CUPID_GB_HUC1:
+                gb->mbc1_bank_high2 = (uint8_t)(value & 0x03u);
+                gb->current_rom_bank = cupid_gb_effective_rom_bank(gb, false);
+                gb->current_ram_bank = cupid_gb_effective_ram_bank(gb);
+                break;
+            case CUPID_GB_MBC3:
+            case CUPID_GB_HUC3:
+                if (value <= 0x03u) {
+                    gb->current_ram_bank = (size_t)value;
+                    gb->rtc_register = 0u;
+                } else if (value >= 0x08u && value <= 0x0cu) {
+                    gb->rtc_register = value;
+                }
+                break;
+            case CUPID_GB_MBC5:
+                if (gb->header.has_rumble) {
+                    gb->current_ram_bank = (size_t)(value & 0x07u);
+                    /* bit 3 = rumble motor (ignored in emulation) */
+                } else {
+                    gb->current_ram_bank = (size_t)(value & 0x0fu);
+                }
+                break;
+            case CUPID_GB_MBC6:
+            case CUPID_GB_MBC7:
+            case CUPID_GB_MMM01:
+                gb->current_ram_bank = (size_t)(value & 0x03u);
+                break;
+            default:
+                break;
         }
         return;
     }
 
     if (address <= 0x7fffu) {
         switch (gb->header.mbc_type) {
-        case CUPID_GB_MBC1:
-        case CUPID_GB_HUC1:
-            gb->mbc1_ram_banking_mode = (value & 0x01u) != 0u;
-            gb->current_rom_bank = cupid_gb_effective_rom_bank(gb, false);
-            gb->current_ram_bank = cupid_gb_effective_ram_bank(gb);
-            break;
-        case CUPID_GB_MBC3:
-            /* Latch clock data: write 0x00 then 0x01 */
-            if (value == 0x01u && gb->rtc.latch_prev == 0x00u) {
-                cupid_gb_rtc_latch(gb);
-            }
-            gb->rtc.latch_prev = value;
-            break;
-        default:
-            break;
+            case CUPID_GB_MBC1:
+            case CUPID_GB_HUC1:
+                gb->mbc1_ram_banking_mode = (value & 0x01u) != 0u;
+                gb->current_rom_bank = cupid_gb_effective_rom_bank(gb, false);
+                gb->current_ram_bank = cupid_gb_effective_ram_bank(gb);
+                break;
+            case CUPID_GB_MBC3:
+                /* Latch clock data: write 0x00 then 0x01 */
+                if (value == 0x01u && gb->rtc.latch_prev == 0x00u) {
+                    cupid_gb_rtc_latch(gb);
+                }
+                gb->rtc.latch_prev = value;
+                break;
+            default:
+                break;
         }
         return;
     }
@@ -1012,12 +992,23 @@ void cupid_gb_write_u8(CupidGb *gb, uint16_t address, uint8_t value)
         /* MBC3: write to RTC register */
         if (gb->header.mbc_type == CUPID_GB_MBC3 && gb->rtc_register >= 0x08u) {
             switch (gb->rtc_register) {
-            case 0x08u: gb->rtc.s = value; break;
-            case 0x09u: gb->rtc.m = value; break;
-            case 0x0au: gb->rtc.h = value; break;
-            case 0x0bu: gb->rtc.dl = value; break;
-            case 0x0cu: gb->rtc.dh = value; break;
-            default: break;
+                case 0x08u:
+                    gb->rtc.s = value;
+                    break;
+                case 0x09u:
+                    gb->rtc.m = value;
+                    break;
+                case 0x0au:
+                    gb->rtc.h = value;
+                    break;
+                case 0x0bu:
+                    gb->rtc.dl = value;
+                    break;
+                case 0x0cu:
+                    gb->rtc.dh = value;
+                    break;
+                default:
+                    break;
             }
             gb->rtc.base_time = (int64_t)time(NULL);
             return;
@@ -1055,18 +1046,15 @@ void cupid_gb_write_u8(CupidGb *gb, uint16_t address, uint8_t value)
         return;
     }
 
-    if (address >= 0xfe00u && address <= 0xfeffu &&
-        cupid_gb_lcd_enabled(gb) &&
+    if (address >= 0xfe00u && address <= 0xfeffu && cupid_gb_lcd_enabled(gb) &&
         gb->io_registers[CUPID_GB_IO_LY] < CUPID_GB_PPU_VISIBLE_SCANLINES) {
         uint8_t mode = (uint8_t)(gb->io_registers[CUPID_GB_IO_STAT] & 0x03u);
         bool blocked = mode == CUPID_GB_PPU_MODE_TRANSFER ||
                        (mode == CUPID_GB_PPU_MODE_OAM && gb->ppu_counter < CUPID_GB_PPU_OAM_CYCLES);
 
         if (blocked) {
-            if (!gb->cgb_mode &&
-                mode == CUPID_GB_PPU_MODE_OAM &&
-                gb->ppu_counter < CUPID_GB_PPU_OAM_CYCLES &&
-                address <= 0xfe9fu) {
+            if (!gb->cgb_mode && mode == CUPID_GB_PPU_MODE_OAM &&
+                gb->ppu_counter < CUPID_GB_PPU_OAM_CYCLES && address <= 0xfe9fu) {
                 cupid_gb_trigger_oam_bug_write_access(gb, address);
             }
             return;
@@ -1090,7 +1078,8 @@ void cupid_gb_write_u8(CupidGb *gb, uint16_t address, uint8_t value)
     if (address >= 0xff00u && address <= 0xff7fu) {
         if (address == 0xff00u) {
             cupid_gb_sgb_write_joyp(gb, value);
-            gb->io_registers[0x00u] = (uint8_t)((value & 0x30u) | (gb->io_registers[0x00u] & 0x0fu));
+            gb->io_registers[0x00u] =
+                (uint8_t)((value & 0x30u) | (gb->io_registers[0x00u] & 0x0fu));
             return;
         }
         if (cupid_cgb_handle_write_register(gb, address, value)) {
@@ -1182,8 +1171,7 @@ void cupid_gb_write_u8(CupidGb *gb, uint16_t address, uint8_t value)
  * @return `true` if an instruction (or halt cycle) was executed,
  *         `false` if @p gb is NULL or no ROM is loaded.
  */
-bool cupid_gb_step(CupidGb *gb)
-{
+bool cupid_gb_step(CupidGb *gb) {
     uint8_t cycles;
     uint8_t opcode;
     bool ime_enable_pending;
@@ -1194,8 +1182,7 @@ bool cupid_gb_step(CupidGb *gb)
     }
 
     pending_interrupts = (uint8_t)(gb->interrupt_enable & gb->interrupt_flags & 0x1fu);
-    if (!(gb->cpu.ime &&
-          pending_interrupts == CUPID_GB_INTERRUPT_VBLANK &&
+    if (!(gb->cpu.ime && pending_interrupts == CUPID_GB_INTERRUPT_VBLANK &&
           gb->io_registers[CUPID_GB_IO_LY] == CUPID_GB_PPU_VISIBLE_SCANLINES &&
           cupid_gb_read_u8(gb, gb->cpu.pc) == 0xf3u)) {
         if (cupid_gb_service_interrupt(gb)) {
@@ -1266,8 +1253,8 @@ bool cupid_gb_step(CupidGb *gb)
         cupid_gb_tick(gb, cycles);
     }
 
-    if (cycles > 0u || opcode == 0xf0u || opcode == 0xe0u || opcode == 0xc3u ||
-        opcode == 0xc2u || opcode == 0xcau || opcode == 0xd2u || opcode == 0xdau) {
+    if (cycles > 0u || opcode == 0xf0u || opcode == 0xe0u || opcode == 0xc3u || opcode == 0xc2u ||
+        opcode == 0xcau || opcode == 0xd2u || opcode == 0xdau) {
         if (opcode == 0xfbu) {
             if (ime_enable_pending) {
                 gb->cpu.ime = true;
@@ -1279,6 +1266,6 @@ bool cupid_gb_step(CupidGb *gb)
         }
     }
 
-            return cycles > 0u || opcode == 0xf0u || opcode == 0xe0u || opcode == 0xc3u ||
-                opcode == 0xc2u || opcode == 0xcau || opcode == 0xd2u || opcode == 0xdau;
+    return cycles > 0u || opcode == 0xf0u || opcode == 0xe0u || opcode == 0xc3u ||
+           opcode == 0xc2u || opcode == 0xcau || opcode == 0xd2u || opcode == 0xdau;
 }

@@ -17,39 +17,36 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "cupid/common/log.h"
 #include "cupid/gb/gb.h"
 #include "cupid/gbc/cgb.h"
-#include "cupid/common/log.h"
 
 // Header field offsets
 
 enum {
-    CUPID_GB_HEADER_START    = 0x0134,
-    CUPID_GB_HEADER_END      = 0x014c,
-    CUPID_GB_LOGO_START      = 0x0104,
-    CUPID_GB_LOGO_END        = 0x0133,
-    CUPID_GB_TITLE_START     = 0x0134,
-    CUPID_GB_TITLE_END       = 0x0143,
-    CUPID_GB_CGB_FLAG        = 0x0143,
-    CUPID_GB_NEW_LICENSEE_0  = 0x0144,
-    CUPID_GB_NEW_LICENSEE_1  = 0x0145,
-    CUPID_GB_SGB_FLAG        = 0x0146,
-    CUPID_GB_CARTRIDGE_TYPE  = 0x0147,
-    CUPID_GB_ROM_SIZE        = 0x0148,
-    CUPID_GB_RAM_SIZE        = 0x0149,
+    CUPID_GB_HEADER_START = 0x0134,
+    CUPID_GB_HEADER_END = 0x014c,
+    CUPID_GB_LOGO_START = 0x0104,
+    CUPID_GB_LOGO_END = 0x0133,
+    CUPID_GB_TITLE_START = 0x0134,
+    CUPID_GB_TITLE_END = 0x0143,
+    CUPID_GB_CGB_FLAG = 0x0143,
+    CUPID_GB_NEW_LICENSEE_0 = 0x0144,
+    CUPID_GB_NEW_LICENSEE_1 = 0x0145,
+    CUPID_GB_SGB_FLAG = 0x0146,
+    CUPID_GB_CARTRIDGE_TYPE = 0x0147,
+    CUPID_GB_ROM_SIZE = 0x0148,
+    CUPID_GB_RAM_SIZE = 0x0149,
     CUPID_GB_DESTINATION_CODE = 0x014a,
     CUPID_GB_OLD_LICENSEE_CODE = 0x014b,
     CUPID_GB_HEADER_CHECKSUM = 0x014d
 };
 
 static const uint8_t cupid_gb_nintendo_logo[] = {
-    0xceu, 0xedu, 0x66u, 0x66u, 0xccu, 0x0du, 0x00u, 0x0bu,
-    0x03u, 0x73u, 0x00u, 0x83u, 0x00u, 0x0cu, 0x00u, 0x0du,
-    0x00u, 0x08u, 0x11u, 0x1fu, 0x88u, 0x89u, 0x00u, 0x0eu,
-    0xdcu, 0xccu, 0x6eu, 0xe6u, 0xddu, 0xddu, 0xd9u, 0x99u,
-    0xbbu, 0xbbu, 0x67u, 0x63u, 0x6eu, 0x0eu, 0xecu, 0xccu,
-    0xddu, 0xdcu, 0x99u, 0x9fu, 0xbbu, 0xb9u, 0x33u, 0x3eu
-};
+    0xceu, 0xedu, 0x66u, 0x66u, 0xccu, 0x0du, 0x00u, 0x0bu, 0x03u, 0x73u, 0x00u, 0x83u,
+    0x00u, 0x0cu, 0x00u, 0x0du, 0x00u, 0x08u, 0x11u, 0x1fu, 0x88u, 0x89u, 0x00u, 0x0eu,
+    0xdcu, 0xccu, 0x6eu, 0xe6u, 0xddu, 0xddu, 0xd9u, 0x99u, 0xbbu, 0xbbu, 0x67u, 0x63u,
+    0x6eu, 0x0eu, 0xecu, 0xccu, 0xddu, 0xdcu, 0x99u, 0x9fu, 0xbbu, 0xb9u, 0x33u, 0x3eu};
 
 enum {
     CUPID_GB_SGB_PACKET_START = 0x0104,
@@ -68,23 +65,22 @@ enum {
  *
  * @return The corresponding RAM size in bytes, or 0 for unrecognised codes.
  */
-static size_t cupid_gb_ram_size_from_code(uint8_t code)
-{
+static size_t cupid_gb_ram_size_from_code(uint8_t code) {
     switch (code) {
-    case 0x00u:
-        return 0u;
-    case 0x01u:
-        return 2u * 1024u;
-    case 0x02u:
-        return 8u * 1024u;
-    case 0x03u:
-        return 32u * 1024u;
-    case 0x04u:
-        return 128u * 1024u;
-    case 0x05u:
-        return 64u * 1024u;
-    default:
-        return 0u;
+        case 0x00u:
+            return 0u;
+        case 0x01u:
+            return 2u * 1024u;
+        case 0x02u:
+            return 8u * 1024u;
+        case 0x03u:
+            return 32u * 1024u;
+        case 0x04u:
+            return 128u * 1024u;
+        case 0x05u:
+            return 64u * 1024u;
+        default:
+            return 0u;
     }
 }
 
@@ -95,8 +91,7 @@ static size_t cupid_gb_ram_size_from_code(uint8_t code)
  *
  * @return The number of bits set to 1 in @p value.
  */
-static uint8_t cupid_gb_popcount8(uint8_t value)
-{
+static uint8_t cupid_gb_popcount8(uint8_t value) {
     uint8_t count = 0u;
 
     while (value != 0u) {
@@ -122,8 +117,7 @@ static uint8_t cupid_gb_popcount8(uint8_t value)
  * @return The estimated DIV counter value (6-bit, 0–63) at the point the
  *         boot ROM hands off to the cartridge.
  */
-static uint16_t cupid_gb_sgb_boot_div_counter(const uint8_t *rom_data, size_t rom_size)
-{
+static uint16_t cupid_gb_sgb_boot_div_counter(const uint8_t *rom_data, size_t rom_size) {
     size_t offset = CUPID_GB_SGB_PACKET_START;
     unsigned stream_popcount = 0u;
     int adjusted_counter;
@@ -164,35 +158,34 @@ static uint16_t cupid_gb_sgb_boot_div_counter(const uint8_t *rom_data, size_t ro
  *
  * @return The number of 16 KiB ROM banks, or 0 for unrecognised codes.
  */
-static size_t cupid_gb_rom_bank_count_from_code(uint8_t code)
-{
+static size_t cupid_gb_rom_bank_count_from_code(uint8_t code) {
     switch (code) {
-    case 0x00u:
-        return 2u;
-    case 0x01u:
-        return 4u;
-    case 0x02u:
-        return 8u;
-    case 0x03u:
-        return 16u;
-    case 0x04u:
-        return 32u;
-    case 0x05u:
-        return 64u;
-    case 0x06u:
-        return 128u;
-    case 0x07u:
-        return 256u;
-    case 0x08u:
-        return 512u;
-    case 0x52u:
-        return 72u;
-    case 0x53u:
-        return 80u;
-    case 0x54u:
-        return 96u;
-    default:
-        return 0u;
+        case 0x00u:
+            return 2u;
+        case 0x01u:
+            return 4u;
+        case 0x02u:
+            return 8u;
+        case 0x03u:
+            return 16u;
+        case 0x04u:
+            return 32u;
+        case 0x05u:
+            return 64u;
+        case 0x06u:
+            return 128u;
+        case 0x07u:
+            return 256u;
+        case 0x08u:
+            return 512u;
+        case 0x52u:
+            return 72u;
+        case 0x53u:
+            return 80u;
+        case 0x54u:
+            return 96u;
+        default:
+            return 0u;
     }
 }
 
@@ -203,22 +196,21 @@ static size_t cupid_gb_rom_bank_count_from_code(uint8_t code)
  *
  * @return The number of 8 KiB RAM banks, or 0 for unrecognised codes.
  */
-static size_t cupid_gb_ram_bank_count_from_code(uint8_t code)
-{
+static size_t cupid_gb_ram_bank_count_from_code(uint8_t code) {
     switch (code) {
-    case 0x00u:
-        return 0u;
-    case 0x01u:
-    case 0x02u:
-        return 1u;
-    case 0x03u:
-        return 4u;
-    case 0x04u:
-        return 16u;
-    case 0x05u:
-        return 8u;
-    default:
-        return 0u;
+        case 0x00u:
+            return 0u;
+        case 0x01u:
+        case 0x02u:
+            return 1u;
+        case 0x03u:
+            return 4u;
+        case 0x04u:
+            return 16u;
+        case 0x05u:
+            return 8u;
+        default:
+            return 0u;
     }
 }
 
@@ -230,47 +222,46 @@ static size_t cupid_gb_ram_bank_count_from_code(uint8_t code)
  * @return The corresponding @ref CupidGbMbcType enum value, or
  *         @ref CUPID_GB_MBC_UNKNOWN for unrecognised values.
  */
-static CupidGbMbcType cupid_gb_detect_mbc_type(uint8_t cartridge_type)
-{
+static CupidGbMbcType cupid_gb_detect_mbc_type(uint8_t cartridge_type) {
     switch (cartridge_type) {
-    case 0x00u:
-    case 0x08u: /* ROM+RAM */
-    case 0x09u: /* ROM+RAM+BATTERY */
-        return CUPID_GB_MBC_NONE;
-    case 0x01u:
-    case 0x02u:
-    case 0x03u:
-        return CUPID_GB_MBC1;
-    case 0x05u:
-    case 0x06u:
-        return CUPID_GB_MBC2;
-    case 0x0bu:
-    case 0x0cu:
-    case 0x0du:
-        return CUPID_GB_MMM01;
-    case 0x0fu:
-    case 0x10u:
-    case 0x11u:
-    case 0x12u:
-    case 0x13u:
-        return CUPID_GB_MBC3;
-    case 0x19u:
-    case 0x1au:
-    case 0x1bu:
-    case 0x1cu:
-    case 0x1du:
-    case 0x1eu:
-        return CUPID_GB_MBC5;
-    case 0x20u:
-        return CUPID_GB_MBC6;
-    case 0x22u:
-        return CUPID_GB_MBC7;
-    case 0xfeu:
-        return CUPID_GB_HUC3;
-    case 0xffu:
-        return CUPID_GB_HUC1;
-    default:
-        return CUPID_GB_MBC_UNKNOWN;
+        case 0x00u:
+        case 0x08u: /* ROM+RAM */
+        case 0x09u: /* ROM+RAM+BATTERY */
+            return CUPID_GB_MBC_NONE;
+        case 0x01u:
+        case 0x02u:
+        case 0x03u:
+            return CUPID_GB_MBC1;
+        case 0x05u:
+        case 0x06u:
+            return CUPID_GB_MBC2;
+        case 0x0bu:
+        case 0x0cu:
+        case 0x0du:
+            return CUPID_GB_MMM01;
+        case 0x0fu:
+        case 0x10u:
+        case 0x11u:
+        case 0x12u:
+        case 0x13u:
+            return CUPID_GB_MBC3;
+        case 0x19u:
+        case 0x1au:
+        case 0x1bu:
+        case 0x1cu:
+        case 0x1du:
+        case 0x1eu:
+            return CUPID_GB_MBC5;
+        case 0x20u:
+            return CUPID_GB_MBC6;
+        case 0x22u:
+            return CUPID_GB_MBC7;
+        case 0xfeu:
+            return CUPID_GB_HUC3;
+        case 0xffu:
+            return CUPID_GB_HUC1;
+        default:
+            return CUPID_GB_MBC_UNKNOWN;
     }
 }
 
@@ -288,10 +279,8 @@ static CupidGbMbcType cupid_gb_detect_mbc_type(uint8_t cartridge_type)
  * @return The computed 8-bit checksum, or 0 if @p rom_data is NULL or the
  *         ROM is too small to contain the checksum byte.
  */
-static uint8_t cupid_gb_compute_header_checksum_at(const uint8_t *rom_data,
-                                                   size_t rom_size,
-                                                   size_t base_offset)
-{
+static uint8_t cupid_gb_compute_header_checksum_at(const uint8_t *rom_data, size_t rom_size,
+                                                   size_t base_offset) {
     size_t index;
     uint8_t checksum = 0u;
 
@@ -299,8 +288,7 @@ static uint8_t cupid_gb_compute_header_checksum_at(const uint8_t *rom_data,
         return 0u;
     }
 
-    for (index = base_offset + CUPID_GB_HEADER_START;
-         index <= base_offset + CUPID_GB_HEADER_END;
+    for (index = base_offset + CUPID_GB_HEADER_START; index <= base_offset + CUPID_GB_HEADER_END;
          ++index) {
         checksum = (uint8_t)(checksum - rom_data[index] - 1u);
     }
@@ -318,11 +306,8 @@ static uint8_t cupid_gb_compute_header_checksum_at(const uint8_t *rom_data,
  *
  * @return The computed 8-bit header checksum.
  */
-static uint8_t cupid_gb_compute_header_checksum(const uint8_t *rom_data)
-{
-    return cupid_gb_compute_header_checksum_at(rom_data,
-                                               CUPID_GB_MAX_ROM_SIZE,
-                                               0u);
+static uint8_t cupid_gb_compute_header_checksum(const uint8_t *rom_data) {
+    return cupid_gb_compute_header_checksum_at(rom_data, CUPID_GB_MAX_ROM_SIZE, 0u);
 }
 
 /**
@@ -337,19 +322,16 @@ static uint8_t cupid_gb_compute_header_checksum(const uint8_t *rom_data)
  *
  * @return `true` if the logo matches exactly, `false` otherwise.
  */
-static bool cupid_gb_has_nintendo_logo(const uint8_t *rom_data,
-                                       size_t rom_size,
-                                       size_t base_offset)
-{
+static bool cupid_gb_has_nintendo_logo(const uint8_t *rom_data, size_t rom_size,
+                                       size_t base_offset) {
     size_t logo_offset = base_offset + CUPID_GB_LOGO_START;
 
     if (rom_data == 0 || logo_offset + sizeof(cupid_gb_nintendo_logo) > rom_size) {
         return false;
     }
 
-    return memcmp(&rom_data[logo_offset],
-                  cupid_gb_nintendo_logo,
-                  sizeof(cupid_gb_nintendo_logo)) == 0;
+    return memcmp(&rom_data[logo_offset], cupid_gb_nintendo_logo, sizeof(cupid_gb_nintendo_logo)) ==
+           0;
 }
 
 /**
@@ -369,10 +351,8 @@ static bool cupid_gb_has_nintendo_logo(const uint8_t *rom_data,
  * @note Returns `false` if @p rom_data or @p header is NULL, if the MBC
  *       type is not MBC1, or if the ROM does not have exactly 64 banks.
  */
-static bool cupid_gb_detect_mbc1_multicart(const uint8_t *rom_data,
-                                           size_t rom_size,
-                                           const CupidGbCartridgeHeader *header)
-{
+static bool cupid_gb_detect_mbc1_multicart(const uint8_t *rom_data, size_t rom_size,
+                                           const CupidGbCartridgeHeader *header) {
     size_t index;
 
     if (rom_data == 0 || header == 0) {
@@ -419,64 +399,67 @@ static bool cupid_gb_detect_mbc1_multicart(const uint8_t *rom_data,
  *
  * @return The effective ROM bank index, or 0 if no banks are present.
  */
-size_t cupid_gb_effective_rom_bank(const CupidGb *gb, bool lower_region)
-{
+size_t cupid_gb_effective_rom_bank(const CupidGb *gb, bool lower_region) {
     size_t bank;
 
     switch (gb->header.mbc_type) {
-    case CUPID_GB_MBC1:
-    case CUPID_GB_HUC1: {
-        size_t high = (size_t)(gb->mbc1_bank_high2 & 0x03u);
-        size_t low = (size_t)(gb->mbc1_bank_low5 & 0x1fu);
+        case CUPID_GB_MBC1:
+        case CUPID_GB_HUC1: {
+            size_t high = (size_t)(gb->mbc1_bank_high2 & 0x03u);
+            size_t low = (size_t)(gb->mbc1_bank_low5 & 0x1fu);
 
-        if (gb->mbc1_multicart) {
+            if (gb->mbc1_multicart) {
+                if (lower_region) {
+                    bank = gb->mbc1_ram_banking_mode ? (high << 4u) : 0u;
+                } else {
+                    bank = (high << 4u) | (low & 0x0fu);
+                }
+                break;
+            }
+
+            if (low == 0u) {
+                low = 1u;
+            }
+
             if (lower_region) {
-                bank = gb->mbc1_ram_banking_mode ? (high << 4u) : 0u;
+                bank = gb->mbc1_ram_banking_mode ? (high << 5u) : 0u;
             } else {
-                bank = (high << 4u) | (low & 0x0fu);
+                bank = low | (high << 5u);
             }
             break;
         }
-
-        if (low == 0u) {
-            low = 1u;
+        case CUPID_GB_MBC2: {
+            size_t b = gb->current_rom_bank & 0x0fu;
+            if (b == 0u) {
+                b = 1u;
+            }
+            bank = lower_region ? 0u : b;
+            break;
         }
-
-        if (lower_region) {
-            bank = gb->mbc1_ram_banking_mode ? (high << 5u) : 0u;
-        } else {
-            bank = low | (high << 5u);
+        case CUPID_GB_MBC5: {
+            bank = lower_region ? 0u : (size_t)(gb->mbc5_rom_bank & 0x01ffu);
+            break;
         }
-        break;
-    }
-    case CUPID_GB_MBC2: {
-        size_t b = gb->current_rom_bank & 0x0fu;
-        if (b == 0u) { b = 1u; }
-        bank = lower_region ? 0u : b;
-        break;
-    }
-    case CUPID_GB_MBC5: {
-        bank = lower_region ? 0u : (size_t)(gb->mbc5_rom_bank & 0x01ffu);
-        break;
-    }
-    case CUPID_GB_MMM01: {
-        if (!gb->mmm01_locked) {
+        case CUPID_GB_MMM01: {
+            if (!gb->mmm01_locked) {
+                bank = lower_region ? 0u : gb->current_rom_bank;
+            } else {
+                size_t b = gb->current_rom_bank;
+                if (b == 0u) {
+                    b = 1u;
+                }
+                bank =
+                    lower_region ? (size_t)gb->mmm01_bank_base : ((size_t)gb->mmm01_bank_base + b);
+            }
+            break;
+        }
+        case CUPID_GB_MBC_NONE:
+            bank = lower_region ? 0u : 1u;
+            break;
+        default:
+            /* MBC3, MBC6, MBC7, HuC3, unknown */
             bank = lower_region ? 0u : gb->current_rom_bank;
-        } else {
-            size_t b = gb->current_rom_bank;
-            if (b == 0u) { b = 1u; }
-            bank = lower_region ? (size_t)gb->mmm01_bank_base
-                                : ((size_t)gb->mmm01_bank_base + b);
-        }
-        break;
-    }
-    case CUPID_GB_MBC_NONE:
-        bank = lower_region ? 0u : 1u;
-        break;
-    default:
-        /* MBC3, MBC6, MBC7, HuC3, unknown */
-        bank = lower_region ? 0u : gb->current_rom_bank;
-        break;
+            break;
     }
 
     if (gb->rom_bank_count == 0u) {
@@ -498,14 +481,12 @@ size_t cupid_gb_effective_rom_bank(const CupidGb *gb, bool lower_region)
  *
  * @return The effective RAM bank index, or 0 if no RAM banks are present.
  */
-size_t cupid_gb_effective_ram_bank(const CupidGb *gb)
-{
+size_t cupid_gb_effective_ram_bank(const CupidGb *gb) {
     if (gb->ram_bank_count == 0u) {
         return 0u;
     }
 
-    if (gb->header.mbc_type == CUPID_GB_MBC1 ||
-        gb->header.mbc_type == CUPID_GB_HUC1) {
+    if (gb->header.mbc_type == CUPID_GB_MBC1 || gb->header.mbc_type == CUPID_GB_HUC1) {
         if (gb->mbc1_ram_banking_mode) {
             return (size_t)(gb->mbc1_bank_high2 & 0x03u) % gb->ram_bank_count;
         }
@@ -533,10 +514,8 @@ size_t cupid_gb_effective_ram_bank(const CupidGb *gb)
  * @return `true` on success, `false` if any pointer is NULL or the ROM is
  *         too small to contain the full header.
  */
-bool cupid_gb_parse_header(const uint8_t *rom_data,
-                           size_t rom_size,
-                           CupidGbCartridgeHeader *header)
-{
+bool cupid_gb_parse_header(const uint8_t *rom_data, size_t rom_size,
+                           CupidGbCartridgeHeader *header) {
     size_t rom_index;
     size_t title_index = 0u;
 
@@ -576,47 +555,47 @@ bool cupid_gb_parse_header(const uint8_t *rom_data,
 
     /* Detect battery-backed SRAM */
     switch (header->cartridge_type) {
-    case 0x03u: /* MBC1+RAM+BATTERY */
-    case 0x06u: /* MBC2+BATTERY */
-    case 0x09u: /* ROM+RAM+BATTERY */
-    case 0x0du: /* MMM01+RAM+BATTERY */
-    case 0x0fu: /* MBC3+TIMER+BATTERY */
-    case 0x10u: /* MBC3+TIMER+RAM+BATTERY */
-    case 0x13u: /* MBC3+RAM+BATTERY */
-    case 0x1bu: /* MBC5+RAM+BATTERY */
-    case 0x1eu: /* MBC5+RUMBLE+RAM+BATTERY */
-    case 0x22u: /* MBC7+SENSOR+RUMBLE+RAM+BATTERY */
-    case 0xfeu: /* HuC3 (battery-backed RTC/RAM) */
-    case 0xffu: /* HuC1+RAM+BATTERY */
-        header->has_battery = true;
-        break;
-    default:
-        header->has_battery = false;
-        break;
+        case 0x03u: /* MBC1+RAM+BATTERY */
+        case 0x06u: /* MBC2+BATTERY */
+        case 0x09u: /* ROM+RAM+BATTERY */
+        case 0x0du: /* MMM01+RAM+BATTERY */
+        case 0x0fu: /* MBC3+TIMER+BATTERY */
+        case 0x10u: /* MBC3+TIMER+RAM+BATTERY */
+        case 0x13u: /* MBC3+RAM+BATTERY */
+        case 0x1bu: /* MBC5+RAM+BATTERY */
+        case 0x1eu: /* MBC5+RUMBLE+RAM+BATTERY */
+        case 0x22u: /* MBC7+SENSOR+RUMBLE+RAM+BATTERY */
+        case 0xfeu: /* HuC3 (battery-backed RTC/RAM) */
+        case 0xffu: /* HuC1+RAM+BATTERY */
+            header->has_battery = true;
+            break;
+        default:
+            header->has_battery = false;
+            break;
     }
 
     /* Detect MBC3 real-time clock */
     switch (header->cartridge_type) {
-    case 0x0fu: /* MBC3+TIMER+BATTERY */
-    case 0x10u: /* MBC3+TIMER+RAM+BATTERY */
-        header->has_timer = true;
-        break;
-    default:
-        header->has_timer = false;
-        break;
+        case 0x0fu: /* MBC3+TIMER+BATTERY */
+        case 0x10u: /* MBC3+TIMER+RAM+BATTERY */
+            header->has_timer = true;
+            break;
+        default:
+            header->has_timer = false;
+            break;
     }
 
     /* Detect rumble motor */
     switch (header->cartridge_type) {
-    case 0x1cu: /* MBC5+RUMBLE */
-    case 0x1du: /* MBC5+RUMBLE+RAM */
-    case 0x1eu: /* MBC5+RUMBLE+RAM+BATTERY */
-    case 0x22u: /* MBC7+SENSOR+RUMBLE+RAM+BATTERY */
-        header->has_rumble = true;
-        break;
-    default:
-        header->has_rumble = false;
-        break;
+        case 0x1cu: /* MBC5+RUMBLE */
+        case 0x1du: /* MBC5+RUMBLE+RAM */
+        case 0x1eu: /* MBC5+RUMBLE+RAM+BATTERY */
+        case 0x22u: /* MBC7+SENSOR+RUMBLE+RAM+BATTERY */
+            header->has_rumble = true;
+            break;
+        default:
+            header->has_rumble = false;
+            break;
     }
 
     return true;
@@ -639,8 +618,7 @@ bool cupid_gb_parse_header(const uint8_t *rom_data,
  *
  * @note Returns `false` if @p gb or @p path is NULL.
  */
-bool cupid_gb_load_rom_file(CupidGb *gb, const char *path)
-{
+bool cupid_gb_load_rom_file(CupidGb *gb, const char *path) {
     FILE *file;
     long file_size;
     size_t bytes_read;
@@ -716,8 +694,7 @@ bool cupid_gb_load_rom_file(CupidGb *gb, const char *path)
  * @note An invalid header checksum is non-fatal; a warning is logged and
  *       loading continues.
  */
-bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size)
-{
+bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size) {
     if (gb == 0 || rom_data == 0) {
         return false;
     }
@@ -852,36 +829,62 @@ bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size)
  *
  * @note The returned string is a literal and must not be modified or freed.
  */
-const char *cupid_gb_cartridge_type_name(uint8_t cartridge_type)
-{
+const char *cupid_gb_cartridge_type_name(uint8_t cartridge_type) {
     switch (cartridge_type) {
-    case 0x00u: return "ROM ONLY";
-    case 0x01u: return "MBC1";
-    case 0x02u: return "MBC1+RAM";
-    case 0x03u: return "MBC1+RAM+BATTERY";
-    case 0x05u: return "MBC2";
-    case 0x06u: return "MBC2+BATTERY";
-    case 0x08u: return "ROM+RAM";
-    case 0x09u: return "ROM+RAM+BATTERY";
-    case 0x0bu: return "MMM01";
-    case 0x0cu: return "MMM01+RAM";
-    case 0x0du: return "MMM01+RAM+BATTERY";
-    case 0x0fu: return "MBC3+TIMER+BATTERY";
-    case 0x10u: return "MBC3+TIMER+RAM+BATTERY";
-    case 0x11u: return "MBC3";
-    case 0x12u: return "MBC3+RAM";
-    case 0x13u: return "MBC3+RAM+BATTERY";
-    case 0x19u: return "MBC5";
-    case 0x1au: return "MBC5+RAM";
-    case 0x1bu: return "MBC5+RAM+BATTERY";
-    case 0x1cu: return "MBC5+RUMBLE";
-    case 0x1du: return "MBC5+RUMBLE+RAM";
-    case 0x1eu: return "MBC5+RUMBLE+RAM+BATTERY";
-    case 0x20u: return "MBC6";
-    case 0x22u: return "MBC7+SENSOR+RUMBLE+RAM+BATTERY";
-    case 0xfeu: return "HuC3";
-    case 0xffu: return "HuC1+RAM+BATTERY";
-    default:    return "UNKNOWN";
+        case 0x00u:
+            return "ROM ONLY";
+        case 0x01u:
+            return "MBC1";
+        case 0x02u:
+            return "MBC1+RAM";
+        case 0x03u:
+            return "MBC1+RAM+BATTERY";
+        case 0x05u:
+            return "MBC2";
+        case 0x06u:
+            return "MBC2+BATTERY";
+        case 0x08u:
+            return "ROM+RAM";
+        case 0x09u:
+            return "ROM+RAM+BATTERY";
+        case 0x0bu:
+            return "MMM01";
+        case 0x0cu:
+            return "MMM01+RAM";
+        case 0x0du:
+            return "MMM01+RAM+BATTERY";
+        case 0x0fu:
+            return "MBC3+TIMER+BATTERY";
+        case 0x10u:
+            return "MBC3+TIMER+RAM+BATTERY";
+        case 0x11u:
+            return "MBC3";
+        case 0x12u:
+            return "MBC3+RAM";
+        case 0x13u:
+            return "MBC3+RAM+BATTERY";
+        case 0x19u:
+            return "MBC5";
+        case 0x1au:
+            return "MBC5+RAM";
+        case 0x1bu:
+            return "MBC5+RAM+BATTERY";
+        case 0x1cu:
+            return "MBC5+RUMBLE";
+        case 0x1du:
+            return "MBC5+RUMBLE+RAM";
+        case 0x1eu:
+            return "MBC5+RUMBLE+RAM+BATTERY";
+        case 0x20u:
+            return "MBC6";
+        case 0x22u:
+            return "MBC7+SENSOR+RUMBLE+RAM+BATTERY";
+        case 0xfeu:
+            return "HuC3";
+        case 0xffu:
+            return "HuC1+RAM+BATTERY";
+        default:
+            return "UNKNOWN";
     }
 }
 
@@ -895,20 +898,30 @@ const char *cupid_gb_cartridge_type_name(uint8_t cartridge_type)
  *
  * @note The returned string is a literal and must not be modified or freed.
  */
-const char *cupid_gb_mbc_name(CupidGbMbcType mbc_type)
-{
+const char *cupid_gb_mbc_name(CupidGbMbcType mbc_type) {
     switch (mbc_type) {
-    case CUPID_GB_MBC_NONE: return "ROM ONLY";
-    case CUPID_GB_MBC1:     return "MBC1";
-    case CUPID_GB_MBC2:     return "MBC2";
-    case CUPID_GB_MBC3:     return "MBC3";
-    case CUPID_GB_MBC5:     return "MBC5";
-    case CUPID_GB_MBC6:     return "MBC6";
-    case CUPID_GB_MBC7:     return "MBC7";
-    case CUPID_GB_MMM01:    return "MMM01";
-    case CUPID_GB_HUC1:     return "HuC1";
-    case CUPID_GB_HUC3:     return "HuC3";
-    default:                return "UNKNOWN";
+        case CUPID_GB_MBC_NONE:
+            return "ROM ONLY";
+        case CUPID_GB_MBC1:
+            return "MBC1";
+        case CUPID_GB_MBC2:
+            return "MBC2";
+        case CUPID_GB_MBC3:
+            return "MBC3";
+        case CUPID_GB_MBC5:
+            return "MBC5";
+        case CUPID_GB_MBC6:
+            return "MBC6";
+        case CUPID_GB_MBC7:
+            return "MBC7";
+        case CUPID_GB_MMM01:
+            return "MMM01";
+        case CUPID_GB_HUC1:
+            return "HuC1";
+        case CUPID_GB_HUC3:
+            return "HuC3";
+        default:
+            return "UNKNOWN";
     }
 }
 
@@ -927,32 +940,28 @@ const char *cupid_gb_mbc_name(CupidGbMbcType mbc_type)
  *
  * @note Does nothing if @p gb or @p rom_path is NULL.
  */
-void cupid_gb_set_save_path(CupidGb *gb, const char *rom_path)
-{
+void cupid_gb_set_save_path(CupidGb *gb, const char *rom_path) {
     size_t len;
 
     if (gb == 0 || rom_path == 0) {
         return;
     }
 
-    len = strlen(rom_path);
-    if (len >= sizeof(gb->save_path) - 1u) {
+    const char *name = rom_path;
+    for (const char *cursor = rom_path; *cursor; ++cursor) {
+        if (*cursor == '/' || *cursor == '\\') {
+            name = cursor + 1;
+        }
+    }
+    const char *dot = strrchr(name, '.');
+    /* A directory's dot is not a file extension. Extensionless ROMs still need a separate save. */
+    len = dot && dot != name ? (size_t)(dot - rom_path) : strlen(rom_path);
+    if (len + sizeof(".sav") > sizeof(gb->save_path)) {
         gb->save_path[0] = '\0';
         return;
     }
-
-    memcpy(gb->save_path, rom_path, len + 1u);
-
-    /* Replace the last extension (.gb, .gbc) with .sav */
-    {
-        char *dot = strrchr(gb->save_path, '.');
-        if (dot != 0 && (size_t)(dot - gb->save_path) + 4u < sizeof(gb->save_path)) {
-            dot[1] = 's';
-            dot[2] = 'a';
-            dot[3] = 'v';
-            dot[4] = '\0';
-        }
-    }
+    memcpy(gb->save_path, rom_path, len);
+    memcpy(gb->save_path + len, ".sav", sizeof(".sav"));
 }
 
 /**
@@ -968,8 +977,7 @@ void cupid_gb_set_save_path(CupidGb *gb, const char *rom_path)
  *       cartridge has no battery, RAM size is zero, the header checksum
  *       is invalid, or the title is blank.
  */
-void cupid_gb_load_save(CupidGb *gb)
-{
+void cupid_gb_load_save(CupidGb *gb) {
     FILE *file;
     size_t bytes_read;
 
@@ -1000,8 +1008,7 @@ void cupid_gb_load_save(CupidGb *gb)
     fclose(file);
 
     if (bytes_read == gb->cartridge_ram_size) {
-        cupid_log_infof("Loaded save data from %s (%zu bytes).",
-                        gb->save_path, bytes_read);
+        cupid_log_infof("Loaded save data from %s (%zu bytes).", gb->save_path, bytes_read);
     } else {
         cupid_log_errorf("Save file %s is %zu bytes; expected %zu. Loaded partial data.",
                          gb->save_path, bytes_read, gb->cartridge_ram_size);
@@ -1021,8 +1028,7 @@ void cupid_gb_load_save(CupidGb *gb)
  *       cartridge has no battery, RAM size is zero, the header checksum
  *       is invalid, or the title is blank.
  */
-void cupid_gb_save(CupidGb *gb)
-{
+void cupid_gb_save(CupidGb *gb) {
     FILE *file;
 
     if (gb == 0 || gb->save_path[0] == '\0') {
@@ -1045,6 +1051,5 @@ void cupid_gb_save(CupidGb *gb)
 
     fwrite(gb->cartridge_ram, 1u, gb->cartridge_ram_size, file);
     fclose(file);
-    cupid_log_infof("Saved game data to %s (%zu bytes).",
-                    gb->save_path, gb->cartridge_ram_size);
+    cupid_log_infof("Saved game data to %s (%zu bytes).", gb->save_path, gb->cartridge_ram_size);
 }

@@ -22,8 +22,8 @@
  * @param format    A printf-style format string for the log message.
  * @param arguments A va_list of arguments corresponding to the format string.
  */
-static void cupid_log_vprint(FILE *stream, const char *level, const char *format, va_list arguments)
-{
+static void cupid_log_vprint(FILE *stream, const char *level, const char *format,
+                             va_list arguments) {
     fprintf(stream, "[%s] ", level);
     vfprintf(stream, format, arguments);
     fputc('\n', stream);
@@ -38,8 +38,7 @@ static void cupid_log_vprint(FILE *stream, const char *level, const char *format
  *
  * @param message The message string to log.
  */
-void cupid_log_info(const char *message)
-{
+void cupid_log_info(const char *message) {
     fprintf(stdout, "[INFO] %s\n", message);
     fflush(stdout);
 }
@@ -53,8 +52,7 @@ void cupid_log_info(const char *message)
  * @param format A printf-style format string for the log message.
  * @param ...    Additional arguments corresponding to the format string.
  */
-void cupid_log_infof(const char *format, ...)
-{
+void cupid_log_infof(const char *format, ...) {
     va_list arguments;
 
     va_start(arguments, format);
@@ -70,8 +68,7 @@ void cupid_log_infof(const char *format, ...)
  *
  * @param message The message string to log.
  */
-void cupid_log_error(const char *message)
-{
+void cupid_log_error(const char *message) {
     fprintf(stderr, "[ERROR] %s\n", message);
     fflush(stderr);
 }
@@ -85,8 +82,7 @@ void cupid_log_error(const char *message)
  * @param format A printf-style format string for the log message.
  * @param ...    Additional arguments corresponding to the format string.
  */
-void cupid_log_errorf(const char *format, ...)
-{
+void cupid_log_errorf(const char *format, ...) {
     va_list arguments;
 
     va_start(arguments, format);

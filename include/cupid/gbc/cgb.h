@@ -10,10 +10,8 @@ struct CupidGb;
 void cupid_cgb_init_state(struct CupidGb *gb);
 size_t cupid_cgb_vram_offset(const struct CupidGb *gb, uint16_t address);
 size_t cupid_cgb_wram_offset(const struct CupidGb *gb, uint16_t address);
-bool cupid_cgb_get_compatibility_palette(const struct CupidGb *gb,
-										 uint16_t bg[4],
-										 uint16_t obj0[4],
-										 uint16_t obj1[4]);
+bool cupid_cgb_get_compatibility_palette(const struct CupidGb *gb, uint16_t bg[4], uint16_t obj0[4],
+                                         uint16_t obj1[4]);
 void cupid_cgb_apply_compatibility_palette(struct CupidGb *gb);
 bool cupid_cgb_compat_active(const struct CupidGb *gb);
 uint16_t cupid_cgb_compat_bg_color(const struct CupidGb *gb, uint8_t shade);

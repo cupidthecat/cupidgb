@@ -7,15 +7,15 @@
 
 #include "cupid/gb/sgb.h"
 
-#define CUPID_GB_MAX_ROM_SIZE    (8u * 1024u * 1024u)
-#define CUPID_GB_MAX_RAM_SIZE    (128u * 1024u)
-#define CUPID_GB_MAX_BOOT_ROM_SIZE 0x0900u  /* CGB boot ROM is 2304 bytes */
-#define CUPID_GB_SCREEN_WIDTH    160u
-#define CUPID_GB_SCREEN_HEIGHT   144u
+#define CUPID_GB_MAX_ROM_SIZE (8u * 1024u * 1024u)
+#define CUPID_GB_MAX_RAM_SIZE (128u * 1024u)
+#define CUPID_GB_MAX_BOOT_ROM_SIZE 0x0900u /* CGB boot ROM is 2304 bytes */
+#define CUPID_GB_SCREEN_WIDTH 160u
+#define CUPID_GB_SCREEN_HEIGHT 144u
 
 /* APU sample buffer: ~2.8 frames at 44100 Hz / 60 fps */
 #define CUPID_GB_APU_SAMPLE_RATE 44100u
-#define CUPID_GB_APU_BUF_FRAMES  2048u
+#define CUPID_GB_APU_BUF_FRAMES 2048u
 
 /*
  * All 4 Game Boy audio channels + frame sequencer state.
@@ -27,81 +27,81 @@
  */
 typedef struct CupidGbApu {
     /* Frame sequencer */
-    uint16_t fs_counter;  /* T-cycles until next frame-sequencer tick */
-    uint8_t  fs_step;     /* 0-7 */
+    uint8_t fs_step;           /* 0-7 */
+    uint8_t fs_skip_div_event; /* 1: skip first edge; 2: resume without advancing phase. */
 
-    bool apu_on;          /* NR52 bit 7 */
+    bool apu_on; /* NR52 bit 7 */
 
     /* CH1 – square wave with frequency sweep */
-    bool     ch1_dac;
-    bool     ch1_on;
-    uint8_t  ch1_duty;        /* 0-3 */
-    uint8_t  ch1_duty_pos;    /* 0-7 */
-    uint8_t  ch1_len;
-    bool     ch1_len_en;
-    uint8_t  ch1_vol;
-    bool     ch1_env_add;
-    uint8_t  ch1_env_period;
-    uint8_t  ch1_env_timer;
-    uint16_t ch1_freq;        /* current live frequency (11-bit) */
+    bool ch1_dac;
+    bool ch1_on;
+    uint8_t ch1_duty;     /* 0-3 */
+    uint8_t ch1_duty_pos; /* 0-7 */
+    uint8_t ch1_len;
+    bool ch1_len_en;
+    uint8_t ch1_vol;
+    bool ch1_env_add;
+    uint8_t ch1_env_period;
+    uint8_t ch1_env_timer;
+    uint16_t ch1_freq; /* current live frequency (11-bit) */
     uint16_t ch1_timer;
-    bool     ch1_sweep_en;
-    uint8_t  ch1_sweep_timer;
-    uint8_t  ch1_sweep_period;
-    bool     ch1_sweep_neg;
-    uint8_t  ch1_sweep_shift;
+    bool ch1_sweep_en;
+    uint8_t ch1_sweep_timer;
+    uint8_t ch1_sweep_period;
+    bool ch1_sweep_neg;
+    uint8_t ch1_sweep_shift;
     uint16_t ch1_sweep_shadow;
-    bool     ch1_sweep_subtracted;
+    bool ch1_sweep_subtracted;
 
     /* CH2 – square wave (no sweep) */
-    bool     ch2_dac;
-    bool     ch2_on;
-    uint8_t  ch2_duty;
-    uint8_t  ch2_duty_pos;
-    uint8_t  ch2_len;
-    bool     ch2_len_en;
-    uint8_t  ch2_vol;
-    bool     ch2_env_add;
-    uint8_t  ch2_env_period;
-    uint8_t  ch2_env_timer;
+    bool ch2_dac;
+    bool ch2_on;
+    uint8_t ch2_duty;
+    uint8_t ch2_duty_pos;
+    uint8_t ch2_len;
+    bool ch2_len_en;
+    uint8_t ch2_vol;
+    bool ch2_env_add;
+    uint8_t ch2_env_period;
+    uint8_t ch2_env_timer;
     uint16_t ch2_freq;
     uint16_t ch2_timer;
 
     /* CH3 – arbitrary wave */
-    bool     ch3_dac;
-    bool     ch3_on;
-    uint16_t ch3_len;         /* counts down from 256; fits in 9 bits */
-    bool     ch3_len_en;
-    uint8_t  ch3_out_level;   /* 0=mute 1=100% 2=50% 3=25% */
+    bool ch3_dac;
+    bool ch3_on;
+    uint16_t ch3_len; /* counts down from 256; fits in 9 bits */
+    bool ch3_len_en;
+    uint8_t ch3_out_level; /* 0=mute 1=100% 2=50% 3=25% */
     uint16_t ch3_freq;
     uint16_t ch3_active_freq; /* currently active period source */
     uint16_t ch3_timer;
-    uint8_t  ch3_wave_pos;    /* 0-31 nibble index */
-    uint8_t  ch3_current_byte;/* 0-15 wave RAM byte currently exposed to CPU */
-    bool     ch3_started;     /* true once the first post-trigger sample has been fetched */
-    uint8_t  ch3_wave_access_ticks; /* DMG-only access window after a wave fetch */
-    bool     ch3_freq_pending;/* apply ch3_freq after the next wave RAM fetch */
-    uint8_t  ch3_sample;      /* current 4-bit output */
+    uint8_t ch3_wave_pos;          /* 0-31 nibble index */
+    uint8_t ch3_current_byte;      /* 0-15 wave RAM byte currently exposed to CPU */
+    bool ch3_started;              /* true once the first post-trigger sample has been fetched */
+    uint8_t ch3_wave_access_ticks; /* DMG-only access window after a wave fetch */
+    bool ch3_freq_pending;         /* apply ch3_freq after the next wave RAM fetch */
+    uint8_t ch3_sample;            /* current 4-bit output */
 
     /* CH4 – noise (LFSR) */
-    bool     ch4_dac;
-    bool     ch4_on;
-    uint8_t  ch4_len;
-    bool     ch4_len_en;
-    uint8_t  ch4_vol;
-    bool     ch4_env_add;
-    uint8_t  ch4_env_period;
-    uint8_t  ch4_env_timer;
-    uint8_t  ch4_div_code;    /* 0-7 */
-    uint8_t  ch4_shift;       /* 0-13 */
-    bool     ch4_width7;      /* true = 7-bit LFSR */
+    bool ch4_dac;
+    bool ch4_on;
+    uint8_t ch4_len;
+    bool ch4_len_en;
+    uint8_t ch4_vol;
+    bool ch4_env_add;
+    uint8_t ch4_env_period;
+    uint8_t ch4_env_timer;
+    uint8_t ch4_div_code; /* 0-7 */
+    uint8_t ch4_shift;    /* 0-13 */
+    bool ch4_width7;      /* true = 7-bit LFSR */
     uint32_t ch4_timer;
-    uint16_t ch4_lfsr;        /* 15-bit shift register */
+    uint16_t ch4_lfsr; /* 15-bit shift register */
 
     /* Output */
     uint32_t sample_acc;
-    int16_t  buf[CUPID_GB_APU_BUF_FRAMES * 2u]; /* L/R interleaved */
-    uint32_t buf_write;       /* number of stereo frames written */
+    int16_t buf[CUPID_GB_APU_BUF_FRAMES * 2u]; /* L/R interleaved */
+    uint32_t buf_write;                        /* number of stereo frames written */
 } CupidGbApu;
 
 typedef enum CupidGbMbcType {
@@ -120,10 +120,10 @@ typedef enum CupidGbMbcType {
 
 /* MBC3 real-time clock registers */
 typedef struct CupidGbRtc {
-    uint8_t s, m, h, dl, dh;       /* live registers */
-    uint8_t ls, lm, lh, ldl, ldh;  /* latched copies */
-    uint8_t latch_prev;             /* last value written to latch port */
-    int64_t base_time;              /* system clock snapshot for elapsed-time calc */
+    uint8_t s, m, h, dl, dh;      /* live registers */
+    uint8_t ls, lm, lh, ldl, ldh; /* latched copies */
+    uint8_t latch_prev;           /* last value written to latch port */
+    int64_t base_time;            /* system clock snapshot for elapsed-time calc */
 } CupidGbRtc;
 
 typedef struct CupidGbCpu {
@@ -201,35 +201,36 @@ typedef struct CupidGb {
     bool mbc1_ram_banking_mode;
     /* MBC3 real-time clock */
     CupidGbRtc rtc;
-    uint8_t rtc_register;       /* 0 = normal RAM; 0x08-0x0C = RTC reg */
+    uint8_t rtc_register; /* 0 = normal RAM; 0x08-0x0C = RTC reg */
     /* MBC5 9-bit ROM bank */
     uint16_t mbc5_rom_bank;
     /* MBC7 accelerometer */
     uint16_t mbc7_sensor_x;
     uint16_t mbc7_sensor_y;
-    bool     mbc7_latch;
+    bool mbc7_latch;
     /* MMM01 */
-    bool     mmm01_locked;
-    uint8_t  mmm01_bank_base;
+    bool mmm01_locked;
+    uint8_t mmm01_bank_base;
     /* HuC1 */
-    bool     huc1_ir_mode;
+    bool huc1_ir_mode;
     /* HuC3 */
-    uint8_t  huc3_mode;
-    uint8_t  huc3_value;
-    uint8_t  serial_counter;
-    uint8_t  serial_bits_remaining;
-    uint8_t  serial_tx_latch;
+    uint8_t huc3_mode;
+    uint8_t huc3_value;
+    bool serial_master_clock;
+    uint64_t elapsed_cycles; /* Base-speed T-cycles, including LCD-off execution. */
+    uint8_t serial_bits_remaining;
+    uint8_t serial_tx_latch;
     uint16_t div_counter;
     uint16_t timer_counter;
-    uint8_t  tima_overflow_delay; /* M-cycles remaining until TMA reload + timer IRQ */
-    bool     tima_reload_just_happened;
+    uint8_t tima_overflow_delay; /* M-cycles remaining until TMA reload + timer IRQ */
+    bool tima_reload_just_happened;
     uint16_t dma_source_base;
     uint16_t dma_restart_source_base;
-    uint8_t  dma_index;
-    uint8_t  dma_start_delay;
-    uint8_t  dma_restart_delay;
-    bool     dma_active;
-    bool     dma_restart_pending;
+    uint8_t dma_index;
+    uint8_t dma_start_delay;
+    uint8_t dma_restart_delay;
+    bool dma_active;
+    bool dma_restart_pending;
     uint16_t ppu_counter;
     bool cgb_mode;
     uint8_t cgb_vram_bank;
@@ -243,7 +244,7 @@ typedef struct CupidGb {
     bool double_speed;
     bool speed_switch_armed;
     bool speed_phase;
-    uint8_t joypad;          /* button state: bits 0-3 dpad, 4-7 action; 0=pressed */
+    uint8_t joypad;              /* button state: bits 0-3 dpad, 4-7 action; 0=pressed */
     uint8_t window_line_counter; /* internal window scanline counter */
     uint8_t ppu_lcd_warmup_lines;
     uint8_t stat_irq_delay;
@@ -256,17 +257,16 @@ typedef struct CupidGb {
     CupidGbSgb sgb;
     CupidGbApu apu;
     /* Boot ROM overlay */
-    uint8_t  boot_rom[CUPID_GB_MAX_BOOT_ROM_SIZE];
-    size_t   boot_rom_size;     /* 0x0100 for DMG, 0x0900 for CGB */
-    bool     boot_rom_enabled;  /* true while boot ROM is mapped */
+    uint8_t boot_rom[CUPID_GB_MAX_BOOT_ROM_SIZE];
+    size_t boot_rom_size;  /* 0x0100 for DMG, 0x0900 for CGB */
+    bool boot_rom_enabled; /* true while boot ROM is mapped */
 } CupidGb;
 
 void cupid_gb_init(CupidGb *gb);
 void cupid_gb_cleanup(CupidGb *gb);
 void cupid_gb_set_model(CupidGb *gb, CupidGbModel model);
 const char *cupid_gb_model_name(CupidGbModel model);
-bool cupid_gb_parse_header(const uint8_t *rom_data,
-                           size_t rom_size,
+bool cupid_gb_parse_header(const uint8_t *rom_data, size_t rom_size,
                            CupidGbCartridgeHeader *header);
 bool cupid_gb_load_rom_file(CupidGb *gb, const char *path);
 bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size);

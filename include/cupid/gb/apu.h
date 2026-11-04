@@ -7,5 +7,6 @@
 
 void cupid_gb_apu_on_write(CupidGb *gb, uint8_t off, uint8_t val);
 void cupid_gb_tick_apu(CupidGb *gb, uint16_t cycles);
+void cupid_gb_apu_div_event(CupidGb *gb);
 
 #endif

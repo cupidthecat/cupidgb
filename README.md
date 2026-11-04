@@ -1,121 +1,72 @@
-# cupidgb
+# CupidGB
 
-`cupidgb` is a multi-system Game Boy emulator written in C, targeting Linux with an SDL2 frontend. It currently supports the original Game Boy (DMG) and Game Boy Color (GBC), with ongoing work toward Game Boy Advance (GBA).
+CupidGB is a Game Boy and Game Boy Color emulator with a C hardware core and a Qt 6 desktop interface for Windows and Linux. Development is ongoing. Complete accuracy, feature parity, and commercial-game compatibility have not been established.
 
-## Status
+## Desktop
 
-### Game Boy (DMG / GBC)
+Open a cartridge with Ctrl+O, drag a `.gb` or `.gbc` file onto the window, or supply its path on the command line. The frontend provides recent files, pause/reset, frame advance, fullscreen, screenshots, keyboard configuration, volume/mute, and battery SRAM persistence. Settings are stored per user.
 
-| Component | Status |
-|---|---|
-| **CPU** | Full Sharp SM83 instruction set - all unprefixed and CB-prefixed opcodes |
-| **PPU** | Background, Window, and Sprite (OBJ) layers; 4-shade DMG palette; scanline rendering; STAT/VBlank interrupts |
-| **APU** | All 4 channels: CH1 (pulse + sweep), CH2 (pulse), CH3 (wave), CH4 (noise/LFSR); volume envelopes; length counters; frame sequencer; stereo mixing; SDL2 audio at 44100 Hz stereo int16 |
-| **Timer** | DIV, TIMA, TMA, TAC with correct overflow/reload behavior |
-| **Interrupts** | VBlank, LCD STAT, Timer, Serial; IME/EI/DI/HALT/STOP |
-| **Joypad** | P1/JOYP register with D-pad and action buttons |
-| **Cartridge** | ROM-only, MBC1 (ROM/RAM banking, multicart detection), MBC2, MBC3 (with RTC latch/update), MBC5 (9-bit ROM bank, rumble detection), MBC6, MBC7, MMM01, HuC1, HuC3; battery-backed SRAM load/save to `.sav` |
-| **Serial** | Blargg test ROM output piped to terminal |
-| **Tests** | Passes Blargg `cpu_instrs` tests 01–02 |
-| **GBC** | VRAM/WRAM banking, color palettes (BCPS/OCPS/OCPD/OBPD), HDMA/GDMA, color scanline rendering with per-tile attributes (flip, palette, tile bank), CGB compatibility palettes for DMG ROMs with Nintendo licensee codes, double-speed mode (KEY1) |
-| **SGB / SGB2** | Full JOYP packet protocol; PAL01/23/03/12, PAL_SET, PAL_TRN (512-palette RAM); ATTR_BLK, ATTR_LIN, ATTR_DIV, ATTR_CHR, ATTR_TRN, ATTR_SET (per-tile attribute map); CHR_TRN, PCT_TRN (256×224 border tiles and tilemap); MLT_REQ (multi-player controller cycling); MASK_EN (disabled/freeze/black/color0 modes); compatibility palette fallback for non-SGB-enhanced ROMs |
+| Control | Default |
+| --- | --- |
+| Direction pad | Arrow keys |
+| A / B | X / Z |
+| Select / Start | Backspace / Enter |
+| Turbo | Hold Space |
+| Open / reset / pause | Ctrl+O / Ctrl+R / Ctrl+P |
+| Fullscreen / mute | Ctrl+F / Ctrl+M |
+| Screenshot | F12 |
 
-## Controls
+Use Settings to select a hardware profile, configure keys, choose a boot-ROM directory, change volume, or select integer/aspect scaling. Boot ROMs are optional local inputs; none are distributed. Without one, the core uses an approximate startup profile.
 
-| Key | Game Boy button |
-|---|---|
-| Arrow keys | D-Pad |
-| `Z` | A |
-| `X` | B |
-| `Enter` | Start |
-| `Backspace` | Select |
+Battery SRAM is saved next to the cartridge as `.sav`, periodically and when resetting, changing, or closing the cartridge. Save states, rewind, controllers, debugger tools, RTC persistence, and advanced display/audio features remain incomplete. See [the parity checklist](docs/parity.md) for the full scope.
 
-## Building
+## Build
 
-### Dependencies
+Requirements: CMake 3.21 or newer, a C11/C++17 compiler, Python 3.9 or newer for tests, and Qt 6.4 or newer with Widgets and Multimedia.
 
-| Package | Purpose |
-|---|---|
-| `gcc` | C compiler |
-| `make` | Build orchestration |
-| `cmake` | Build system |
-| `pkg-config` | Library flags |
-| `libsdl2-dev` | Video, audio, and input |
-
-Optional development tools: `clangd`, `clang-format`, `cppcheck`, `gdb`, `valgrind`.
-
-### Quick start
+On Debian or Ubuntu:
 
 ```sh
-# Install dependencies (Debian/Ubuntu)
-./scripts/setup_dev_env.sh --install
-
-# Configure
-cmake -S . -B build
-
-# Build
+sudo apt-get install build-essential cmake ninja-build python3 qt6-base-dev qt6-multimedia-dev
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
-
-# Run
-./build/cupidgb path/to/rom.gb
+ctest --test-dir build --output-on-failure
+./build/cupidgb /path/to/cartridge.gb
 ```
 
-The emulator opens a 640×576 window (4× scale from the 160×144 native resolution). Log output goes to the terminal.
+On Windows, use an x64 Visual Studio 2022 developer shell and a matching MSVC Qt installation:
 
-### Running tests
+```powershell
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH=C:/Qt/6.8.3/msvc2022_64
+cmake --build build
+$env:PATH = "C:/Qt/6.8.3/msvc2022_64/bin;$env:PATH"
+ctest --test-dir build --output-on-failure
+./build/cupidgb.exe C:/Games/cartridge.gbc
+```
+
+The Qt path is an example; use the actual location of your installation. Run Qt's `windeployqt` on the executable when preparing a portable Windows folder. A local build alone does not qualify packaging or deployment.
+
+For core-only tools and tests, configure with `-DCUPIDGB_BUILD_QT=OFF`. GCC/Clang builds can enable AddressSanitizer and UndefinedBehaviorSanitizer with `-DCUPIDGB_ENABLE_SANITIZERS=ON`.
+
+## Validation tools
 
 ```sh
-ctest --test-dir build --output-on-failure
+./build/cupidgb --smoke-test
+python3 scripts/test_rom_runner.py ./build/cupidgb_rom_runner
+python3 scripts/run_rom_suite.py ./build/cupidgb_rom_runner /private/test-roms --model dmg --protocol register --output .local-research/suite.json
+./build/cupidgb_rom_runner --model cgb --protocol none --frames 600 --image .local-research/frame.ppm --audio .local-research/audio.pcm /private/cartridge.gbc
 ```
 
-### Make shortcuts
+The frontend smoke check uses an isolated settings directory and a generated disposable cartridge. It checks a bounded workflow; it does not establish real-game playability, audible output quality, or sustained pacing.
 
-| Target | Action |
-|---|---|
-| `make configure` | Run CMake configuration |
-| `make build` | Build all targets |
-| `make run` | Build and run |
-| `make test` | Build and run tests |
-| `make debug` | Debug build |
-| `make release` | Release build |
-| `make clean` | Remove build artifacts |
+For a real frontend measurement with host audio enabled:
 
-## Project layout
-
-```text
-cupidgb/
-├── docs/                   # Architecture notes
-├── include/cupid/          # Public headers
-│   ├── common/             # Logging
-│   ├── core/               # Emulator and system interfaces
-│   ├── gb/                 # Game Boy core API
-│   └── platform/           # SDL app interface
-├── scripts/                # Dev environment helpers
-├── src/
-│   ├── common/             # log.c
-│   ├── core/               # emulator.c, system.c
-│   ├── gb/                 # cpu.c, ppu.c, apu.c, timer.c, cartridge.c, gb.c, sgb.c
-│   ├── gbc/                # cgb.c - Game Boy Color extensions
-│   ├── platform/sdl/       # sdl_app.c - SDL2 window, event loop, audio
-│   └── main.c
-├── tests/                  # Unit and integration tests
-├── CMakeLists.txt
-└── Makefile
+```sh
+./build/cupidgb --run-seconds 60 --report .local-research/frontend.json /private/cartridge.gb
 ```
 
-## Architecture
+This mode isolates settings and records guest speed, widget paint counts, host audio format, queue depth, and reported backend idle/error events. The JSON report and companion PNG are private evidence. Optional `--input-trace` files contain ascending decimal guest frames and hexadecimal active-low button masks, one pair per line. Bits 0 through 7 represent Right, Left, Up, Down, A, B, Select, Start. Frame timestamps use 70,224 base-speed T-cycles. For example, `300 7f` presses Start at frame 300 and `310 ff` releases all buttons at frame 310.
 
-The codebase is split into three layers:
+The suite runner requires an explicit serial, register, or memory success protocol. A bounded run without a verdict is inconclusive. Headless output records guest base-clock progress, VBlank counts, audio sample counts, checksums, and host elapsed time separately. These measurements do not establish presentation FPS or full-speed commercial gameplay.
 
-- **`src/gb/`** - self-contained GB/GBC hardware: CPU, PPU, APU, timer, DMA, serial, MBC
-- **`src/core/`** - thin orchestration wrapper (`emulator.c`, `system.c`)
-- **`src/platform/sdl/`** - SDL2 frontend: texture upload, keyboard input, frame pacing, audio
-
-Platform code has no knowledge of emulation internals beyond the public `cupid/gb/gb.h` API.
-
-## Roadmap
-
-- [ ] APU accuracy improvements (CH3 timing quirks, zombie mode)
-- [ ] Save states
-- [X] Game Boy Advance support - implemented in [cupidgba](https://github.com/cupidthecat/cupidgba)
-- [ ] Expanded Blargg test ROM coverage (`instr_timing`, `mem_timing`)
+Use the supplied `.clang-format` for project C/C++ files. Keep local ROMs, boot ROMs, saves, build outputs, and private evidence out of commits. [Validation record](docs/validation.md) lists tested scopes and remaining gaps. [Architecture notes](docs/architecture.md) describe subsystem boundaries. The repository license and notices in `LICENSES` apply to source and distributed builds.

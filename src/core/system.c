@@ -23,14 +23,13 @@
  * @note The returned string is a string literal and must not be
  *       modified or freed by the caller.
  */
-const char *cupid_system_name(CupidSystem system)
-{
+const char *cupid_system_name(CupidSystem system) {
     switch (system) {
-    case CUPID_SYSTEM_GB:
-        return "Game Boy";
-    case CUPID_SYSTEM_GBC:
-        return "Game Boy Color";
-    default:
-        return "Unknown";
+        case CUPID_SYSTEM_GB:
+            return "Game Boy";
+        case CUPID_SYSTEM_GBC:
+            return "Game Boy Color";
+        default:
+            return "Unknown";
     }
 }

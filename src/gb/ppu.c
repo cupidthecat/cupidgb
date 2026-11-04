@@ -2,7 +2,7 @@
  * @file ppu.c
  * @brief Pixel Processing Unit (PPU) emulation for Game Boy (DMG) and Game Boy Color (CGB).
  *
- * Implements the full PPU pipeline, shared between DMG and CGB:
+ * Implements a scanline PPU shared between DMG and CGB:
  *   - Mode state machine (OAM scan → Transfer → HBlank → VBlank)
  *   - Scanline renderer: background, window, and sprite (OBJ) layers
  *   - STAT IRQ edge-detection and delayed-fire logic
@@ -10,15 +10,15 @@
  *   - CGB compatibility palette rendering (delegated to cgb.c)
  *
  * Cycle timing is driven by @ref cupid_gb_tick_ppu, which is called
- * once per T-cycle from the main step loop.
+ * once per M-cycle from the main step loop.
  */
 
 #include "cupid/gb/ppu.h"
 
 #include <string.h>
 
-#include "cupid/gb/gb.h"
 #include "cupid/gb/cpu.h"
+#include "cupid/gb/gb.h"
 #include "cupid/gbc/cgb.h"
 
 // Helpers
@@ -32,8 +32,7 @@
  *
  * @return `true` if the LCD is enabled, `false` otherwise.
  */
-bool cupid_gb_lcd_enabled(const CupidGb *gb)
-{
+bool cupid_gb_lcd_enabled(const CupidGb *gb) {
     return (gb->io_registers[CUPID_GB_IO_LCDC] & 0x80u) != 0u;
 }
 
@@ -44,8 +43,7 @@ bool cupid_gb_lcd_enabled(const CupidGb *gb)
  *
  * @return The current PPU mode (0=HBlank, 1=VBlank, 2=OAM, 3=Transfer).
  */
-static uint8_t cupid_gb_ppu_mode(const CupidGb *gb)
-{
+static uint8_t cupid_gb_ppu_mode(const CupidGb *gb) {
     return (uint8_t)(gb->io_registers[CUPID_GB_IO_STAT] & 0x03u);
 }
 
@@ -57,8 +55,7 @@ static uint8_t cupid_gb_ppu_mode(const CupidGb *gb)
  * @param gb   Pointer to the Game Boy state.
  * @param mode The mode to set (0=HBlank, 1=VBlank, 2=OAM, 3=Transfer).
  */
-void cupid_gb_set_ppu_mode(CupidGb *gb, uint8_t mode)
-{
+void cupid_gb_set_ppu_mode(CupidGb *gb, uint8_t mode) {
     gb->io_registers[CUPID_GB_IO_STAT] =
         (uint8_t)((gb->io_registers[CUPID_GB_IO_STAT] & 0xfcu) | (mode & 0x03u));
 }
@@ -74,8 +71,7 @@ void cupid_gb_set_ppu_mode(CupidGb *gb, uint8_t mode)
  *
  * @return The 2-bit shade value (0–3).
  */
-static uint8_t cupid_gb_palette_lookup(uint8_t palette, uint8_t color_index)
-{
+static uint8_t cupid_gb_palette_lookup(uint8_t palette, uint8_t color_index) {
     return (uint8_t)((palette >> (color_index * 2u)) & 0x03u);
 }
 
@@ -89,8 +85,7 @@ static uint8_t cupid_gb_palette_lookup(uint8_t palette, uint8_t color_index)
  *
  * @return `floor(value / 8)`.
  */
-static int cupid_gb_floor_div8(int value)
-{
+static int cupid_gb_floor_div8(int value) {
     if (value >= 0) {
         return value / 8;
     }
@@ -112,11 +107,11 @@ static int cupid_gb_floor_div8(int value)
  * @return The number of extra T-cycles added to Mode 3 by OBJ fetches,
  *         or 0 if sprites are disabled or @p gb is NULL.
  */
-static uint16_t cupid_gb_sprite_penalty_cycles(const CupidGb *gb)
-{
+static uint16_t cupid_gb_sprite_penalty_cycles(const CupidGb *gb) {
     struct SpriteCandidate {
         uint8_t x;
     } sprites[10];
+
     int considered_buckets[10];
     int bucket_waits[10];
     uint8_t count;
@@ -223,8 +218,7 @@ static uint16_t cupid_gb_sprite_penalty_cycles(const CupidGb *gb)
  *
  * @return The total Mode 3 duration in T-cycles for the current scanline.
  */
-static uint16_t cupid_gb_visible_transfer_cycles(const CupidGb *gb)
-{
+static uint16_t cupid_gb_visible_transfer_cycles(const CupidGb *gb) {
     uint8_t scx_mod;
     uint16_t cycles;
 
@@ -246,20 +240,17 @@ static uint16_t cupid_gb_visible_transfer_cycles(const CupidGb *gb)
 }
 
 /**
- * @brief Returns the total scanline duration in T-cycles for a given LY.
+ * @brief Returns the current scanline duration in M-cycles.
  *
- * Most scanlines are @ref CUPID_GB_PPU_SCANLINE_CYCLES (456) T-cycles.
- * Two special cases are handled:
- *   - LY 0 during LCD startup is only 111 T-cycles (PPU warm-up).
- *   - LY 153 on DMG is one T-cycle shorter (455) due to a hardware quirk.
+ * Normal scanlines use 114 M-cycles. Startup and the final DMG VBlank line
+ * currently use approximate durations. The shortened final line is an
+ * outstanding timing gap; LY reset timing must be separated from line length.
  *
  * @param gb Pointer to the Game Boy state.
- * @param ly The scanline number (0–153).
- *
- * @return The scanline duration in T-cycles.
+ * @param ly The scanline number (0-153).
+ * @return The current scanline duration in M-cycles.
  */
-static uint16_t cupid_gb_scanline_cycles(const CupidGb *gb, uint8_t ly)
-{
+static uint16_t cupid_gb_scanline_cycles(const CupidGb *gb, uint8_t ly) {
     if (gb != 0 && gb->ppu_lcd_startup && ly == 0u) {
         return 111u;
     }
@@ -291,8 +282,7 @@ static uint16_t cupid_gb_scanline_cycles(const CupidGb *gb, uint8_t ly)
  *
  * @note Does nothing if @p gb is NULL or LY is outside the visible area.
  */
-static void cupid_gb_render_scanline(CupidGb *gb)
-{
+static void cupid_gb_render_scanline(CupidGb *gb) {
     uint8_t lcdc;
     uint8_t ly;
     size_t base_index;
@@ -317,6 +307,7 @@ static void cupid_gb_render_scanline(CupidGb *gb)
     {
         uint8_t bg_palette = gb->io_registers[CUPID_GB_IO_BGP];
         bool cgb_compat = cupid_cgb_compat_active(gb);
+        uint8_t bg_color_indices[CUPID_GB_SCREEN_WIDTH] = {0};
 
         /* --- Background layer --- */
         if ((lcdc & 0x01u) == 0u) {
@@ -329,7 +320,8 @@ static void cupid_gb_render_scanline(CupidGb *gb)
                 uint8_t bg_x = (uint8_t)(x + scx);
                 uint8_t bg_y = (uint8_t)(ly + scy);
                 size_t tile_map_base = (lcdc & 0x08u) != 0u ? 0x1c00u : 0x1800u;
-                size_t tile_map_index = tile_map_base + (size_t)((bg_y >> 3u) * 32u) + (size_t)(bg_x >> 3u);
+                size_t tile_map_index =
+                    tile_map_base + (size_t)((bg_y >> 3u) * 32u) + (size_t)(bg_x >> 3u);
                 uint8_t tile_number = gb->video_ram[tile_map_index & 0x1fffu];
                 size_t tile_address;
                 uint8_t tile_line;
@@ -348,9 +340,10 @@ static void cupid_gb_render_scanline(CupidGb *gb)
                 low = gb->video_ram[(tile_address + tile_line) & 0x1fffu];
                 high = gb->video_ram[(tile_address + tile_line + 1u) & 0x1fffu];
                 bit_index = (uint8_t)(7u - (bg_x & 0x07u));
-                color_index = (uint8_t)((((high >> bit_index) & 0x01u) << 1u) |
-                                        ((low >> bit_index) & 0x01u));
+                color_index =
+                    (uint8_t)((((high >> bit_index) & 0x01u) << 1u) | ((low >> bit_index) & 0x01u));
                 gb->frame_buffer[base_index + x] = cupid_gb_palette_lookup(bg_palette, color_index);
+                bg_color_indices[x] = color_index;
                 if (cgb_compat) {
                     gb->frame_buffer_color[base_index + x] =
                         cupid_cgb_compat_bg_color(gb, gb->frame_buffer[base_index + x]);
@@ -370,7 +363,8 @@ static void cupid_gb_render_scanline(CupidGb *gb)
 
                 for (x = wx_screen; x < CUPID_GB_SCREEN_WIDTH; ++x) {
                     uint8_t win_x = (uint8_t)(x - wx_screen);
-                    size_t tile_map_idx = win_tile_map_base + (size_t)((win_y >> 3u) * 32u) + (size_t)(win_x >> 3u);
+                    size_t tile_map_idx =
+                        win_tile_map_base + (size_t)((win_y >> 3u) * 32u) + (size_t)(win_x >> 3u);
                     uint8_t tile_num = gb->video_ram[tile_map_idx & 0x1fffu];
                     size_t tile_address;
                     uint8_t tile_line;
@@ -389,9 +383,10 @@ static void cupid_gb_render_scanline(CupidGb *gb)
                     wlow = gb->video_ram[(tile_address + tile_line) & 0x1fffu];
                     whigh = gb->video_ram[(tile_address + tile_line + 1u) & 0x1fffu];
                     wbit = (uint8_t)(7u - (win_x & 0x07u));
-                    wcolor = (uint8_t)((((whigh >> wbit) & 0x01u) << 1u) |
-                                       ((wlow >> wbit) & 0x01u));
+                    wcolor =
+                        (uint8_t)((((whigh >> wbit) & 0x01u) << 1u) | ((wlow >> wbit) & 0x01u));
                     gb->frame_buffer[base_index + x] = cupid_gb_palette_lookup(bg_palette, wcolor);
+                    bg_color_indices[x] = wcolor;
                     if (cgb_compat) {
                         gb->frame_buffer_color[base_index + x] =
                             cupid_cgb_compat_bg_color(gb, gb->frame_buffer[base_index + x]);
@@ -403,93 +398,110 @@ static void cupid_gb_render_scanline(CupidGb *gb)
 
         /* --- OBJ/Sprite layer (LCDC bit 1 enables sprites) --- */
         if ((lcdc & 0x02u) != 0u) {
-        int obj_height = ((lcdc & 0x04u) != 0u) ? 16 : 8;
-        unsigned int sprite_count = 0u;
-        unsigned int i;
+            int obj_height = ((lcdc & 0x04u) != 0u) ? 16 : 8;
+            unsigned int sprite_count = 0u;
+            unsigned int i;
+            unsigned int sprites[10];
+            bool sprite_claimed[CUPID_GB_SCREEN_WIDTH] = {false};
 
-        for (i = 0u; i < 40u && sprite_count < 10u; ++i) {
-            int obj_y = (int)gb->object_attribute_memory[i * 4u] - 16;
-            int obj_x = (int)gb->object_attribute_memory[i * 4u + 1u] - 8;
-            uint8_t tile_idx = gb->object_attribute_memory[i * 4u + 2u];
-            uint8_t attrs = gb->object_attribute_memory[i * 4u + 3u];
-            int tile_row;
-            uint8_t palette;
-            size_t tile_addr;
-            uint8_t olow;
-            uint8_t ohigh;
-            int px;
-
-            if ((int)ly < obj_y || (int)ly >= obj_y + obj_height) {
-                continue;
-            }
-            ++sprite_count;
-
-            tile_row = (int)ly - obj_y;
-
-            if (obj_height == 16) {
-                if ((attrs & 0x40u) != 0u) { /* Y-flip */
-                    tile_row = obj_height - 1 - tile_row;
-                }
-                if (tile_row >= 8) {
-                    tile_idx = (uint8_t)(tile_idx | 0x01u);
-                    tile_row -= 8;
-                } else {
-                    tile_idx = (uint8_t)(tile_idx & 0xfeu);
-                }
-            } else {
-                if ((attrs & 0x40u) != 0u) { /* Y-flip */
-                    tile_row = 7 - tile_row;
-                }
-            }
-
-                        palette = ((attrs & 0x10u) != 0u)
-                                                    ? gb->io_registers[CUPID_GB_IO_OBP1]
-                                                    : gb->io_registers[CUPID_GB_IO_OBP0];
-            tile_addr = (size_t)tile_idx * 16u + (size_t)(tile_row * 2);
-            olow = gb->video_ram[tile_addr & 0x1fffu];
-            ohigh = gb->video_ram[(tile_addr + 1u) & 0x1fffu];
-
-            for (px = 0; px < 8; ++px) {
-                int screen_x;
-                uint8_t color_index;
-                uint8_t bit_pos;
-
-                if ((attrs & 0x20u) != 0u) { /* X-flip */
-                    screen_x = obj_x + (7 - px);
-                    bit_pos = (uint8_t)px;
-                } else {
-                    screen_x = obj_x + px;
-                    bit_pos = (uint8_t)px;
-                }
-
-                if (screen_x < 0 || screen_x >= (int)CUPID_GB_SCREEN_WIDTH) {
+            /* OAM order determines which ten objects reach the line. DMG pixel
+             * priority then uses the smaller X coordinate, with OAM order as tie-breaker. */
+            for (i = 0u; i < 40u && sprite_count < 10u; ++i) {
+                int y = (int)gb->object_attribute_memory[i * 4u] - 16;
+                if ((int)ly < y || (int)ly >= y + obj_height) {
                     continue;
                 }
+                unsigned int position = sprite_count;
+                while (position > 0u &&
+                       gb->object_attribute_memory[sprites[position - 1u] * 4u + 1u] >
+                           gb->object_attribute_memory[i * 4u + 1u]) {
+                    sprites[position] = sprites[position - 1u];
+                    --position;
+                }
+                sprites[position] = i;
+                ++sprite_count;
+            }
 
-                color_index = (uint8_t)((((ohigh >> (7u - bit_pos)) & 0x01u) << 1u) |
-                                        ((olow >> (7u - bit_pos)) & 0x01u));
+            for (unsigned int selected = 0u; selected < sprite_count; ++selected) {
+                i = sprites[selected];
+                int obj_y = (int)gb->object_attribute_memory[i * 4u] - 16;
+                int obj_x = (int)gb->object_attribute_memory[i * 4u + 1u] - 8;
+                uint8_t tile_idx = gb->object_attribute_memory[i * 4u + 2u];
+                uint8_t attrs = gb->object_attribute_memory[i * 4u + 3u];
+                int tile_row;
+                uint8_t palette;
+                size_t tile_addr;
+                uint8_t olow;
+                uint8_t ohigh;
+                int px;
 
-                if (color_index == 0u) {
-                    continue; /* color 0 is transparent for sprites */
+                tile_row = (int)ly - obj_y;
+
+                if (obj_height == 16) {
+                    if ((attrs & 0x40u) != 0u) { /* Y-flip */
+                        tile_row = obj_height - 1 - tile_row;
+                    }
+                    if (tile_row >= 8) {
+                        tile_idx = (uint8_t)(tile_idx | 0x01u);
+                        tile_row -= 8;
+                    } else {
+                        tile_idx = (uint8_t)(tile_idx & 0xfeu);
+                    }
+                } else {
+                    if ((attrs & 0x40u) != 0u) { /* Y-flip */
+                        tile_row = 7 - tile_row;
+                    }
                 }
 
-                /* BG priority: attr bit 7 set means sprite is behind BG colors 1-3 */
-                if ((attrs & 0x80u) != 0u &&
-                    gb->frame_buffer[base_index + (size_t)screen_x] != 0u) {
-                    continue;
-                }
+                palette = ((attrs & 0x10u) != 0u) ? gb->io_registers[CUPID_GB_IO_OBP1]
+                                                  : gb->io_registers[CUPID_GB_IO_OBP0];
+                tile_addr = (size_t)tile_idx * 16u + (size_t)(tile_row * 2);
+                olow = gb->video_ram[tile_addr & 0x1fffu];
+                ohigh = gb->video_ram[(tile_addr + 1u) & 0x1fffu];
 
-                gb->frame_buffer[base_index + (size_t)screen_x] =
-                    cupid_gb_palette_lookup(palette, color_index);
-                if (cgb_compat) {
-                    gb->frame_buffer_color[base_index + (size_t)screen_x] =
-                        cupid_cgb_compat_obj_color(gb,
-                                                   (attrs & 0x10u) != 0u ? 1u : 0u,
-                                                   gb->frame_buffer[base_index + (size_t)screen_x]);
+                for (px = 0; px < 8; ++px) {
+                    int screen_x;
+                    uint8_t color_index;
+                    uint8_t bit_pos;
+
+                    if ((attrs & 0x20u) != 0u) { /* X-flip */
+                        screen_x = obj_x + (7 - px);
+                        bit_pos = (uint8_t)px;
+                    } else {
+                        screen_x = obj_x + px;
+                        bit_pos = (uint8_t)px;
+                    }
+
+                    if (screen_x < 0 || screen_x >= (int)CUPID_GB_SCREEN_WIDTH ||
+                        sprite_claimed[screen_x]) {
+                        continue;
+                    }
+
+                    color_index = (uint8_t)((((ohigh >> (7u - bit_pos)) & 0x01u) << 1u) |
+                                            ((olow >> (7u - bit_pos)) & 0x01u));
+
+                    if (color_index == 0u) {
+                        continue; /* color 0 is transparent for sprites */
+                    }
+                    /* An opaque object wins OBJ priority even when BG hides it. */
+                    sprite_claimed[screen_x] = true;
+
+                    /* BG priority: attr bit 7 set means sprite is behind BG colors 1-3 */
+                    if ((attrs & 0x80u) != 0u && bg_color_indices[screen_x] != 0u) {
+                        continue;
+                    }
+
+                    gb->frame_buffer[base_index + (size_t)screen_x] =
+                        cupid_gb_palette_lookup(palette, color_index);
+                    if (cgb_compat) {
+                        gb->frame_buffer_color[base_index + (size_t)screen_x] =
+                            cupid_cgb_compat_obj_color(
+                                gb, (attrs & 0x10u) != 0u ? 1u : 0u,
+                                gb->frame_buffer[base_index + (size_t)screen_x]);
+                    }
                 }
             }
         }
-    }
     }
 }
 
@@ -510,8 +522,7 @@ static void cupid_gb_render_scanline(CupidGb *gb)
  *
  * @note Does nothing if @p gb is NULL.
  */
-void cupid_gb_update_stat_irq(CupidGb *gb)
-{
+void cupid_gb_update_stat_irq(CupidGb *gb) {
     bool coincidence;
     bool irq_signal;
     uint8_t stat;
@@ -585,8 +596,7 @@ void cupid_gb_update_stat_irq(CupidGb *gb)
  *
  * @note Does nothing if @p gb is NULL.
  */
-void cupid_gb_reset_ppu(CupidGb *gb)
-{
+void cupid_gb_reset_ppu(CupidGb *gb) {
     if (gb == 0) {
         return;
     }
@@ -615,8 +625,7 @@ void cupid_gb_reset_ppu(CupidGb *gb)
  *
  * @note Does nothing if @p gb is NULL.
  */
-void cupid_gb_run_dma_transfer(CupidGb *gb, uint8_t source_high)
-{
+void cupid_gb_run_dma_transfer(CupidGb *gb, uint8_t source_high) {
     uint16_t source_base;
 
     if (gb == 0) {
@@ -645,18 +654,17 @@ void cupid_gb_run_dma_transfer(CupidGb *gb, uint8_t source_high)
 }
 
 /**
- * @brief Advances the OAM DMA state machine by one T-cycle.
+ * @brief Advances the OAM DMA state machine by one M-cycle.
  *
  * Each call handles at most one byte of DMA data. Manages the start
  * delay, restart delay, active transfer, and completion. Must be called
- * once per T-cycle from the main tick path.
+ * once per M-cycle from the main tick path.
  *
  * @param gb Pointer to the Game Boy state.
  *
  * @note Does nothing if @p gb is NULL.
  */
-void cupid_gb_tick_dma(CupidGb *gb)
-{
+void cupid_gb_tick_dma(CupidGb *gb) {
     if (gb == 0) {
         return;
     }
@@ -697,9 +705,9 @@ void cupid_gb_tick_dma(CupidGb *gb)
 // PPU tick
 
 /**
- * @brief Advances the PPU state machine by the given number of T-cycles.
+ * @brief Advances the PPU state machine by the given number of M-cycles.
  *
- * For each T-cycle, drives the PPU mode state machine (OAM → Transfer
+ * For each M-cycle, drives the PPU mode state machine (OAM → Transfer
  * → HBlank → VBlank) based on the current line position. On mode
  * transitions it calls @ref cupid_gb_render_scanline (at HBlank entry
  * for visible lines), fires the VBlank interrupt at LY 144, and
@@ -709,13 +717,12 @@ void cupid_gb_tick_dma(CupidGb *gb)
  * warm-up period after LCD enable.
  *
  * @param gb     Pointer to the Game Boy state.
- * @param cycles Number of T-cycles to advance.
+ * @param cycles Number of M-cycles to advance.
  *
  * @note Does nothing if @p gb is NULL or the LCD is disabled (state is
  *       reset to LY=0 / HBlank on every call while the LCD is off).
  */
-void cupid_gb_tick_ppu(CupidGb *gb, uint16_t cycles)
-{
+void cupid_gb_tick_ppu(CupidGb *gb, uint16_t cycles) {
     if (gb == 0) {
         return;
     }
