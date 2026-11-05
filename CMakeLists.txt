@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(CupidGB VERSION 0.2.0 LANGUAGES C CXX)
+project(CupidGB VERSION 0.3.0 LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -16,7 +16,8 @@ option(CUPIDGB_ENABLE_SANITIZERS "Enable address and undefined behavior sanitize
 
 add_library(cupidgb_core STATIC
     src/common/log.c src/common/sha256.c src/core/emulator.c src/core/system.c
-    src/gb/gb.c src/gb/state.c src/gb/cpu.c src/gb/ppu.c src/gb/apu.c
+    src/compat/native_v1.c src/gb/battery.c
+    src/gb/gb.c src/gb/state.c src/gb/cpu.c src/gb/ppu.c src/gb/pixels.c src/gb/apu.c
     src/gb/timer.c src/gb/cartridge.c src/gb/sgb.c src/gbc/cgb.c
 )
 target_include_directories(cupidgb_core PUBLIC include)
@@ -47,14 +48,15 @@ if(CUPIDGB_BUILD_QT)
         src/frontend/qt/main_window.cpp
         src/frontend/qt/main_window.h
         src/frontend/qt/audio_converter.cpp
+        src/frontend/qt/wave_recorder.cpp
     )
     target_link_libraries(cupidgb PRIVATE cupidgb_core Qt6::Widgets Qt6::Multimedia)
     install(TARGETS cupidgb RUNTIME DESTINATION bin)
-    install(FILES LICENSE LICENSES/hardware.txt DESTINATION share/licenses/cupidgb)
+    install(FILES LICENSE DESTINATION share/licenses/cupidgb)
 endif()
 if(CUPIDGB_ENABLE_TESTS)
     enable_testing()
-    foreach(test_name IN ITEMS smoke gb serial ppu apu cpu_timing state)
+    foreach(test_name IN ITEMS smoke gb serial ppu apu cpu_timing state battery native_v1_recovery sgb)
         add_executable(cupidgb_${test_name} tests/test_${test_name}.c)
         target_link_libraries(cupidgb_${test_name} PRIVATE cupidgb_core)
         # Tests use assert for setup and checks, including in Release builds.
@@ -86,6 +88,16 @@ if(CUPIDGB_ENABLE_TESTS)
             target_compile_options(cupidgb_audio_converter PRIVATE -UNDEBUG)
         endif()
         add_test(NAME cupidgb_audio_converter COMMAND cupidgb_audio_converter)
+        add_executable(cupidgb_wave_recorder
+            tests/frontend/test_wave_recorder.cpp src/frontend/qt/wave_recorder.cpp)
+        target_include_directories(cupidgb_wave_recorder PRIVATE src/frontend/qt)
+        target_link_libraries(cupidgb_wave_recorder PRIVATE Qt6::Core)
+        if(MSVC)
+            target_compile_options(cupidgb_wave_recorder PRIVATE /UNDEBUG)
+        else()
+            target_compile_options(cupidgb_wave_recorder PRIVATE -UNDEBUG)
+        endif()
+        add_test(NAME cupidgb_wave_recorder COMMAND cupidgb_wave_recorder)
         add_test(NAME cupidgb_qt_workflows COMMAND cupidgb --smoke-test)
         set_tests_properties(cupidgb_qt_workflows PROPERTIES
             ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)

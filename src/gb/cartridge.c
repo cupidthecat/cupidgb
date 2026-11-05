@@ -13,12 +13,21 @@
 
 #include "cupid/gb/cartridge.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "cupid/common/log.h"
+#include "cupid/gb/battery.h"
 #include "cupid/gb/gb.h"
+
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#endif
 #include "cupid/gbc/cgb.h"
 
 // Header field offsets
@@ -29,7 +38,6 @@ enum {
     CUPID_GB_LOGO_START = 0x0104,
     CUPID_GB_LOGO_END = 0x0133,
     CUPID_GB_TITLE_START = 0x0134,
-    CUPID_GB_TITLE_END = 0x0143,
     CUPID_GB_CGB_FLAG = 0x0143,
     CUPID_GB_NEW_LICENSEE_0 = 0x0144,
     CUPID_GB_NEW_LICENSEE_1 = 0x0145,
@@ -516,27 +524,25 @@ size_t cupid_gb_effective_ram_bank(const CupidGb *gb) {
  */
 bool cupid_gb_parse_header(const uint8_t *rom_data, size_t rom_size,
                            CupidGbCartridgeHeader *header) {
-    size_t rom_index;
-    size_t title_index = 0u;
-
     if (rom_data == 0 || header == 0 || rom_size <= CUPID_GB_HEADER_CHECKSUM) {
         return false;
     }
 
     memset(header, 0, sizeof(*header));
 
-    for (rom_index = CUPID_GB_TITLE_START; rom_index <= CUPID_GB_TITLE_END; ++rom_index) {
-        uint8_t value = rom_data[rom_index];
-
-        if (value == 0u) {
+    /* The last title byte doubles as the CGB flag. Header bytes are ASCII,
+     * not host text: stop before a flag, control byte, or non-ASCII byte can
+     * enter a window title or log message. Contiguous manufacturer bytes remain
+     * part of the displayed header text when no earlier terminator separates them. */
+    const size_t title_capacity = rom_data[CUPID_GB_CGB_FLAG] & 0x80u ? 15u : 16u;
+    size_t title_length = 0u;
+    while (title_length < title_capacity) {
+        const unsigned byte = rom_data[CUPID_GB_TITLE_START + title_length];
+        if (byte < 0x20u || byte > 0x7fu)
             break;
-        }
-
-        header->title[title_index] = (char)value;
-        ++title_index;
+        ++title_length;
     }
-
-    header->title[title_index] = '\0';
+    memcpy(header->title, rom_data + CUPID_GB_TITLE_START, title_length);
     header->cgb_flag = rom_data[CUPID_GB_CGB_FLAG];
     header->new_licensee_code[0] = rom_data[CUPID_GB_NEW_LICENSEE_0];
     header->new_licensee_code[1] = rom_data[CUPID_GB_NEW_LICENSEE_1];
@@ -716,10 +722,9 @@ bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size) {
         return false;
     }
 
-    /* 0xC0 cartridges require CGB mode. 0x80 cartridges enter CGB mode only
-     * when the user selected the CGB hardware profile. */
-    gb->cgb_mode = (gb->header.cgb_flag & 0xc0u) == 0xc0u ||
-                   ((gb->header.cgb_flag & 0x80u) != 0u && gb->model == CUPID_GB_MODEL_CGB);
+    /* Cartridge requirements cannot turn monochrome hardware into a CGB.
+     * Color-only software must still observe the explicitly selected model. */
+    gb->cgb_mode = gb->model == CUPID_GB_MODEL_CGB && (gb->header.cgb_flag & 0x80u) != 0u;
     gb->sgb.enabled = (gb->model == CUPID_GB_MODEL_SGB || gb->model == CUPID_GB_MODEL_SGB2) &&
                       gb->header.sgb_flag == 0x03u;
     gb->double_speed = false;
@@ -964,92 +969,99 @@ void cupid_gb_set_save_path(CupidGb *gb, const char *rom_path) {
     memcpy(gb->save_path + len, ".sav", sizeof(".sav"));
 }
 
-/**
- * @brief Loads cartridge RAM contents from the save file.
- *
- * Reads up to `cartridge_ram_size` bytes from the `.sav` file indicated
- * by `gb->save_path` into `gb->cartridge_ram`. A partial read is accepted
- * with a warning. Missing save files are silently ignored.
- *
- * @param gb Pointer to the @ref CupidGb instance.
- *
- * @note Does nothing if @p gb is NULL, `save_path` is empty, the
- *       cartridge has no battery, RAM size is zero, the header checksum
- *       is invalid, or the title is blank.
+/* Legacy path-based callers retain the test-cartridge safeguard. Buffer-based
+ * persistence is explicit and does not infer intent from a cartridge title.
  */
-void cupid_gb_load_save(CupidGb *gb) {
-    FILE *file;
-    size_t bytes_read;
-
-    if (gb == 0 || gb->save_path[0] == '\0') {
-        return;
-    }
-
-    if (!gb->header.has_battery || gb->cartridge_ram_size == 0u) {
-        return;
-    }
-
-    /*
-     * Many hardware test ROMs advertise battery-backed RAM for result
-     * reporting, but leave the title blank and/or ship with an invalid
-     * header checksum. Persisting their cartridge RAM can feed stale test
-     * output back into later runs and produce misleading failures.
-     */
-    if (!gb->header.header_checksum_valid || gb->header.title[0] == '\0') {
-        return;
-    }
-
-    file = fopen(gb->save_path, "rb");
-    if (file == 0) {
-        return; /* No save file yet - not an error */
-    }
-
-    bytes_read = fread(gb->cartridge_ram, 1u, gb->cartridge_ram_size, file);
-    fclose(file);
-
-    if (bytes_read == gb->cartridge_ram_size) {
-        cupid_log_infof("Loaded save data from %s (%zu bytes).", gb->save_path, bytes_read);
-    } else {
-        cupid_log_errorf("Save file %s is %zu bytes; expected %zu. Loaded partial data.",
-                         gb->save_path, bytes_read, gb->cartridge_ram_size);
-    }
+static bool legacy_save_enabled(const CupidGb *gb) {
+    return gb && gb->save_path[0] && gb->header.header_checksum_valid && gb->header.title[0] &&
+           cupid_gb_battery_size(gb);
 }
 
-/**
- * @brief Writes cartridge RAM contents to the save file.
- *
- * Writes `cartridge_ram_size` bytes from `gb->cartridge_ram` to the
- * `.sav` file indicated by `gb->save_path`, creating or overwriting
- * it as needed.
- *
- * @param gb Pointer to the @ref CupidGb instance.
- *
- * @note Does nothing if @p gb is NULL, `save_path` is empty, the
- *       cartridge has no battery, RAM size is zero, the header checksum
- *       is invalid, or the title is blank.
- */
+void cupid_gb_load_save(CupidGb *gb) {
+    if (!legacy_save_enabled(gb))
+        return;
+    FILE *file = fopen(gb->save_path, "rb");
+    if (!file)
+        return;
+    size_t capacity = cupid_gb_battery_size(gb) + 1;
+    uint8_t *bytes = malloc(capacity);
+    if (!bytes) {
+        fclose(file);
+        cupid_log_error("Cannot allocate battery input buffer.");
+        return;
+    }
+    size_t count = fread(bytes, 1, capacity, file);
+    bool complete = !ferror(file);
+    if (fclose(file))
+        complete = false;
+    CupidGbBatteryResult result =
+        complete ? cupid_gb_load_battery(gb, bytes, count) : CUPID_GB_BATTERY_INVALID_ARGUMENT;
+    if (result == CUPID_GB_BATTERY_OK)
+        cupid_log_infof("Loaded battery data from %s (%zu bytes).", gb->save_path, count);
+    else
+        cupid_log_errorf("Cannot load battery file %s: %s", gb->save_path,
+                         cupid_gb_battery_result_name(result));
+    free(bytes);
+}
+
 void cupid_gb_save(CupidGb *gb) {
-    FILE *file;
-
-    if (gb == 0 || gb->save_path[0] == '\0') {
+    if (!legacy_save_enabled(gb))
+        return;
+    size_t size = cupid_gb_battery_size(gb), written = 0;
+    uint8_t *bytes = malloc(size);
+    if (!bytes) {
+        cupid_log_error("Cannot allocate battery output buffer.");
         return;
     }
-
-    if (!gb->header.has_battery || gb->cartridge_ram_size == 0u) {
+    if (cupid_gb_save_battery(gb, bytes, size, &written) != CUPID_GB_BATTERY_OK) {
+        free(bytes);
+        cupid_log_error("Cannot serialize battery data.");
         return;
     }
-
-    if (!gb->header.header_checksum_valid || gb->header.title[0] == '\0') {
+    /* A sibling temporary keeps replacement on one filesystem. Exclusive
+     * creation avoids clobbering another session's incomplete write.
+     */
+    char temporary[sizeof(gb->save_path) + 96];
+    struct timespec stamp;
+    if (!timespec_get(&stamp, TIME_UTC)) {
+        free(bytes);
+        cupid_log_error("Cannot obtain a temporary battery filename.");
         return;
     }
-
-    file = fopen(gb->save_path, "wb");
-    if (file == 0) {
-        cupid_log_errorf("Could not write save file: %s", gb->save_path);
+    FILE *file = NULL;
+    for (unsigned attempt = 0; attempt < 128; ++attempt) {
+        int length =
+            snprintf(temporary, sizeof(temporary), "%s.cupidgb-%llu-%lu-%u.tmp", gb->save_path,
+                     (unsigned long long)stamp.tv_sec, (unsigned long)stamp.tv_nsec, attempt);
+        if (length < 0 || (size_t)length >= sizeof(temporary))
+            break;
+        file = fopen(temporary, "wbx");
+        if (file || errno != EEXIST)
+            break;
+    }
+    if (!file) {
+        free(bytes);
+        cupid_log_errorf("Cannot create battery temporary beside %s.", gb->save_path);
         return;
     }
-
-    fwrite(gb->cartridge_ram, 1u, gb->cartridge_ram_size, file);
-    fclose(file);
-    cupid_log_infof("Saved game data to %s (%zu bytes).", gb->save_path, gb->cartridge_ram_size);
+    bool complete = fwrite(bytes, 1, written, file) == written;
+    if (fflush(file))
+        complete = false;
+    if (fclose(file))
+        complete = false;
+    free(bytes);
+    if (complete) {
+#ifdef _WIN32
+        complete = MoveFileExA(temporary, gb->save_path,
+                               MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+#else
+        complete = rename(temporary, gb->save_path) == 0;
+#endif
+    }
+    if (!complete) {
+        remove(temporary);
+        cupid_log_errorf("Cannot replace battery file %s; previous file preserved.", gb->save_path);
+        return;
+    }
+    cupid_log_infof("Saved battery data to %s (%zu bytes).", gb->save_path, written);
 }

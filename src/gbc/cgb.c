@@ -619,6 +619,7 @@ void cupid_cgb_init_state(CupidGb *gb) {
 
     gb->cgb_vram_bank = 0u;
     gb->cgb_wram_bank = 1u;
+    gb->cgb_object_priority_x = false;
     memset(gb->cgb_bg_palette_ram, 0u, sizeof(gb->cgb_bg_palette_ram));
     memset(gb->cgb_obj_palette_ram, 0u, sizeof(gb->cgb_obj_palette_ram));
     for (palette_index = 0u; palette_index < sizeof(gb->cgb_bg_palette_ram); palette_index += 2u) {
@@ -630,6 +631,7 @@ void cupid_cgb_init_state(CupidGb *gb) {
     gb->hdma_blocks_remaining = 0u;
     gb->hdma_active = false;
     gb->io_registers[0x4fu] = 0xfeu;
+    gb->io_registers[0x4cu] = 0u;
     gb->io_registers[0x68u] = 0x00u;
     gb->io_registers[0x69u] = 0xffu;
     gb->io_registers[0x6au] = 0x00u;
@@ -1014,8 +1016,9 @@ bool cupid_cgb_handle_read_register(const CupidGb *gb, uint16_t address, uint8_t
             *value = cupid_cgb_palette_read(gb, true);
             return true;
         case 0xff6cu:
-            *value = gb != 0 && gb->cgb_mode ? (uint8_t)(0xfeu | (gb->io_registers[0x6cu] & 0x01u))
-                                             : 0xffu;
+            *value = gb != 0 && gb->model == CUPID_GB_MODEL_CGB
+                         ? (uint8_t)(0xfeu | (gb->io_registers[0x6cu] & 0x01u))
+                         : 0xffu;
             return true;
         case 0xff70u:
             *value =
@@ -1058,6 +1061,10 @@ bool cupid_cgb_handle_write_register(CupidGb *gb, uint16_t address, uint8_t valu
 
     switch (address) {
         case 0xff4cu:
+            if (gb->model == CUPID_GB_MODEL_CGB && gb->boot_rom_enabled) {
+                gb->io_registers[0x4cu] = value;
+            }
+            return true;
         case 0xff56u:
             if (gb->cgb_mode) {
                 gb->io_registers[address - 0xff00u] = value;
@@ -1131,8 +1138,16 @@ bool cupid_cgb_handle_write_register(CupidGb *gb, uint16_t address, uint8_t valu
             cupid_cgb_palette_write(gb, true, value);
             return true;
         case 0xff6cu:
-            if (gb->cgb_mode) {
-                gb->io_registers[0x6cu] = (uint8_t)(0xfeu | (value & 0x01u));
+            if (gb->model == CUPID_GB_MODEL_CGB) {
+                /* Boot firmware can select X priority. Normal color software
+                 * can change readback but cannot change the selected ordering. */
+                bool writable = gb->boot_rom_enabled || (gb->io_registers[0x4cu] & 8u);
+                if (writable) {
+                    gb->cgb_object_priority_x = (value & 1u) != 0;
+                }
+                if (writable || gb->cgb_mode) {
+                    gb->io_registers[0x6cu] = (uint8_t)(0xfeu | (value & 0x01u));
+                }
             }
             return true;
         case 0xff70u:
@@ -1275,8 +1290,8 @@ void cupid_cgb_render_scanline(CupidGb *gb, uint8_t lcdc, uint8_t ly, size_t bas
         low = gb->video_ram[tile_bank_base + tile_address + tile_line];
         high = gb->video_ram[tile_bank_base + tile_address + tile_line + 1u];
         bit_index = (uint8_t)(7u - (pixel_x & 0x07u));
-        color_index =
-            (uint8_t)((((high >> bit_index) & 0x01u) << 1u) | ((low >> bit_index) & 0x01u));
+        color_index = (uint8_t)(((((unsigned)high >> bit_index) & 0x01u) << 1u) |
+                                (((unsigned)low >> bit_index) & 0x01u));
         palette_number = (uint8_t)(attributes & 0x07u);
 
         gb->frame_buffer[base_index + x] = color_index;
@@ -1353,8 +1368,8 @@ void cupid_cgb_render_scanline(CupidGb *gb, uint8_t lcdc, uint8_t ly, size_t bas
                     continue;
                 }
 
-                color_index = (uint8_t)((((ohigh >> (7u - bit_pos)) & 0x01u) << 1u) |
-                                        ((olow >> (7u - bit_pos)) & 0x01u));
+                color_index = (uint8_t)(((((unsigned)ohigh >> (7u - bit_pos)) & 0x01u) << 1u) |
+                                        (((unsigned)olow >> (7u - bit_pos)) & 0x01u));
                 if (color_index == 0u) {
                     continue;
                 }

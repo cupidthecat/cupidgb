@@ -4,7 +4,7 @@ CupidGB is a Game Boy and Game Boy Color emulator with a C hardware core and a Q
 
 ## Desktop
 
-Open a cartridge with Ctrl+O, drag a `.gb` or `.gbc` file onto the window, or supply its path on the command line. The frontend provides recent files, pause/reset, frame advance, fullscreen, screenshots, keyboard configuration, volume/mute, battery SRAM persistence, ten native state slots, and rewind. Settings are stored per user.
+Open a cartridge with Ctrl+O, drag a `.gb` or `.gbc` file onto the window, or supply its path on the command line. The frontend provides recent files, pause/reset, frame advance, fullscreen, screenshots, configurable keys and shortcuts, volume/mute, WAVE recording, battery RAM and clock persistence, ten native state slots, and rewind. Settings are stored per user.
 
 | Control | Default |
 | --- | --- |
@@ -12,6 +12,8 @@ Open a cartridge with Ctrl+O, drag a `.gb` or `.gbc` file onto the window, or su
 | A / B | X / Z |
 | Select / Start | Backspace / Enter |
 | Turbo / rewind | Hold Space / hold Tab |
+| Slow motion | Hold Shift |
+| Rapid A / B | Assign keys in Settings |
 | Save / load slot | Ctrl+digit / Ctrl+Shift+digit |
 | Open / reset / pause | Ctrl+O / Ctrl+R / Ctrl+P |
 | Fullscreen / mute | Ctrl+F / Ctrl+M |
@@ -19,7 +21,15 @@ Open a cartridge with Ctrl+O, drag a `.gb` or `.gbc` file onto the window, or su
 
 Use Settings to select a hardware profile, configure keys, choose a boot-ROM directory, change volume, or select integer/aspect scaling. Boot ROMs are optional local inputs; none are distributed. Without one, the core uses an approximate startup profile.
 
-Battery SRAM is saved next to the cartridge as `.sav`, periodically and when resetting, changing, or closing the cartridge. State files and rewind use the versioned CupidGB native format. Controllers, debugger tools, RTC battery persistence, interoperable state imports, and advanced display/audio features remain incomplete. See [save states and rewind](docs/save-states.md) for controls and file behavior, and [the parity checklist](docs/parity.md) for the full scope.
+`--boot-directory /path/to/boot-roms` selects a directory for the current session without changing the saved preference. The directory must contain the file for the selected model. Accepting a boot directory in Settings saves that explicit choice.
+
+Battery data is saved next to the cartridge as `.sav` after a quiet period following writes, and when resetting, changing, or closing the cartridge. Timer-equipped MBC3 cartridges include live and latched clock registers and a host timestamp. A rejected save leaves the current session and existing file intact. See [battery saves](docs/battery-saves.md) for the file contract.
+
+State files and rewind use native version 2, which includes pending pixel fetches and audio integration. Older version 1 files can export their battery data through File > Recover Battery from Older State; they cannot restore execution in the changed core. See [save states and rewind](docs/save-states.md) for controls and recovery.
+
+Use Audio > Start Audio Recording to write stereo 16-bit PCM to a WAVE file. Recording captures forward emulation before host mute, volume, or format conversion. Pause and rewind do not append audio. Reset, cartridge replacement, closing, and sample-rate changes finish the recording. A state load at the same sample rate continues it with newly generated audio.
+
+Controllers, debugger tools, interoperable state imports, and advanced display/audio features remain incomplete. [The parity checklist](docs/parity.md) tracks the full scope.
 
 ## Build
 
@@ -71,4 +81,4 @@ This mode isolates settings and records guest speed, widget paint counts, host a
 
 The suite runner requires an explicit serial, register, or memory success protocol. A bounded run without a verdict is inconclusive. Headless output records guest base-clock progress, VBlank counts, audio sample counts, checksums, and host elapsed time separately. These measurements do not establish presentation FPS or full-speed commercial gameplay.
 
-Use the supplied `.clang-format` for project C/C++ files. Keep local ROMs, boot ROMs, saves, build outputs, and private evidence out of commits. [Validation record](docs/validation.md) lists tested scopes and remaining gaps. [Architecture notes](docs/architecture.md) describe subsystem boundaries. The repository license and notices in `LICENSES` apply to source and distributed builds.
+Use the supplied `.clang-format` for project C/C++ files. Keep local ROMs, boot ROMs, saves, build outputs, and private evidence out of commits. [Validation record](docs/validation.md) lists tested scopes and remaining gaps. [Architecture notes](docs/architecture.md) describe subsystem boundaries. The project license is in [LICENSE](LICENSE).

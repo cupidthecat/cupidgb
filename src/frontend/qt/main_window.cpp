@@ -1,5 +1,8 @@
 #include "main_window.h"
 #include "audio_converter.h"
+#include "cupid/compat/native_v1.h"
+#include "cupid/gb/battery.h"
+#include "wave_recorder.h"
 
 #include <QAction>
 #include <QApplication>
@@ -37,6 +40,8 @@
 #include <QPushButton>
 #include <QSaveFile>
 #include <QScopedValueRollback>
+#include <QScreen>
+#include <QScrollArea>
 #include <QSignalBlocker>
 #include <QSlider>
 #include <QStatusBar>
@@ -46,6 +51,7 @@
 #include <cstring>
 
 extern "C" {
+#include "cupid/gb/apu.h"
 #include "cupid/gb/state.h"
 #include "cupid/gbc/cgb.h"
 }
@@ -56,8 +62,31 @@ constexpr std::array<int, 8> defaultKeys = {Qt::Key_Right,     Qt::Key_Left,  Qt
                                             Qt::Key_Backspace, Qt::Key_Return};
 constexpr std::array<const char *, 8> buttonNames = {"Right", "Left", "Up",     "Down",
                                                      "A",     "B",    "Select", "Start"};
+constexpr std::array<const char *, 5> specialNames = {"Turbo", "Rewind", "Slow motion", "Rapid A",
+                                                      "Rapid B"};
+constexpr std::array<int, 5> defaultSpecialKeys = {Qt::Key_Space, Qt::Key_Tab, Qt::Key_Shift, 0, 0};
 // A normal-speed LCD frame is 70,224 T-cycles at 4,194,304 Hz.
 constexpr qint64 frameNanoseconds = 16742706;
+
+Qt::KeyboardModifiers keyModifier(int key) {
+    switch (key) {
+        case Qt::Key_Shift:
+            return Qt::ShiftModifier;
+        case Qt::Key_Control:
+            return Qt::ControlModifier;
+        case Qt::Key_Alt:
+            return Qt::AltModifier;
+        case Qt::Key_Meta:
+            return Qt::MetaModifier;
+        default:
+            return Qt::NoModifier;
+    }
+}
+
+int inputKey(int key) {
+    // Qt names Shift+Tab separately, although the same physical Tab key remains held.
+    return key == Qt::Key_Backtab ? Qt::Key_Tab : key;
+}
 
 QRgb rgb555(uint16_t value) {
     const int r = value & 31;
@@ -72,7 +101,42 @@ bool isStatePath(const QString &path) {
     return (extension.size() == 2 && extension[0] == 's' && digit(extension[1])) ||
            (extension.size() == 3 && extension.startsWith("sn") && digit(extension[2]));
 }
+
+CupidGbModel automaticModel(const QByteArray &rom) {
+    if (rom.size() <= 0x14b)
+        return CUPID_GB_MODEL_DMG_ABC;
+    const bool color = (uint8_t(rom[0x143]) & 0x80) != 0;
+    const bool super = uint8_t(rom[0x146]) == 3;
+    const bool licensed = uint8_t(rom[0x14b]) == 1 ||
+                          (uint8_t(rom[0x14b]) == 0x33 && rom[0x144] == '0' && rom[0x145] == '1');
+    return color      ? CUPID_GB_MODEL_CGB
+           : super    ? CUPID_GB_MODEL_SGB
+           : licensed ? CUPID_GB_MODEL_CGB
+                      : CUPID_GB_MODEL_DMG_ABC;
+}
 } // namespace
+
+// Button bindings also accept standalone modifiers and Tab, which ordinary shortcut
+// editors treat as unfinished combinations or focus traversal.
+class InputKeyEdit final : public QKeySequenceEdit {
+  public:
+    explicit InputKeyEdit(int key) : QKeySequenceEdit(QKeySequence(key)) {
+    }
+
+  protected:
+    bool event(QEvent *event) override {
+        if (event->type() == QEvent::KeyPress) {
+            const auto *key = static_cast<QKeyEvent *>(event);
+            const int value = inputKey(key->key());
+            if (value == Qt::Key_Tab || keyModifier(value) != Qt::NoModifier) {
+                setKeySequence(QKeySequence(value));
+                event->accept();
+                return true;
+            }
+        }
+        return QKeySequenceEdit::event(event);
+    }
+};
 
 class DisplayWidget final : public QWidget {
   public:
@@ -168,17 +232,18 @@ class AudioBuffer final {
                 {"remaining_queued_bytes", double(queue_.size())}};
     }
 
-    void writeTo(QIODevice *device, qint64 maximum) {
+    qint64 writeTo(QIODevice *device, qint64 maximum) {
         QMutexLocker lock(&mutex_);
         const qint64 available = std::min(maximum, qint64(queue_.size()));
         const qint64 aligned = available - available % bytesPerFrame_;
         if (aligned <= 0)
-            return;
+            return 0;
         const qint64 written = device->write(queue_.constData(), aligned);
         if (written > 0) {
             queue_.remove(0, qsizetype(written));
             bytesRead_ += uint64_t(written);
         }
+        return written;
     }
 
   private:
@@ -189,14 +254,19 @@ class AudioBuffer final {
     qsizetype maximumQueued_ = 0;
 };
 
-MainWindow::MainWindow(bool isolated, bool automated, bool audioCheck)
-    : isolated_(isolated), automated_(automated), audioCheck_(audioCheck) {
+MainWindow::MainWindow(bool isolated, bool automated, bool audioCheck,
+                       const QString &bootDirectoryOverride)
+    : bootDirectoryOverride_(bootDirectoryOverride), isolated_(isolated), automated_(automated),
+      audioCheck_(audioCheck) {
     setWindowTitle("CupidGB");
     setAcceptDrops(true);
     display_ = new DisplayWidget(this);
     setCentralWidget(display_);
     for (size_t i = 0; i < keys_.size(); ++i)
         keys_[i] = settings_.value(QString("input/%1").arg(i), defaultKeys[i]).toInt();
+    for (size_t i = 0; i < specialKeys_.size(); ++i)
+        specialKeys_[i] =
+            settings_.value(QString("input/special/%1").arg(i), defaultSpecialKeys[i]).toInt();
     display_->integerScale = settings_.value("video/integerScale", true).toBool();
     buildMenus();
     resize(std::max(320, menuBar()->sizeHint().width()),
@@ -208,7 +278,8 @@ MainWindow::MainWindow(bool isolated, bool automated, bool audioCheck)
     timer_.setInterval(1);
     connect(&timer_, &QTimer::timeout, this, [this] { tick(); });
     connect(&saveTimer_, &QTimer::timeout, this, [this] { flushBattery(); });
-    saveTimer_.start(15000);
+    saveTimer_.setSingleShot(true);
+    saveTimer_.setInterval(250);
     timer_.start();
     clock_.start();
     refreshActions();
@@ -220,6 +291,8 @@ MainWindow::~MainWindow() {
     paused_ = true;
     qApp->removeEventFilter(this);
     stopAudio();
+    if (recorder_ && !recorder_->finish())
+        qCritical("Cannot finalize audio recording: %s", qPrintable(recorder_->errorString()));
     if (emulator_) {
         flushBattery();
         cupid_emulator_shutdown(emulator_.get());
@@ -229,6 +302,7 @@ MainWindow::~MainWindow() {
 void MainWindow::buildMenus() {
     auto *file = menuBar()->addMenu("&File");
     auto *open = file->addAction("&Open ROM…", QKeySequence("Ctrl+O"));
+    registerShortcut(open, "open");
     connect(open, &QAction::triggered, this, [this] {
         const bool wasPaused = paused_;
         setPaused(true);
@@ -250,18 +324,43 @@ void MainWindow::buildMenus() {
             loadStateFile(path);
         nextFrame_ = clock_.nsecsElapsed();
     });
+    auto *recover = file->addAction("Recover Battery from Older State…");
+    connect(recover, &QAction::triggered, this, [this] {
+        if (!emulator_) {
+            reportError("Open the matching cartridge before recovering an older state.");
+            return;
+        }
+        QScopedValueRollback<bool> operation(stateOperation_, true);
+        const QString source = QFileDialog::getOpenFileName(
+            this, "Choose Older State", {}, "State files (*.s? *.sn?);;All files (*)");
+        if (source.isEmpty())
+            return;
+        const QString destination = QFileDialog::getSaveFileName(
+            this, "Export Recovered Battery",
+            QFileInfo(romPath_).dir().filePath(QFileInfo(romPath_).completeBaseName() +
+                                               "-recovered.sav"),
+            "Battery saves (*.sav)");
+        if (!destination.isEmpty())
+            recoverBattery(source, destination);
+        nextFrame_ = clock_.nsecsElapsed();
+    });
     closeAction_ = file->addAction("&Close ROM", QKeySequence("Ctrl+W"));
+    registerShortcut(closeAction_, "close");
     connect(closeAction_, &QAction::triggered, this, [this] { closeRom(); });
     file->addSeparator();
     auto *quit = file->addAction("&Quit", QKeySequence("Ctrl+Q"));
+    registerShortcut(quit, "quit");
     connect(quit, &QAction::triggered, this, &QWidget::close);
     auto *emulation = menuBar()->addMenu("&Emulation");
     resetAction_ = emulation->addAction("&Reset", QKeySequence("Ctrl+R"));
+    registerShortcut(resetAction_, "reset");
     connect(resetAction_, &QAction::triggered, this, [this] { restart(); });
     pauseAction_ = emulation->addAction("&Pause", QKeySequence("Ctrl+P"));
+    registerShortcut(pauseAction_, "pause");
     pauseAction_->setCheckable(true);
     connect(pauseAction_, &QAction::toggled, this, [this](bool value) { setPaused(value); });
     frameAction_ = emulation->addAction("Advance &Frame", QKeySequence("Ctrl+N"));
+    registerShortcut(frameAction_, "frame");
     connect(frameAction_, &QAction::triggered, this, [this] {
         setPaused(true);
         runFrame();
@@ -277,6 +376,8 @@ void MainWindow::buildMenus() {
             saveStates->addAction(title, QKeySequence(QString("Ctrl+%1").arg(slot)));
         loadSlotActions_[size_t(slot)] =
             loadStates->addAction(title, QKeySequence(QString("Ctrl+Shift+%1").arg(slot)));
+        registerShortcut(saveSlotActions_[size_t(slot)], QString("save/%1").arg(slot));
+        registerShortcut(loadSlotActions_[size_t(slot)], QString("load/%1").arg(slot));
         connect(saveSlotActions_[size_t(slot)], &QAction::triggered, this,
                 [this, slot] { saveSlot(slot); });
         connect(loadSlotActions_[size_t(slot)], &QAction::triggered, this,
@@ -284,13 +385,16 @@ void MainWindow::buildMenus() {
     }
     auto *view = menuBar()->addMenu("&View");
     auto *fullscreen = view->addAction("&Fullscreen", QKeySequence("Ctrl+F"));
+    registerShortcut(fullscreen, "fullscreen");
     fullscreen->setCheckable(true);
     connect(fullscreen, &QAction::toggled, this,
             [this](bool value) { value ? showFullScreen() : showNormal(); });
     screenshotAction_ = view->addAction("Save &Screenshot…", QKeySequence("F12"));
+    registerShortcut(screenshotAction_, "screenshot");
     connect(screenshotAction_, &QAction::triggered, this, [this] { screenshot(); });
     auto *audio = menuBar()->addMenu("&Audio");
     muteAction_ = audio->addAction("&Mute", QKeySequence("Ctrl+M"));
+    registerShortcut(muteAction_, "mute");
     muteAction_->setCheckable(true);
     muteAction_->setChecked(settings_.value("audio/mute", false).toBool());
     connect(muteAction_, &QAction::toggled, this, [this](bool muted) {
@@ -298,8 +402,28 @@ void MainWindow::buildMenus() {
         if (audio_)
             audio_->setVolume(muted ? 0.0f : settings_.value("audio/volume", 100).toFloat() / 100);
     });
+    recordingAction_ = audio->addAction("Start Audio &Recording…");
+    recordingAction_->setToolTip(
+        "Record forward stereo audio before host mute, volume, and resampling. "
+        "Pause and rewind add no audio. Reset or a sample-rate change ends the file.");
+    registerShortcut(recordingAction_, "recording");
+    connect(recordingAction_, &QAction::triggered, this, [this] {
+        if (recorder_ && recorder_->active()) {
+            stopRecording();
+            return;
+        }
+        const bool wasPaused = paused_;
+        setPaused(true);
+        const QString path = QFileDialog::getSaveFileName(
+            this, "Record Audio", QFileInfo(romPath_).completeBaseName() + ".wav",
+            "WAVE audio (*.wav)");
+        if (!path.isEmpty())
+            startRecording(path);
+        setPaused(wasPaused);
+    });
     emulation->addSeparator();
     auto *settings = emulation->addAction("&Settings…", QKeySequence("Ctrl+,"));
+    registerShortcut(settings, "settings");
     connect(settings, &QAction::triggered, this, [this] { configure(); });
     auto *help = menuBar()->addMenu("&Help");
     connect(help->addAction("&Controls"), &QAction::triggered, this, [this] {
@@ -309,6 +433,7 @@ void MainWindow::buildMenus() {
             this, "Controls",
             "Default controls: arrows, X (A), Z (B), Backspace (Select), Enter (Start).\n"
             "Hold Space for turbo. Hold Tab to rewind. Change button mappings in Settings.\n\n"
+            "Hold Shift for slow motion. Rapid A/B keys are configurable and start unassigned.\n\n"
             "Open: Ctrl+O   Reset: Ctrl+R   Pause: Ctrl+P\n"
             "Fullscreen: Ctrl+F   Mute: Ctrl+M   Screenshot: F12\n\n"
             "Save state: Ctrl+0–9   Load state: Ctrl+Shift+0–9\n\n"
@@ -319,8 +444,9 @@ void MainWindow::buildMenus() {
         const bool wasPaused = paused_;
         setPaused(true);
         QMessageBox::about(this, "CupidGB",
-                           "CupidGB 0.2.0\nGame Boy and Game Boy Color emulator\n"
-                           "See LICENSE for licensing terms.");
+                           QString("CupidGB %1\nGame Boy and Game Boy Color emulator\n"
+                                   "See LICENSE for licensing terms.")
+                               .arg(QCoreApplication::applicationVersion()));
         setPaused(wasPaused);
     });
 }
@@ -339,8 +465,11 @@ void MainWindow::reportError(const QString &message) {
     failed_ = true;
     if (isolated_ || automated_)
         qCritical("%s", qPrintable(message));
-    else
+    else {
+        QScopedValueRollback<bool> operation(stateOperation_, true);
         QMessageBox::critical(this, "CupidGB", message);
+        nextFrame_ = clock_.nsecsElapsed();
+    }
 }
 
 bool MainWindow::openRom(const QString &path) {
@@ -369,14 +498,8 @@ bool MainWindow::openRom(const QString &path) {
     }
     auto candidate = std::make_unique<CupidEmulator>();
     int model = settings_.value("emulation/model", -1).toInt();
-    if (model < 0) {
-        if ((uint8_t(data[0x143]) & 0x80) != 0)
-            model = CUPID_GB_MODEL_CGB;
-        else if (uint8_t(data[0x146]) == 3)
-            model = CUPID_GB_MODEL_SGB;
-        else
-            model = CUPID_GB_MODEL_DMG_ABC;
-    }
+    if (model < 0)
+        model = automaticModel(data);
     if (model > CUPID_GB_MODEL_SGB2 || model < CUPID_GB_MODEL_DMG_ABC) {
         reportError("The configured hardware model is invalid.");
         return false;
@@ -416,24 +539,30 @@ bool MainWindow::openRom(const QString &path) {
         return false;
     }
     QFile battery(save);
-    if (candidate->gb.header.has_battery && candidate->gb.cartridge_ram_size && battery.exists()) {
-        if (!battery.open(QIODevice::ReadOnly) ||
-            battery.size() != qint64(candidate->gb.cartridge_ram_size)) {
+    if (cupid_gb_battery_size(&candidate->gb) && battery.exists()) {
+        if (!battery.open(QIODevice::ReadOnly) || battery.size() > 128 * 1024 + 48) {
             cupid_emulator_shutdown(candidate.get());
             reportError("Cannot load battery save or its size does not match cartridge RAM: " +
                         save);
             return false;
         }
         const QByteArray ram = battery.readAll();
-        if (ram.size() != qint64(candidate->gb.cartridge_ram_size)) {
+        if (ram.size() != battery.size()) {
             cupid_emulator_shutdown(candidate.get());
             reportError("Battery save read failed: " + save);
             return false;
         }
-        std::memcpy(candidate->gb.cartridge_ram, ram.constData(), size_t(ram.size()));
+        const auto result = cupid_gb_load_battery(
+            &candidate->gb, reinterpret_cast<const uint8_t *>(ram.constData()), size_t(ram.size()));
+        if (result != CUPID_GB_BATTERY_OK) {
+            cupid_emulator_shutdown(candidate.get());
+            reportError("Cannot load battery save: " +
+                        QString::fromLatin1(cupid_gb_battery_result_name(result)));
+            return false;
+        }
     }
     // Loading a cartridge initializes post-boot state. Apply the boot overlay afterwards.
-    const QString bootFolder = settings_.value("emulation/bootDirectory").toString();
+    const QString bootFolder = bootDirectory();
     if (!bootFolder.isEmpty()) {
         QString name = "dmg_boot.bin";
         if (model == CUPID_GB_MODEL_CGB)
@@ -461,6 +590,10 @@ bool MainWindow::openRom(const QString &path) {
         candidate->gb.boot_rom_size = size_t(bytes.size());
         cupid_gb_enter_boot_rom(&candidate->gb);
     }
+    if (!stopRecording()) {
+        cupid_emulator_shutdown(candidate.get());
+        return false;
+    }
     if (emulator_)
         cupid_emulator_shutdown(emulator_.get());
     emulator_ = std::move(candidate);
@@ -469,8 +602,17 @@ bool MainWindow::openRom(const QString &path) {
     romData_ = data;
     romPath_ = absolute;
     savePath_ = save;
-    savedRam_ = QByteArray(reinterpret_cast<const char *>(emulator_->gb.cartridge_ram),
-                           qsizetype(emulator_->gb.cartridge_ram_size));
+    saveTimer_.stop();
+    observedBatteryGeneration_ = emulator_->gb.battery_write_generation;
+    batteryDirty_ = false;
+    savedRam_.clear();
+    if (cupid_gb_battery_size(&emulator_->gb)) {
+        savedRam_.resize(qsizetype(cupid_gb_battery_size(&emulator_->gb)));
+        size_t written = 0;
+        if (cupid_gb_save_battery(&emulator_->gb, reinterpret_cast<uint8_t *>(savedRam_.data()),
+                                  size_t(savedRam_.size()), &written) != CUPID_GB_BATTERY_OK)
+            savedRam_.clear();
+    }
     QStringList recent = settings_.value("files/recent").toStringList();
     recent.removeAll(absolute);
     recent.prepend(absolute);
@@ -491,25 +633,48 @@ bool MainWindow::openRom(const QString &path) {
 }
 
 bool MainWindow::flushBattery() {
-    if (!emulator_ || !emulator_->gb.header.has_battery || !emulator_->gb.cartridge_ram_size)
+    if (!emulator_ || !cupid_gb_battery_size(&emulator_->gb))
         return true;
-    const QByteArray ram(reinterpret_cast<const char *>(emulator_->gb.cartridge_ram),
-                         qsizetype(emulator_->gb.cartridge_ram_size));
-    if (ram == savedRam_)
+    // The generation excludes natural RTC advancement. Clock reads alone must not rewrite saves.
+    if (!batteryDirty_ && observedBatteryGeneration_ == emulator_->gb.battery_write_generation)
         return true;
-    QSaveFile file(savePath_);
-    if (!file.open(QIODevice::WriteOnly) || file.write(ram) != ram.size() || !file.commit()) {
-        reportError("Cannot save cartridge RAM: " + file.errorString());
+    QByteArray ram(qsizetype(cupid_gb_battery_size(&emulator_->gb)), Qt::Uninitialized);
+    size_t written = 0;
+    const auto result = cupid_gb_save_battery(
+        &emulator_->gb, reinterpret_cast<uint8_t *>(ram.data()), size_t(ram.size()), &written);
+    if (result != CUPID_GB_BATTERY_OK || written != size_t(ram.size())) {
+        reportError("Cannot serialize battery save: " +
+                    QString::fromLatin1(cupid_gb_battery_result_name(result)));
         return false;
     }
-    savedRam_ = ram;
+    if (ram != savedRam_) {
+        QSaveFile file(savePath_);
+        if (!file.open(QIODevice::WriteOnly) || file.write(ram) != ram.size() || !file.commit()) {
+            reportError("Cannot save cartridge RAM: " + file.errorString());
+            return false;
+        }
+        savedRam_ = ram;
+    }
+    observedBatteryGeneration_ = emulator_->gb.battery_write_generation;
+    batteryDirty_ = false;
+    saveTimer_.stop();
     return true;
 }
 
+void MainWindow::watchBattery() {
+    if (emulator_ && observedBatteryGeneration_ != emulator_->gb.battery_write_generation) {
+        observedBatteryGeneration_ = emulator_->gb.battery_write_generation;
+        batteryDirty_ = true;
+        saveTimer_.start();
+    }
+}
+
 bool MainWindow::closeRom() {
-    if (!flushBattery())
+    if (!flushBattery() || !stopRecording())
         return false;
     ++sessionId_;
+    saveTimer_.stop();
+    batteryDirty_ = false;
     releaseKeys();
     stopAudio();
     audioBuffer_.reset();
@@ -521,6 +686,7 @@ bool MainWindow::closeRom() {
     romData_.clear();
     image_ = {};
     display_->image = {};
+    display_->setMinimumSize(160, 144);
     display_->update();
     setWindowTitle("CupidGB");
     refreshActions();
@@ -534,6 +700,9 @@ bool MainWindow::restart() {
 }
 
 void MainWindow::setupAudio() {
+    // Some audio backends dispatch Qt events while opening or closing a stream.
+    // Guest execution must not reenter a pause, load, or rewind transition.
+    QScopedValueRollback<bool> operation(stateOperation_, true);
     stopAudio();
     audioConverter_.reset();
     audioBuffer_ = std::make_unique<AudioBuffer>();
@@ -554,8 +723,12 @@ void MainWindow::setupAudio() {
     audioBuffer_ = std::make_unique<AudioBuffer>(format.bytesPerFrame());
     audioConverter_ = std::make_unique<AudioConverter>(format);
     audioQueueLimit_ = format.bytesForDuration(50000);
+    audioPrimeBytes_ = format.bytesForDuration(30000);
+    audioPriming_ = true;
     audio_ = std::make_unique<QAudioSink>(device, format);
     connect(audio_.get(), &QAudioSink::stateChanged, this, [this](QAudio::State state) {
+        if (state == QAudio::IdleState)
+            audioPriming_ = true;
         if (state == QAudio::IdleState && telemetryClock_.isValid() &&
             telemetryClock_.elapsed() > 250)
             ++audioIdleEvents_;
@@ -565,11 +738,11 @@ void MainWindow::setupAudio() {
     audio_->setBufferSize(audioQueueLimit_);
     audio_->setVolume(
         muteAction_->isChecked() ? 0.0f : settings_.value("audio/volume", 100).toFloat() / 100);
-    audioDevice_ = audio_->start();
 }
 
 void MainWindow::stopAudio() {
     audioDevice_ = nullptr;
+    audioPriming_ = true;
     if (audio_) {
         // Disconnect callbacks before releasing the owning pointer: stopping the
         // backend may synchronously emit stateChanged during destruction.
@@ -580,21 +753,92 @@ void MainWindow::stopAudio() {
 }
 
 void MainWindow::clearAudio() {
+    audioPriming_ = true;
+    if (audio_) {
+        // A new sink owns a fresh backend stream. Rapid reuse after several
+        // pause/load/rewind resets can otherwise leave the Windows stream idle.
+        setupAudio();
+        return;
+    }
     if (audioConverter_)
         audioConverter_->reset();
     if (audioBuffer_)
         audioBuffer_->clear();
-    if (audio_) {
-        audioDevice_ = nullptr;
-        audio_->reset();
-        if (!paused_)
-            audioDevice_ = audio_->start();
-    }
 }
 
 void MainWindow::pumpAudio() {
-    if (audio_ && audioDevice_)
-        audioBuffer_->writeTo(audioDevice_, audio_->bytesFree());
+    QScopedValueRollback<bool> operation(stateOperation_, true);
+    if (audio_ && !paused_) {
+        // The event loop produces one guest frame at a time. Accumulate real samples
+        // before starting the sink so frame-sized writes tolerate host scheduling jitter.
+        // The 30 ms target stays below the 50 ms execution-backpressure limit.
+        if (audioPriming_) {
+            if (audioBuffer_->bytesAvailable() < audioPrimeBytes_)
+                return;
+            // Start only when generated audio is ready. Repeated reset/start calls
+            // with an empty queue can leave the Windows backend idle after a load.
+            if (!audioDevice_)
+                audioDevice_ = audio_->start();
+            if (audioDevice_ && audioBuffer_->writeTo(audioDevice_, audio_->bytesFree()) > 0) {
+                audioPriming_ = false;
+                ++audioPrimeEvents_;
+            }
+            return;
+        }
+        if (audioDevice_)
+            audioBuffer_->writeTo(audioDevice_, audio_->bytesFree());
+    }
+}
+
+bool MainWindow::startRecording(const QString &path) {
+    if (!emulator_)
+        return false;
+    const QFileInfo destination(path);
+    if (destination.suffix().compare("wav", Qt::CaseInsensitive) != 0) {
+        reportError("Choose a .wav file for the audio recording.");
+        return false;
+    }
+    auto identity = [](const QString &name) {
+        const QFileInfo info(name);
+        return info.exists() ? info.canonicalFilePath() : info.absoluteFilePath();
+    };
+#ifdef _WIN32
+    constexpr auto pathCase = Qt::CaseInsensitive;
+#else
+    constexpr auto pathCase = Qt::CaseSensitive;
+#endif
+    QStringList protectedPaths = {romPath_, savePath_};
+    for (int slot = 0; slot < 10; ++slot)
+        protectedPaths << slotPath(slot) << slotPath(slot, true);
+    for (const auto &protectedPath : protectedPaths) {
+        if (identity(path).compare(identity(protectedPath), pathCase) == 0) {
+            reportError(
+                "Record to a separate file. Cartridge, battery, and state files are protected.");
+            return false;
+        }
+    }
+    if (!recorder_)
+        recorder_ = std::make_unique<WaveRecorder>();
+    if (!recorder_->start(path, cupid_gb_apu_get_sample_rate(&emulator_->gb))) {
+        reportError("Cannot start audio recording: " + recorder_->errorString());
+        return false;
+    }
+    refreshActions();
+    statusBar()->showMessage("Recording forward audio at the core sample rate", 3000);
+    return true;
+}
+
+bool MainWindow::stopRecording() {
+    if (!recorder_ || !recorder_->active())
+        return true;
+    const bool finished = recorder_->finish();
+    refreshActions();
+    if (!finished) {
+        reportError("Cannot finalize audio recording: " + recorder_->errorString());
+        return false;
+    }
+    statusBar()->showMessage("Audio recording saved", 3000);
+    return true;
 }
 
 void MainWindow::setPaused(bool value) {
@@ -611,9 +855,25 @@ void MainWindow::setPaused(bool value) {
 void MainWindow::releaseKeys() {
     turbo_ = false;
     rewind_ = false;
+    slowHeld_ = false;
+    speedSteps_ = 16;
+    if (audioConverter_)
+        audioConverter_->setInputRate(
+            cupid_gb_apu_get_sample_rate(emulator_ ? &emulator_->gb : nullptr));
+    rapidHeld_.fill(false);
+    rapidPhase_.fill(0);
     physicalJoypad_ = 0xff;
     if (emulator_)
         emulator_->gb.joypad = 0xff;
+}
+
+void MainWindow::registerShortcut(QAction *action, const QString &id) {
+    action->setObjectName(id);
+    const auto stored = settings_.value("shortcuts/" + id);
+    if (stored.isValid())
+        action->setShortcut(
+            QKeySequence::fromString(stored.toString(), QKeySequence::PortableText));
+    shortcutActions_.push_back(action);
 }
 
 void MainWindow::setJoypad(uint8_t mask) {
@@ -623,6 +883,36 @@ void MainWindow::setJoypad(uint8_t mask) {
     const uint8_t current = cupid_gb_read_u8(&gb, 0xff00);
     if ((old & uint8_t(~current) & 0xf) != 0)
         gb.interrupt_flags |= 0x10;
+}
+
+void MainWindow::applyHeldButtons() {
+    if (!emulator_)
+        return;
+    uint8_t mask = physicalJoypad_;
+    for (size_t action = 0; action < rapidHeld_.size(); ++action) {
+        if (!rapidHeld_[action])
+            continue;
+        const uint8_t button = uint8_t(1u << (action + 4));
+        if (rapidPhase_[action] < 2)
+            mask &= uint8_t(~button);
+        else
+            mask |= button;
+    }
+    setJoypad(mask);
+}
+
+void MainWindow::advanceControls() {
+    if (slowHeld_)
+        speedSteps_ = std::max(8u, speedSteps_ - 1);
+    else
+        speedSteps_ = std::min(16u, speedSteps_ + 1);
+    for (size_t action = 0; action < rapidHeld_.size(); ++action)
+        if (rapidHeld_[action])
+            rapidPhase_[action] = (rapidPhase_[action] + 1) % 4;
+    applyHeldButtons();
+    if (audioConverter_)
+        audioConverter_->setInputRate(double(cupid_gb_apu_get_sample_rate(&emulator_->gb)) *
+                                      speedSteps_ / 16);
 }
 
 void MainWindow::tick() {
@@ -646,8 +936,9 @@ void MainWindow::tick() {
         return;
     if (!runFrame())
         return;
-    nextFrame_ += frameNanoseconds;
-    if (turbo_ || now - nextFrame_ > frameNanoseconds * 4)
+    const qint64 interval = frameNanoseconds * 16 / speedSteps_;
+    nextFrame_ += interval;
+    if (turbo_ || now - nextFrame_ > interval * 4)
         nextFrame_ = now;
 }
 
@@ -655,6 +946,11 @@ bool MainWindow::runFrame() {
     if (!emulator_)
         return false;
     auto &gb = emulator_->gb;
+    const uint32_t rate = cupid_gb_apu_get_sample_rate(&gb);
+    if (recorder_ && recorder_->active() && recorder_->sampleRate() != rate && !stopRecording())
+        return false;
+    if (audioConverter_)
+        audioConverter_->setInputRate(double(rate) * speedSteps_ / 16);
     gb.frame_ready = false;
     const uint64_t startCycles = gb.elapsed_cycles;
     // With LCD disabled no vblank arrives. Bound the interval with the guest clock.
@@ -678,12 +974,19 @@ bool MainWindow::runFrame() {
     int16_t samples[CUPID_GB_APU_BUF_FRAMES * 2];
     const auto frames = cupid_gb_apu_drain(&gb, samples, CUPID_GB_APU_BUF_FRAMES);
     generatedAudioFrames_ += frames;
+    if (recorder_ && recorder_->active() && !recorder_->append(samples, frames)) {
+        const QString error = recorder_->errorString();
+        if (stopRecording())
+            reportError("Audio recording stopped: " + error);
+    }
     if (audio_ && !turbo_ && !paused_) {
         const QByteArray converted = audioConverter_->convert(samples, frames);
         audioBuffer_->append(converted.constData(), converted.size());
         pumpAudio();
     }
     present();
+    advanceControls();
+    watchBattery();
     rememberFrame();
     return true;
 }
@@ -719,6 +1022,13 @@ QByteArray MainWindow::captureState(bool reportFailure, bool rewindSnapshot) {
 bool MainWindow::restoreState(const QByteArray &bytes, bool reportFailure, bool rewindSnapshot) {
     if (!emulator_)
         return false;
+    if (cupid_native_v1_is_state(reinterpret_cast<const uint8_t *>(bytes.constData()),
+                                 size_t(bytes.size()))) {
+        if (reportFailure)
+            reportError("This older state cannot resume with the current pixel pipeline. "
+                        "Use File > Recover Battery from Older State to export its battery data.");
+        return false;
+    }
     const auto result =
         rewindSnapshot
             ? cupid_gb_load_state_with_context(&emulator_->gb,
@@ -804,8 +1114,16 @@ bool MainWindow::loadStateFile(const QString &path) {
     }
     if (!restoreState(bytes, true))
         return false;
+    if (recorder_ && recorder_->active() &&
+        recorder_->sampleRate() != cupid_gb_apu_get_sample_rate(&emulator_->gb))
+        stopRecording();
+    // Pending samples belong to the saved timeline, before the next forward instruction.
+    int16_t discarded[CUPID_GB_APU_BUF_FRAMES * 2];
+    cupid_gb_apu_drain(&emulator_->gb, discarded, CUPID_GB_APU_BUF_FRAMES);
     // Host input remains current even when the saved guest frame held another button.
-    setJoypad(physicalJoypad_);
+    applyHeldButtons();
+    batteryDirty_ = true;
+    saveTimer_.start();
     rewind_ = false;
     turbo_ = false;
     clearAudio();
@@ -814,6 +1132,63 @@ bool MainWindow::loadStateFile(const QString &path) {
     rememberFrame();
     present();
     statusBar()->showMessage("State loaded", 3000);
+    return true;
+}
+
+bool MainWindow::recoverBattery(const QString &statePath, const QString &outputPath) {
+    if (!emulator_)
+        return false;
+    auto pathIdentity = [](const QString &path) {
+        const QFileInfo file(path);
+        return file.exists() ? file.canonicalFilePath() : file.absoluteFilePath();
+    };
+#ifdef _WIN32
+    constexpr auto pathCase = Qt::CaseInsensitive;
+#else
+    constexpr auto pathCase = Qt::CaseSensitive;
+#endif
+    for (const QString &protectedPath : {romPath_, savePath_, statePath}) {
+        if (pathIdentity(outputPath).compare(pathIdentity(protectedPath), pathCase) == 0) {
+            reportError("Export recovery to a separate file. Cartridge, battery, and state inputs "
+                        "are protected.");
+            return false;
+        }
+    }
+    QFile file(statePath);
+    if (!file.open(QIODevice::ReadOnly) || file.size() > 16 * 1024 * 1024) {
+        reportError("Cannot read the older state: " + file.errorString());
+        return false;
+    }
+    const QByteArray state = file.readAll();
+    if (state.size() != file.size())
+        return false;
+    auto recovered = std::make_unique<CupidNativeV1Battery>();
+    auto result = cupid_native_v1_recover_battery(
+        reinterpret_cast<const uint8_t *>(state.constData()), size_t(state.size()),
+        reinterpret_cast<const uint8_t *>(romData_.constData()), size_t(romData_.size()),
+        emulator_->gb.cartridge_ram_size, recovered.get());
+    if (result != CUPID_NATIVE_V1_OK) {
+        reportError("Cannot recover battery: " +
+                    QString::fromLatin1(cupid_native_v1_result_name(result)));
+        return false;
+    }
+    const auto size = cupid_native_v1_battery_size(recovered.get());
+    if (!size || size != cupid_gb_battery_size(&emulator_->gb)) {
+        reportError("The recovered battery layout does not match this cartridge.");
+        return false;
+    }
+    QByteArray bytes(qsizetype(size), Qt::Uninitialized);
+    size_t written = 0;
+    result = cupid_native_v1_export_battery(
+        recovered.get(), reinterpret_cast<uint8_t *>(bytes.data()), size, &written);
+    QSaveFile output(outputPath);
+    if (result != CUPID_NATIVE_V1_OK || written != size || !output.open(QIODevice::WriteOnly) ||
+        output.write(bytes) != bytes.size() || !output.commit()) {
+        reportError("Cannot export recovered battery: " + output.errorString());
+        return false;
+    }
+    statusBar()->showMessage("Recovered battery exported; the running cartridge is unchanged",
+                             5000);
     return true;
 }
 
@@ -904,7 +1279,9 @@ bool MainWindow::rewindFrame() {
         statusBar()->showMessage("Rewind disabled: stored state could not be restored");
         return false;
     }
-    setJoypad(physicalJoypad_);
+    applyHeldButtons();
+    batteryDirty_ = true;
+    saveTimer_.start();
     rewindBytes_ -= rewindStates_.back().compressed.capacity() + qsizetype(sizeof(RewindSnapshot));
     rewindStates_.pop_back();
     present();
@@ -929,12 +1306,14 @@ void MainWindow::present() {
                             : palette[gb.frame_buffer[i] & 3];
     }
     display_->image = image_;
+    display_->setMinimumSize(image_.size());
     ++presentedImages_;
     display_->update();
 }
 
 bool MainWindow::eventFilter(QObject *object, QEvent *event) {
-    if (event->type() == QEvent::ApplicationDeactivate || event->type() == QEvent::WindowDeactivate)
+    if (event->type() == QEvent::ApplicationDeactivate ||
+        (event->type() == QEvent::WindowDeactivate && object == this))
         releaseKeys();
     if ((object == display_ || object == this) && emulator_ &&
         (event->type() == QEvent::KeyPress || event->type() == QEvent::KeyRelease)) {
@@ -942,34 +1321,48 @@ bool MainWindow::eventFilter(QObject *object, QEvent *event) {
         if (key->isAutoRepeat())
             return true;
         const bool pressed = event->type() == QEvent::KeyPress;
+        const int value = inputKey(key->key());
         // A modifier pressed after a game button must not suppress that button's release.
-        if (pressed &&
-            (key->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier)))
+        if (pressed && (key->modifiers() & ~keyModifier(value) &
+                        (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier)))
             return QMainWindow::eventFilter(object, event);
-        if (key->key() == Qt::Key_Space) {
-            turbo_ = pressed;
-            clearAudio();
+        for (size_t action = 0; action < specialKeys_.size(); ++action) {
+            if (!specialKeys_[action] || specialKeys_[action] != value)
+                continue;
+            const bool held = pressed && !paused_;
+            switch (action) {
+                case 0:
+                    turbo_ = held;
+                    clearAudio();
+                    break;
+                case 1:
+                    rewind_ = held;
+                    clearAudio();
+                    if (held && rewindStates_.size() < 2)
+                        statusBar()->showMessage("No earlier rewind history");
+                    break;
+                case 2:
+                    slowHeld_ = held;
+                    break;
+                case 3:
+                case 4:
+                    rapidHeld_[action - 3] = held;
+                    rapidPhase_[action - 3] = 0;
+                    applyHeldButtons();
+                    break;
+            }
             nextFrame_ = clock_.nsecsElapsed();
-            return true;
-        }
-        if (key->key() == Qt::Key_Tab) {
-            rewind_ = pressed && !paused_;
-            clearAudio();
-            nextFrame_ = clock_.nsecsElapsed();
-            if (pressed && rewindStates_.size() < 2)
-                statusBar()->showMessage("No earlier rewind history");
             return true;
         }
         for (size_t i = 0; i < keys_.size(); ++i) {
-            if (key->key() == keys_[i]) {
+            if (value == keys_[i]) {
                 const uint8_t mask = uint8_t(1u << i);
                 if (pressed && !paused_) {
                     physicalJoypad_ &= uint8_t(~mask);
-                    setJoypad(physicalJoypad_);
                 } else {
                     physicalJoypad_ |= mask;
-                    setJoypad(physicalJoypad_);
                 }
+                applyHeldButtons();
                 return true;
             }
         }
@@ -1002,8 +1395,10 @@ void MainWindow::dropEvent(QDropEvent *event) {
 
 void MainWindow::refreshActions() {
     for (auto *action : {closeAction_, resetAction_, pauseAction_, frameAction_, screenshotAction_,
-                         loadStateFileAction_})
+                         loadStateFileAction_, recordingAction_})
         action->setEnabled(bool(emulator_));
+    recordingAction_->setText(recorder_ && recorder_->active() ? "Stop Audio &Recording"
+                                                               : "Start Audio &Recording…");
     for (auto *action : saveSlotActions_)
         action->setEnabled(bool(emulator_));
     for (auto *action : loadSlotActions_)
@@ -1022,13 +1417,20 @@ void MainWindow::screenshot() {
     setPaused(wasPaused);
 }
 
+QString MainWindow::bootDirectory() const {
+    return bootDirectoryOverride_.isNull() ? settings_.value("emulation/bootDirectory").toString()
+                                           : bootDirectoryOverride_;
+}
+
 void MainWindow::configure() {
     const bool wasPaused = paused_;
     setPaused(true);
     QDialog dialog(this);
+    dialog.setObjectName("settings");
     dialog.setWindowTitle("CupidGB Settings");
     auto *layout = new QVBoxLayout(&dialog);
-    auto *form = new QFormLayout;
+    auto *formWidget = new QWidget;
+    auto *form = new QFormLayout(formWidget);
     auto *model = new QComboBox;
     model->addItem("Automatic", -1);
     model->addItem("Game Boy", CUPID_GB_MODEL_DMG_ABC);
@@ -1042,7 +1444,8 @@ void MainWindow::configure() {
     auto *bootRow = new QWidget;
     auto *bootLayout = new QHBoxLayout(bootRow);
     bootLayout->setContentsMargins(0, 0, 0, 0);
-    auto *boot = new QLineEdit(settings_.value("emulation/bootDirectory").toString());
+    auto *boot = new QLineEdit(bootDirectory());
+    boot->setObjectName("bootDirectory");
     boot->setPlaceholderText("Empty: start from post-boot state");
     auto *browse = new QPushButton("Browse…");
     bootLayout->addWidget(boot);
@@ -1085,13 +1488,38 @@ void MainWindow::configure() {
                                 .arg(double(rewindBytes_) / (1024 * 1024), 0, 'f', 1)));
     std::array<QKeySequenceEdit *, 8> edits;
     for (size_t i = 0; i < edits.size(); ++i) {
-        edits[i] = new QKeySequenceEdit(QKeySequence(keys_[i]));
+        edits[i] = new InputKeyEdit(keys_[i]);
+        edits[i]->setObjectName(QString("input/%1").arg(i));
         form->addRow(buttonNames[i], edits[i]);
     }
-    layout->addLayout(form);
-    auto *note = new QLabel("Choose one unmodified key per button. Space and Tab are reserved.\n"
-                            "Rewind duration is bounded by the selected memory limit.\n"
-                            "Controllers and debugger tools remain incomplete.");
+    std::array<QKeySequenceEdit *, 5> specialEdits;
+    for (size_t i = 0; i < specialEdits.size(); ++i) {
+        specialEdits[i] = new InputKeyEdit(specialKeys_[i]);
+        specialEdits[i]->setObjectName(QString("input/special/%1").arg(i));
+        form->addRow(specialNames[i], specialEdits[i]);
+    }
+    std::vector<QKeySequenceEdit *> commandEdits;
+    for (auto *action : shortcutActions_) {
+        auto *edit = new QKeySequenceEdit(action->shortcut());
+        edit->setObjectName("shortcut/" + action->objectName());
+        commandEdits.push_back(edit);
+        QString label = action->text();
+        label.remove('&');
+        if (action->objectName().startsWith("save/"))
+            label.prepend("Save ");
+        if (action->objectName().startsWith("load/"))
+            label.prepend("Load ");
+        form->addRow(label, edit);
+    }
+    auto *scroll = new QScrollArea;
+    scroll->setWidgetResizable(true);
+    scroll->setWidget(formWidget);
+    layout->addWidget(scroll);
+    auto *note =
+        new QLabel("Choose one key per button or mode. Empty mappings disable an input.\n"
+                   "Command shortcuts may include modifiers. Each mapping must be unique.\n"
+                   "Rewind duration is bounded by the selected memory limit.\n"
+                   "Controllers and debugger tools remain incomplete.");
     note->setWordWrap(true);
     layout->addWidget(note);
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
@@ -1099,29 +1527,65 @@ void MainWindow::configure() {
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
         std::array<int, 8> values{};
-        for (size_t i = 0; i < edits.size(); ++i) {
-            const auto sequence = edits[i]->keySequence();
-            if (sequence.count() != 1 || sequence[0].keyboardModifiers() != Qt::NoModifier ||
-                sequence[0].key() == Qt::Key_Space || sequence[0].key() == Qt::Key_Tab ||
-                sequence[0].key() == Qt::Key_unknown) {
-                QMessageBox::warning(
-                    &dialog, "Input",
-                    "Choose one unmodified key for each button. Space and Tab are reserved.");
+        std::array<int, 5> specialValues{};
+        std::vector<int> used;
+        auto readInput = [&](QKeySequenceEdit *edit, int &value) {
+            const auto sequence = edit->keySequence();
+            if (sequence.isEmpty()) {
+                value = 0;
+                return true;
+            }
+            const auto key = sequence[0].key();
+            const auto modifiers = sequence[0].keyboardModifiers();
+            if (sequence.count() != 1 || key == Qt::Key_unknown ||
+                (modifiers != Qt::NoModifier && modifiers != keyModifier(key)) ||
+                std::find(used.begin(), used.end(), int(key)) != used.end())
+                return false;
+            value = int(key);
+            used.push_back(value);
+            return true;
+        };
+        for (size_t i = 0; i < edits.size(); ++i)
+            if (!readInput(edits[i], values[i])) {
+                QMessageBox::warning(&dialog, "Input",
+                                     "Choose unique single keys for buttons and modes.");
                 return;
             }
-            values[i] = sequence[0].key();
-            for (size_t j = 0; j < i; ++j) {
-                if (values[j] == values[i]) {
-                    QMessageBox::warning(&dialog, "Input", "Each button needs a different key.");
-                    return;
-                }
+        for (size_t i = 0; i < specialEdits.size(); ++i)
+            if (!readInput(specialEdits[i], specialValues[i])) {
+                QMessageBox::warning(&dialog, "Input",
+                                     "Choose unique single keys for buttons and modes.");
+                return;
             }
+        std::vector<QKeySequence> commands;
+        for (auto *edit : commandEdits) {
+            const auto sequence = edit->keySequence();
+            if (!sequence.isEmpty() &&
+                (sequence.count() != 1 ||
+                 std::find(commands.begin(), commands.end(), sequence) != commands.end() ||
+                 (sequence[0].keyboardModifiers() == Qt::NoModifier &&
+                  std::find(used.begin(), used.end(), int(sequence[0].key())) != used.end()))) {
+                QMessageBox::warning(
+                    &dialog, "Input",
+                    "Command shortcuts must be unique and cannot overlap button or mode keys.");
+                return;
+            }
+            commands.push_back(sequence);
         }
         keys_ = values;
+        specialKeys_ = specialValues;
         for (size_t i = 0; i < values.size(); ++i)
             settings_.setValue(QString("input/%1").arg(i), values[i]);
+        for (size_t i = 0; i < specialValues.size(); ++i)
+            settings_.setValue(QString("input/special/%1").arg(i), specialValues[i]);
+        for (size_t i = 0; i < commands.size(); ++i) {
+            shortcutActions_[i]->setShortcut(commands[i]);
+            settings_.setValue("shortcuts/" + shortcutActions_[i]->objectName(),
+                               commands[i].toString(QKeySequence::PortableText));
+        }
         settings_.setValue("emulation/model", model->currentData());
         settings_.setValue("emulation/bootDirectory", boot->text());
+        bootDirectoryOverride_ = QString();
         settings_.setValue("video/integerScale", scaling->currentIndex() == 0);
         settings_.setValue("audio/volume", volume->value());
         if (settings_.value("emulation/rewindSeconds", 120) != rewindLength->currentData() ||
@@ -1137,6 +1601,7 @@ void MainWindow::configure() {
             audio_->setVolume(muteAction_->isChecked() ? 0.0f : float(volume->value()) / 100);
         dialog.accept();
     });
+    dialog.resize(620, std::min(780, screen()->availableGeometry().height() - 80));
     dialog.exec();
     setPaused(wasPaused);
 }
@@ -1150,6 +1615,24 @@ bool MainWindow::smokeTest() {
     rom[0x101] = char(0xfe);
     rom[0x147] = 0x09; // ROM + RAM + battery, used to check persistence.
     rom[0x149] = 0x02;
+    if (automaticModel(rom) != CUPID_GB_MODEL_DMG_ABC)
+        return false;
+    auto modelProbe = rom;
+    modelProbe[0x14b] = 1;
+    if (automaticModel(modelProbe) != CUPID_GB_MODEL_CGB)
+        return false;
+    modelProbe[0x146] = 3;
+    if (automaticModel(modelProbe) != CUPID_GB_MODEL_SGB)
+        return false;
+    modelProbe[0x143] = char(0x80);
+    if (automaticModel(modelProbe) != CUPID_GB_MODEL_CGB)
+        return false;
+    modelProbe = rom;
+    modelProbe[0x14b] = 0x33;
+    modelProbe[0x144] = '0';
+    modelProbe[0x145] = '1';
+    if (automaticModel(modelProbe) != CUPID_GB_MODEL_CGB)
+        return false;
     const QString path = directory.filePath(QString::fromUtf8("cartridge-\xc3\xa9.gb"));
     QFile file(path);
     if (!file.open(QIODevice::WriteOnly) || file.write(rom) != rom.size())
@@ -1166,10 +1649,20 @@ bool MainWindow::smokeTest() {
     };
     if (!openRom(path) || !runFrame() || image_.size() != QSize(160, 144))
         return false;
+    if (audioCheck_ && (!audio_ || !audioPriming_ || audioBuffer_->bytesAvailable() <= 0 ||
+                        audioPrimeEvents_ != 0))
+        return false;
+    const auto beforeInvalidBoot = captureState();
+    settings_.setValue("emulation/bootDirectory", directory.filePath("missing-boot-directory"));
+    if (openRom(path) || captureState() != beforeInvalidBoot)
+        return false;
+    settings_.remove("emulation/bootDirectory");
+    failed_ = false;
     pauseAction_->trigger();
     const uint16_t pc = emulator_->gb.cpu.pc;
     tick();
-    if (emulator_->gb.cpu.pc != pc || !pauseAction_->isChecked())
+    if (emulator_->gb.cpu.pc != pc || !pauseAction_->isChecked() ||
+        (audioCheck_ && (!audioPriming_ || audioBuffer_->bytesAvailable() != 0)))
         return false;
     setPaused(false);
     const auto beforeTimer = emulator_->gb.elapsed_cycles;
@@ -1193,6 +1686,32 @@ bool MainWindow::smokeTest() {
     QApplication::sendEvent(display_, &turboUp);
     if (turbo_)
         return false;
+    QKeyEvent slowDown(QEvent::KeyPress, Qt::Key_Shift, Qt::ShiftModifier);
+    QKeyEvent slowUp(QEvent::KeyRelease, Qt::Key_Shift, Qt::NoModifier);
+    QApplication::sendEvent(display_, &slowDown);
+    for (unsigned frame = 0; frame < 8; ++frame)
+        if (!runFrame())
+            return false;
+    if (speedSteps_ != 8 || !slowHeld_)
+        return false;
+    QApplication::sendEvent(display_, &slowUp);
+    for (unsigned frame = 0; frame < 8; ++frame)
+        if (!runFrame())
+            return false;
+    if (speedSteps_ != 16 || slowHeld_)
+        return false;
+    specialKeys_[3] = Qt::Key_C;
+    QKeyEvent rapidDown(QEvent::KeyPress, Qt::Key_C, Qt::NoModifier);
+    QKeyEvent rapidUp(QEvent::KeyRelease, Qt::Key_C, Qt::ControlModifier);
+    QApplication::sendEvent(display_, &rapidDown);
+    for (unsigned frame = 0; frame < 8; ++frame) {
+        if (bool(emulator_->gb.joypad & 0x10) != (frame % 4 >= 2) || !runFrame())
+            return false;
+    }
+    QApplication::sendEvent(display_, &rapidUp);
+    if (!(emulator_->gb.joypad & 0x10))
+        return false;
+    specialKeys_[3] = 0;
     QApplication::sendEvent(display_, &down);
     QEvent deactivate(QEvent::WindowDeactivate);
     QApplication::sendEvent(this, &deactivate);
@@ -1210,13 +1729,85 @@ bool MainWindow::smokeTest() {
         !saveRom.open(QIODevice::ReadOnly) || saveRom.readAll() != rom)
         return false;
     failed_ = false; // Rejecting a save file must preserve the running cartridge and input bytes.
+    cupid_gb_write_u8(&emulator_->gb, 0xa017, 0x39);
+    watchBattery();
+    QEventLoop saveLoop;
+    QTimer::singleShot(320, &saveLoop, &QEventLoop::quit);
+    saveLoop.exec();
+    QFile automaticSave(savePath_);
+    if (batteryDirty_ || !automaticSave.open(QIODevice::ReadOnly) ||
+        automaticSave.readAll()[23] != char(0x39))
+        return false;
+    automaticSave.close();
+    cupid_gb_write_u8(&emulator_->gb, 0xa017, 0x40);
+    watchBattery();
+    QTimer::singleShot(120, this, [this] {
+        cupid_gb_write_u8(&emulator_->gb, 0xa017, 0x41);
+        watchBattery();
+    });
+    QEventLoop debounceLoop;
+    QTimer::singleShot(320, &debounceLoop, &QEventLoop::quit);
+    debounceLoop.exec();
+    if (!batteryDirty_ || !automaticSave.open(QIODevice::ReadOnly) ||
+        automaticSave.readAll()[23] != char(0x39))
+        return false;
+    automaticSave.close();
+    QEventLoop stableLoop;
+    QTimer::singleShot(100, &stableLoop, &QEventLoop::quit);
+    stableLoop.exec();
+    if (batteryDirty_ || !automaticSave.open(QIODevice::ReadOnly) ||
+        automaticSave.readAll()[23] != char(0x41))
+        return false;
+    automaticSave.close();
     const QString shot = directory.filePath("screen.png");
     emulator_->gb.cartridge_ram[23] = 0x5a;
+    ++emulator_->gb.battery_write_generation;
     if (!image_.save(shot) || QImage(shot).size() != image_.size() || !restart() ||
         emulator_->gb.cartridge_ram[23] != 0x5a)
         return false;
     setPaused(true);
     const QByteArray checkpoint = captureState();
+    // Frozen legacy wire offsets are used only to exercise explicit battery recovery.
+    QByteArray olderState(300349, char(0));
+    std::memcpy(olderState.data(), "CUPIDGB", 8);
+    auto putLegacy32 = [&](qsizetype offset, uint32_t value) {
+        for (unsigned i = 0; i < 4; ++i)
+            olderState[offset + i] = char(value >> (i * 8));
+    };
+    putLegacy32(8, 1);
+    putLegacy32(12, uint32_t(olderState.size()));
+    putLegacy32(20, uint32_t(rom.size()));
+    const auto romDigest = QCryptographicHash::hash(rom, QCryptographicHash::Sha256);
+    std::memcpy(olderState.data() + 32, romDigest.constData(), 32);
+    olderState[16529 + 23] = char(0x72);
+    const auto stateDigest = QCryptographicHash::hash(olderState.first(96) + olderState.mid(128),
+                                                      QCryptographicHash::Sha256);
+    std::memcpy(olderState.data() + 96, stateDigest.constData(), 32);
+    QFile olderFile(directory.filePath("older.s1"));
+    if (!olderFile.open(QIODevice::WriteOnly) || olderFile.write(olderState) != olderState.size())
+        return false;
+    olderFile.close();
+    const QString recoveredPath = directory.filePath(QString::fromUtf8("recovered-\xc3\xa9.sav"));
+    if (restoreState(olderState, false) || captureState() != checkpoint ||
+        !recoverBattery(olderFile.fileName(), recoveredPath) || captureState() != checkpoint)
+        return false;
+    QFile recovered(recoveredPath);
+    if (!recovered.open(QIODevice::ReadOnly) || recovered.size() != 8192 ||
+        recovered.readAll()[23] != char(0x72))
+        return false;
+    if (recoverBattery(olderFile.fileName(), savePath_) ||
+        recoverBattery(olderFile.fileName(), romPath_) ||
+        recoverBattery(olderFile.fileName(), olderFile.fileName()) || captureState() != checkpoint)
+        return false;
+    failed_ = false;
+    olderState[16529] ^= 1;
+    if (!olderFile.open(QIODevice::WriteOnly) || olderFile.write(olderState) != olderState.size())
+        return false;
+    olderFile.close();
+    if (recoverBattery(olderFile.fileName(), directory.filePath("bad-export.sav")) ||
+        QFileInfo::exists(directory.filePath("bad-export.sav")) || captureState() != checkpoint)
+        return false;
+    failed_ = false;
     if (checkpoint.isEmpty() || !saveSlot(1) || !saveSlot(0) ||
         saveSlotActions_[1]->shortcut() != QKeySequence("Ctrl+1") ||
         loadSlotActions_[0]->shortcut() != QKeySequence("Ctrl+Shift+0"))
@@ -1303,8 +1894,10 @@ bool MainWindow::smokeTest() {
     for (int i = 0; i < 3; ++i)
         if (!runFrame())
             return false;
-    if (captureState() != forwardState)
+    if (captureState() != forwardState) {
+        qCritical("Rewind workflow failed to reproduce the forward state");
         return false;
+    }
     const auto beforeRewind = emulator_->gb.elapsed_cycles;
     setPaused(false);
     QKeyEvent rightDown(QEvent::KeyPress, Qt::Key_Right, Qt::NoModifier);
@@ -1315,8 +1908,26 @@ bool MainWindow::smokeTest() {
     QApplication::sendEvent(display_, &rewindDown);
     tick();
     QApplication::sendEvent(display_, &rewindUp);
-    if (rewind_ || emulator_->gb.elapsed_cycles >= beforeRewind || (emulator_->gb.joypad & 1) != 0)
+    if (rewind_ || emulator_->gb.elapsed_cycles >= beforeRewind ||
+        (emulator_->gb.joypad & 1) != 0) {
+        qCritical("Rewind key workflow failed: held=%d cycles=%llu before=%llu joypad=%02x",
+                  rewind_, qulonglong(emulator_->gb.elapsed_cycles), qulonglong(beforeRewind),
+                  emulator_->gb.joypad);
         return false;
+    }
+    // Shift+Tab arrives as Backtab on desktop platforms and must still operate rewind.
+    QKeyEvent shiftedRewindDown(QEvent::KeyPress, Qt::Key_Backtab, Qt::ShiftModifier);
+    QKeyEvent shiftedRewindUp(QEvent::KeyRelease, Qt::Key_Backtab, Qt::ShiftModifier);
+    QApplication::sendEvent(display_, &shiftedRewindDown);
+    if (!rewind_) {
+        qCritical("Shift+Tab did not start rewind");
+        return false;
+    }
+    QApplication::sendEvent(display_, &shiftedRewindUp);
+    if (rewind_) {
+        qCritical("Shift+Tab release did not stop rewind");
+        return false;
+    }
     QApplication::sendEvent(display_, &rightUp);
     if ((emulator_->gb.joypad & 1) == 0)
         return false;
@@ -1340,8 +1951,10 @@ bool MainWindow::smokeTest() {
         rememberFrame();
     }
     if (rewindFailed_ || rewindBytes_ > 16 * 1024 * 1024 || rewindStates_.size() >= 100 ||
-        rewindStates_.size() < 2)
+        rewindStates_.size() < 2) {
+        qCritical("Rewind memory limit workflow failed");
         return false;
+    }
     settings_.setValue("emulation/rewindSeconds", 0);
     resetRewind();
     rememberFrame();
@@ -1362,8 +1975,10 @@ bool MainWindow::smokeTest() {
         rewindStates_.size() < 2 || rewindStates_.size() >= 91 ||
         rewindStates_.front().cycles <= durationStart ||
         rewindStates_.back().cycles - rewindStates_.front().cycles > 4194304 ||
-        rewindBytes_ >= 16 * 1024 * 1024)
+        rewindBytes_ >= 16 * 1024 * 1024) {
+        qCritical("Rewind duration limit workflow failed");
         return false;
+    }
     settings_.setValue("emulation/rewindSeconds", 120);
     if (!restoreState(beforeBudget, true))
         return false;
@@ -1377,15 +1992,27 @@ bool MainWindow::smokeTest() {
         auto waitForward = [this] {
             setPaused(false);
             const uint64_t before = generatedAudioFrames_;
+            const uint64_t primedBefore = audioPrimeEvents_;
             QEventLoop loop;
             QTimer::singleShot(350, Qt::PreciseTimer, &loop, &QEventLoop::quit);
             loop.exec();
-            return audio_ && audio_->error() == QAudio::NoError && audio_->processedUSecs() > 0 &&
-                   generatedAudioFrames_ > before;
+            const bool passed = audio_ && audio_->error() == QAudio::NoError &&
+                                audio_->processedUSecs() > 0 && generatedAudioFrames_ > before &&
+                                !audioPriming_ && audioPrimeEvents_ > primedBefore;
+            if (!passed)
+                qCritical("Audio resume check failed: sink=%d state=%d error=%d processed=%lld "
+                          "generated=%llu priming=%d completions=%llu previous=%llu queued=%lld",
+                          bool(audio_), audio_ ? int(audio_->state()) : -1,
+                          audio_ ? int(audio_->error()) : -1,
+                          audio_ ? qlonglong(audio_->processedUSecs()) : 0,
+                          qulonglong(generatedAudioFrames_ - before), audioPriming_,
+                          qulonglong(audioPrimeEvents_), qulonglong(primedBefore),
+                          audioBuffer_ ? qlonglong(audioBuffer_->bytesAvailable()) : -1);
+            return passed;
         };
         if (!waitForward() || !saveSlot(9) || !waitForward())
             return false;
-        if (!loadSlot(9) || audioBuffer_->bytesAvailable() != 0 || !waitForward())
+        if (!loadSlot(9) || audioBuffer_->bytesAvailable() != 0 || !audioPriming_ || !waitForward())
             return false;
         const uint64_t beforeBackwards = emulator_->gb.elapsed_cycles;
         QApplication::sendEvent(display_, &rewindDown);
@@ -1394,27 +2021,227 @@ bool MainWindow::smokeTest() {
         backwardsLoop.exec();
         QApplication::sendEvent(display_, &rewindUp);
         if (rewind_ || emulator_->gb.elapsed_cycles >= beforeBackwards ||
-            audioBuffer_->bytesAvailable() != 0 || !waitForward() || audioErrorEvents_)
+            audioBuffer_->bytesAvailable() != 0 || !audioPriming_ || !waitForward() ||
+            audioErrorEvents_)
             return false;
         qInfo("CupidGB real-audio save/load and rewind transition checks passed");
     }
+    const auto originalKeys = keys_;
+    const auto originalSpecialKeys = specialKeys_;
+    const auto originalPauseShortcut = pauseAction_->shortcut();
+    auto settingsDialog = [this](const auto &edit) {
+        bool checked = false;
+        QTimer command;
+        command.setInterval(1);
+        connect(&command, &QTimer::timeout, this, [&] {
+            auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+            if (!dialog || dialog->objectName() != "settings")
+                return;
+            command.stop();
+            checked = edit(*dialog);
+            if (dialog->isVisible())
+                dialog->reject();
+        });
+        command.start();
+        configure();
+        return checked;
+    };
+    auto changeMappings = [](QDialog &dialog) {
+        auto *button = dialog.findChild<QKeySequenceEdit *>("input/4");
+        auto *mode = dialog.findChild<QKeySequenceEdit *>("input/special/0");
+        auto *command = dialog.findChild<QKeySequenceEdit *>("shortcut/pause");
+        if (!button || !mode || !command)
+            return false;
+        button->setKeySequence(QKeySequence(Qt::Key_J));
+        mode->setKeySequence(QKeySequence(Qt::Key_Control));
+        command->setKeySequence(QKeySequence("Ctrl+F8"));
+        return true;
+    };
+    setPaused(false);
+    QApplication::sendEvent(display_, &down);
+    if (!settingsDialog([&](QDialog &dialog) {
+            if (!changeMappings(dialog) || !paused_ || emulator_->gb.joypad != 0xff)
+                return false;
+            dialog.findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Cancel)->click();
+            return true;
+        }) ||
+        paused_ || keys_ != originalKeys || specialKeys_ != originalSpecialKeys ||
+        pauseAction_->shortcut() != originalPauseShortcut)
+        return false;
+    if (!settingsDialog([&](QDialog &dialog) {
+            if (!changeMappings(dialog))
+                return false;
+            dialog.findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Ok)->click();
+            return !dialog.isVisible();
+        }) ||
+        paused_ || keys_[4] != Qt::Key_J || specialKeys_[0] != Qt::Key_Control ||
+        pauseAction_->shortcut() != QKeySequence("Ctrl+F8") ||
+        settings_.value("input/4").toInt() != Qt::Key_J ||
+        settings_.value("input/special/0").toInt() != Qt::Key_Control ||
+        settings_.value("shortcuts/pause").toString() != "Ctrl+F8")
+        return false;
+    QKeyEvent controlDown(QEvent::KeyPress, Qt::Key_Control, Qt::ControlModifier);
+    QKeyEvent controlUp(QEvent::KeyRelease, Qt::Key_Control, Qt::NoModifier);
+    QApplication::sendEvent(display_, &controlDown);
+    if (!turbo_)
+        return false;
+    QApplication::sendEvent(display_, &controlUp);
+    if (turbo_)
+        return false;
+    const auto appliedKeys = keys_;
+    if (!settingsDialog([&](QDialog &dialog) {
+            auto *conflict = dialog.findChild<QKeySequenceEdit *>("input/5");
+            if (!conflict)
+                return false;
+            conflict->setKeySequence(QKeySequence(Qt::Key_J));
+            bool warningShown = false;
+            QTimer::singleShot(0, &dialog, [&] {
+                auto *warning = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+                if (warning) {
+                    warningShown = true;
+                    warning->accept();
+                }
+            });
+            dialog.findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Ok)->click();
+            return warningShown && dialog.isVisible();
+        }) ||
+        paused_ || keys_ != appliedKeys)
+        return false;
+    setPaused(true);
+    const QString recordingPath = directory.filePath("forward-audio.wav");
+    if (startRecording(romPath_) || startRecording(savePath_))
+        return false;
+    failed_ = false;
+    if (!startRecording(recordingPath) || !recorder_->active() ||
+        recordingAction_->text() != "Stop Audio &Recording")
+        return false;
+    const uint64_t audioBeforeRecording = generatedAudioFrames_;
+    resetRewind();
+    rememberFrame();
+    if (!saveSlot(8) || !runFrame() || !runFrame())
+        return false;
+    const uint64_t recordedFrames = recorder_->framesWritten();
+    if (!recordedFrames || recordedFrames != generatedAudioFrames_ - audioBeforeRecording ||
+        !rewindFrame() || recorder_->framesWritten() != recordedFrames || !loadSlot(8) ||
+        !recorder_->active() || recorder_->framesWritten() != recordedFrames)
+        return false;
+    tick();
+    if (recorder_->framesWritten() != recordedFrames || !runFrame() ||
+        recorder_->framesWritten() <= recordedFrames)
+        return false;
+    const uint64_t finalFrames = recorder_->framesWritten();
+    recordingAction_->trigger();
+    QFile recorded(recordingPath);
+    if (recorder_->active() || !recorded.open(QIODevice::ReadOnly) ||
+        recorded.size() != qint64(44 + finalFrames * 4))
+        return false;
+    recorded.close();
+    const QString rateChangePath = directory.filePath("rate-change.wav");
+    if (!startRecording(rateChangePath) || !runFrame() ||
+        !cupid_gb_apu_set_sample_rate(&emulator_->gb, 48000) || !runFrame() ||
+        recorder_->active() || QFileInfo(rateChangePath).size() <= 44)
+        return false;
+    const QString loadRatePath = directory.filePath("load-rate-change.wav");
+    if (!startRecording(loadRatePath) || !loadSlot(8) || recorder_->active() ||
+        QFileInfo(loadRatePath).size() != 44)
+        return false;
+    const QString resetRecordingPath = directory.filePath("reset-audio.wav");
+    if (!startRecording(resetRecordingPath) || !runFrame() || !restart() || recorder_->active() ||
+        QFileInfo(resetRecordingPath).size() <= 44)
+        return false;
+    const QString closingRecordingPath = directory.filePath("close-audio.wav");
+    if (!startRecording(closingRecordingPath) || !runFrame())
+        return false;
     if (!closeRom() || closeAction_->isEnabled())
         return false;
+    if (recorder_->active() || recordingAction_->isEnabled() ||
+        QFileInfo(closingRecordingPath).size() <= 44)
+        return false;
+    const QString exitRecordingPath = directory.filePath("exit-audio.wav");
+    {
+        MainWindow closing(true);
+        if (!closing.openRom(path) || !closing.startRecording(exitRecordingPath) ||
+            !closing.runFrame())
+            return false;
+    }
+    if (QFileInfo(exitRecordingPath).size() <= 44)
+        return false;
     settings_.setValue("input/4", int(Qt::Key_A));
+    settings_.setValue("input/special/0", int(Qt::Key_T));
+    settings_.setValue("shortcuts/pause", "Ctrl+F9");
     settings_.setValue("video/integerScale", false);
     settings_.sync();
     {
         MainWindow restored(true);
-        if (restored.keys_[4] != Qt::Key_A || restored.display_->integerScale)
+        if (restored.keys_[4] != Qt::Key_A || restored.specialKeys_[0] != Qt::Key_T ||
+            restored.pauseAction_->shortcut() != QKeySequence("Ctrl+F9") ||
+            restored.display_->integerScale)
             return false;
     }
+    InputKeyEdit capture(0);
+    QKeyEvent tabCapture(QEvent::KeyPress, Qt::Key_Tab, Qt::NoModifier);
+    QApplication::sendEvent(&capture, &tabCapture);
+    if (capture.keySequence() != QKeySequence(Qt::Key_Tab))
+        return false;
+    QApplication::sendEvent(&capture, &slowDown);
+    if (capture.keySequence() != QKeySequence(Qt::Key_Shift))
+        return false;
+    QApplication::sendEvent(&capture, &controlDown);
+    if (capture.keySequence() != QKeySequence(Qt::Key_Control))
+        return false;
+    QApplication::sendEvent(&capture, &shiftedRewindDown);
+    if (capture.keySequence() != QKeySequence(Qt::Key_Tab))
+        return false;
+    settings_.setValue("emulation/model", int(CUPID_GB_MODEL_SGB));
+    QFile superCartridge(directory.filePath("super.gb"));
+    auto superData = rom;
+    superData[0x146] = 3;
+    if (!superCartridge.open(QIODevice::WriteOnly) ||
+        superCartridge.write(superData) != superData.size())
+        return false;
+    superCartridge.close();
+    if (!openRom(superCartridge.fileName()) || image_.size() != QSize(256, 224) ||
+        display_->minimumSize() != image_.size() || !closeRom())
+        return false;
     // Exercise model selection and boot overlay after cartridge initialization.
     settings_.setValue("emulation/model", int(CUPID_GB_MODEL_CGB));
-    settings_.setValue("emulation/bootDirectory", directory.path());
     QFile boot(directory.filePath("cgb_boot.bin"));
     if (!boot.open(QIODevice::WriteOnly) || boot.write(QByteArray(0x900, char(0))) != 0x900)
         return false;
     boot.close();
+    const QString priorDirectory = directory.filePath("saved-boot-preference");
+    settings_.setValue("emulation/bootDirectory", priorDirectory);
+    {
+        MainWindow session(true, false, false, directory.path());
+        if (!session.openRom(path) || !session.emulator_->gb.boot_rom_enabled ||
+            session.bootDirectory() != directory.path() ||
+            settings_.value("emulation/bootDirectory").toString() != priorDirectory)
+            return false;
+        for (const bool accept : {false, true}) {
+            bool checked = false;
+            QTimer command;
+            command.setInterval(1);
+            connect(&command, &QTimer::timeout, &session, [&] {
+                auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+                if (!dialog || dialog->objectName() != "settings")
+                    return;
+                command.stop();
+                auto *edit = dialog ? dialog->findChild<QLineEdit *>("bootDirectory") : nullptr;
+                checked = edit && edit->text() == directory.path();
+                if (dialog)
+                    dialog->findChild<QDialogButtonBox *>()
+                        ->button(accept ? QDialogButtonBox::Ok : QDialogButtonBox::Cancel)
+                        ->click();
+            });
+            command.start();
+            session.configure();
+            if (!checked || session.bootDirectory() != directory.path() ||
+                settings_.value("emulation/bootDirectory").toString() !=
+                    (accept ? directory.path() : priorDirectory) ||
+                session.bootDirectoryOverride_.isNull() != accept)
+                return false;
+        }
+    }
     if (!openRom(path) || emulator_->gb.model != CUPID_GB_MODEL_CGB ||
         !emulator_->gb.boot_rom_enabled || emulator_->gb.cpu.pc != 0)
         return false;
@@ -1435,6 +2262,7 @@ void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
     rewindCaptureNanoseconds_ = 0;
     rewindCaptureMaximumNanoseconds_ = 0;
     audioIdleEvents_ = 0;
+    audioPrimeEvents_ = 0;
     display_->paintCount = 0;
     display_->lastPaintAt = 0;
     display_->paintIntervals.clear();
@@ -1460,12 +2288,15 @@ void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
             {"widget_paint_events", double(display_->paintCount)},
             {"audio_frames_generated", double(generatedAudioFrames_)},
             {"audio_idle_events_after_startup", double(audioIdleEvents_)},
+            {"audio_priming_target_microseconds", 30000},
+            {"audio_priming_events", double(audioPrimeEvents_)},
+            {"audio_priming_pending", audioPriming_},
             {"audio_error_events", double(audioErrorEvents_)},
             {"audio_sink_created", bool(audio_)},
             {"audio_sink_state", audio_ ? int(audio_->state()) : -1},
             {"audio_sink_error", audio_ ? int(audio_->error()) : -1},
             {"audio_processed_microseconds", audio_ ? double(audio_->processedUSecs()) : 0},
-            {"audio_sample_rate", 44100},
+            {"audio_sample_rate", int(cupid_gb_apu_get_sample_rate(&emulator_->gb))},
             {"audio_channels", 2},
             {"host_audio_sample_rate", audio_ ? audio_->format().sampleRate() : 0},
             {"host_audio_channels", audio_ ? audio_->format().channelCount() : 0},
@@ -1485,6 +2316,17 @@ void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
                                 4194304);
         report.insert("rewind_capture_failed", rewindFailed_);
         report.insert("hardware_model", cupid_gb_model_name(emulator_->gb.model));
+        report.insert("startup_mode", emulator_->gb.boot_rom_size ? "boot-rom" : "post-boot");
+        report.insert("boot_rom_bytes", int(emulator_->gb.boot_rom_size));
+        if (emulator_->gb.boot_rom_size)
+            report.insert(
+                "boot_rom_sha256",
+                QString::fromLatin1(QCryptographicHash::hash(
+                                        QByteArray::fromRawData(
+                                            reinterpret_cast<const char *>(emulator_->gb.boot_rom),
+                                            qsizetype(emulator_->gb.boot_rom_size)),
+                                        QCryptographicHash::Sha256)
+                                        .toHex()));
         report.insert("rom_sha256",
                       QString::fromLatin1(
                           QCryptographicHash::hash(romData_, QCryptographicHash::Sha256).toHex()));

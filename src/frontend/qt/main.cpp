@@ -3,19 +3,22 @@
 #include <QApplication>
 #include <QCommandLineParser>
 #include <QDir>
+#include <QFileInfo>
 #include <QTemporaryDir>
 
 int main(int argc, char **argv) {
     QApplication app(argc, argv);
     QCoreApplication::setOrganizationName("CupidGB");
     QCoreApplication::setApplicationName("CupidGB");
-    QCoreApplication::setApplicationVersion("0.2.0");
+    QCoreApplication::setApplicationVersion("0.3.0");
     QCommandLineParser parser;
     parser.setApplicationDescription("CupidGB Game Boy and Game Boy Color emulator");
     parser.addHelpOption();
     parser.addVersionOption();
     parser.addOption({"smoke-test", "Run isolated frontend workflow checks and exit."});
     parser.addOption({"audio-check", "Require real audio during --smoke-test."});
+    parser.addOption(
+        {"boot-directory", "Use boot ROMs from this directory for this session.", "path"});
     parser.addOption(
         {"run-seconds", "Run the frontend for a bounded duration and exit.", "seconds"});
     parser.addOption({"report", "Write bounded frontend measurements as JSON.", "path"});
@@ -25,7 +28,8 @@ int main(int argc, char **argv) {
     parser.process(app);
     const bool smoke = parser.isSet("smoke-test");
     const bool audioCheck = parser.isSet("audio-check");
-    if (audioCheck && !smoke)
+    const bool bootOverride = parser.isSet("boot-directory");
+    if ((audioCheck && !smoke) || (smoke && bootOverride))
         parser.showHelp(1);
     const bool bounded = parser.isSet("run-seconds");
     QTemporaryDir temporary;
@@ -35,7 +39,15 @@ int main(int argc, char **argv) {
         QSettings::setDefaultFormat(QSettings::IniFormat);
         QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, temporary.path());
     }
-    MainWindow window(smoke, bounded, audioCheck);
+    QString bootDirectory;
+    if (bootOverride) {
+        bootDirectory = QDir(parser.value("boot-directory")).absolutePath();
+        if (!QFileInfo(bootDirectory).isDir()) {
+            qCritical("Boot ROM directory does not exist: %s", qPrintable(bootDirectory));
+            return 1;
+        }
+    }
+    MainWindow window(smoke, bounded, audioCheck, bootDirectory);
     window.show();
     if (smoke)
         return window.smokeTest() ? 0 : 1;

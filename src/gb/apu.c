@@ -1,6 +1,3 @@
-/* APU divider and power behavior portions: Copyright (c) 2015-2026 Lior Halphon.
- * Distributed under the Expat License; see LICENSES/hardware.txt.
- */
 /**
  * @file apu.c
  * @brief Audio Processing Unit (APU) emulation for Game Boy (DMG) and Game Boy Color (CGB).
@@ -13,14 +10,16 @@
  *
  * The frame sequencer is clocked at 512 Hz (every 8192 T-cycles) and drives
  * length counters, volume envelopes, and the CH1 frequency sweep unit.
- * Audio samples are generated at @ref CUPID_GB_APU_SAMPLE_RATE (44100 Hz)
- * via sample accumulation and written into an internal ring buffer.
+ * Audio samples default to @ref CUPID_GB_APU_SAMPLE_RATE (44100 Hz).
+ * Weighted integration and DC blocking feed a bounded stereo output buffer.
  *
  * @note DMG-specific hardware bugs (e.g. CH3 wave RAM corruption on retrigger)
- *       are emulated when not in CGB mode.
+ *       are selected by the hardware model, including cartridge compatibility mode.
  */
 #include "cupid/gb/apu.h"
+#include "cupid/gb/timer.h"
 
+#include <math.h>
 #include <string.h>
 
 #include "cupid/gb/gb.h"
@@ -28,21 +27,15 @@
 /**
  * @brief Pulse duty-cycle waveforms.
  *
- * Encodes the four standard Game Boy duty cycles as 8-step binary sequences.
- * Index with [duty][pos] where duty is 0–3 and pos is the current duty
- * position (0–7). A value of 1 means the channel output is high.
+ * Encodes each eight-step waveform in a byte, with phase zero in bit zero.
+ * Duty phase is observable when switching duty without retriggering the channel.
  *
  *   - Duty 0: 12.5%  (1 high out of 8)
  *   - Duty 1: 25%    (2 high out of 8)
  *   - Duty 2: 50%    (4 high out of 8)
  *   - Duty 3: 75%    (6 high out of 8)
  */
-static const uint8_t cupid_gb_duty_table[4u][8u] = {
-    {0u, 0u, 0u, 0u, 0u, 0u, 0u, 1u}, /* 12.5% */
-    {0u, 0u, 0u, 0u, 0u, 0u, 1u, 1u}, /* 25%   */
-    {0u, 0u, 0u, 0u, 1u, 1u, 1u, 1u}, /* 50%   */
-    {1u, 1u, 1u, 1u, 1u, 1u, 0u, 0u}  /* 75%   */
-};
+static const uint8_t cupid_gb_duty_mask[4] = {0x80, 0x81, 0xe1, 0x7e};
 
 /**
  * @brief CH4 noise channel base clock divisors indexed by div_code (0–7).
@@ -272,148 +265,197 @@ static void cupid_gb_apu_clock_envelope(CupidGbApu *apu) {
     }
 }
 
-/**
- * @brief Dispatches frame sequencer sub-clocks for a given step.
- *
- * Calls the appropriate sub-clock functions based on the current step:
- *   - Steps 0, 2, 4, 6: clock length counters
- *   - Step 7:            clock volume envelopes
- *
- * @param apu  Pointer to the APU state.
- * @param step The current frame sequencer step (0–7).
- */
-static void cupid_gb_apu_clock_fs(CupidGbApu *apu, uint8_t step) {
-    if ((step & 1u) == 0u) { /* steps 0, 2, 4, 6 */
+void cupid_gb_apu_div_event(CupidGb *gb) {
+    if (!gb || !gb->apu.apu_on) {
+        return;
+    }
+
+    CupidGbApu *apu = &gb->apu;
+    /* A high DIV input at power-on inhibits one edge. The following edge starts
+     * phase zero. Retain the three serialized gate states for native states. */
+    static const uint8_t gate_next[] = {0, 2, 0};
+    unsigned gate = apu->fs_skip_div_event;
+    apu->fs_skip_div_event = gate_next[gate];
+    if (gate == 1) {
+        return;
+    }
+
+    unsigned phase = gate == 2 ? 0 : apu->fs_step;
+    /* Bit 0 clocks length, bit 1 sweep, and bit 2 envelopes. */
+    static const uint8_t clocks[] = {1, 0, 3, 0, 1, 0, 3, 4};
+    unsigned edges = clocks[phase];
+    apu->fs_step = (uint8_t)((phase + 1) & 7);
+    if (edges & 1) {
         cupid_gb_apu_clock_length(apu);
     }
-    if (step == 7u) {
+    if (edges & 2) {
+        cupid_gb_apu_clock_sweep(gb);
+    }
+    if (edges & 4) {
         cupid_gb_apu_clock_envelope(apu);
     }
 }
 
-void cupid_gb_apu_div_event(CupidGb *gb) {
-    CupidGbApu *apu = &gb->apu;
-    if (!apu->apu_on) {
-        return;
+static void cupid_gb_apu_digital_samples(const CupidGbApu *apu, uint8_t digital[4]) {
+    memset(digital, 0, 4);
+    if (apu->ch1_on) {
+        digital[0] = (uint8_t)(((cupid_gb_duty_mask[apu->ch1_duty] >> apu->ch1_duty_pos) & 1u) *
+                               apu->ch1_vol);
     }
-    if (apu->fs_skip_div_event == 1u) {
-        apu->fs_skip_div_event = 2u;
-        return;
+    if (apu->ch2_on) {
+        digital[1] = (uint8_t)(((cupid_gb_duty_mask[apu->ch2_duty] >> apu->ch2_duty_pos) & 1u) *
+                               apu->ch2_vol);
     }
-    if (apu->fs_skip_div_event == 2u) {
-        apu->fs_skip_div_event = 0u;
-        apu->fs_step = 0u;
+    if (apu->ch3_on && apu->ch3_out_level) {
+        digital[2] = (uint8_t)(apu->ch3_sample >> (apu->ch3_out_level - 1u));
     }
-    cupid_gb_apu_clock_fs(apu, apu->fs_step);
-    if (apu->fs_step == 2u || apu->fs_step == 6u) {
-        cupid_gb_apu_clock_sweep(gb);
+    if (apu->ch4_on && !(apu->ch4_lfsr & 1u)) {
+        digital[3] = apu->ch4_vol;
     }
-    apu->fs_step = (uint8_t)((apu->fs_step + 1u) & 7u);
 }
 
-/**
- * @brief Mixes all active channels and writes one stereo sample to the output buffer.
- *
- * Computes the amplitude of each channel based on its current state and
- * applies NR51 stereo panning and NR50 master volume scaling. The resulting
- * left/right sample pair is scaled to `int16_t` range and appended to the
- * internal sample buffer if space is available.
- *
- * @param gb Pointer to the Game Boy state.
- *
- * @note Maximum unscaled amplitude is 480 per channel (15 vol × 4 ch × 8 vol levels).
- *       Samples are scaled by 64, yielding a maximum of 30720, safely within int16_t range.
+uint8_t cupid_gb_apu_read_pcm12(const CupidGb *gb) {
+    uint8_t digital[4];
+    if (!gb || gb->model != CUPID_GB_MODEL_CGB) {
+        return 0xff;
+    }
+    cupid_gb_apu_digital_samples(&gb->apu, digital);
+    return (uint8_t)(digital[0] | (digital[1] << 4));
+}
+
+uint8_t cupid_gb_apu_read_pcm34(const CupidGb *gb) {
+    uint8_t digital[4];
+    if (!gb || gb->model != CUPID_GB_MODEL_CGB) {
+        return 0xff;
+    }
+    cupid_gb_apu_digital_samples(&gb->apu, digital);
+    return (uint8_t)(digital[2] | (digital[3] << 4));
+}
+
+/* The signed DAC transfer is inverted: digital zero is positive full scale.
+ * A stopped channel still drives zero through its DAC until the DAC is disabled.
  */
+static void cupid_gb_apu_mix(const CupidGb *gb, int32_t *left, int32_t *right) {
+    const CupidGbApu *apu = &gb->apu;
+    uint8_t digital[4];
+    const bool dac[4] = {apu->ch1_dac, apu->ch2_dac, apu->ch3_dac, apu->ch4_dac};
+    uint8_t routing = gb->io_registers[0x25];
+    uint8_t volume = gb->io_registers[0x24];
+    *left = 0;
+    *right = 0;
+    cupid_gb_apu_digital_samples(apu, digital);
+    for (unsigned channel = 0; channel < 4; ++channel) {
+        if (dac[channel]) {
+            int32_t amplitude = 15 - 2 * (int32_t)digital[channel];
+            if (routing & (0x10u << channel)) {
+                *left += amplitude;
+            }
+            if (routing & (1u << channel)) {
+                *right += amplitude;
+            }
+        }
+    }
+    /* Four channels peak at 16320, leaving headroom for a full-polarity filter step. */
+    *left *= (int32_t)(((volume >> 4) & 7u) + 1u) * 34;
+    *right *= (int32_t)((volume & 7u) + 1u) * 34;
+}
+
+static uint32_t cupid_gb_apu_filter_rate(uint32_t sample_rate) {
+    return (uint32_t)(pow(0.999958, 4194304.0 / sample_rate) * 1073741824.0 + 0.5);
+}
+
+bool cupid_gb_apu_set_sample_rate(CupidGb *gb, uint32_t sample_rate) {
+    if (!gb || sample_rate < 8000u || sample_rate > 192000u) {
+        return false;
+    }
+    if (cupid_gb_apu_get_sample_rate(gb) != sample_rate) {
+        /* A partial frame cannot span two host sample rates. Queued frames use the old rate. */
+        gb->apu.sample_acc = 0;
+        gb->apu.mix_left = 0;
+        gb->apu.mix_right = 0;
+        gb->apu.buf_write = 0;
+    }
+    gb->apu.sample_rate = sample_rate;
+    gb->apu.highpass_rate = cupid_gb_apu_filter_rate(sample_rate);
+    return true;
+}
+
+uint32_t cupid_gb_apu_get_sample_rate(const CupidGb *gb) {
+    return gb && gb->apu.sample_rate ? gb->apu.sample_rate : CUPID_GB_APU_SAMPLE_RATE;
+}
+
+void cupid_gb_apu_set_highpass(CupidGb *gb, bool enabled) {
+    if (gb) {
+        gb->apu.highpass_disabled = !enabled;
+        if (!enabled) {
+            gb->apu.highpass_left = 0;
+            gb->apu.highpass_right = 0;
+        }
+    }
+}
+
+static int16_t cupid_gb_apu_filter_sample(int64_t area, int64_t *capacitor, const CupidGbApu *apu,
+                                          bool connected) {
+    int64_t input = (area / 4194304) * 65536;
+    int64_t output;
+    if (!connected) {
+        return 0;
+    }
+    output = input - *capacitor;
+    if (apu->highpass_disabled) {
+        output = input;
+        *capacitor = 0;
+    } else {
+        /* Q16 voltage and Q30 retention keep exact-resume state independent of FP layout. */
+        *capacitor = input - output * apu->highpass_rate / 1073741824;
+    }
+    output /= 65536;
+    if (output > 32767) {
+        output = 32767;
+    } else if (output < -32768) {
+        output = -32768;
+    }
+    return (int16_t)output;
+}
+
 static void cupid_gb_apu_emit_sample(CupidGb *gb) {
     CupidGbApu *apu = &gb->apu;
-    uint8_t nr50 = gb->io_registers[0x24u];
-    uint8_t nr51 = gb->io_registers[0x25u];
-    int32_t left = 0;
-    int32_t right = 0;
-    uint8_t ch1_amp;
-    uint8_t ch2_amp;
-    uint8_t ch3_amp;
-    uint8_t ch4_amp;
-    uint8_t raw;
-
-    // CH1 – pulse
-    if (apu->ch1_on && apu->ch1_dac) {
-        ch1_amp = (uint8_t)(cupid_gb_duty_table[apu->ch1_duty][apu->ch1_duty_pos] * apu->ch1_vol);
-    } else {
-        ch1_amp = 0u;
-    }
-
-    // CH2 – pulse
-    if (apu->ch2_on && apu->ch2_dac) {
-        ch2_amp = (uint8_t)(cupid_gb_duty_table[apu->ch2_duty][apu->ch2_duty_pos] * apu->ch2_vol);
-    } else {
-        ch2_amp = 0u;
-    }
-
-    // CH3 – wave; output level shifts the 4-bit sample
-    if (apu->ch3_on && apu->ch3_dac) {
-        raw = apu->ch3_sample & 0x0fu;
-        switch (apu->ch3_out_level) {
-            case 1u:
-                ch3_amp = raw;
-                break;
-            case 2u:
-                ch3_amp = (uint8_t)(raw >> 1u);
-                break;
-            case 3u:
-                ch3_amp = (uint8_t)(raw >> 2u);
-                break;
-            default:
-                ch3_amp = 0u;
-                break;
-        }
-    } else {
-        ch3_amp = 0u;
-    }
-
-    // CH4 – noise; LFSR bit 0 inverted
-    if (apu->ch4_on && apu->ch4_dac) {
-        ch4_amp = ((apu->ch4_lfsr & 1u) == 0u) ? apu->ch4_vol : 0u;
-    } else {
-        ch4_amp = 0u;
-    }
-
-    // Stereo mix (NR51 panning)
-    if ((nr51 & 0x10u) != 0u) {
-        left += (int32_t)ch1_amp;
-    }
-    if ((nr51 & 0x01u) != 0u) {
-        right += (int32_t)ch1_amp;
-    }
-    if ((nr51 & 0x20u) != 0u) {
-        left += (int32_t)ch2_amp;
-    }
-    if ((nr51 & 0x02u) != 0u) {
-        right += (int32_t)ch2_amp;
-    }
-    if ((nr51 & 0x40u) != 0u) {
-        left += (int32_t)ch3_amp;
-    }
-    if ((nr51 & 0x04u) != 0u) {
-        right += (int32_t)ch3_amp;
-    }
-    if ((nr51 & 0x80u) != 0u) {
-        left += (int32_t)ch4_amp;
-    }
-    if ((nr51 & 0x08u) != 0u) {
-        right += (int32_t)ch4_amp;
-    }
-
-    // Master volume
-    left *= (int32_t)(((uint32_t)(nr50 >> 4u) & 7u) + 1u);
-    right *= (int32_t)(((uint32_t)nr50 & 7u) + 1u);
-
-    // Scale to int16_t: max = 15*4*8 = 480; 480*64 = 30720 < 32767
+    /* Monochrome hardware disconnects its coupling capacitor when all DACs are off. */
+    bool connected = gb->model == CUPID_GB_MODEL_CGB || apu->ch1_dac || apu->ch2_dac ||
+                     apu->ch3_dac || apu->ch4_dac;
+    int16_t left = cupid_gb_apu_filter_sample(apu->mix_left, &apu->highpass_left, apu, connected);
+    int16_t right =
+        cupid_gb_apu_filter_sample(apu->mix_right, &apu->highpass_right, apu, connected);
     if (apu->buf_write < CUPID_GB_APU_BUF_FRAMES) {
-        size_t idx = (size_t)(apu->buf_write * 2u);
-        apu->buf[idx] = (int16_t)(left * 64);
-        apu->buf[idx + 1u] = (int16_t)(right * 64);
-        apu->buf_write = apu->buf_write + 1u;
+        size_t index = (size_t)apu->buf_write * 2;
+        apu->buf[index] = left;
+        apu->buf[index + 1] = right;
+        ++apu->buf_write;
+    }
+    apu->mix_left = 0;
+    apu->mix_right = 0;
+}
+
+/* Integrate both sides of a sample boundary instead of point-sampling a fast oscillator.
+ * The area is measured in sample-phase units: one output frame always spans 4194304.
+ * This box integration attenuates aliasing; it is not a full reconstruction filter.
+ */
+static void cupid_gb_apu_integrate(CupidGb *gb, uint32_t sample_rate, int32_t left, int32_t right) {
+    CupidGbApu *apu = &gb->apu;
+    uint32_t remaining = sample_rate;
+    while (remaining) {
+        uint32_t portion = 4194304u - apu->sample_acc;
+        if (portion > remaining) {
+            portion = remaining;
+        }
+        apu->mix_left += (int64_t)left * portion;
+        apu->mix_right += (int64_t)right * portion;
+        apu->sample_acc += portion;
+        remaining -= portion;
+        if (apu->sample_acc == 4194304u) {
+            apu->sample_acc = 0;
+            cupid_gb_apu_emit_sample(gb);
+        }
     }
 }
 
@@ -565,7 +607,7 @@ static void cupid_gb_apu_apply_dmg_ch3_retrigger_bug(CupidGb *gb) {
     if (offset < 4u) {
         gb->io_registers[0x30u] = gb->io_registers[0x30u + offset];
     } else {
-        memcpy(&gb->io_registers[0x30u], &gb->io_registers[0x30u + (offset & (uint8_t)~0x03u)], 4u);
+        memcpy(&gb->io_registers[0x30u], &gb->io_registers[0x30u + (offset & 0xfcu)], 4u);
     }
 }
 
@@ -599,16 +641,46 @@ static void cupid_gb_apu_trigger_ch4(CupidGb *gb) {
     apu->ch4_width7 = (nr43 & 0x08u) != 0u;
 
     period = (uint32_t)cupid_gb_noise_div[apu->ch4_div_code];
-    if (apu->ch4_shift < 14u) {
-        period = period << apu->ch4_shift;
-    } else {
-        period = period << 13u;
-    }
+    period = period << apu->ch4_shift;
     apu->ch4_timer = (period > 0u) ? period : 8u;
     apu->ch4_lfsr = 0x7fffu;
 
     if (apu->ch4_dac) {
         apu->ch4_on = true;
+    }
+}
+
+/* The hardware portion precedes sample_acc. Resetting it leaves already generated
+ * host samples, partial sample integration, and coupling capacitors continuous.
+ * Wave RAM is a separate memory array and survives both power transitions. */
+static void cupid_gb_apu_power(CupidGb *gb, bool enabled) {
+    CupidGbApu *apu = &gb->apu;
+    if (enabled == apu->apu_on) {
+        return;
+    }
+
+    uint16_t lengths[4] = {0};
+    if (enabled && gb->model != CUPID_GB_MODEL_CGB) {
+        lengths[0] = apu->ch1_len;
+        lengths[1] = apu->ch2_len;
+        lengths[2] = apu->ch3_len;
+        lengths[3] = apu->ch4_len;
+    }
+    memset(apu, 0, offsetof(CupidGbApu, sample_acc));
+    apu->apu_on = enabled;
+    apu->ch1_len = (uint8_t)lengths[0];
+    apu->ch2_len = (uint8_t)lengths[1];
+    apu->ch3_len = lengths[2];
+    apu->ch4_len = (uint8_t)lengths[3];
+
+    if (enabled) {
+        /* DIV bit 12 clocks audio, or bit 13 at double CPU speed. The visible
+         * divider byte supplies the same input without advancing the clock. */
+        bool high = (gb->io_registers[0x04] >> (4 + gb->double_speed)) & 1;
+        apu->fs_step = high ? 1 : 0;
+        apu->fs_skip_div_event = high ? 1 : 0;
+    } else {
+        memset(gb->io_registers + 0x10, 0, 0x20);
     }
 }
 
@@ -644,78 +716,9 @@ void cupid_gb_apu_on_write(CupidGb *gb, uint8_t off, uint8_t val) {
         return;
     }
 
-    /* NR52 – APU power; always accessible */
     if (off == 0x26u) {
-        bool was_on = apu->apu_on;
-        apu->apu_on = (val & 0x80u) != 0u;
-        if (was_on && !apu->apu_on) {
-            /* Power-off: clear sound registers and counter state. */
-            size_t r;
-            for (r = 0x10u; r <= 0x25u; ++r) {
-                gb->io_registers[r] = 0u;
-            }
-            apu->ch1_on = false;
-            apu->ch2_on = false;
-            apu->ch3_on = false;
-            apu->ch4_on = false;
-            /* Power-off resets counters; DMG length writes while off are latched for power-on. */
-            apu->ch1_len = 0u;
-            apu->ch2_len = 0u;
-            apu->ch3_len = 0u;
-            apu->ch4_len = 0u;
-            apu->ch1_dac = false;
-            apu->ch2_dac = false;
-            apu->ch3_dac = false;
-            apu->ch4_dac = false;
-            apu->ch1_len_en = false;
-            apu->ch2_len_en = false;
-            apu->ch3_len_en = false;
-            apu->ch4_len_en = false;
-            apu->ch1_sweep_en = false;
-            apu->ch1_sweep_timer = 0u;
-            apu->ch1_sweep_period = 0u;
-            apu->ch1_sweep_neg = false;
-            apu->ch1_sweep_shift = 0u;
-            apu->ch1_sweep_shadow = 0u;
-            apu->ch1_sweep_subtracted = false;
-            apu->ch1_env_period = 0u;
-            apu->ch1_env_timer = 0u;
-            apu->ch2_env_period = 0u;
-            apu->ch2_env_timer = 0u;
-            apu->ch4_env_period = 0u;
-            apu->ch4_env_timer = 0u;
-            apu->ch3_active_freq = 0u;
-            apu->ch3_current_byte = 0u;
-            apu->ch3_started = false;
-            apu->ch3_wave_access_ticks = 0u;
-            apu->ch3_freq_pending = false;
-            apu->ch3_sample = 0u;
-            apu->fs_step = 0u;
-        } else if (!was_on && apu->apu_on) {
-            if ((gb->model == CUPID_GB_MODEL_CGB)) {
-                apu->ch1_len = 0u;
-                apu->ch2_len = 0u;
-                apu->ch3_len = 0u;
-                apu->ch4_len = 0u;
-            }
-            apu->ch3_active_freq = 0u;
-            apu->ch3_current_byte = 0u;
-            apu->ch3_started = false;
-            apu->ch3_wave_access_ticks = 0u;
-            apu->ch3_freq_pending = false;
-            apu->ch3_sample = 0u;
-            apu->fs_step = 0u;
-            apu->fs_skip_div_event = 0u;
-            /* Turning on during DIV's high half skips the first APU falling edge. */
-            if (gb->io_registers[0x04u] & (gb->double_speed ? 0x20u : 0x10u)) {
-                apu->fs_step = 1u;
-                apu->fs_skip_div_event = 1u;
-            }
-        }
-        gb->io_registers[0x26u] =
-            (uint8_t)((apu->apu_on ? 0x80u : 0u) | 0x70u | (apu->ch4_on ? 0x08u : 0u) |
-                      (apu->ch3_on ? 0x04u : 0u) | (apu->ch2_on ? 0x02u : 0u) |
-                      (apu->ch1_on ? 0x01u : 0u));
+        cupid_gb_apu_power(gb, (val & 0x80u) != 0);
+        gb->io_registers[off] = (uint8_t)(0x70u | (apu->apu_on ? 0x80u : 0));
         return;
     }
 
@@ -770,7 +773,7 @@ void cupid_gb_apu_on_write(CupidGb *gb, uint8_t off, uint8_t val) {
             bool trigger;
             bool length_reloaded;
 
-            apu->ch1_freq = (uint16_t)((apu->ch1_freq & 0x00ffu) | ((uint16_t)(val & 0x07u) << 8u));
+            apu->ch1_freq = (uint16_t)((apu->ch1_freq & 0x00ffu) | ((uint32_t)(val & 0x07u) << 8u));
             old_len_en = apu->ch1_len_en;
             apu->ch1_len_en = (val & 0x40u) != 0u;
             trigger = (val & 0x80u) != 0u;
@@ -809,7 +812,7 @@ void cupid_gb_apu_on_write(CupidGb *gb, uint8_t off, uint8_t val) {
             bool trigger;
             bool length_reloaded;
 
-            apu->ch2_freq = (uint16_t)((apu->ch2_freq & 0x00ffu) | ((uint16_t)(val & 0x07u) << 8u));
+            apu->ch2_freq = (uint16_t)((apu->ch2_freq & 0x00ffu) | ((uint32_t)(val & 0x07u) << 8u));
             old_len_en = apu->ch2_len_en;
             apu->ch2_len_en = (val & 0x40u) != 0u;
             trigger = (val & 0x80u) != 0u;
@@ -860,7 +863,7 @@ void cupid_gb_apu_on_write(CupidGb *gb, uint8_t off, uint8_t val) {
             bool trigger;
             bool length_reloaded;
 
-            apu->ch3_freq = (uint16_t)((apu->ch3_freq & 0x00ffu) | ((uint16_t)(val & 0x07u) << 8u));
+            apu->ch3_freq = (uint16_t)((apu->ch3_freq & 0x00ffu) | ((uint32_t)(val & 0x07u) << 8u));
             old_len_en = apu->ch3_len_en;
             apu->ch3_len_en = (val & 0x40u) != 0u;
             trigger = (val & 0x80u) != 0u;
@@ -937,12 +940,13 @@ void cupid_gb_apu_on_write(CupidGb *gb, uint8_t off, uint8_t val) {
  * @brief Advances the APU state by the given number of T-cycles.
  *
  * For each T-cycle:
- *   - Decrements and fires the frame sequencer (every 8192 T-cycles)
  *   - Clocks CH1 and CH2 frequency timers and advances their duty positions
  *   - Clocks the CH3 wave timer and fetches the next 4-bit wave sample
  *   - Clocks the CH4 LFSR noise timer and shifts the LFSR
- *   - Accumulates samples and calls @ref cupid_gb_apu_emit_sample at
- *     @ref CUPID_GB_APU_SAMPLE_RATE (44100 Hz)
+ *   - Integrates the mixer and emits samples at the configured output rate
+ *
+ * The DIV falling-edge callback clocks the frame sequencer separately.
+ * On monochrome hardware STOP holds oscillator state while output sampling continues.
  *
  * @param gb     Pointer to the Game Boy state.
  * @param cycles Number of T-cycles to advance.
@@ -950,27 +954,39 @@ void cupid_gb_apu_on_write(CupidGb *gb, uint8_t off, uint8_t val) {
 void cupid_gb_tick_apu(CupidGb *gb, uint16_t cycles) {
     CupidGbApu *apu = &gb->apu;
     uint16_t c;
+    int32_t left = 0;
+    int32_t right = 0;
+    uint32_t sample_rate = cupid_gb_apu_get_sample_rate(gb);
+    if (!apu->highpass_rate) {
+        apu->highpass_rate = cupid_gb_apu_filter_rate(sample_rate);
+    }
 
     for (c = 0u; c < cycles; ++c) {
-        if (apu->ch3_wave_access_ticks > 0u) {
+        bool mix_changed = c == 0;
+        bool oscillator_running = !gb->cpu.stopped || gb->model == CUPID_GB_MODEL_CGB;
+        if (oscillator_running && apu->ch3_wave_access_ticks > 0u) {
             apu->ch3_wave_access_ticks = (uint8_t)(apu->ch3_wave_access_ticks - 1u);
         }
 
-        if (apu->apu_on) {
+        if (apu->apu_on && oscillator_running) {
             // CH1 frequency timer
             if (apu->ch1_timer > 0u) {
                 apu->ch1_timer = (uint16_t)(apu->ch1_timer - 1u);
-            } else {
+            }
+            if (apu->ch1_timer == 0u) {
                 apu->ch1_timer = (uint16_t)((2048u - (uint32_t)apu->ch1_freq) * 4u);
                 apu->ch1_duty_pos = (uint8_t)((apu->ch1_duty_pos + 1u) & 7u);
+                mix_changed |= apu->ch1_on && apu->ch1_dac;
             }
 
             // CH2 frequency timer
             if (apu->ch2_timer > 0u) {
                 apu->ch2_timer = (uint16_t)(apu->ch2_timer - 1u);
-            } else {
+            }
+            if (apu->ch2_timer == 0u) {
                 apu->ch2_timer = (uint16_t)((2048u - (uint32_t)apu->ch2_freq) * 4u);
                 apu->ch2_duty_pos = (uint8_t)((apu->ch2_duty_pos + 1u) & 7u);
+                mix_changed |= apu->ch2_on && apu->ch2_dac;
             }
 
             // CH3 wave timer
@@ -1006,37 +1022,38 @@ void cupid_gb_tick_apu(CupidGb *gb, uint16_t cycles) {
                         period = 2u;
                     }
                     apu->ch3_timer = period;
+                    mix_changed |= apu->ch3_dac;
                 }
             }
 
             // CH4 LFSR timer
             if (apu->ch4_timer > 0u) {
                 apu->ch4_timer = apu->ch4_timer - 1u;
-            } else {
+            }
+            /* The noise divider is fourteen bits wide; bits 14 and 15 never rise. */
+            if (apu->ch4_timer == 0u && apu->ch4_shift < 14u) {
                 uint16_t xor_bit = (uint16_t)((apu->ch4_lfsr ^ (apu->ch4_lfsr >> 1u)) & 1u);
                 apu->ch4_lfsr = (uint16_t)((apu->ch4_lfsr >> 1u) | (uint16_t)(xor_bit << 14u));
                 if (apu->ch4_width7) {
                     apu->ch4_lfsr =
-                        (uint16_t)((apu->ch4_lfsr & (uint16_t)~0x40u) | (uint16_t)(xor_bit << 6u));
+                        (uint16_t)((apu->ch4_lfsr & 0xffbfu) | (uint16_t)(xor_bit << 6u));
                 }
+                mix_changed |= apu->ch4_on && apu->ch4_dac;
                 {
                     uint32_t noise_period = (uint32_t)cupid_gb_noise_div[apu->ch4_div_code];
-                    if (apu->ch4_shift < 14u) {
-                        noise_period = noise_period << apu->ch4_shift;
-                    } else {
-                        noise_period = noise_period << 13u;
-                    }
+                    noise_period = noise_period << apu->ch4_shift;
                     apu->ch4_timer = (noise_period > 0u) ? noise_period : 8u;
                 }
             }
         }
 
-        // Output one sample at 44100 Hz
-        apu->sample_acc += CUPID_GB_APU_SAMPLE_RATE;
-        if (apu->sample_acc >= 4194304u) {
-            apu->sample_acc -= 4194304u;
-            cupid_gb_apu_emit_sample(gb);
+        /* Register writes and frame-sequencer clocks happen outside this call.
+         * Between oscillator edges the mixer is constant, so reuse its exact value.
+         */
+        if (mix_changed) {
+            cupid_gb_apu_mix(gb, &left, &right);
         }
+        cupid_gb_apu_integrate(gb, sample_rate, left, right);
     }
 }
 
@@ -1044,7 +1061,7 @@ void cupid_gb_tick_apu(CupidGb *gb, uint16_t cycles) {
  * @brief Drains accumulated audio samples from the internal buffer.
  *
  * Copies up to @p max_frames stereo sample frames from the APU's internal
- * buffer into @p out, then resets the write pointer. Each frame consists
+ * buffer into @p out, retaining any unread frames. Each frame consists
  * of two `int16_t` values (left, right), so @p out must have capacity for
  * at least `max_frames * 2` elements.
  *
@@ -1066,7 +1083,8 @@ uint32_t cupid_gb_apu_drain(CupidGb *gb, int16_t *out, uint32_t max_frames) {
     count = (apu->buf_write < max_frames) ? apu->buf_write : max_frames;
     if (count > 0u) {
         memcpy(out, apu->buf, (size_t)(count * 2u * sizeof(int16_t)));
-        apu->buf_write = 0u;
+        apu->buf_write -= count;
+        memmove(apu->buf, apu->buf + count * 2u, (size_t)apu->buf_write * 2u * sizeof(int16_t));
     }
     return count;
 }

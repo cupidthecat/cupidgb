@@ -1,369 +1,213 @@
-/* Hardware timing portions: Copyright (c) 2015-2026 Lior Halphon.
- * Distributed under the Expat License; see LICENSES/hardware.txt.
- */
-/**
- * @file timer.c
- * @brief Game Boy timer subsystem (DIV / TIMA / TMA / TAC).
- *
- * Implements the 16-bit internal counter that drives the DIV register,
- * TIMA increment and overflow / reload logic (including the one M-cycle
- * reload delay), and TAC / DIV obscure glitch behavior (falling-edge
- * detection on the selected multiplexer bit).
- *
- * Also provides the top-level @ref cupid_gb_tick entry point that drives
- * one M-cycle of the entire system: timer, DMA, PPU, APU, and serial,
- * with correct CGB double-speed gating.
- *
- * Shared by DMG and CGB.
- */
-
 #include "cupid/gb/timer.h"
 
 #include <stdio.h>
 
 #include "cupid/gb/apu.h"
 #include "cupid/gb/cpu.h"
-#include "cupid/gb/gb.h"
 #include "cupid/gb/ppu.h"
 
-/* The timer counter uses M-cycle units, so DIV bits 2 and 7 become bits 0 and 5.
- * Every falling DIV edge toggles the serial clock; only its falling phase shifts. */
-static void cupid_gb_serial_div_changed(CupidGb *gb, uint16_t old_counter, uint16_t new_counter) {
-    uint16_t mask = gb->cgb_mode && (gb->io_registers[0x02u] & 2u) ? 1u : 32u;
-    if ((old_counter & (uint16_t)~new_counter & mask) != 0u) {
+enum {
+    SERIAL_DATA = 0x01,
+    SERIAL_CONTROL = 0x02,
+    DIVIDER = 0x04,
+    TIMER_VALUE = 0x05,
+    TIMER_MODULO = 0x06,
+    TIMER_CONTROL = 0x07
+};
+
+/* The stored divider counts machine cycles. DIV exposes its upper eight bits;
+ * the six remaining bits live in div_counter. This preserves divider phase
+ * across direct register writes, save states, HALT, and speed changes. */
+static uint16_t divider_phase(const CupidGb *gb) {
+    return (uint16_t)(gb->io_registers[DIVIDER] * 64u + (gb->div_counter & 63u));
+}
+
+static bool timer_level(uint16_t phase, uint8_t control) {
+    static const uint8_t shifts[4] = {7, 1, 3, 5};
+    return (control & 4u) != 0u && (((unsigned)phase >> shifts[control & 3u]) & 1u) != 0u;
+}
+
+static void timer_pulse(CupidGb *gb) {
+    gb->io_registers[TIMER_VALUE]++;
+    if (gb->io_registers[TIMER_VALUE] == 0u) {
+        /* The overflow cycle exposes zero. Reload and IRQ occur one machine
+         * cycle later, unless a TIMA write cancels that pending operation. */
+        gb->tima_overflow_delay = 1u;
+    }
+}
+
+void cupid_gb_serial_master_edge(CupidGb *gb) {
+    if (!gb) {
+        return;
+    }
+
+    const bool falling = gb->serial_master_clock;
+    gb->serial_master_clock = !falling;
+    if (!falling || gb->serial_bits_remaining == 0u ||
+        (gb->io_registers[SERIAL_CONTROL] & 0x81u) != 0x81u) {
+        return;
+    }
+
+    /* An unplugged serial input is high. SB remains readable during transfer. */
+    gb->io_registers[SERIAL_DATA] = (uint8_t)(gb->io_registers[SERIAL_DATA] * 2u + 1u);
+    --gb->serial_bits_remaining;
+    if (gb->serial_bits_remaining != 0u) {
+        return;
+    }
+
+    gb->io_registers[SERIAL_CONTROL] &= 0x7fu;
+    cupid_gb_request_interrupt(gb, CUPID_GB_INTERRUPT_SERIAL);
+    fputc(gb->serial_tx_latch, stdout);
+    fflush(stdout);
+}
+
+/* DIV changes affect three independent edge consumers. Resetting DIV uses this
+ * same path, so a register write can clock TIMA, serial, or the audio sequencer. */
+static void divider_change(CupidGb *gb, uint16_t phase) {
+    const uint16_t before = divider_phase(gb);
+    const uint8_t control = gb->io_registers[TIMER_CONTROL];
+    if (timer_level(before, control) && !timer_level(phase, control)) {
+        timer_pulse(gb);
+    }
+
+    const unsigned serial_shift = gb->cgb_mode && (gb->io_registers[SERIAL_CONTROL] & 2u) ? 0u : 5u;
+    if ((((unsigned)before >> serial_shift) & 1u) && !(((unsigned)phase >> serial_shift) & 1u)) {
         cupid_gb_serial_master_edge(gb);
     }
-}
 
-static void cupid_gb_apu_div_changed(CupidGb *gb, uint16_t old_counter, uint16_t new_counter) {
-    /* DIV is stored in M-cycle units; APU clocks on T-cycle bit 12 or 13. */
-    uint16_t mask = gb->double_speed ? 0x800u : 0x400u;
-    if ((old_counter & (uint16_t)~new_counter & mask) != 0u) {
+    const unsigned audio_shift = gb->double_speed ? 11u : 10u;
+    if ((((unsigned)before >> audio_shift) & 1u) && !(((unsigned)phase >> audio_shift) & 1u)) {
         cupid_gb_apu_div_event(gb);
     }
+
+    gb->io_registers[DIVIDER] = (uint8_t)(phase >> 6u);
+    gb->div_counter = phase & 63u;
 }
 
-/**
- * @brief Returns the full 16-bit internal timer counter.
- *
- * The hardware maintains a 16-bit free-running counter; the DIV register
- * (0xFF04) exposes only the upper 8 bits. This helper reconstructs
- * the full value from the high byte in the I/O register and the low
- * 6 bits held in `gb->div_counter`.
- *
- * @param gb Pointer to the Game Boy state.
- *
- * @return The 16-bit internal counter value.
- */
-static uint16_t cupid_gb_timer_internal_counter(const CupidGb *gb) {
-    return (uint16_t)(((uint16_t)gb->io_registers[0x04u] << 6u) | (gb->div_counter & 0x003fu));
-}
-
-/**
- * @brief Returns the current TIMA input signal derived from the internal counter and TAC.
- *
- * The timer is implemented as a falling-edge detector on one bit of the
- * internal 16-bit counter, selected by TAC bits 1–0:
- *   - `00` → bit 7  (4096 Hz)
- *   - `01` → bit 1  (262144 Hz)
- *   - `10` → bit 3  (65536 Hz)
- *   - `11` → bit 5  (16384 Hz)
- *
- * If the timer enable bit (TAC bit 2) is clear, the signal is always `false`.
- *
- * @param counter The current 16-bit internal counter value.
- * @param tac     The current TAC register value (0xFF07).
- *
- * @return `true` if the selected counter bit is set and the timer is enabled.
- */
-static bool cupid_gb_timer_input_signal(uint16_t counter, uint8_t tac) {
-    uint16_t mask;
-
-    if ((tac & 0x04u) == 0u) {
-        return false;
-    }
-
-    switch (tac & 0x03u) {
-        case 0u:
-            mask = 1u << 7u;
-            break;
-        case 1u:
-            mask = 1u << 1u;
-            break;
-        case 2u:
-            mask = 1u << 3u;
-            break;
-        default:
-            mask = 1u << 5u;
-            break;
-    }
-
-    return (counter & mask) != 0u;
-}
-
-/**
- * @brief Increments TIMA by one, scheduling an overflow reload if it wraps.
- *
- * When TIMA overflows (0xFF → 0x00), instead of immediately reloading
- * from TMA and requesting an interrupt, a one M-cycle delay
- * (`gb->tima_overflow_delay`) is set. The reload and the TIMER interrupt
- * are delivered at the end of that delay cycle by
- * @ref cupid_gb_tick_system_mcycle.
- *
- * @param gb Pointer to the Game Boy state.
- */
-static void cupid_gb_timer_increment_tima(CupidGb *gb) {
-    if (gb->io_registers[0x05u] == 0xffu) {
-        gb->io_registers[0x05u] = 0x00u;
-        gb->tima_overflow_delay = 1u;
-    } else {
-        gb->io_registers[0x05u] = (uint8_t)(gb->io_registers[0x05u] + 1u);
+void cupid_gb_timer_apply_div_reset(CupidGb *gb) {
+    if (gb) {
+        divider_change(gb, 0u);
     }
 }
 
-/**
- * @brief Handles a CPU write to the TIMA register (0xFF05).
- *
- * Writes are intercepted to implement hardware quirks:
- * - If the TMA reload has already been latched into TIMA during the
- *   current M-cycle (`tima_reload_just_happened`), the write is silently
- *   discarded.
- * - If an overflow is pending but has not yet been serviced
- *   (`tima_overflow_delay > 0`), the write cancels the pending reload
- *   and interrupt and stores the new value directly.
- *
- * @param gb    Pointer to the Game Boy state.
- * @param value The value to write to TIMA.
- *
- * @note Does nothing if @p gb is NULL.
- */
+void cupid_gb_timer_apply_tac_write(CupidGb *gb, uint8_t value) {
+    if (!gb) {
+        return;
+    }
+
+    const uint16_t phase = divider_phase(gb);
+    const bool old_level = timer_level(phase, gb->io_registers[TIMER_CONTROL]);
+    gb->io_registers[TIMER_CONTROL] = value & 7u;
+    if (old_level && !timer_level(phase, value)) {
+        timer_pulse(gb);
+    }
+}
+
 void cupid_gb_timer_apply_tima_write(CupidGb *gb, uint8_t value) {
-    if (gb == 0) {
-        return;
-    }
-
-    if (gb->tima_reload_just_happened) {
-        return;
-    }
-
-    gb->io_registers[0x05u] = value;
-    if (gb->tima_overflow_delay > 0u) {
+    if (gb && !gb->tima_reload_just_happened) {
+        gb->io_registers[TIMER_VALUE] = value;
         gb->tima_overflow_delay = 0u;
     }
 }
 
-/**
- * @brief Handles a CPU write to the TMA register (0xFF06).
- *
- * Stores the new modulo value. If the TMA reload was latched into TIMA
- * during the current M-cycle (`tima_reload_just_happened`), TIMA is
- * also updated immediately to reflect the new modulo, matching hardware
- * behavior.
- *
- * @param gb    Pointer to the Game Boy state.
- * @param value The value to write to TMA.
- *
- * @note Does nothing if @p gb is NULL.
- */
 void cupid_gb_timer_apply_tma_write(CupidGb *gb, uint8_t value) {
-    if (gb == 0) {
-        return;
-    }
-
-    gb->io_registers[0x06u] = value;
-    if (gb->tima_reload_just_happened) {
-        gb->io_registers[0x05u] = value;
+    if (gb) {
+        gb->io_registers[TIMER_MODULO] = value;
+        if (gb->tima_reload_just_happened) {
+            gb->io_registers[TIMER_VALUE] = value;
+        }
     }
 }
 
-/**
- * @brief Handles a CPU write to the DIV register (0xFF04), which resets it to zero.
- *
- * Resetting DIV resets the entire 16-bit internal counter to 0. If this
- * causes a falling edge on the selected TIMA input bit (the bit was 1
- * before the reset and would be 0), TIMA is incremented immediately,
- * matching the hardware glitch.
- *
- * @param gb Pointer to the Game Boy state.
- *
- * @note Does nothing if @p gb is NULL.
- */
-void cupid_gb_timer_apply_div_reset(CupidGb *gb) {
-    uint16_t old_counter;
-    uint8_t tac;
-
-    if (gb == 0) {
+static void clock_cpu_domain(CupidGb *gb) {
+    if (gb->cpu.stopped) {
         return;
     }
-
-    old_counter = cupid_gb_timer_internal_counter(gb);
-    tac = gb->io_registers[0x07u];
-    if (cupid_gb_timer_input_signal(old_counter, tac) && !cupid_gb_timer_input_signal(0u, tac)) {
-        cupid_gb_timer_increment_tima(gb);
-    }
-
-    gb->io_registers[0x04u] = 0u;
-    gb->div_counter = 0u;
-    cupid_gb_serial_div_changed(gb, old_counter, 0u);
-    cupid_gb_apu_div_changed(gb, old_counter, 0u);
-}
-
-/**
- * @brief Handles a CPU write to the TAC register (0xFF07).
- *
- * Only bits 2–0 are writable. Changing the selected multiplexer bit or
- * the enable flag can cause a spurious TIMA increment: if the old TAC
- * produced a high input signal and the new TAC produces a low signal
- * (falling edge), TIMA increments immediately.
- *
- * @param gb    Pointer to the Game Boy state.
- * @param value The value to write to TAC (only bits 2–0 are used).
- *
- * @note Does nothing if @p gb is NULL.
- */
-void cupid_gb_timer_apply_tac_write(CupidGb *gb, uint8_t value) {
-    uint16_t counter;
-    uint8_t old_tac;
-    uint8_t new_tac;
-
-    if (gb == 0) {
-        return;
-    }
-
-    counter = cupid_gb_timer_internal_counter(gb);
-    old_tac = gb->io_registers[0x07u];
-    new_tac = (uint8_t)(value & 0x07u);
-
-    if (cupid_gb_timer_input_signal(counter, old_tac) &&
-        !cupid_gb_timer_input_signal(counter, new_tac)) {
-        cupid_gb_timer_increment_tima(gb);
-    }
-
-    gb->io_registers[0x07u] = new_tac;
-}
-
-/**
- * @brief Toggles the internal serial clock and transfers a bit on its falling edge.
- *
- * Falling edges of the selected DIV bit toggle the master clock.
- * On its falling phase, if the internal clock is selected (SC bit 0)
- * and the transfer-start flag is set (SC bit 7), one bit is shifted
- * out of SB (the outgoing bit is replaced by 1, simulating an
- * unconnected cable). When all 8 bits have been transferred, the
- * transfer-start flag is cleared, the byte is printed to stdout, and
- * a SERIAL interrupt is requested.
- *
- * @param gb Pointer to the Game Boy state.
- *
- * @note Does nothing if @p gb is NULL.
- */
-void cupid_gb_serial_master_edge(CupidGb *gb) {
-    if (gb == 0) {
-        return;
-    }
-
-    gb->serial_master_clock = !gb->serial_master_clock;
-    if (gb->serial_master_clock) {
-        return;
-    }
-
-    if ((gb->io_registers[0x02u] & 0x81u) != 0x81u || gb->serial_bits_remaining == 0u) {
-        return;
-    }
-
-    gb->io_registers[0x01u] = (uint8_t)((gb->io_registers[0x01u] << 1u) | 0x01u);
-    gb->serial_bits_remaining = (uint8_t)(gb->serial_bits_remaining - 1u);
-
-    if (gb->serial_bits_remaining == 0u) {
-        gb->io_registers[0x02u] = (uint8_t)(gb->io_registers[0x02u] & (uint8_t)~0x80u);
-        fputc((int)gb->serial_tx_latch, stdout);
-        fflush(stdout);
-        cupid_gb_request_interrupt(gb, CUPID_GB_INTERRUPT_SERIAL);
-    }
-}
-
-/**
- * @brief Advances all timer and serial state by one M-cycle (4 T-cycles).
- *
- * Performs, in order:
- *   1. Clears the one-cycle TIMA-reload flag.
- *   2. Increments the 16-bit internal counter; the DIV register (high
- *      byte) is updated when the low 6 bits overflow.
- *   3. Services any pending TIMA overflow delay: reloads TIMA from TMA
- *      and requests the TIMER interrupt after the one-cycle delay.
- *   4. Checks for a TIMA falling edge and increments TIMA if detected.
- *   5. Advances the serial clock from falling DIV edges.
- *
- * @param gb Pointer to the Game Boy state.
- */
-static void cupid_gb_tick_system_mcycle(CupidGb *gb) {
-    uint16_t old_counter;
-    uint16_t new_counter;
-    uint8_t tac;
 
     gb->tima_reload_just_happened = false;
-
-    // DIV (internal 16-bit counter; DIV register = upper byte)
-    old_counter = cupid_gb_timer_internal_counter(gb);
-    gb->div_counter = (uint16_t)(gb->div_counter + 1u);
-    if (gb->div_counter >= 64u) {
-        gb->div_counter = (uint16_t)(gb->div_counter - 64u);
-        gb->io_registers[0x04u] = (uint8_t)(gb->io_registers[0x04u] + 1u);
+    if (gb->tima_overflow_delay != 0u && --gb->tima_overflow_delay == 0u) {
+        gb->io_registers[TIMER_VALUE] = gb->io_registers[TIMER_MODULO];
+        gb->tima_reload_just_happened = true;
+        cupid_gb_request_interrupt(gb, CUPID_GB_INTERRUPT_TIMER);
     }
-    new_counter = cupid_gb_timer_internal_counter(gb);
-
-    // TIMA reload delay
-    if (gb->tima_overflow_delay > 0u) {
-        gb->tima_overflow_delay = (uint8_t)(gb->tima_overflow_delay - 1u);
-        if (gb->tima_overflow_delay == 0u) {
-            gb->io_registers[0x05u] = gb->io_registers[0x06u];
-            gb->tima_reload_just_happened = true;
-            cupid_gb_request_interrupt(gb, CUPID_GB_INTERRUPT_TIMER);
-        }
-    }
-
-    // TIMA
-    tac = gb->io_registers[0x07u];
-    if (cupid_gb_timer_input_signal(old_counter, tac) &&
-        !cupid_gb_timer_input_signal(new_counter, tac)) {
-        cupid_gb_timer_increment_tima(gb);
-    }
-
-    cupid_gb_serial_div_changed(gb, old_counter, new_counter);
-    cupid_gb_apu_div_changed(gb, old_counter, new_counter);
+    divider_change(gb, (uint16_t)(divider_phase(gb) + 1u));
 }
 
-/**
- * @brief Advances the entire Game Boy system by @p cycles M-cycles.
- *
- * For each M-cycle this function:
- *   1. Ticks the timer/serial subsystem (@ref cupid_gb_tick_system_mcycle).
- *   2. Ticks OAM DMA (@ref cupid_gb_tick_dma).
- *   3. In normal-speed mode: ticks the PPU (1 M-cycle) and APU (4 T-cycles).
- *   4. In CGB double-speed mode: ticks the PPU and APU only on every
- *      second M-cycle (using `gb->speed_phase` as a toggle).
- *
- * @param gb     Pointer to the Game Boy state.
- * @param cycles Number of M-cycles to advance.
- */
 void cupid_gb_tick(CupidGb *gb, uint16_t cycles) {
-    uint16_t i;
+    if (!gb) {
+        return;
+    }
 
-    for (i = 0u; i < cycles; ++i) {
-        cupid_gb_tick_system_mcycle(gb);
+    while (cycles-- != 0u) {
+        clock_cpu_domain(gb);
         cupid_gb_tick_dma(gb);
 
-        if (!gb->double_speed) {
-            gb->elapsed_cycles += 4u;
-            cupid_gb_tick_ppu(gb, 1u);
-            cupid_gb_tick_apu(gb, 4u);
-        } else {
+        /* CPU timers and OAM DMA run twice as fast in double speed. The LCD and
+         * sound generators stay in the base clock domain, including during HALT. */
+        if (gb->double_speed) {
             gb->speed_phase = !gb->speed_phase;
-            if (!gb->speed_phase) {
-                gb->elapsed_cycles += 4u;
-                cupid_gb_tick_ppu(gb, 1u);
-                cupid_gb_tick_apu(gb, 4u);
+            if (gb->speed_phase) {
+                continue;
             }
         }
+        gb->elapsed_cycles += 4u;
+        cupid_gb_tick_ppu(gb, 1u);
+        cupid_gb_tick_apu(gb, 4u);
     }
+}
+
+uint8_t cupid_gb_tick_halt(CupidGb *gb) {
+    if (!gb) {
+        return 0;
+    }
+    const uint8_t before = (uint8_t)(gb->interrupt_enable & gb->interrupt_flags & 0x1fu);
+    const bool first_cycle = gb->cpu.just_halted;
+    gb->cpu.just_halted = false;
+    if (gb->model == CUPID_GB_MODEL_CGB || first_cycle) {
+        /* Color hardware and the first cycle after HALT poll before the cycle. */
+        cupid_gb_tick(gb, 1u);
+        return before;
+    }
+
+    clock_cpu_domain(gb);
+    cupid_gb_tick_dma(gb);
+    const uint8_t middle = cupid_gb_tick_ppu_halt(gb);
+    gb->elapsed_cycles += 4u;
+    cupid_gb_tick_apu(gb, 4u);
+    /* Monochrome hardware polls after the first two LCD dots. Timer and serial
+     * divider transitions occupy the third T-cycle, beyond that polling point. */
+    return (uint8_t)((middle & (uint8_t)~0x0cu) | (before & 0x0cu));
+}
+
+static void clock_lcd_dot(CupidGb *gb) {
+    ++gb->elapsed_cycles;
+    cupid_gb_tick_ppu_dots(gb, 1u);
+    cupid_gb_tick_apu(gb, 1u);
+}
+
+void cupid_gb_cpu_write(CupidGb *gb, uint16_t address, uint8_t value, uint16_t leading_mcycles) {
+    if (address != 0xff40u || gb->model == CUPID_GB_MODEL_CGB || leading_mcycles == 0u) {
+        cupid_gb_tick(gb, leading_mcycles);
+        cupid_gb_write_u8(gb, address, value);
+        return;
+    }
+
+    cupid_gb_tick(gb, (uint16_t)(leading_mcycles - 1u));
+    const uint8_t previous = gb->io_registers[CUPID_GB_IO_LCDC];
+    clock_lcd_dot(gb);
+    clock_lcd_dot(gb);
+    /* LCD control lines settle before the ordinary write boundary. Background
+     * enable is already visible after two dots; the complete value follows one
+     * dot later. Keep the CPU-cycle total unchanged while exposing those edges. */
+    if (gb->model == CUPID_GB_MODEL_SGB || gb->model == CUPID_GB_MODEL_SGB2) {
+        cupid_gb_write_u8(gb, address, value);
+        cupid_gb_write_u8(gb, address, previous);
+    } else {
+        cupid_gb_write_u8(gb, address, (uint8_t)(previous | (value & 1u)));
+    }
+    clock_cpu_domain(gb);
+    cupid_gb_tick_dma(gb);
+    clock_lcd_dot(gb);
+    cupid_gb_write_u8(gb, address, value);
+    clock_lcd_dot(gb);
 }

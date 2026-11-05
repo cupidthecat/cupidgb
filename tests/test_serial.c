@@ -93,6 +93,26 @@ static void test_div_reset_can_shift(void) {
     assert(cupid_gb_read_u8(&gb, 0xff01) == 1);
 }
 
+static void test_control_access_restarts_byte_count(void) {
+    static const struct {
+        uint8_t old_control, new_control, data, remaining;
+    } cases[] = {
+        {0x80, 0x83, 0x80, 8}, {0x01, 0x83, 0x80, 8}, {0x81, 0x83, 0x01, 7}, {0x83, 0x00, 0x01, 0}};
+
+    for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        CupidGb gb;
+        prepare(&gb, true, false);
+        gb.io_registers[1] = 0x80;
+        gb.io_registers[2] = cases[i].old_control;
+        gb.serial_master_clock = true;
+        gb.serial_bits_remaining = 1;
+        cupid_gb_write_u8(&gb, 0xff02, cases[i].new_control);
+        assert(gb.io_registers[1] == cases[i].data);
+        assert(gb.serial_bits_remaining == cases[i].remaining);
+        assert(!gb.serial_master_clock && !(gb.interrupt_flags & 8));
+    }
+}
+
 static void test_base_clock_counts_with_lcd_off(void) {
     CupidGb gb;
     prepare(&gb, true, true);
@@ -116,6 +136,7 @@ int main(void) {
     test_divider_phase_and_reset();
     test_control_write_completes_high_phase();
     test_div_reset_can_shift();
+    test_control_access_restarts_byte_count();
     test_base_clock_counts_with_lcd_off();
     puts("Serial timing checks passed.");
     return 0;
