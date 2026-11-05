@@ -1,0 +1,73 @@
+# Hardware support
+
+CupidGB implements Game Boy and Game Boy Color execution in the same C core, with color-specific banking and registers in `src/gbc`. A recognized model or cartridge header does not establish complete hardware accuracy. The [parity checklist](parity.md) tracks the remaining requirements, and the [validation record](validation.md) identifies tested scopes.
+
+## Hardware profiles
+
+| Desktop choice | Core profile | Scope |
+| --- | --- | --- |
+| Game Boy | `CUPID_GB_MODEL_DMG_ABC` | Grouped monochrome profile |
+| Game Boy (DMG0) | `CUPID_GB_MODEL_DMG0` | Early monochrome startup profile |
+| Game Boy Pocket / Light | `CUPID_GB_MODEL_MGB` | Pocket-family profile |
+| Game Boy Color | `CUPID_GB_MODEL_CGB` | One color profile with monochrome compatibility mode |
+| Super Game Boy | `CUPID_GB_MODEL_SGB` | SGB command, palette, attribute, mask, and border behavior |
+| Super Game Boy 2 | `CUPID_GB_MODEL_SGB2` | Separate SGB2 startup profile |
+
+These are the six current profile tags. Individual CGB hardware revisions, separate SGB regional/host variants, and every model-specific startup or bus difference have not been qualified. Keep the physical hardware model separate from the cartridge's color capability: a header must not turn selected monochrome hardware into color hardware.
+
+Automatic desktop selection is a convenience policy, not a new hardware profile. Reproducible comparisons should select the model explicitly and record whether startup used a boot binary or the approximate post-boot profile.
+
+## Cartridge controllers
+
+The core decodes ROM-only cartridges and the MBC1, MBC2, MBC3, MBC5, MMM01, MBC6, MBC7, HuC1, and HuC3 type families. Coverage differs by controller. Recognition of a type byte is separate from implementing all of its banking, storage, and peripheral behavior.
+
+| Family | Current scope and limits |
+| --- | --- |
+| ROM-only | Fixed ROM and optional RAM, with battery files when the header identifies battery storage |
+| MBC1 | ROM/RAM bank selection, wired bank aliases, and logo-detected multicart layouts; multicart RAM remains in bank 0 |
+| MBC2 | Address-dependent control and built-in 512 by 4-bit RAM |
+| MBC3 | Banked ROM/RAM, optional clock registers, live/latched clock persistence, halt and carry handling; extended MBC30-sized inputs use eight-bit ROM selection and up to eight RAM banks |
+| MBC5 | Nine-bit ROM selection, RAM banking, and exact RAM-enable decoding; host rumble output remains incomplete |
+| MMM01 | Partial mapping; full controller qualification remains pending |
+| MBC6 | Partial mapping; flash behavior remains pending |
+| MBC7 | Partial mapping and sensor state; complete EEPROM, motion input, and persistence qualification remain pending |
+| HuC1 | Independent six-bit ROM and three-bit RAM selection, RAM access outside infrared mode, and disconnected infrared register behavior; transport and startup mapping qualification remain pending |
+| HuC3 | Partial controller behavior; clock and accessory behavior remain incomplete |
+
+Camera cartridges, TPP1 banking/clock/rumble, and other controller variants still need implementation and qualification. MBC6 is a legacy partial path, not a qualified controller requirement established by the pinned comparison build. Consult load errors and the parity checklist instead of treating a successful open as a compatibility verdict. The current maximum cartridge image size is 8 MiB; supported RAM storage is bounded by the core's 128 KiB capacity.
+
+Physical ROM bank population follows the actual file length, rounded to the next power of two with a minimum of two 16 KiB banks. Bytes in an unpopulated tail read as `0xff`. Header ROM-size metadata does not override the loaded bank population, and an unknown size code does not reject an otherwise loadable image. Cartridge identity and native-state hashes retain the original, unpadded input bytes. A ROM-only type-0 header on an image larger than 32 KiB selects an MBC3 banking fallback. An invalid header checksum is reported without necessarily rejecting the image.
+
+Two-KiB SRAM mirrors across the eight-KiB RAM window. Ordinary timer-equipped MBC3 RAM banks 4 through 7 are disconnected; the wider RAM wiring applies to extended inputs larger than 2 MiB ROM or 32 KiB RAM. These rules have targeted regression coverage, but do not qualify every undocumented board or decaying open-bus behavior.
+
+The frontend's `.sav` support is separate from controller emulation. Its complete clock persistence contract currently covers timer-equipped MBC3 cartridges. Other EEPROM, flash, sensor, or clock devices need their own validated file contracts.
+
+## CPU, memory, and timing
+
+The CPU executes SM83 instructions with instruction-specific bus phases, interrupt dispatch, delayed interrupt enable, HALT, and STOP handling. CPU and timer work use machine cycles; elapsed guest time is counted in base-speed T-cycles. CGB double speed increases CPU-domain work without doubling LCD or sound generator clocks.
+
+The memory map includes cartridge windows, VRAM, banked WRAM, echo RAM, OAM, I/O, high RAM, and interrupt enable. Device access restrictions depend on LCD and DMA state. Open-bus decay, fine bus conflicts, interrupt races, and revision differences remain incomplete. Passing ordinary instruction tests cannot establish those behaviors.
+
+The timer derives edges from divider phase and models delayed TIMA reloads and register-write windows. Serial supports an internal slow clock and the color fast clock with disconnected incoming data. External serial transport, infrared, and attached devices remain pending.
+
+OAM DMA and CGB general/HBlank DMA are implemented. Bus contention, restarts, collision timing, and double-speed combinations need broader acceptance coverage.
+
+## Graphics
+
+The pixel pipeline keeps background and object fetch queues across LCD dots. It handles scroll, window activation, object selection and priority, color attributes, palettes, and a latched color object-priority choice. The PPU owns scanline progression, access modes, LCD startup, STAT signaling, and DMA coordination.
+
+SGB behavior includes packet reception, palette/attribute commands, screen masking, and a border framebuffer. A border image does not establish complete SGB host emulation, four-player input, audio extensions, or regional timing.
+
+Complete fetcher timing, mid-scanline conflicts, broad pixel comparisons, model-specific startup, and hardware color response remain active accuracy work. Host scaling, optional blending, and palette presentation do not change those requirements.
+
+## Audio
+
+The APU has two square channels, a wave channel, and a noise channel with routing, gain, envelopes, sweep, a divider-driven sequencer, and sample integration. Signed stereo output defaults to 44,100 Hz. The core accepts output rates from 8,000 through 192,000 Hz without changing oscillator timing and includes a configurable DC-blocking filter API.
+
+Sweep, envelope, wave, interference, and revision-specific quirks need wider testing. Output samples, host playback, and recordings are different observations. Exact sample reproduction after a state restore establishes continuation for that scenario; it does not prove that the sound matches hardware.
+
+## Input and startup
+
+The eight buttons use an active-low mask: Right, Left, Up, Down, A, B, Select, Start. JOYP selects the direction and action rows. Input interrupts and STOP wake behavior must follow selected register lines rather than host key events alone. Contact bouncing, row-switch settling, controllers, motion, and multiple player input remain separate requirements.
+
+An optional local boot binary overlays the startup address range. Without it, CupidGB initializes an approximate model profile. Boot binaries, model choices, and startup conditions must match in comparative tests. The accepted desktop filenames and sizes are listed in the [user guide](user-guide.md#boot-behavior).

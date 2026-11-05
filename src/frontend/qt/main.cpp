@@ -11,6 +11,7 @@ int main(int argc, char **argv) {
     QCoreApplication::setOrganizationName("CupidGB");
     QCoreApplication::setApplicationName("CupidGB");
     QCoreApplication::setApplicationVersion("0.3.0");
+    QGuiApplication::setDesktopFileName("io.github.cupidthecat.CupidGB");
     QCommandLineParser parser;
     parser.setApplicationDescription("CupidGB Game Boy and Game Boy Color emulator");
     parser.addHelpOption();

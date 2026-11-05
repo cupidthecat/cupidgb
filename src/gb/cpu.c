@@ -349,6 +349,11 @@ void cupid_gb_request_interrupt(CupidGb *gb, uint8_t mask) {
     gb->interrupt_flags = (uint8_t)((gb->interrupt_flags | mask) & 0x1fu);
 }
 
+static void cupid_gb_write_stack_byte(CupidGb *gb, uint8_t value) {
+    --gb->cpu.sp;
+    cupid_gb_cpu_write(gb, gb->cpu.sp, value, 1u);
+}
+
 /**
  * @brief Services the highest-priority pending interrupt, if any.
  *
@@ -380,11 +385,8 @@ bool cupid_gb_service_interrupt(CupidGb *gb) {
     gb->cpu.ime_delay = 0;
     cupid_gb_tick(gb, 2);
     cupid_gb_trigger_oam_bug_write(gb, gb->cpu.sp);
-    cupid_gb_tick(gb, 1);
-
     /* The stack bus is active at T12 and T16, rather than T8 and T12. */
-    --gb->cpu.sp;
-    cupid_gb_write_u8(gb, gb->cpu.sp, (uint8_t)(return_address >> 8));
+    cupid_gb_write_stack_byte(gb, (uint8_t)(return_address >> 8));
     const uint8_t enabled = gb->interrupt_enable;
     cupid_gb_tick(gb, 1);
     const uint8_t requested = gb->interrupt_flags;
@@ -1013,6 +1015,16 @@ static uint8_t cupid_gb_unsupported_opcode(CupidGb *gb, uint16_t opcode, bool pr
     return 0u;
 }
 
+static void cupid_gb_write_modified_reg8(CupidGb *gb, uint8_t reg, uint8_t value) {
+    if (reg == 6u) {
+        /* Read-modify-write instructions drive the same register-specific
+         * write phases as ordinary stores, including the LCD control lines. */
+        cupid_gb_cpu_write(gb, cupid_gb_get_hl(&gb->cpu), value, 1u);
+    } else {
+        cupid_gb_write_reg8(gb, reg, value);
+    }
+}
+
 /**
  * @brief Executes a CB-prefixed opcode.
  *
@@ -1042,66 +1054,42 @@ static uint8_t cupid_gb_execute_cb(CupidGb *gb, uint8_t opcode) {
     /* For read-modify-write (HL) ops the write must happen at M4. */
     if (opcode <= 0x07u) {
         value = cupid_gb_rlc(&gb->cpu, value, true);
-        if (is_hl) {
-            cupid_gb_tick(gb, 1u);
-        }
-        cupid_gb_write_reg8(gb, reg, value);
+        cupid_gb_write_modified_reg8(gb, reg, value);
         return is_hl ? 1u : 2u; /* HL: 2+1+1=4 total; reg: 2 total */
     }
     if (opcode <= 0x0fu) {
         value = cupid_gb_rrc(&gb->cpu, value, true);
-        if (is_hl) {
-            cupid_gb_tick(gb, 1u);
-        }
-        cupid_gb_write_reg8(gb, reg, value);
+        cupid_gb_write_modified_reg8(gb, reg, value);
         return is_hl ? 1u : 2u;
     }
     if (opcode <= 0x17u) {
         value = cupid_gb_rl(&gb->cpu, value, true);
-        if (is_hl) {
-            cupid_gb_tick(gb, 1u);
-        }
-        cupid_gb_write_reg8(gb, reg, value);
+        cupid_gb_write_modified_reg8(gb, reg, value);
         return is_hl ? 1u : 2u;
     }
     if (opcode <= 0x1fu) {
         value = cupid_gb_rr(&gb->cpu, value, true);
-        if (is_hl) {
-            cupid_gb_tick(gb, 1u);
-        }
-        cupid_gb_write_reg8(gb, reg, value);
+        cupid_gb_write_modified_reg8(gb, reg, value);
         return is_hl ? 1u : 2u;
     }
     if (opcode <= 0x27u) {
         value = cupid_gb_sla(&gb->cpu, value);
-        if (is_hl) {
-            cupid_gb_tick(gb, 1u);
-        }
-        cupid_gb_write_reg8(gb, reg, value);
+        cupid_gb_write_modified_reg8(gb, reg, value);
         return is_hl ? 1u : 2u;
     }
     if (opcode <= 0x2fu) {
         value = cupid_gb_sra(&gb->cpu, value);
-        if (is_hl) {
-            cupid_gb_tick(gb, 1u);
-        }
-        cupid_gb_write_reg8(gb, reg, value);
+        cupid_gb_write_modified_reg8(gb, reg, value);
         return is_hl ? 1u : 2u;
     }
     if (opcode <= 0x37u) {
         value = cupid_gb_swap(&gb->cpu, value);
-        if (is_hl) {
-            cupid_gb_tick(gb, 1u);
-        }
-        cupid_gb_write_reg8(gb, reg, value);
+        cupid_gb_write_modified_reg8(gb, reg, value);
         return is_hl ? 1u : 2u;
     }
     if (opcode <= 0x3fu) {
         value = cupid_gb_srl(&gb->cpu, value);
-        if (is_hl) {
-            cupid_gb_tick(gb, 1u);
-        }
-        cupid_gb_write_reg8(gb, reg, value);
+        cupid_gb_write_modified_reg8(gb, reg, value);
         return is_hl ? 1u : 2u;
     }
     if (opcode <= 0x7fu) {
@@ -1111,17 +1099,11 @@ static uint8_t cupid_gb_execute_cb(CupidGb *gb, uint8_t opcode) {
     }
     if (opcode <= 0xbfu) {
         value = (uint8_t)(value & (uint8_t)(~(uint8_t)(1u << ((opcode - 0x80u) >> 3u))));
-        if (is_hl) {
-            cupid_gb_tick(gb, 1u);
-        }
-        cupid_gb_write_reg8(gb, reg, value);
+        cupid_gb_write_modified_reg8(gb, reg, value);
         return is_hl ? 1u : 2u;
     }
     value = (uint8_t)(value | (uint8_t)(1u << ((opcode - 0xc0u) >> 3u)));
-    if (is_hl) {
-        cupid_gb_tick(gb, 1u);
-    }
-    cupid_gb_write_reg8(gb, reg, value);
+    cupid_gb_write_modified_reg8(gb, reg, value);
     return is_hl ? 1u : 2u;
 }
 
@@ -1272,11 +1254,8 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode) {
                 cupid_gb_tick(gb, 1u);
             } /* (HL) read at M2 */
             val = cupid_gb_inc8(&gb->cpu, cupid_gb_read_reg8(gb, reg));
-            if (reg == 6u) {
-                cupid_gb_tick(gb, 1u);
-            } /* (HL) write at M3 */
-            cupid_gb_write_reg8(gb, reg, val);
-            return 1u; /* (HL): 1+1+1=3 total; reg: 1 total */
+            cupid_gb_write_modified_reg8(gb, reg, val); /* (HL) write at M3 */
+            return 1u;                                  /* (HL): 1+1+1=3 total; reg: 1 total */
         }
         case 0x05u:
         case 0x0du:
@@ -1292,11 +1271,8 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode) {
                 cupid_gb_tick(gb, 1u);
             } /* (HL) read at M2 */
             val = cupid_gb_dec8(&gb->cpu, cupid_gb_read_reg8(gb, reg));
-            if (reg == 6u) {
-                cupid_gb_tick(gb, 1u);
-            } /* (HL) write at M3 */
-            cupid_gb_write_reg8(gb, reg, val);
-            return 1u; /* (HL): 1+1+1=3 total; reg: 1 total */
+            cupid_gb_write_modified_reg8(gb, reg, val); /* (HL) write at M3 */
+            return 1u;                                  /* (HL): 1+1+1=3 total; reg: 1 total */
         }
         case 0x06u:
         case 0x0eu:
@@ -1535,13 +1511,9 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode) {
 
             if (cupid_gb_check_condition(&gb->cpu, (uint8_t)((opcode >> 3u) & 0x03u))) {
                 cupid_gb_tick(gb, 1u); /* M3 */
-                cupid_gb_tick(gb, 1u); /* M4 */
                 cupid_gb_trigger_oam_bug_write(gb, gb->cpu.sp);
-                gb->cpu.sp = (uint16_t)(gb->cpu.sp - 1u);
-                cupid_gb_write_u8(gb, gb->cpu.sp, (uint8_t)(gb->cpu.pc >> 8u));
-                cupid_gb_tick(gb, 1u); /* M5 */
-                gb->cpu.sp = (uint16_t)(gb->cpu.sp - 1u);
-                cupid_gb_write_u8(gb, gb->cpu.sp, (uint8_t)(gb->cpu.pc & 0xffu));
+                cupid_gb_write_stack_byte(gb, (uint8_t)(gb->cpu.pc >> 8u));   /* M4 */
+                cupid_gb_write_stack_byte(gb, (uint8_t)(gb->cpu.pc & 0xffu)); /* M5 */
                 gb->cpu.pc = address;
                 return 1u; /* M6 */
             }
@@ -1552,14 +1524,10 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode) {
             uint16_t val = cupid_gb_get_bc(&gb->cpu);
             cupid_gb_tick(gb, 1u); /* M1 */
             cupid_gb_trigger_oam_bug_write(gb, gb->cpu.sp);
-            cupid_gb_tick(gb, 1u); /* M2 */
-            gb->cpu.sp = (uint16_t)(gb->cpu.sp - 1u);
-            cupid_gb_write_u8(gb, gb->cpu.sp, (uint8_t)(val >> 8u));
+            cupid_gb_write_stack_byte(gb, (uint8_t)(val >> 8u)); /* M2 */
             cupid_gb_trigger_oam_bug_write(gb, gb->cpu.sp);
-            cupid_gb_tick(gb, 1u); /* M3 */
-            gb->cpu.sp = (uint16_t)(gb->cpu.sp - 1u);
-            cupid_gb_write_u8(gb, gb->cpu.sp, (uint8_t)(val & 0xffu));
-            return 1u; /* M4 */
+            cupid_gb_write_stack_byte(gb, (uint8_t)(val & 0xffu)); /* M3 */
+            return 1u;                                             /* M4 */
         }
         case 0xc6u:
             cupid_gb_add_a(&gb->cpu, cupid_gb_fetch_u8(gb));
@@ -1576,13 +1544,9 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode) {
             uint16_t ret_addr = gb->cpu.pc;
             cupid_gb_tick(gb, 1u); /* M1 */
             cupid_gb_trigger_oam_bug_write(gb, gb->cpu.sp);
-            cupid_gb_tick(gb, 1u); /* M2 */
-            gb->cpu.sp = (uint16_t)(gb->cpu.sp - 1u);
-            cupid_gb_write_u8(gb, gb->cpu.sp, (uint8_t)(ret_addr >> 8u));
+            cupid_gb_write_stack_byte(gb, (uint8_t)(ret_addr >> 8u)); /* M2 */
             cupid_gb_trigger_oam_bug_write(gb, gb->cpu.sp);
-            cupid_gb_tick(gb, 1u); /* M3 */
-            gb->cpu.sp = (uint16_t)(gb->cpu.sp - 1u);
-            cupid_gb_write_u8(gb, gb->cpu.sp, (uint8_t)(ret_addr & 0xffu));
+            cupid_gb_write_stack_byte(gb, (uint8_t)(ret_addr & 0xffu)); /* M3 */
             gb->cpu.pc = (uint16_t)(opcode & 0x38u);
             return 1u; /* M4 */
         }
@@ -1615,13 +1579,9 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode) {
 
             /* gb->cpu.pc now points past operand = return address */
             cupid_gb_tick(gb, 1u); /* M3 */
-            cupid_gb_tick(gb, 1u); /* M4 */
             cupid_gb_trigger_oam_bug_write(gb, gb->cpu.sp);
-            gb->cpu.sp = (uint16_t)(gb->cpu.sp - 1u);
-            cupid_gb_write_u8(gb, gb->cpu.sp, (uint8_t)(gb->cpu.pc >> 8u));
-            cupid_gb_tick(gb, 1u); /* M5 */
-            gb->cpu.sp = (uint16_t)(gb->cpu.sp - 1u);
-            cupid_gb_write_u8(gb, gb->cpu.sp, (uint8_t)(gb->cpu.pc & 0xffu));
+            cupid_gb_write_stack_byte(gb, (uint8_t)(gb->cpu.pc >> 8u));   /* M4 */
+            cupid_gb_write_stack_byte(gb, (uint8_t)(gb->cpu.pc & 0xffu)); /* M5 */
             gb->cpu.pc = target;
             return 1u; /* M6 */
         }
@@ -1659,14 +1619,10 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode) {
             uint16_t val = cupid_gb_get_de(&gb->cpu);
             cupid_gb_tick(gb, 1u); /* M1 */
             cupid_gb_trigger_oam_bug_write(gb, gb->cpu.sp);
-            cupid_gb_tick(gb, 1u); /* M2 */
-            gb->cpu.sp = (uint16_t)(gb->cpu.sp - 1u);
-            cupid_gb_write_u8(gb, gb->cpu.sp, (uint8_t)(val >> 8u));
+            cupid_gb_write_stack_byte(gb, (uint8_t)(val >> 8u)); /* M2 */
             cupid_gb_trigger_oam_bug_write(gb, gb->cpu.sp);
-            cupid_gb_tick(gb, 1u); /* M3 */
-            gb->cpu.sp = (uint16_t)(gb->cpu.sp - 1u);
-            cupid_gb_write_u8(gb, gb->cpu.sp, (uint8_t)(val & 0xffu));
-            return 1u; /* M4 */
+            cupid_gb_write_stack_byte(gb, (uint8_t)(val & 0xffu)); /* M3 */
+            return 1u;                                             /* M4 */
         }
         case 0xd6u:
             cupid_gb_sub_a(&gb->cpu, cupid_gb_fetch_u8(gb));
@@ -1717,14 +1673,10 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode) {
             uint16_t val = cupid_gb_get_hl(&gb->cpu);
             cupid_gb_tick(gb, 1u); /* M1 */
             cupid_gb_trigger_oam_bug_write(gb, gb->cpu.sp);
-            cupid_gb_tick(gb, 1u); /* M2 */
-            gb->cpu.sp = (uint16_t)(gb->cpu.sp - 1u);
-            cupid_gb_write_u8(gb, gb->cpu.sp, (uint8_t)(val >> 8u));
+            cupid_gb_write_stack_byte(gb, (uint8_t)(val >> 8u)); /* M2 */
             cupid_gb_trigger_oam_bug_write(gb, gb->cpu.sp);
-            cupid_gb_tick(gb, 1u); /* M3 */
-            gb->cpu.sp = (uint16_t)(gb->cpu.sp - 1u);
-            cupid_gb_write_u8(gb, gb->cpu.sp, (uint8_t)(val & 0xffu));
-            return 1u; /* M4 */
+            cupid_gb_write_stack_byte(gb, (uint8_t)(val & 0xffu)); /* M3 */
+            return 1u;                                             /* M4 */
         }
         case 0xe6u:
             cupid_gb_and_a(&gb->cpu, cupid_gb_fetch_u8(gb));
@@ -1782,14 +1734,10 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode) {
             uint16_t val = cupid_gb_get_af(&gb->cpu);
             cupid_gb_tick(gb, 1u); /* M1 */
             cupid_gb_trigger_oam_bug_write(gb, gb->cpu.sp);
-            cupid_gb_tick(gb, 1u); /* M2 */
-            gb->cpu.sp = (uint16_t)(gb->cpu.sp - 1u);
-            cupid_gb_write_u8(gb, gb->cpu.sp, (uint8_t)(val >> 8u));
+            cupid_gb_write_stack_byte(gb, (uint8_t)(val >> 8u)); /* M2 */
             cupid_gb_trigger_oam_bug_write(gb, gb->cpu.sp);
-            cupid_gb_tick(gb, 1u); /* M3 */
-            gb->cpu.sp = (uint16_t)(gb->cpu.sp - 1u);
-            cupid_gb_write_u8(gb, gb->cpu.sp, (uint8_t)(val & 0xffu));
-            return 1u; /* M4 */
+            cupid_gb_write_stack_byte(gb, (uint8_t)(val & 0xffu)); /* M3 */
+            return 1u;                                             /* M4 */
         }
         case 0xf6u:
             cupid_gb_or_a(&gb->cpu, cupid_gb_fetch_u8(gb));

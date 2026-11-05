@@ -472,6 +472,121 @@ static void test_lcd_enable_during_io_write_cycle(void) {
     cupid_gb_cleanup(&gb);
 }
 
+static void test_lcd_enable_during_read_modify_write(void) {
+    static const struct {
+        uint8_t opcode, before, carry, after;
+    } cases[] = {
+        {0x06, 0x40, 0, 0x80}, /* RLC (HL) */
+        {0x0e, 0x01, 0, 0x80}, /* RRC (HL) */
+        {0x16, 0x40, 0, 0x80}, /* RL (HL) */
+        {0x1e, 0x00, 1, 0x80}, /* RR (HL) */
+        {0x26, 0x40, 0, 0x80}, /* SLA (HL) */
+        {0x36, 0x08, 0, 0x80}, /* SWAP (HL) */
+        {0xfe, 0x11, 0, 0x91}, /* SET 7,(HL) */
+    };
+
+    static const CupidGbModel models[] = {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_DMG0,
+                                          CUPID_GB_MODEL_MGB,     CUPID_GB_MODEL_SGB,
+                                          CUPID_GB_MODEL_SGB2,    CUPID_GB_MODEL_CGB};
+    CupidGb gb = {0};
+    for (unsigned m = 0; m < sizeof(models) / sizeof(models[0]); ++m) {
+        for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+            prepare(&gb, 0xcb, cases[i].carry ? 0x10 : 0);
+            gb.model = models[m];
+            gb.cgb_mode = gb.model == CUPID_GB_MODEL_CGB;
+            gb.rom[0x101] = cases[i].opcode;
+            gb.cpu.h = 0xff;
+            gb.cpu.l = 0x40;
+            gb.io_registers[CUPID_GB_IO_LCDC] = cases[i].before;
+            step_cycles(&gb, 16);
+            assert(gb.io_registers[CUPID_GB_IO_LCDC] == cases[i].after);
+            /* These operations read during M3 and settle LCDC during M4.
+             * The final LCD power edge leaves five dots on monochrome hardware. */
+            assert(gb.pixels.initialized && gb.pixels.line == 0);
+            assert(gb.pixels.dot == (gb.model == CUPID_GB_MODEL_CGB ? 4 : 5));
+            assert(gb.div_counter == 4 && gb.cpu.pc == 0x102);
+        }
+        for (unsigned decrement = 0; decrement < 2; ++decrement) {
+            prepare(&gb, decrement ? 0x35 : 0x34, 0);
+            gb.model = models[m];
+            gb.cgb_mode = gb.model == CUPID_GB_MODEL_CGB;
+            gb.cpu.h = 0xff;
+            gb.cpu.l = 0x40;
+            gb.io_registers[CUPID_GB_IO_LCDC] = decrement ? 0 : 0x7f;
+            step_cycles(&gb, 12);
+            assert(gb.io_registers[CUPID_GB_IO_LCDC] == (decrement ? 0xff : 0x80));
+            assert(gb.pixels.initialized && gb.pixels.line == 0);
+            assert(gb.pixels.dot == (gb.model == CUPID_GB_MODEL_CGB ? 4 : 5));
+            assert(gb.div_counter == 3 && gb.cpu.pc == 0x101);
+        }
+    }
+    cupid_gb_cleanup(&gb);
+}
+
+static void test_lcd_enable_during_stack_writes(void) {
+    static const uint8_t pushes[] = {0xc5, 0xd5, 0xe5, 0xf5};
+    static const uint8_t calls[] = {0xc4, 0xcc, 0xd4, 0xdc, 0xcd};
+    static const uint8_t taken[] = {0, 0x80, 0, 0x10, 0};
+    static const CupidGbModel models[] = {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_SGB,
+                                          CUPID_GB_MODEL_CGB};
+    CupidGb gb = {0};
+    for (unsigned m = 0; m < sizeof(models) / sizeof(models[0]); ++m) {
+        for (unsigned low = 0; low < 2; ++low) {
+            unsigned expected = (low ? 4u : 8u) + (models[m] == CUPID_GB_MODEL_CGB ? 0u : 1u);
+            for (unsigned i = 0; i < sizeof(pushes); ++i) {
+                prepare(&gb, pushes[i], 0x90);
+                gb.model = models[m];
+                gb.cgb_mode = gb.model == CUPID_GB_MODEL_CGB;
+                gb.cpu.a = gb.cpu.b = gb.cpu.c = gb.cpu.d = gb.cpu.e = gb.cpu.h = gb.cpu.l = 0x91;
+                gb.cpu.sp = (uint16_t)(0xff41 + low);
+                step_cycles(&gb, 16);
+                assert(gb.pixels.initialized && gb.pixels.dot == expected);
+                assert(gb.div_counter == 4 && gb.cpu.sp == (uint16_t)(0xff3f + low));
+                assert(gb.io_registers[CUPID_GB_IO_LCDC] ==
+                       (pushes[i] == 0xf5 && low ? 0x90 : 0x91));
+            }
+            for (unsigned i = 0; i < sizeof(calls); ++i) {
+                prepare(&gb, 0, taken[i]);
+                gb.model = models[m];
+                gb.cgb_mode = gb.model == CUPID_GB_MODEL_CGB;
+                gb.cpu.pc = 0xc090;
+                gb.work_ram[0x90] = calls[i];
+                gb.work_ram[0x91] = 0;
+                gb.work_ram[0x92] = 2;
+                gb.cpu.sp = (uint16_t)(0xff41 + low);
+                step_cycles(&gb, 24);
+                assert(gb.pixels.initialized && gb.pixels.dot == expected);
+                assert(gb.div_counter == 6 && gb.cpu.pc == 0x200);
+                assert(gb.io_registers[CUPID_GB_IO_LCDC] == (low ? 0x93 : 0xc0));
+            }
+            for (unsigned i = 0; i < 8; ++i) {
+                prepare(&gb, 0, 0);
+                gb.model = models[m];
+                gb.cgb_mode = gb.model == CUPID_GB_MODEL_CGB;
+                gb.cpu.pc = 0xc090;
+                gb.work_ram[0x90] = (uint8_t)(0xc7 + 8u * i);
+                gb.cpu.sp = (uint16_t)(0xff41 + low);
+                step_cycles(&gb, 16);
+                assert(gb.pixels.initialized && gb.pixels.dot == expected);
+                assert(gb.div_counter == 4 && gb.cpu.pc == 8u * i);
+                assert(gb.io_registers[CUPID_GB_IO_LCDC] == (low ? 0x91 : 0xc0));
+            }
+        }
+
+        prepare(&gb, 0, 0);
+        gb.model = models[m];
+        gb.cgb_mode = gb.model == CUPID_GB_MODEL_CGB;
+        gb.cpu.pc = 0x8091;
+        gb.cpu.sp = 0xff41;
+        gb.cpu.ime = true;
+        gb.interrupt_enable = gb.interrupt_flags = 4;
+        step_cycles(&gb, 20);
+        assert(gb.cpu.pc == 0x50 && gb.cpu.sp == 0xff3f);
+        assert(gb.pixels.initialized && gb.pixels.dot == (gb.cgb_mode ? 8 : 9));
+    }
+    cupid_gb_cleanup(&gb);
+}
+
 static void test_register_indirect_bus_phase(void) {
     CupidGb gb = {0};
     const uint8_t reads[] = {0x0a, 0x1a, 0x2a, 0x3a, 0x7e, 0xf2};
@@ -512,6 +627,8 @@ int main(void) {
     test_pending_interrupt_precedes_di();
     test_io_read_before_final_machine_cycle();
     test_lcd_enable_during_io_write_cycle();
+    test_lcd_enable_during_read_modify_write();
+    test_lcd_enable_during_stack_writes();
     test_register_indirect_bus_phase();
     puts("CPU control-flow timing checks passed.");
     return 0;

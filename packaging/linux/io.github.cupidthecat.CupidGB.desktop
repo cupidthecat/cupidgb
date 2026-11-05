@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=CupidGB
+Comment=Play Game Boy and Game Boy Color cartridges
+Exec=cupidgb %f
+Icon=cupidgb
+Terminal=false
+Categories=Game;Emulator;
+Keywords=Game Boy;Game Boy Color;GB;GBC;
+MimeType=application/x-gameboy-rom;application/x-gameboy-color-rom;
+StartupNotify=true

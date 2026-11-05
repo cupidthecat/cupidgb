@@ -25,6 +25,7 @@
 #include "cupid/gb/apu.h"
 #include "cupid/gb/cartridge.h"
 #include "cupid/gb/cpu.h"
+#include "cupid/gb/input.h"
 #include "cupid/gb/ppu.h"
 #include "cupid/gb/sgb.h"
 #include "cupid/gb/timer.h"
@@ -563,7 +564,7 @@ uint8_t cupid_gb_read_u8(const CupidGb *gb, uint16_t address) {
     }
 
     if (address >= 0xa000u && address <= 0xbfffu) {
-        if (!gb->ram_enabled) {
+        if (!gb->ram_enabled && gb->header.mbc_type != CUPID_GB_HUC1) {
             return 0xffu;
         }
         /* MBC2: built-in 512x4-bit RAM, only bottom nibble valid */
@@ -581,10 +582,10 @@ uint8_t cupid_gb_read_u8(const CupidGb *gb, uint16_t address) {
             unsigned selected = gb->rtc_register - 0x08u;
             return latched[selected] & masks[selected];
         }
-        /* Timer-equipped MBC3 cartridges decode banks 4-7 without connecting
-         * RAM. The extended controller variant needs separate qualification. */
+        /* Ordinary timer-equipped MBC3 wiring leaves banks 4-7 disconnected;
+         * the extended controller connects them to additional SRAM. */
         if (gb->header.mbc_type == CUPID_GB_MBC3 && gb->header.has_timer &&
-            gb->current_ram_bank > 3u) {
+            !cupid_gb_has_extended_mbc3(gb) && gb->current_ram_bank > 3u) {
             return 0xffu;
         }
         /* MBC7: accelerometer / EEPROM registers */
@@ -613,6 +614,10 @@ uint8_t cupid_gb_read_u8(const CupidGb *gb, uint16_t address) {
         }
         {
             size_t offset = cupid_gb_effective_ram_bank(gb) * 0x2000u + (size_t)(address - 0xa000u);
+            /* Every configured SRAM size is a power of two. Missing address
+             * lines mirror a small chip throughout the cartridge window. */
+            if (gb->cartridge_ram_size)
+                offset &= gb->cartridge_ram_size - 1u;
             if (offset < gb->cartridge_ram_size) {
                 return gb->cartridge_ram[offset];
             }
@@ -633,8 +638,11 @@ uint8_t cupid_gb_read_u8(const CupidGb *gb, uint16_t address) {
 
         if (cupid_gb_lcd_enabled(gb) &&
             gb->io_registers[CUPID_GB_IO_LY] < CUPID_GB_PPU_VISIBLE_SCANLINES &&
-            (gb->ppu_line_boundary_hold || mode == CUPID_GB_PPU_MODE_OAM ||
-             mode == CUPID_GB_PPU_MODE_TRANSFER)) {
+            /* OAM is already claimed at the line boundary. The mode bits
+             * still show the previous HBlank until the following LCD dot. */
+            (gb->ppu_line_boundary_hold ||
+             (gb->pixels.initialized && !gb->ppu_lcd_startup && gb->pixels.dot == 0) ||
+             mode == CUPID_GB_PPU_MODE_OAM || mode == CUPID_GB_PPU_MODE_TRANSFER)) {
             return 0xffu;
         }
         return gb->object_attribute_memory[address - 0xfe00u];
@@ -652,26 +660,16 @@ uint8_t cupid_gb_read_u8(const CupidGb *gb, uint16_t address) {
     }
 
     if (address == 0xff00u) {
-        /* P1/JOYP: return joypad state based on selection bits */
-        uint8_t sel = gb->io_registers[0x00u];
-        uint8_t result = 0x0fu; /* default: no buttons pressed */
-
-        if ((sel & 0x30u) == 0x30u && cupid_gb_sgb_active(gb) && gb->sgb.player_count > 1u) {
-            result = (uint8_t)(0x0fu - (gb->sgb.current_player & 0x03u));
-            return (uint8_t)(0xc0u | (sel & 0x30u) | result);
-        }
-
-        if ((sel & 0x10u) == 0u) {
-            result &= (gb->joypad & 0x0fu); /* direction: right/left/up/down */
-        }
-        if ((sel & 0x20u) == 0u) {
-            result &= ((gb->joypad >> 4u) & 0x0fu); /* action: A/B/select/start */
-        }
-        return (uint8_t)(0xc0u | (sel & 0x30u) | result);
+        return cupid_gb_input_read(gb);
     }
 
     if (address == 0xff0fu) {
         return (uint8_t)(gb->interrupt_flags | 0xe0u);
+    }
+
+    if (address == 0xff41u) {
+        /* The unused STAT input is pulled high independently of startup RAM. */
+        return (uint8_t)(gb->io_registers[CUPID_GB_IO_STAT] | 0x80u);
     }
 
     if (address == 0xff02u) {
@@ -793,6 +791,11 @@ void cupid_gb_write_u8(CupidGb *gb, uint16_t address, uint8_t value) {
         return;
     }
 
+    if (address < 0x8000u && gb->header.mbc_type == CUPID_GB_HUC1) {
+        cupid_gb_huc1_write(gb, address, value);
+        return;
+    }
+
     if (address <= 0x3fffu && gb->header.mbc_type == CUPID_GB_MBC2) {
         if ((address & 0x0100u) == 0u) {
             gb->ram_enabled = (value & 0x0fu) == 0x0au;
@@ -809,20 +812,14 @@ void cupid_gb_write_u8(CupidGb *gb, uint16_t address, uint8_t value) {
         switch (gb->header.mbc_type) {
             case CUPID_GB_MBC1:
             case CUPID_GB_MBC3:
-            case CUPID_GB_MBC5:
             case CUPID_GB_MBC6:
             case CUPID_GB_MBC7:
             case CUPID_GB_MMM01:
                 gb->ram_enabled = (value & 0x0fu) == 0x0au;
                 break;
-            case CUPID_GB_HUC1:
-                if (value == 0x0eu) {
-                    gb->huc1_ir_mode = true;
-                    gb->ram_enabled = false;
-                } else {
-                    gb->huc1_ir_mode = false;
-                    gb->ram_enabled = (value & 0x0fu) == 0x0au;
-                }
+            case CUPID_GB_MBC5:
+                /* All data bits participate in this controller's enable decode. */
+                gb->ram_enabled = value == 0x0au;
                 break;
             case CUPID_GB_HUC3:
                 gb->huc3_mode = value;
@@ -837,7 +834,6 @@ void cupid_gb_write_u8(CupidGb *gb, uint16_t address, uint8_t value) {
     if (address <= 0x3fffu) {
         switch (gb->header.mbc_type) {
             case CUPID_GB_MBC1:
-            case CUPID_GB_HUC1:
                 gb->mbc1_bank_low5 = (uint8_t)(value & 0x1fu);
                 if (gb->mbc1_bank_low5 == 0u) {
                     gb->mbc1_bank_low5 = 1u;
@@ -845,6 +841,10 @@ void cupid_gb_write_u8(CupidGb *gb, uint16_t address, uint8_t value) {
                 gb->current_rom_bank = cupid_gb_effective_rom_bank(gb, false);
                 break;
             case CUPID_GB_MBC3:
+                gb->current_rom_bank = value & (cupid_gb_has_extended_mbc3(gb) ? 0xffu : 0x7fu);
+                if (gb->current_rom_bank == 0u)
+                    gb->current_rom_bank = 1u;
+                break;
             case CUPID_GB_HUC3:
                 gb->current_rom_bank = (size_t)(value & 0x7fu);
                 if (gb->current_rom_bank == 0u) {
@@ -877,7 +877,6 @@ void cupid_gb_write_u8(CupidGb *gb, uint16_t address, uint8_t value) {
     if (address <= 0x5fffu) {
         switch (gb->header.mbc_type) {
             case CUPID_GB_MBC1:
-            case CUPID_GB_HUC1:
                 gb->mbc1_bank_high2 = (uint8_t)(value & 0x03u);
                 gb->current_rom_bank = cupid_gb_effective_rom_bank(gb, false);
                 gb->current_ram_bank = cupid_gb_effective_ram_bank(gb);
@@ -885,7 +884,7 @@ void cupid_gb_write_u8(CupidGb *gb, uint16_t address, uint8_t value) {
             case CUPID_GB_MBC3:
                 /* RAM address bits and the RTC select line are independent;
                  * upper control bits alias the same low-nibble selection. */
-                gb->current_ram_bank = value & (gb->header.has_timer ? 7u : 3u);
+                gb->current_ram_bank = value & 7u;
                 gb->rtc_register = gb->header.has_timer && (value & 8u) ? value & 15u : 0u;
                 break;
             case CUPID_GB_HUC3:
@@ -918,7 +917,6 @@ void cupid_gb_write_u8(CupidGb *gb, uint16_t address, uint8_t value) {
     if (address <= 0x7fffu) {
         switch (gb->header.mbc_type) {
             case CUPID_GB_MBC1:
-            case CUPID_GB_HUC1:
                 gb->mbc1_ram_banking_mode = (value & 0x01u) != 0u;
                 gb->current_rom_bank = cupid_gb_effective_rom_bank(gb, false);
                 gb->current_ram_bank = cupid_gb_effective_ram_bank(gb);
@@ -949,7 +947,12 @@ void cupid_gb_write_u8(CupidGb *gb, uint16_t address, uint8_t value) {
     }
 
     if (address >= 0xa000u && address <= 0xbfffu) {
-        if (!gb->ram_enabled) {
+        if (!gb->ram_enabled && gb->header.mbc_type != CUPID_GB_HUC1) {
+            return;
+        }
+        /* An IR write drives the cartridge LED and must never overwrite SRAM.
+         * The disconnected accessory currently has no external LED callback. */
+        if (gb->header.mbc_type == CUPID_GB_HUC1 && gb->huc1_ir_mode) {
             return;
         }
         /* MBC2: built-in 512x4-bit RAM */
@@ -980,7 +983,7 @@ void cupid_gb_write_u8(CupidGb *gb, uint16_t address, uint8_t value) {
             return;
         }
         if (gb->header.mbc_type == CUPID_GB_MBC3 && gb->header.has_timer &&
-            gb->current_ram_bank > 3u) {
+            !cupid_gb_has_extended_mbc3(gb) && gb->current_ram_bank > 3u) {
             return;
         }
         /* MBC7: accelerometer latch control */
@@ -999,6 +1002,8 @@ void cupid_gb_write_u8(CupidGb *gb, uint16_t address, uint8_t value) {
         }
         {
             size_t offset = cupid_gb_effective_ram_bank(gb) * 0x2000u + (size_t)(address - 0xa000u);
+            if (gb->cartridge_ram_size)
+                offset &= gb->cartridge_ram_size - 1u;
             if (offset < gb->cartridge_ram_size) {
                 if (gb->cartridge_ram[offset] != value && gb->header.has_battery)
                     ++gb->battery_write_generation;
@@ -1049,9 +1054,7 @@ void cupid_gb_write_u8(CupidGb *gb, uint16_t address, uint8_t value) {
 
     if (address >= 0xff00u && address <= 0xff7fu) {
         if (address == 0xff00u) {
-            cupid_gb_sgb_write_joyp(gb, value);
-            gb->io_registers[0x00u] =
-                (uint8_t)((value & 0x30u) | (gb->io_registers[0x00u] & 0x0fu));
+            cupid_gb_input_select(gb, value);
             return;
         }
         if (cupid_cgb_handle_write_register(gb, address, value)) {

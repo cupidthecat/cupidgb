@@ -3,6 +3,7 @@
 #endif
 
 #include "cupid/gb/gb.h"
+#include "cupid/gb/input.h"
 #include "cupid/gbc/cgb.h"
 
 #include <errno.h>
@@ -247,11 +248,7 @@ int main(int argc, char **argv) {
     while (gb->elapsed_cycles < frames * UINT64_C(70224) && steps < max_steps) {
         while (event_index < event_count &&
                gb->elapsed_cycles >= events[event_index].frame * UINT64_C(70224)) {
-            const uint8_t old = cupid_gb_read_u8(gb, 0xff00);
-            gb->joypad = events[event_index++].mask;
-            if (old & (uint8_t)~cupid_gb_read_u8(gb, 0xff00) & 0x0f) {
-                gb->interrupt_flags |= 0x10;
-            }
+            cupid_gb_set_buttons(gb, events[event_index++].mask);
         }
         if (!strcmp(protocol, "register")) {
             int detected = register_result(gb);
