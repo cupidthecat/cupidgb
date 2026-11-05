@@ -353,10 +353,9 @@ void cupid_gb_request_interrupt(CupidGb *gb, uint8_t mask) {
  * @brief Services the highest-priority pending interrupt, if any.
  *
  * Checks IF & IE for pending interrupts. If IME is enabled and an
- * interrupt is pending, performs the full 5-machine-cycle ISR sequence:
- * two internal cycles, push PC high byte, re-evaluate pending interrupts
- * (cancel-on-clear), push PC low byte, then load PC from the interrupt
- * vector. Also unhals the CPU on any pending interrupt regardless of IME.
+ * interrupt is pending, performs the full 5-machine-cycle entry sequence.
+ * Stack accesses can change IE or IF, so enable and request selection are
+ * sampled separately. Any enabled request wakes HALT regardless of IME.
  *
  * @param gb Pointer to the Game Boy state.
  *
@@ -367,70 +366,44 @@ void cupid_gb_request_interrupt(CupidGb *gb, uint8_t mask) {
  *       to 0x0000 (hardware quirk).
  */
 bool cupid_gb_service_interrupt(CupidGb *gb) {
-    static const uint16_t vectors[5] = {0x40u, 0x48u, 0x50u, 0x58u, 0x60u};
-    uint8_t pending;
-    uint8_t bit;
-    uint16_t pc_save;
-
-    pending = (uint8_t)(gb->interrupt_enable & gb->interrupt_flags & 0x1fu);
-    if (pending == 0u) {
+    if ((gb->interrupt_enable & gb->interrupt_flags & 0x1fu) == 0u) {
         return false;
     }
-
     gb->cpu.halted = false;
+    gb->cpu.just_halted = false;
     if (!gb->cpu.ime) {
         return false;
     }
 
-    for (bit = 0u; bit < 5u; ++bit) {
-        uint8_t mask = (uint8_t)(1u << bit);
-        if ((pending & mask) != 0u) {
-            gb->cpu.ime = false;
-            gb->cpu.ime_delay = 0u;
+    const uint16_t return_address = gb->cpu.pc;
+    gb->cpu.ime = false;
+    gb->cpu.ime_delay = 0;
+    cupid_gb_tick(gb, 2);
+    cupid_gb_trigger_oam_bug_write(gb, gb->cpu.sp);
+    cupid_gb_tick(gb, 1);
 
-            pc_save = gb->cpu.pc;
+    /* The stack bus is active at T12 and T16, rather than T8 and T12. */
+    --gb->cpu.sp;
+    cupid_gb_write_u8(gb, gb->cpu.sp, (uint8_t)(return_address >> 8));
+    const uint8_t enabled = gb->interrupt_enable;
+    cupid_gb_tick(gb, 1);
+    const uint8_t requested = gb->interrupt_flags;
+    --gb->cpu.sp;
+    cupid_gb_write_u8(gb, gb->cpu.sp, (uint8_t)return_address);
 
-            /* M1, M2: two internal (no-op) cycles */
-            cupid_gb_tick(gb, 2u);
-            cupid_gb_trigger_oam_bug_write(gb, gb->cpu.sp);
-
-            /* M3: push PC high byte */
-            gb->cpu.sp = (uint16_t)(gb->cpu.sp - 1u);
-            cupid_gb_write_u8(gb, gb->cpu.sp, (uint8_t)(pc_save >> 8u));
-            cupid_gb_tick(gb, 1u);
-
-            /* IE may have been modified by the upper-byte push. Re-evaluate
-             * the highest-priority pending interrupt before committing the
-             * dispatch. If none remain, the dispatch is cancelled and the
-             * final jump target becomes $0000. */
-            pending = (uint8_t)(gb->interrupt_enable & gb->interrupt_flags & 0x1fu);
-            if (pending != 0u) {
-                for (bit = 0u; bit < 5u; ++bit) {
-                    uint8_t current_mask = (uint8_t)(1u << bit);
-                    if ((pending & current_mask) != 0u) {
-                        gb->interrupt_flags =
-                            (uint8_t)(gb->interrupt_flags & (uint8_t)(~current_mask));
-                        break;
-                    }
-                }
-            } else {
-                bit = 0xffu;
-            }
-
-            /* M4: push PC low byte */
-            gb->cpu.sp = (uint16_t)(gb->cpu.sp - 1u);
-            cupid_gb_write_u8(gb, gb->cpu.sp, (uint8_t)(pc_save & 0x00ffu));
-            cupid_gb_tick(gb, 1u);
-
-            /* M5: load PC from vector */
-            gb->cpu.pc = (bit < 5u) ? vectors[bit] : 0x0000u;
-            cupid_gb_tick(gb, 1u);
-
-            return true;
+    const uint8_t pending = (uint8_t)(enabled & requested & 0x1fu);
+    const uint8_t selected = (uint8_t)(pending & (uint8_t)(0u - pending));
+    gb->cpu.pc = 0;
+    for (unsigned bit = 0; bit < 5; ++bit) {
+        if (selected == (1u << bit)) {
+            gb->cpu.pc = (uint16_t)(0x40u + 8u * bit);
         }
     }
-
-    return false;
+    /* The low stack byte can itself target IF. Clear the acknowledged request
+     * in the replacement value while preserving unrelated newly written bits. */
+    gb->interrupt_flags &= (uint8_t)~selected;
+    cupid_gb_tick(gb, 1);
+    return true;
 }
 
 // Register read/write by index
@@ -1169,21 +1142,33 @@ static uint8_t cupid_gb_execute_cb(CupidGb *gb, uint8_t opcode) {
 uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode) {
     if ((opcode & 0xc0u) == 0x40u) {
         if (opcode == 0x76u) {
+            /* Requests raised while fetching HALT participate in its decision.
+             * A preceding EI has enabled IME by this point of the instruction. */
+            cupid_gb_tick(gb, 1u);
             uint8_t pending = (uint8_t)(gb->interrupt_enable & gb->interrupt_flags & 0x1fu);
-
-            if (!gb->cpu.ime && pending != 0u) {
-                gb->cpu.halt_bug = true;
+            if (pending != 0u) {
+                gb->cpu.just_halted = false;
+                if (gb->cpu.ime || gb->cpu.ime_delay != 0u) {
+                    gb->cpu.pc = (uint16_t)(gb->cpu.pc - 1u);
+                } else {
+                    gb->cpu.halt_bug = true;
+                }
             } else {
                 gb->cpu.halted = true;
+                gb->cpu.just_halted = true;
             }
-            return 1u;
+            return 0u;
         }
 
         {
             uint8_t dst = (uint8_t)((opcode >> 3u) & 0x07u);
             uint8_t src = (uint8_t)(opcode & 0x07u);
             /* LD r,(HL) or LD (HL),r: memory access must be at M2 */
-            if (src == 6u || dst == 6u) {
+            if (dst == 6u) {
+                cupid_gb_cpu_write(gb, cupid_gb_get_hl(&gb->cpu), cupid_gb_read_reg8(gb, src), 1u);
+                return 1u;
+            }
+            if (src == 6u) {
                 cupid_gb_tick(gb, 1u);
             }
             cupid_gb_write_reg8(gb, dst, cupid_gb_read_reg8(gb, src));
@@ -1259,8 +1244,7 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode) {
                                 cupid_gb_fetch_u16(gb));
             return 3u;
         case 0x02u:
-            cupid_gb_tick(gb, 1u);
-            cupid_gb_write_u8(gb, cupid_gb_get_bc(&gb->cpu), gb->cpu.a);
+            cupid_gb_cpu_write(gb, cupid_gb_get_bc(&gb->cpu), gb->cpu.a, 1u);
             return 1u;
         case 0x03u:
         case 0x13u:
@@ -1325,8 +1309,7 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode) {
             return 2u;
         case 0x36u: { /* LD (HL),n: M1=opcode, M2=fetch n, M3=write(HL) */
             uint8_t n = cupid_gb_fetch_u8(gb);
-            cupid_gb_tick(gb, 2u);
-            cupid_gb_write_u8(gb, cupid_gb_get_hl(&gb->cpu), n);
+            cupid_gb_cpu_write(gb, cupid_gb_get_hl(&gb->cpu), n, 2u);
             return 1u;
         }
         case 0x07u:
@@ -1334,10 +1317,8 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode) {
             return 1u;
         case 0x08u: { /* LD (nn),SP: M1=opcode M2/M3=fetch nn M4=write lo M5=write hi */
             uint16_t address = cupid_gb_fetch_u16(gb);
-            cupid_gb_tick(gb, 3u);
-            cupid_gb_write_u8(gb, address, (uint8_t)(gb->cpu.sp & 0x00ffu));
-            cupid_gb_tick(gb, 1u);
-            cupid_gb_write_u8(gb, (uint16_t)(address + 1u), (uint8_t)(gb->cpu.sp >> 8u));
+            cupid_gb_cpu_write(gb, address, (uint8_t)(gb->cpu.sp & 0x00ffu), 3u);
+            cupid_gb_cpu_write(gb, (uint16_t)(address + 1u), (uint8_t)(gb->cpu.sp >> 8u), 1u);
             return 1u;
         }
         case 0x09u:
@@ -1367,8 +1348,10 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode) {
             gb->cpu.a = cupid_gb_rrc(&gb->cpu, gb->cpu.a, false);
             return 1u;
         case 0x10u:
-            (void)cupid_gb_fetch_u8(gb); /* STOP's padding byte */
-            if (gb->cgb_mode && gb->speed_switch_armed) {
+            gb->cpu.just_halted = false;
+            if (gb->cgb_mode && gb->speed_switch_armed &&
+                (cupid_gb_read_u8(gb, 0xff00u) & 0x0fu) == 0x0fu) {
+                (void)cupid_gb_fetch_u8(gb);
                 gb->double_speed = !gb->double_speed;
                 gb->speed_switch_armed = false;
                 gb->speed_phase = false;
@@ -1376,11 +1359,26 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode) {
                 gb->cpu.stopped = false;
                 return 1u;
             }
-            gb->cpu.stopped = true;
-            return 1u;
-        case 0x12u:
-            cupid_gb_write_u8(gb, cupid_gb_get_de(&gb->cpu), gb->cpu.a);
             cupid_gb_tick(gb, 1u);
+            /* STOP gates the divider after its opcode fetch. A selected key
+             * already held low prevents entry; an IRQ alone does not wake it. */
+            if ((cupid_gb_read_u8(gb, 0xff00u) & 0x0fu) == 0x0fu) {
+                cupid_gb_timer_apply_div_reset(gb);
+                gb->cpu.stopped = true;
+            }
+            if ((gb->interrupt_enable & gb->interrupt_flags & 0x1fu) == 0u) {
+                (void)cupid_gb_fetch_u8(gb);
+                cupid_gb_tick(gb, 1u);
+                /* A selected key held on entry prevents divider gating, but
+                 * the CPU still waits in HALT until an interrupt is pending. */
+                if (!gb->cpu.stopped) {
+                    gb->cpu.halted = true;
+                    gb->cpu.just_halted = true;
+                }
+            }
+            return 0u;
+        case 0x12u:
+            cupid_gb_cpu_write(gb, cupid_gb_get_de(&gb->cpu), gb->cpu.a, 1u);
             return 1u;
         case 0x17u:
             gb->cpu.a = cupid_gb_rl(&gb->cpu, gb->cpu.a, false);
@@ -1391,8 +1389,8 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode) {
             return 3u;
         }
         case 0x1au:
-            gb->cpu.a = cupid_gb_read_u8(gb, cupid_gb_get_de(&gb->cpu));
             cupid_gb_tick(gb, 1u);
+            gb->cpu.a = cupid_gb_read_u8(gb, cupid_gb_get_de(&gb->cpu));
             return 1u;
         case 0x1fu:
             gb->cpu.a = cupid_gb_rr(&gb->cpu, gb->cpu.a, false);
@@ -1410,8 +1408,7 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode) {
         }
         case 0x22u: {
             uint16_t hl = cupid_gb_get_hl(&gb->cpu);
-            cupid_gb_tick(gb, 1u);
-            cupid_gb_write_u8(gb, hl, gb->cpu.a);
+            cupid_gb_cpu_write(gb, hl, gb->cpu.a, 1u);
             cupid_gb_trigger_oam_bug_write(gb, hl);
             cupid_gb_set_hl(&gb->cpu, (uint16_t)(hl + 1u));
             return 1u;
@@ -1434,8 +1431,7 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode) {
             return 1u;
         case 0x32u: {
             uint16_t hl = cupid_gb_get_hl(&gb->cpu);
-            cupid_gb_tick(gb, 1u);
-            cupid_gb_write_u8(gb, hl, gb->cpu.a);
+            cupid_gb_cpu_write(gb, hl, gb->cpu.a, 1u);
             cupid_gb_trigger_oam_bug_write(gb, hl);
             cupid_gb_set_hl(&gb->cpu, (uint16_t)(hl - 1u));
             return 1u;
@@ -1696,8 +1692,7 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode) {
             return 2u;
         case 0xe0u: { /* LDH (n),A: M1=opcode M2=fetch n M3=write */
             uint8_t n = cupid_gb_fetch_u8(gb);
-            cupid_gb_tick(gb, 2u);
-            cupid_gb_write_u8(gb, (uint16_t)(0xff00u + n), gb->cpu.a);
+            cupid_gb_cpu_write(gb, (uint16_t)(0xff00u + n), gb->cpu.a, 2u);
             return 1u;
         }
         case 0xe1u: {
@@ -1715,8 +1710,7 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode) {
             return 1u; /* M3 */
         }
         case 0xe2u:
-            cupid_gb_tick(gb, 1u);
-            cupid_gb_write_u8(gb, (uint16_t)(0xff00u + gb->cpu.c), gb->cpu.a);
+            cupid_gb_cpu_write(gb, (uint16_t)(0xff00u + gb->cpu.c), gb->cpu.a, 1u);
             return 1u;
         case 0xe5u: {
             /* PUSH HL: M1=opcode M2=internal M3=write_hi M4=write_lo */
@@ -1749,8 +1743,7 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode) {
             return 1u;
         case 0xeau: { /* LD (nn),A: M1=opcode M2/M3=fetch nn M4=write */
             uint16_t addr = cupid_gb_fetch_u16(gb);
-            cupid_gb_tick(gb, 3u);
-            cupid_gb_write_u8(gb, addr, gb->cpu.a);
+            cupid_gb_cpu_write(gb, addr, gb->cpu.a, 3u);
             return 1u;
         }
         case 0xeeu:

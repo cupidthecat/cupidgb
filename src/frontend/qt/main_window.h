@@ -23,10 +23,12 @@ class QIODevice;
 class DisplayWidget;
 class AudioBuffer;
 class AudioConverter;
+class WaveRecorder;
 
 class MainWindow final : public QMainWindow {
   public:
-    explicit MainWindow(bool isolated = false, bool automated = false, bool audioCheck = false);
+    explicit MainWindow(bool isolated = false, bool automated = false, bool audioCheck = false,
+                        const QString &bootDirectoryOverride = QString());
     ~MainWindow() override;
     bool openRom(const QString &path);
     bool smokeTest();
@@ -43,9 +45,14 @@ class MainWindow final : public QMainWindow {
     void buildMenus();
     void updateRecentMenu();
     void configure();
+    QString bootDirectory() const;
     void setPaused(bool paused);
     void releaseKeys();
     void setJoypad(uint8_t mask);
+    void applyHeldButtons();
+    void advanceControls();
+    void watchBattery();
+    void registerShortcut(QAction *action, const QString &id);
     bool flushBattery();
     bool closeRom();
     bool restart();
@@ -56,6 +63,8 @@ class MainWindow final : public QMainWindow {
     void stopAudio();
     void clearAudio();
     void pumpAudio();
+    bool startRecording(const QString &path);
+    bool stopRecording();
     void screenshot();
     QByteArray captureState(bool reportFailure = true, bool rewindSnapshot = false);
     bool restoreState(const QByteArray &state, bool reportFailure, bool rewindSnapshot = false);
@@ -63,6 +72,7 @@ class MainWindow final : public QMainWindow {
     bool saveSlot(int slot);
     bool loadSlot(int slot);
     bool loadStateFile(const QString &path);
+    bool recoverBattery(const QString &statePath, const QString &outputPath);
     void resetRewind();
     void rememberFrame();
     bool rewindFrame();
@@ -70,13 +80,18 @@ class MainWindow final : public QMainWindow {
     void refreshActions();
 
     QSettings settings_;
+    QString bootDirectoryOverride_;
     std::unique_ptr<CupidEmulator> emulator_;
     DisplayWidget *display_ = nullptr;
     std::unique_ptr<AudioBuffer> audioBuffer_;
     std::unique_ptr<QAudioSink> audio_;
     QIODevice *audioDevice_ = nullptr;
     std::unique_ptr<AudioConverter> audioConverter_;
+    std::unique_ptr<WaveRecorder> recorder_;
     qint64 audioQueueLimit_ = 8192;
+    qint64 audioPrimeBytes_ = 0;
+    bool audioPriming_ = true;
+    uint64_t audioPrimeEvents_ = 0;
     QTimer timer_;
     QTimer saveTimer_;
     QElapsedTimer clock_;
@@ -85,10 +100,13 @@ class MainWindow final : public QMainWindow {
     QString savePath_;
     QByteArray romData_;
     QByteArray savedRam_;
+    uint64_t observedBatteryGeneration_ = 0;
+    bool batteryDirty_ = false;
     QImage image_;
     QMenu *recentMenu_ = nullptr;
     QAction *pauseAction_ = nullptr;
     QAction *muteAction_ = nullptr;
+    QAction *recordingAction_ = nullptr;
     QAction *closeAction_ = nullptr;
     QAction *resetAction_ = nullptr;
     QAction *frameAction_ = nullptr;
@@ -97,6 +115,12 @@ class MainWindow final : public QMainWindow {
     std::array<QAction *, 10> saveSlotActions_{};
     std::array<QAction *, 10> loadSlotActions_{};
     std::array<int, 8> keys_{};
+    std::array<int, 5> specialKeys_{};
+    std::vector<QAction *> shortcutActions_;
+    std::array<bool, 2> rapidHeld_{};
+    std::array<unsigned, 2> rapidPhase_{};
+    bool slowHeld_ = false;
+    unsigned speedSteps_ = 16;
     uint8_t physicalJoypad_ = 0xff;
     bool paused_ = false;
     bool turbo_ = false;

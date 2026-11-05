@@ -1,6 +1,3 @@
-/* Hardware timing portions: Copyright (c) 2015-2026 Lior Halphon.
- * Distributed under the Expat License; see LICENSES/hardware.txt.
- */
 /**
  * @file gb.c
  * @brief Game Boy system glue — initialization, step loop, and memory map.
@@ -17,6 +14,7 @@
  */
 
 #include "cupid/gb/gb.h"
+#include "cupid/gb/battery.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -37,33 +35,28 @@
 /**
  * @brief Handles a write to the SC (serial control) register at 0xFF02.
  *
- * Updates the serial control register and, if bit 7 is set (transfer
- * requested), latches the current SB byte and arms the serial counter
- * for an 8-bit outgoing transfer.
+ * Commits the old clock phase, applies the writable control bits, and
+ * establishes the remaining byte length for a disconnected serial port.
  *
  * @param gb    Pointer to the Game Boy state.
  * @param value The value being written to SC.
  *
- * @note Does nothing if @p gb is NULL.
+ * @note The memory-map dispatcher has already checked that @p gb is valid.
  */
 static void cupid_gb_handle_serial_transfer(CupidGb *gb, uint8_t value) {
-    if (gb == 0) {
-        return;
-    }
+    /* A control access begins a new byte count but also drives the old clock
+     * low. An active internal transfer therefore contributes its outgoing bit
+     * before the newly written clock selection takes effect. */
+    bool old_bit = gb->serial_master_clock && (gb->io_registers[2] & 0x81u) == 0x81u;
+    if (old_bit)
+        gb->io_registers[1] = (uint8_t)(2u * gb->io_registers[1] + 1u);
+    gb->serial_master_clock = false;
 
-    /* SC bit 1 selects the fast clock only in CGB mode. A control write
-     * completes a high clock phase before installing the new control value. */
-    gb->serial_bits_remaining = 8u;
-    if (gb->serial_master_clock) {
-        cupid_gb_serial_master_edge(gb);
-    }
-    gb->io_registers[0x02u] = (uint8_t)((gb->cgb_mode ? 0x7cu : 0x7eu) | (value & 0x83u));
-
-    if ((value & 0x80u) != 0u) {
-        gb->serial_tx_latch = gb->io_registers[0x01u];
-    } else {
-        gb->serial_bits_remaining = 0u;
-    }
+    uint8_t writable = gb->cgb_mode ? 0x83u : 0x81u;
+    gb->io_registers[2] = (uint8_t)((value & writable) | (uint8_t)~writable);
+    gb->serial_bits_remaining = (value & 0x80u) ? (uint8_t)(8u - old_bit) : 0u;
+    if (value & 0x80u)
+        gb->serial_tx_latch = gb->io_registers[1];
 }
 
 // Init
@@ -427,6 +420,7 @@ void cupid_gb_enter_boot_rom(CupidGb *gb) {
     gb->cpu.ime = false;
     gb->cpu.ime_delay = 0u;
     gb->cpu.halted = false;
+    gb->cpu.just_halted = false;
     gb->cpu.stopped = false;
     gb->cpu.halt_bug = false;
 
@@ -579,20 +573,19 @@ uint8_t cupid_gb_read_u8(const CupidGb *gb, uint16_t address) {
         }
         /* MBC3: RTC register reads when selected */
         if (gb->header.mbc_type == CUPID_GB_MBC3 && gb->rtc_register >= 0x08u) {
-            switch (gb->rtc_register) {
-                case 0x08u:
-                    return gb->rtc.ls;
-                case 0x09u:
-                    return gb->rtc.lm;
-                case 0x0au:
-                    return gb->rtc.lh;
-                case 0x0bu:
-                    return gb->rtc.ldl;
-                case 0x0cu:
-                    return gb->rtc.ldh;
-                default:
-                    return 0xffu;
-            }
+            if (gb->rtc_register > 0x0cu)
+                return 0xffu;
+            const uint8_t latched[] = {gb->rtc.ls, gb->rtc.lm, gb->rtc.lh, gb->rtc.ldl,
+                                       gb->rtc.ldh};
+            const uint8_t masks[] = {0x3f, 0x3f, 0x1f, 0xff, 0xc1};
+            unsigned selected = gb->rtc_register - 0x08u;
+            return latched[selected] & masks[selected];
+        }
+        /* Timer-equipped MBC3 cartridges decode banks 4-7 without connecting
+         * RAM. The extended controller variant needs separate qualification. */
+        if (gb->header.mbc_type == CUPID_GB_MBC3 && gb->header.has_timer &&
+            gb->current_ram_bank > 3u) {
+            return 0xffu;
         }
         /* MBC7: accelerometer / EEPROM registers */
         if (gb->header.mbc_type == CUPID_GB_MBC7) {
@@ -682,7 +675,8 @@ uint8_t cupid_gb_read_u8(const CupidGb *gb, uint16_t address) {
     }
 
     if (address == 0xff02u) {
-        return (uint8_t)((gb->cgb_mode ? 0x7cu : 0x7eu) | (gb->io_registers[0x02u] & 0x83u));
+        uint8_t writable = gb->cgb_mode ? 0x83u : 0x81u;
+        return (uint8_t)(gb->io_registers[2] | (uint8_t)~writable);
     }
 
     if (address == 0xff03u || (address >= 0xff08u && address <= 0xff0eu) || address == 0xff4eu ||
@@ -748,42 +742,7 @@ uint8_t cupid_gb_read_u8(const CupidGb *gb, uint16_t address) {
  * @param gb Pointer to the Game Boy state.
  */
 static void cupid_gb_rtc_update(CupidGb *gb) {
-    int64_t now = (int64_t)time(NULL);
-    uint64_t elapsed;
-    uint64_t remainder;
-    uint64_t total;
-    uint64_t days;
-
-    if (gb->rtc.base_time == 0) {
-        gb->rtc.base_time = now;
-        return;
-    }
-
-    if (now <= gb->rtc.base_time || (gb->rtc.dh & 0x40u)) { /* halt flag = bit 6 */
-        gb->rtc.base_time = now;
-        return;
-    }
-
-    /* Restored timestamps span all signed 64-bit values. The positive distance
-     * may exceed INT64_MAX; unsigned subtraction represents that span exactly.
-     * Divide before adding register values so even UINT64_MAX cannot overflow. */
-    elapsed = (uint64_t)now - (uint64_t)gb->rtc.base_time;
-    remainder = elapsed % 60u + gb->rtc.s;
-    gb->rtc.s = (uint8_t)(remainder % 60u);
-    total = elapsed / 60u + remainder / 60u;
-    remainder = total % 60u + gb->rtc.m;
-    gb->rtc.m = (uint8_t)(remainder % 60u);
-    total = total / 60u + remainder / 60u;
-    remainder = total % 24u + gb->rtc.h;
-    gb->rtc.h = (uint8_t)(remainder % 24u);
-    days = (uint64_t)gb->rtc.dl + ((uint64_t)(gb->rtc.dh & 0x01u) << 8u) + total / 24u +
-           remainder / 24u;
-    gb->rtc.dl = (uint8_t)(days & 0xffu);
-    gb->rtc.dh = (uint8_t)((gb->rtc.dh & 0xfeu) | ((days >> 8u) & 0x01u));
-    if (days > 511) {
-        gb->rtc.dh = (uint8_t)(gb->rtc.dh | 0x80u); /* carry flag = bit 7 */
-    }
-    gb->rtc.base_time = now;
+    cupid_gb_rtc_advance(&gb->rtc, (int64_t)time(NULL));
 }
 
 /**
@@ -897,7 +856,7 @@ void cupid_gb_write_u8(CupidGb *gb, uint16_t address, uint8_t value) {
                     gb->mbc5_rom_bank = (uint16_t)((gb->mbc5_rom_bank & 0x0100u) | value);
                 } else {
                     gb->mbc5_rom_bank = (uint16_t)((gb->mbc5_rom_bank & 0x00ffu) |
-                                                   ((uint16_t)(value & 0x01u) << 8u));
+                                                   ((unsigned)(value & 0x01u) << 8u));
                 }
                 gb->current_rom_bank = (size_t)gb->mbc5_rom_bank;
                 break;
@@ -924,6 +883,11 @@ void cupid_gb_write_u8(CupidGb *gb, uint16_t address, uint8_t value) {
                 gb->current_ram_bank = cupid_gb_effective_ram_bank(gb);
                 break;
             case CUPID_GB_MBC3:
+                /* RAM address bits and the RTC select line are independent;
+                 * upper control bits alias the same low-nibble selection. */
+                gb->current_ram_bank = value & (gb->header.has_timer ? 7u : 3u);
+                gb->rtc_register = gb->header.has_timer && (value & 8u) ? value & 15u : 0u;
+                break;
             case CUPID_GB_HUC3:
                 if (value <= 0x03u) {
                     gb->current_ram_bank = (size_t)value;
@@ -991,31 +955,32 @@ void cupid_gb_write_u8(CupidGb *gb, uint16_t address, uint8_t value) {
         /* MBC2: built-in 512x4-bit RAM */
         if (gb->header.mbc_type == CUPID_GB_MBC2) {
             size_t offset = (size_t)(address - 0xa000u) & 0x01ffu;
+            if ((gb->cartridge_ram[offset] & 0x0fu) != (value & 0x0fu) && gb->header.has_battery)
+                ++gb->battery_write_generation;
             gb->cartridge_ram[offset] = (uint8_t)(value & 0x0fu);
             return;
         }
         /* MBC3: write to RTC register */
         if (gb->header.mbc_type == CUPID_GB_MBC3 && gb->rtc_register >= 0x08u) {
-            switch (gb->rtc_register) {
-                case 0x08u:
-                    gb->rtc.s = value;
-                    break;
-                case 0x09u:
-                    gb->rtc.m = value;
-                    break;
-                case 0x0au:
-                    gb->rtc.h = value;
-                    break;
-                case 0x0bu:
-                    gb->rtc.dl = value;
-                    break;
-                case 0x0cu:
-                    gb->rtc.dh = value;
-                    break;
-                default:
-                    break;
-            }
-            gb->rtc.base_time = (int64_t)time(NULL);
+            if (!gb->header.has_timer || gb->rtc_register > 0x0cu)
+                return;
+            const int64_t previous_time = gb->rtc.base_time;
+            cupid_gb_rtc_update(gb);
+            uint8_t *registers[] = {&gb->rtc.s, &gb->rtc.m, &gb->rtc.h, &gb->rtc.dl, &gb->rtc.dh};
+            uint8_t *selected = registers[gb->rtc_register - 0x08u];
+            /* The seconds port also starts a new clock interval. Clock latches
+             * and host time updates must not count as cartridge writes.
+             */
+            if (gb->header.has_battery &&
+                (*selected != value ||
+                 (gb->rtc_register == 0x08u && previous_time != gb->rtc.base_time &&
+                  !(gb->rtc.dh & 0x40u))))
+                ++gb->battery_write_generation;
+            *selected = value;
+            return;
+        }
+        if (gb->header.mbc_type == CUPID_GB_MBC3 && gb->header.has_timer &&
+            gb->current_ram_bank > 3u) {
             return;
         }
         /* MBC7: accelerometer latch control */
@@ -1035,6 +1000,8 @@ void cupid_gb_write_u8(CupidGb *gb, uint16_t address, uint8_t value) {
         {
             size_t offset = cupid_gb_effective_ram_bank(gb) * 0x2000u + (size_t)(address - 0xa000u);
             if (offset < gb->cartridge_ram_size) {
+                if (gb->cartridge_ram[offset] != value && gb->header.has_battery)
+                    ++gb->battery_write_generation;
                 gb->cartridge_ram[offset] = value;
             }
         }
@@ -1180,43 +1147,32 @@ bool cupid_gb_step(CupidGb *gb) {
     uint8_t cycles;
     uint8_t opcode;
     bool ime_enable_pending;
-    uint8_t pending_interrupts;
 
     if (gb == 0 || !gb->loaded) {
         return false;
     }
 
-    pending_interrupts = (uint8_t)(gb->interrupt_enable & gb->interrupt_flags & 0x1fu);
-    if (!(gb->cpu.ime && pending_interrupts == CUPID_GB_INTERRUPT_VBLANK &&
-          gb->io_registers[CUPID_GB_IO_LY] == CUPID_GB_PPU_VISIBLE_SCANLINES &&
-          cupid_gb_read_u8(gb, gb->cpu.pc) == 0xf3u)) {
-        if (cupid_gb_service_interrupt(gb)) {
-            return true;
-        }
-    }
-
     if (gb->cpu.stopped) {
         cupid_gb_tick(gb, CUPID_GB_HALT_CYCLES);
+        if ((cupid_gb_read_u8(gb, 0xff00u) & 0x0fu) != 0x0fu) {
+            gb->cpu.stopped = false;
+            cupid_gb_tick(gb, 2u);
+        }
         return true;
     }
 
     if (gb->cpu.halted) {
-        /* Check for a pending interrupt first. If IME=1 and one is pending
-         * the ISR dispatch (5 M-cycles) happens without any extra HALT cycle.
-         * Otherwise advance 1 M-cycle. If an interrupt becomes pending during
-         * that halted cycle, handle the wake-up immediately so HALT does not
-         * add an extra idle step before either leaving HALT or dispatching the
-         * ISR. */
+        /* Sample requests at the model's HALT polling point before deciding
+         * whether this cycle leaves the CPU asleep or begins interrupt entry. */
+        if (cupid_gb_tick_halt(gb) == 0u) {
+            return true;
+        }
+        gb->cpu.halted = false;
         if (cupid_gb_service_interrupt(gb)) {
             return true;
         }
-        cupid_gb_tick(gb, CUPID_GB_HALT_CYCLES);
-        if (cupid_gb_service_interrupt(gb)) {
-            return true;
-        }
-        if (gb->cpu.halted) {
-            return true;
-        }
+    } else if (cupid_gb_service_interrupt(gb)) {
+        return true;
     }
 
     ime_enable_pending = gb->cpu.ime_delay > 0u;
@@ -1225,31 +1181,16 @@ bool cupid_gb_step(CupidGb *gb) {
     if (opcode == 0xf0u) {
         uint8_t n = cupid_gb_fetch_u8(gb);
 
-        if (n == 0x04u) {
-            /* LDH A,(DIV) is phase-sensitive and is sampled on the final
-             * M-cycle in the mooneye boot timing tests. */
-            cupid_gb_tick(gb, 3u);
-            gb->cpu.a = cupid_gb_read_u8(gb, (uint16_t)(0xff00u + n));
-            cycles = 0u;
-        } else {
-            cupid_gb_tick(gb, 2u);
-            gb->cpu.a = cupid_gb_read_u8(gb, (uint16_t)(0xff00u + n));
-            cycles = 1u;
-        }
+        /* The data read is the start of M3, after the opcode and immediate
+         * fetches. DIV has the same read phase as the other I/O registers. */
+        cupid_gb_tick(gb, 2u);
+        gb->cpu.a = cupid_gb_read_u8(gb, (uint16_t)(0xff00u + n));
+        cycles = 1u;
     } else if (opcode == 0xe0u) {
         uint8_t n = cupid_gb_fetch_u8(gb);
 
-        if (n == 0x40u) {
-            /* LDH writes to LCDC are phase-sensitive and take effect on the
-             * final M-cycle of the instruction. */
-            cupid_gb_tick(gb, 3u);
-            cupid_gb_write_u8(gb, (uint16_t)(0xff00u + n), gb->cpu.a);
-            cycles = 0u;
-        } else {
-            cupid_gb_tick(gb, 2u);
-            cupid_gb_write_u8(gb, (uint16_t)(0xff00u + n), gb->cpu.a);
-            cycles = 1u;
-        }
+        cupid_gb_cpu_write(gb, (uint16_t)(0xff00u + n), gb->cpu.a, 2u);
+        cycles = 1u;
     } else {
         cycles = cupid_gb_execute_unprefixed(gb, opcode);
     }
@@ -1258,8 +1199,9 @@ bool cupid_gb_step(CupidGb *gb) {
         cupid_gb_tick(gb, cycles);
     }
 
-    if (cycles > 0u || opcode == 0xf0u || opcode == 0xe0u || opcode == 0xc3u || opcode == 0xc2u ||
-        opcode == 0xcau || opcode == 0xd2u || opcode == 0xdau) {
+    if (cycles > 0u || opcode == 0x10u || opcode == 0x76u || opcode == 0xf0u || opcode == 0xe0u ||
+        opcode == 0xc3u || opcode == 0xc2u || opcode == 0xcau || opcode == 0xd2u ||
+        opcode == 0xdau) {
         if (opcode == 0xfbu) {
             if (ime_enable_pending) {
                 gb->cpu.ime = true;
@@ -1271,6 +1213,7 @@ bool cupid_gb_step(CupidGb *gb) {
         }
     }
 
-    return cycles > 0u || opcode == 0xf0u || opcode == 0xe0u || opcode == 0xc3u ||
-           opcode == 0xc2u || opcode == 0xcau || opcode == 0xd2u || opcode == 0xdau;
+    return cycles > 0u || opcode == 0x10u || opcode == 0x76u || opcode == 0xf0u ||
+           opcode == 0xe0u || opcode == 0xc3u || opcode == 0xc2u || opcode == 0xcau ||
+           opcode == 0xd2u || opcode == 0xdau;
 }

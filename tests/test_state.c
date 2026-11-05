@@ -304,10 +304,16 @@ static void test_rejection(void) {
     memcpy(damaged, valid, length);
     damaged[length - 1] ^= 1;
     rejected_unchanged(gb, damaged, length, CUPID_GB_STATE_INVALID);
-    const size_t invalid_payload_offsets[] = {129, 141, 180784};
-    const uint8_t invalid_payload_values[] = {1, 2, 4};
-    /* v1 offsets: CPU flags, CPU IME bool, first monochrome pixel. These have
-     * valid integrity digests, so the decoder must reject their hardware domains. */
+    const size_t invalid_payload_offsets[] = {
+        129,    141,    180784, 300352, 300388, 300389, 300391, 300392, 300393, 300394, 300402,
+        300410, 300418, 300419, 300420, 300425, 300426, 300427, 300429, 300430, 300460, 300462,
+        300463, 300464, 300469, 300470, 300478, 300486, 300510, 300516, 300517};
+    const uint8_t invalid_payload_values[] = {1,  2,  4,    1, 0x80, 2, 2,  154,  161, 4,  8,
+                                              2,  8,  9,    7, 32,   8, 13, 0x40, 40,  11, 4,
+                                              12, 10, 0x40, 4, 8,    2, 2,  2,    2};
+    /* Stable prefix offsets cover CPU flags, an IME bool, and a monochrome pixel.
+     * Version 2 appends audio integration and fetch queues at byte 300349. These
+     * rehashed payloads must fail domain checks rather than checksum checks. */
     for (unsigned i = 0; i < sizeof(invalid_payload_offsets) / sizeof(invalid_payload_offsets[0]);
          ++i) {
         memcpy(damaged, valid, length);
@@ -315,11 +321,21 @@ static void test_rejection(void) {
         update_integrity(damaged, length);
         rejected_unchanged(gb, damaged, length, CUPID_GB_STATE_INVALID);
     }
+    const uint16_t invalid_map_addresses[] = {0, 0x17ff, 0x2000, 0x3000, 0x3fff};
+    for (unsigned i = 0; i < sizeof(invalid_map_addresses) / sizeof(invalid_map_addresses[0]);
+         ++i) {
+        memcpy(damaged, valid, length);
+        damaged[300420] = 1; /* Pending tile/attribute map read. */
+        damaged[300428] = (uint8_t)invalid_map_addresses[i];
+        damaged[300429] = (uint8_t)(invalid_map_addresses[i] >> 8);
+        update_integrity(damaged, length);
+        rejected_unchanged(gb, damaged, length, CUPID_GB_STATE_INVALID);
+    }
     memcpy(damaged, valid, length);
     damaged[length] = 0;
     rejected_unchanged(gb, damaged, length + 1, CUPID_GB_STATE_INVALID);
     memcpy(damaged, valid, length);
-    damaged[8] = 2;
+    damaged[8] = 3;
     update_integrity(damaged, length);
     rejected_unchanged(gb, damaged, length, CUPID_GB_STATE_UNSUPPORTED_VERSION);
     memcpy(damaged, valid, length);
@@ -377,11 +393,12 @@ static void print_fixture(const char *path) {
     uint8_t *bytes = encode(gb, &length);
     char sha256[65];
     digest_hex(bytes, length, sha256);
-    /* Native format v1 compatibility fixture: changing its schema or generated
-     * machine state requires an intentional update to this portable golden. */
-    assert(length == 300349);
-    assert(strcmp(sha256, "ac3df28d89204f9a5d91c74570cdae32c9ee7a8e5cb7d54e321ef7f20ae9ab5c") == 0);
     printf("CUPIDGB_STATE_FIXTURE size=%zu sha256=%s\n", length, sha256);
+    fflush(stdout);
+    /* Native format v2 compatibility fixture: changing its schema or generated
+     * machine state requires an intentional update to this portable golden. */
+    assert(length == 300518);
+    assert(strcmp(sha256, "bceb48a1fadaad1dcf305f6f7bdf27dcefbb291e853eb788b61bdc4bdcf6978b") == 0);
     if (path) {
         FILE *file = fopen(path, "wb");
         assert(file && fwrite(bytes, 1, length, file) == length && fclose(file) == 0);
@@ -607,6 +624,103 @@ static void test_restored_rtc_extreme_timestamps(void) {
     free(gb);
 }
 
+static void test_pixel_pipeline_resume(void) {
+    CupidGb *a = calloc(1, sizeof(*a)), *b = calloc(1, sizeof(*b));
+    assert(a && b);
+    unsigned queued = 0, fetching_object = 0, window = 0;
+    const CupidGbModel models[] = {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_CGB};
+    for (unsigned model = 0; model < sizeof(models) / sizeof(models[0]); ++model) {
+        for (unsigned phase = 0; phase < 32; ++phase) {
+            prepare(a, models[model], false);
+            prepare(b, models[model], false);
+            cupid_gb_write_u8(a, 0xff40, 0);
+            cupid_gb_write_u8(a, 0xff43, 5);
+            cupid_gb_write_u8(a, 0xff4a, 0);
+            cupid_gb_write_u8(a, 0xff4b, 39);
+            memset(a->object_attribute_memory, 0, sizeof(a->object_attribute_memory));
+            for (unsigned object = 0; object < 10; ++object) {
+                a->object_attribute_memory[object * 4] = 16;
+                a->object_attribute_memory[object * 4 + 1] = (uint8_t)(16 + object * 13);
+                a->object_attribute_memory[object * 4 + 2] = (uint8_t)(object + 1);
+            }
+            a->cgb_object_priority_x = (phase & 1) != 0;
+            cupid_gb_write_u8(a, 0xff40, 0xf3);
+            cupid_gb_tick(a, (uint16_t)(114 * 3 + 18 + phase * 2));
+            queued += a->pixels.count != 0;
+            fetching_object += a->pixels.object_delay != 0;
+            window += a->pixels.window_active;
+            size_t length;
+            uint8_t *state = encode(a, &length);
+            assert(cupid_gb_load_state(b, state, length) == CUPID_GB_STATE_OK);
+            assert(a->cgb_object_priority_x == b->cgb_object_priority_x);
+            assert_encoded_equal(a, b);
+            for (unsigned cycle = 0; cycle < 240; ++cycle) {
+                if (cycle == 7) {
+                    /* Writes after restore must see the same pending fetches and emitted pixels. */
+                    cupid_gb_write_u8(a, 0xff43, 11);
+                    cupid_gb_write_u8(b, 0xff43, 11);
+                    cupid_gb_write_u8(a, 0xff47, 0x1b);
+                    cupid_gb_write_u8(b, 0xff47, 0x1b);
+                }
+                cupid_gb_tick(a, 1);
+                cupid_gb_tick(b, 1);
+            }
+            assert_encoded_equal(a, b);
+            assert_hardware_equal(a, b);
+            free(state);
+        }
+    }
+    assert(queued && fetching_object && window);
+    cupid_gb_cleanup(a);
+    cupid_gb_cleanup(b);
+    free(a);
+    free(b);
+}
+
+static void test_first_halt_poll_resume(void) {
+    CupidGb *a = calloc(1, sizeof(*a)), *b = calloc(1, sizeof(*b));
+    assert(a && b);
+    prepare(a, CUPID_GB_MODEL_DMG_ABC, false);
+    prepare(b, CUPID_GB_MODEL_DMG_ABC, false);
+    a->rom[0x100] = b->rom[0x100] = 0x76;
+    a->cpu.pc = 0x100;
+    a->cpu.ime = true;
+    a->interrupt_enable = a->interrupt_flags = 0;
+    assert(cupid_gb_step(a));
+    assert(a->cpu.halted && a->cpu.just_halted);
+    /* The first HALT poll precedes this OAM edge. Later monochrome polls occur
+     * midway through a cycle. Restoring the queue without the CPU latch wakes early. */
+    a->pixels.line = 4;
+    a->pixels.dot = 455;
+    a->pixels.x = 160;
+    a->pixels.active = false;
+    a->pixels.lyc_irq = false;
+    a->ppu_counter = 113;
+    a->ppu_lcd_startup = false;
+    a->io_registers[0x41] = 0xa0;
+    a->io_registers[0x44] = 4;
+    a->io_registers[0x45] = 20;
+    a->stat_irq_line = false;
+    a->interrupt_enable = 2;
+    a->interrupt_flags = 0;
+    size_t length;
+    uint8_t *state = encode(a, &length);
+    assert(cupid_gb_load_state(b, state, length) == CUPID_GB_STATE_OK);
+    assert(b->cpu.just_halted);
+    assert(cupid_gb_step(a) && cupid_gb_step(b));
+    assert(a->cpu.halted && b->cpu.halted && !b->cpu.just_halted);
+    assert((a->interrupt_flags & 2) && (b->interrupt_flags & 2));
+    assert_encoded_equal(a, b);
+    assert(cupid_gb_step(a) && cupid_gb_step(b));
+    assert(!a->cpu.halted && a->cpu.pc == 0x48);
+    assert_encoded_equal(a, b);
+    free(state);
+    cupid_gb_cleanup(a);
+    cupid_gb_cleanup(b);
+    free(a);
+    free(b);
+}
+
 int main(int argc, char **argv) {
     assert(argc == 1 || (argc == 3 && strcmp(argv[1], "--write-fixture") == 0));
     test_sha256();
@@ -615,6 +729,8 @@ int main(int argc, char **argv) {
     test_trusted_context();
     test_restored_rtc_extreme_timestamps();
     test_mapper_snapshots();
+    test_pixel_pipeline_resume();
+    test_first_halt_poll_resume();
     print_fixture(argc == 3 ? argv[2] : NULL);
     puts("Portable state checks passed.");
     return 0;

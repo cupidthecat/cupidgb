@@ -37,5 +37,13 @@ void cupid_gb_reset_ppu(CupidGb *gb);
 void cupid_gb_run_dma_transfer(CupidGb *gb, uint8_t source_high);
 void cupid_gb_tick_dma(CupidGb *gb);
 void cupid_gb_tick_ppu(CupidGb *gb, uint16_t cycles);
+/* Advances LCD dots without advancing the CPU, timer, DMA, or audio clocks. */
+void cupid_gb_tick_ppu_dots(CupidGb *gb, uint16_t dots);
+/* Advances one monochrome HALT M-cycle and samples enabled requests after two dots. */
+uint8_t cupid_gb_tick_ppu_halt(CupidGb *gb);
+void cupid_gb_pixels_begin_line(CupidGb *gb);
+void cupid_gb_pixels_scan_object(CupidGb *gb, unsigned index);
+void cupid_gb_pixels_begin_transfer(CupidGb *gb);
+bool cupid_gb_pixels_tick(CupidGb *gb);
 
 #endif

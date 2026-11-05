@@ -93,7 +93,7 @@ typedef struct CupidGbApu {
     uint8_t ch4_env_period;
     uint8_t ch4_env_timer;
     uint8_t ch4_div_code; /* 0-7 */
-    uint8_t ch4_shift;    /* 0-13 */
+    uint8_t ch4_shift;    /* 0-15; high shifts do not clock the noise generator. */
     bool ch4_width7;      /* true = 7-bit LFSR */
     uint32_t ch4_timer;
     uint16_t ch4_lfsr; /* 15-bit shift register */
@@ -102,6 +102,11 @@ typedef struct CupidGbApu {
     uint32_t sample_acc;
     int16_t buf[CUPID_GB_APU_BUF_FRAMES * 2u]; /* L/R interleaved */
     uint32_t buf_write;                        /* number of stereo frames written */
+    uint32_t sample_rate; /* Zero selects the default rate for zero-initialized callers. */
+    int64_t mix_left, mix_right;
+    int64_t highpass_left, highpass_right;
+    uint32_t highpass_rate;
+    bool highpass_disabled;
 } CupidGbApu;
 
 typedef enum CupidGbMbcType {
@@ -141,6 +146,7 @@ typedef struct CupidGbCpu {
     bool ime;
     bool halt_bug;
     bool halted;
+    bool just_halted; /* The first idle cycle polls before the clock advances. */
     bool stopped;
 } CupidGbCpu;
 
@@ -173,6 +179,23 @@ typedef enum CupidGbModel {
     CUPID_GB_MODEL_SGB = 4,
     CUPID_GB_MODEL_SGB2 = 5
 } CupidGbModel;
+
+/* Pixel queues retain fetched data across CPU writes and save/rewind boundaries.
+ * Palette lookup happens when a pixel leaves the queue, rather than at HBlank. */
+typedef struct CupidGbPixels {
+    uint16_t dot;
+    uint8_t line, x;
+    uint8_t colors[8], palettes[8], priorities[8];
+    uint8_t read, count, phase, tile, attributes, low, high, column, discard, delay;
+    uint16_t address;
+    uint8_t objects[10], object_x[10], object_y[10], object_count;
+    uint16_t fetched_objects;
+    uint8_t object_delay, object_index, object_low, object_high, object_attributes;
+    uint16_t object_address;
+    uint8_t sprite_colors[8], sprite_palettes[8], sprite_flags[8];
+    uint16_t sprite_priorities[8];
+    bool initialized, active, window_armed, window_active, window_used, lyc_irq;
+} CupidGbPixels;
 
 typedef struct CupidGb {
     CupidGbCpu cpu;
@@ -234,6 +257,7 @@ typedef struct CupidGb {
     bool dma_restart_pending;
     uint16_t ppu_counter;
     bool cgb_mode;
+    bool cgb_object_priority_x; /* Latched independently of FF6C readback after boot. */
     uint8_t cgb_vram_bank;
     uint8_t cgb_wram_bank;
     uint8_t cgb_bg_palette_ram[0x40];
@@ -254,9 +278,11 @@ typedef struct CupidGb {
     bool stat_irq_line;
     bool frame_ready;
     bool loaded;
+    uint64_t battery_write_generation; /* Host dirty tracking; excluded from guest snapshots. */
     char save_path[260];
     CupidGbSgb sgb;
     CupidGbApu apu;
+    CupidGbPixels pixels;
     /* Boot ROM overlay */
     uint8_t boot_rom[CUPID_GB_MAX_BOOT_ROM_SIZE];
     size_t boot_rom_size;  /* 0x0100 for DMG, 0x0900 for CGB */

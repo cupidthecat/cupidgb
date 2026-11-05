@@ -56,6 +56,23 @@ int main() {
     }
     if (!check(crossings >= 999 && crossings <= 1001, "Resampling changed sine frequency"))
         return 1;
+    AudioConverter slow(output);
+    slow.setInputRate(22050);
+    const QByteArray stretched = slow.convert(sine.data(), 44100);
+    if (!check(stretched.size() / 8 >= 95996 && stretched.size() / 8 <= 96000,
+               "Half speed did not double host audio duration"))
+        return 1;
+    crossings = 0;
+    previous = 0;
+    for (qsizetype i = 0; i < stretched.size() / 8; ++i) {
+        float sample;
+        std::memcpy(&sample, stretched.constData() + i * 8, sizeof(sample));
+        if (previous <= 0 && sample > 0)
+            ++crossings;
+        previous = sample;
+    }
+    if (!check(crossings >= 999 && crossings <= 1001, "Half-speed output lost waveform cycles"))
+        return 1;
     AudioConverter mono(format(32000, 1, QAudioFormat::Float));
     const auto monoBytes = mono.convert(sine.data(), 44100);
     if (!check(monoBytes.size() / 4 >= 31998 && monoBytes.size() / 4 <= 32000,

@@ -56,3 +56,49 @@ The Windows sequence reported zero audio errors and two backend idle events; the
 Expanded local GBC inputs were then checked with private copies of Crystal, Mario Tennis, and Tomb Raider. After a bounded input sequence, each snapshot/restore replay matched the complete encoded end state, both framebuffers, PCM bytes and sample counts, and guest cycles. Original ROM hashes remained unchanged and existing user saves were untouched. The captured scenes were intro dialogue, court play, and a main menu respectively; this is bounded replay evidence, not full-game compatibility.
 
 A separate native Tomb Raider menu run completed sixty seconds with normal audio and rewind capture: approximately 99.987% nominal guest-clock progress, 3,585 snapshots, about 97.27 MB of retained history, zero reported audio errors or idle events, and a clean process exit. This qualifies sustained menu operation on that input, not commercial gameplay or universal full-speed operation.
+
+## Independent pixel pipeline and desktop save/audio milestone
+
+The 0.3.0 implementation replaces whole-line drawing with persistent dot-driven fetch queues. It also replaces the identified adapted timing and SGB routines with independently written implementations. The obsolete hardware notice file and its directory are removed; the root project license is unchanged. The comparison revision remains `ea667ad79aa28409f034b1fd6da7304e1844750d`.
+
+Windows MSVC Release with Qt 6.8.3 and Ubuntu 24.04 under WSLg with GCC and Qt 6.4.2 each passed all 14 CTest checks. Native Windows and Xcb workflow runs also passed with a real audio sink. Linux GCC Debug passed all 11 core/tool checks with AddressSanitizer, UndefinedBehaviorSanitizer, and leak detection enabled. The supplied formatting file matches the installed repository configuration byte for byte; changed project sources pass its formatting check.
+
+New coverage includes timer edges and reload windows, HALT polling before and during its first idle cycle, held-key STOP behavior, serial control writes, physical model selection with color-only headers, MBC3 bank aliases, CGB object-priority latching, LCD-off STAT behavior, SGB packet commit timing, and malformed snapshot rejection. Normal-store LCDC write regressions cover 13 store forms across six profiles and both SP-byte positions. A paired object-timing probe matched all 210 selected configurations. These scopes do not cover every CPU bus conflict or object combination.
+
+Native version 2 stores pending pixel fetches, audio integration/filter state, object priority, and the first HALT polling phase. Continuation tests include the earlier generated scenarios, 64 additional queue/window scenarios, and a first-HALT boundary restoration. Rehashed malformed map addresses are rejected before a CGB attribute fetch can cross VRAM's boundary. Windows and Linux check the same 300,518-byte portable fixture with SHA-256 `bceb48a1fadaad1dcf305f6f7bdf27dcefbb291e853eb788b61bdc4bdcf6978b`. Version 1 battery export is tested separately; older execution states cannot continue in this core.
+
+Qt runtime checks exercise actual Settings accept/cancel and conflict dialogs, button/mode/shortcut persistence, standalone modifiers, Shift+Tab, quiet-period battery saves, explicit older-state battery export, WAVE recording, and a session-only boot-directory override. Recording checks verify PCM channel order, amplitude, byte order, RIFF limits, atomic finalization, and preservation of previous files after failures. Real-audio workflows cover fresh stream setup, state loading, rewind, and forward resumption. Host audio starts after a short reserve of generated samples; this introduces host latency without inserting silence or changing guest cycles. Backend setup blocks guest timer reentry while Qt processes native audio events.
+
+### Equivalent-input comparisons
+
+The final shared-boot comparison used identical ROM hashes, model choices, boot binaries, and protocol limits in both builds:
+
+| Corpus | CupidGB | Comparison build |
+| --- | --- | --- |
+| Eleven CPU instruction cases | 11 explicit serial passes | 11 explicit serial passes |
+| Twelve DMG sound cases | 12 explicit memory passes | 12 explicit memory passes |
+| Twelve CGB sound cases | 12 explicit memory passes | 12 explicit memory passes |
+| Sixty-six selected DMG acceptance cases | 61 explicit register passes, 5 bounded | 63 explicit register passes, 3 bounded |
+
+The two CupidGB-only acceptance gaps are `intr_2_mode0_timing_sprites` and `lcdon_timing-GS`. The boot-divider, boot-I/O, and boot-serial-alignment cases are bounded in both builds with the selected generated boot binary. A separate CupidGB run without boot firmware reaches 64 explicit passes and two bounded cases. Those startup conditions are different and their counts must not be combined. This remains incomplete timing coverage.
+
+Both acid2 final images and six bounded commercial scenes matched the comparison build with zero differing pixels out of 23,040 each. The commercial inputs were Tetris, Kirby, Super Mario Land, Crystal, Mario Tennis, and Tomb Raider. Shared boot inputs, equivalent model choices, grayscale where applicable, disabled color correction, and identical input traces were used. Captured scenes include active gameplay, dialogue, character selection, and menus. Stable final-image matches do not establish timing or audio parity throughout a game.
+
+Separate native snapshot/replay checks ran Crystal, Mario Tennis, and Tomb Raider for 1,800 guest-clock intervals, then replayed 180 intervals from a checkpoint. All three reproduced the complete encoded end state, both framebuffers, emitted PCM bytes and sample counts, and guest cycles. These are bounded continuation checks. Existing ROMs and user saves were preserved.
+
+### Desktop runtime samples
+
+Final Windows and WSLg/Xcb sessions used fresh private cartridge copies, the same CGB boot binary, equivalent settings, normal audio, rewind capture, and matching per-game input traces. Each measurement lasted 60 seconds and included boot, menus, and audio-device initialization. All four ended in active Tetris or Super Mario Bros. Deluxe gameplay and exited successfully. Source manifests matched the final code throughout the runs.
+
+| Environment and game | Nominal guest-clock progress | Audio error / idle events | Widget paint interval p95 / maximum | Peak process memory |
+| --- | --- | --- | --- | --- |
+| Windows, Tetris | 99.6319% | 0 / 1 | 17.98 / 190.42 ms | 73.5 MiB working set |
+| Windows, Mario Deluxe | 99.6310% | 0 / 1 | 17.95 / 188.02 ms | 84.0 MiB working set |
+| WSLg/Xcb, Tetris | 99.9342% | 0 / 1 | 17.57 / 23.65 ms | 86.7 MiB resident |
+| WSLg/Xcb, Mario Deluxe | 99.8799% | 0 / 3 | 17.52 / 20.70 ms | 97.8 MiB resident |
+
+Guest-clock progress is computed from base-speed T-cycles and elapsed host time. Widget paint events do not establish physical display presentation. The sessions include stream initialization and are not steady-state benchmarks. Backend idle events remain; these samples do not establish glitch-free or audibly correct playback.
+
+Linux process user-plus-system CPU times were 12.38 and 12.28 seconds over complete process lifetimes of 61.05 and 60.95 seconds. Those lifetimes include work outside the 60-second telemetry windows. Windows sampled CPU counters are retained privately and are not used for utilization claims. Private receipts retain source and binary hashes, ROM/boot/trace identities, queue and priming metrics, paint intervals, memory samples, input counts, screenshots, and exit codes.
+
+Remaining work includes the two measured timing mismatches, finer CPU bus conflicts, decaying open bus, extended and uncommon cartridge controllers, individual hardware revisions, wider frontend tools and devices, and long-term gameplay/audio qualification. Current release packaging and installation have not been qualified by these checks.

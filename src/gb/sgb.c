@@ -121,7 +121,7 @@ static void cupid_gb_sgb_load_attr_file(CupidGb *gb, unsigned file_index) {
 
         for (j = 0u; j < 4u; ++j) {
             *(output++) = (uint8_t)(byte >> 6u);
-            byte <<= 2u;
+            byte = (uint8_t)(byte << 2u);
         }
     }
 }
@@ -241,15 +241,70 @@ static void cupid_gb_sgb_apply_pct_trn(CupidGb *gb) {
     }
 }
 
-/**
- * @brief Dispatches a fully-received SGB command packet.
- *
- * Reads the command code from `gb->sgb.command[0]` (bits 7–3) and
- * executes the corresponding operation. Unknown or intentionally ignored
- * commands are logged at INFO level.
- *
- * @param gb Pointer to the Game Boy state.
- */
+/* Decode six-byte rectangle records without relying on host structure layout. */
+static void cupid_gb_sgb_attribute_blocks(CupidGb *gb) {
+    const uint8_t *payload = gb->sgb.command + 2;
+    const unsigned records = gb->sgb.command[1];
+    if (records > (sizeof(gb->sgb.command) - 2u) / 6u) {
+        return;
+    }
+
+    for (unsigned record = 0; record < records; ++record, payload += 6) {
+        const unsigned control = payload[0] & 7u;
+        /* Region indices are interior, perimeter, exterior. A disabled region
+         * keeps its current palette. Selecting only one side extends that
+         * side's palette to the perimeter, including degenerate rectangles.
+         */
+        int palette[3] = {-1, -1, -1};
+        for (unsigned region = 0; region < 3; ++region) {
+            if (control & (1u << region)) {
+                palette[region] = (payload[1] >> (2u * region)) & 3u;
+            }
+        }
+        if (control == 1u || control == 4u) {
+            palette[1] = palette[control == 1u ? 0 : 2];
+        }
+
+        const unsigned x0 = payload[2] & 31u, y0 = payload[3] & 31u;
+        const unsigned x1 = payload[4] & 31u, y1 = payload[5] & 31u;
+        for (unsigned cell = 0; cell < sizeof(gb->sgb.attribute_map); ++cell) {
+            const unsigned column = cell % CUPID_SGB_ATTR_WIDTH;
+            const unsigned row = cell / CUPID_SGB_ATTR_WIDTH;
+            unsigned region = 2;
+            if (column >= x0 && column <= x1 && row >= y0 && row <= y1) {
+                const bool perimeter = column == x0 || column == x1 || row == y0 || row == y1;
+                region = perimeter ? 1u : 0u;
+            }
+            if (palette[region] >= 0) {
+                gb->sgb.attribute_map[cell] = (uint8_t)palette[region];
+            }
+        }
+    }
+}
+
+static void cupid_gb_sgb_attribute_characters(CupidGb *gb) {
+    const uint8_t *bytes = gb->sgb.command;
+    const unsigned start_x = bytes[1], start_y = bytes[2];
+    if (start_x >= CUPID_SGB_ATTR_WIDTH || start_y >= CUPID_SGB_ATTR_HEIGHT) {
+        return;
+    }
+
+    const bool vertical = bytes[5] != 0;
+    const unsigned stride = vertical ? CUPID_SGB_ATTR_HEIGHT : CUPID_SGB_ATTR_WIDTH;
+    unsigned cursor = vertical ? start_x * stride + start_y : start_y * stride + start_x;
+    unsigned count = cupid_gb_sgb_read_le16(bytes + 3);
+    const unsigned capacity = (unsigned)sizeof(gb->sgb.attribute_map) - cursor;
+    if (count > capacity) {
+        count = capacity;
+    }
+    for (unsigned item = 0; item < count; ++item, ++cursor) {
+        const unsigned offset =
+            vertical ? (cursor % stride) * CUPID_SGB_ATTR_WIDTH + cursor / stride : cursor;
+        const unsigned shift = 6u - 2u * (item % 4u);
+        gb->sgb.attribute_map[offset] = (uint8_t)(((unsigned)bytes[6u + item / 4u] >> shift) & 3u);
+    }
+}
+
 static void cupid_gb_sgb_handle_command(CupidGb *gb) {
     uint8_t command = (uint8_t)(gb->sgb.command[0] >> 3u);
 
@@ -270,73 +325,9 @@ static void cupid_gb_sgb_handle_command(CupidGb *gb) {
         case CUPID_SGB_CMD_PAL12:
             cupid_gb_sgb_pal_command(gb, 1u, 2u);
             break;
-        case CUPID_SGB_CMD_ATTR_BLK: {
-            struct {
-                uint8_t count;
-
-                struct {
-                    uint8_t control;
-                    uint8_t palettes;
-                    uint8_t left;
-                    uint8_t top;
-                    uint8_t right;
-                    uint8_t bottom;
-                } data[18];
-            } *blk = (void *)(gb->sgb.command + 1);
-
-            unsigned i;
-
-            if (blk->count > 18u) {
-                return;
-            }
-
-            for (i = 0u; i < blk->count; ++i) {
-                bool inside = (blk->data[i].control & 0x01u) != 0u;
-                bool middle = (blk->data[i].control & 0x02u) != 0u;
-                bool outside = (blk->data[i].control & 0x04u) != 0u;
-                uint8_t inside_palette = (uint8_t)(blk->data[i].palettes & 0x03u);
-                uint8_t middle_palette = (uint8_t)((blk->data[i].palettes >> 2u) & 0x03u);
-                uint8_t outside_palette = (uint8_t)((blk->data[i].palettes >> 4u) & 0x03u);
-                unsigned x;
-                unsigned y;
-                uint8_t left;
-                uint8_t top;
-                uint8_t right;
-                uint8_t bottom;
-
-                if (inside && !middle && !outside) {
-                    middle = true;
-                    middle_palette = inside_palette;
-                } else if (outside && !middle && !inside) {
-                    middle = true;
-                    middle_palette = outside_palette;
-                }
-
-                left = (uint8_t)(blk->data[i].left & 0x1fu);
-                top = (uint8_t)(blk->data[i].top & 0x1fu);
-                right = (uint8_t)(blk->data[i].right & 0x1fu);
-                bottom = (uint8_t)(blk->data[i].bottom & 0x1fu);
-
-                for (y = 0u; y < CUPID_SGB_ATTR_HEIGHT; ++y) {
-                    for (x = 0u; x < CUPID_SGB_ATTR_WIDTH; ++x) {
-                        if (x < left || x > right || y < top || y > bottom) {
-                            if (outside) {
-                                gb->sgb.attribute_map[x + y * CUPID_SGB_ATTR_WIDTH] =
-                                    outside_palette;
-                            }
-                        } else if (x > left && x < right && y > top && y < bottom) {
-                            if (inside) {
-                                gb->sgb.attribute_map[x + y * CUPID_SGB_ATTR_WIDTH] =
-                                    inside_palette;
-                            }
-                        } else if (middle) {
-                            gb->sgb.attribute_map[x + y * CUPID_SGB_ATTR_WIDTH] = middle_palette;
-                        }
-                    }
-                }
-            }
+        case CUPID_SGB_CMD_ATTR_BLK:
+            cupid_gb_sgb_attribute_blocks(gb);
             break;
-        }
         case CUPID_SGB_CMD_ATTR_LIN: {
             uint8_t count = gb->sgb.command[1];
             unsigned i;
@@ -392,50 +383,9 @@ static void cupid_gb_sgb_handle_command(CupidGb *gb) {
             }
             break;
         }
-        case CUPID_SGB_CMD_ATTR_CHR: {
-            struct {
-                uint8_t x;
-                uint8_t y;
-                uint16_t length;
-                uint8_t direction;
-                uint8_t data[CUPID_SGB_MAX_COMMAND_BYTES - 6u];
-            } *chr = (void *)(gb->sgb.command + 1);
-
-            uint16_t count = cupid_gb_sgb_read_le16((const uint8_t *)&chr->length);
-            uint8_t x = chr->x;
-            uint8_t y = chr->y;
-            uint16_t i;
-
-            if (x >= CUPID_SGB_ATTR_WIDTH || y >= CUPID_SGB_ATTR_HEIGHT) {
-                break;
-            }
-
-            for (i = 0u; i < count; ++i) {
-                uint8_t palette =
-                    (uint8_t)((chr->data[i / 4u] >> ((((uint16_t)(~i)) & 3u) << 1u)) & 0x03u);
-                gb->sgb.attribute_map[x + y * CUPID_SGB_ATTR_WIDTH] = palette;
-                if (chr->direction != 0u) {
-                    y = (uint8_t)(y + 1u);
-                    if (y == CUPID_SGB_ATTR_HEIGHT) {
-                        x = (uint8_t)(x + 1u);
-                        y = 0u;
-                        if (x == CUPID_SGB_ATTR_WIDTH) {
-                            break;
-                        }
-                    }
-                } else {
-                    x = (uint8_t)(x + 1u);
-                    if (x == CUPID_SGB_ATTR_WIDTH) {
-                        y = (uint8_t)(y + 1u);
-                        x = 0u;
-                        if (y == CUPID_SGB_ATTR_HEIGHT) {
-                            break;
-                        }
-                    }
-                }
-            }
+        case CUPID_SGB_CMD_ATTR_CHR:
+            cupid_gb_sgb_attribute_characters(gb);
             break;
-        }
         case CUPID_SGB_CMD_PAL_SET: {
             unsigned palette;
             for (palette = 0u; palette < 4u; ++palette) {
@@ -567,102 +517,70 @@ bool cupid_gb_sgb_active(const CupidGb *gb) {
     return gb != NULL && gb->sgb.enabled;
 }
 
-/**
- * @brief Processes a write to the P1/JOYP register (0xFF00) for SGB packet reception.
- *
- * Implements the 4-state SGB serial protocol driven by bits 5–4 of JOYP:
- *   - `11` (reset pulse): arms the receiver for a new packet
- *   - `01` (start bit): marks the beginning of a bit stream
- *   - `10` (zero bit): clocks in a 0 or finalizes the packet on stop
- *   - `01` (one bit): clocks in a 1 or resets state on stop
- *
- * When a complete packet (or multi-packet command) is received,
- * @ref cupid_gb_sgb_handle_command is called. Also handles multi-player
- * controller cycling when P15 transitions high.
- *
- * @param gb    Pointer to the Game Boy state.
- * @param value The value being written to JOYP.
- *
- * @note Does nothing if @p gb is NULL or SGB is not active.
+/* A data pulse is sampled when both select lines return high. The reset
+ * handshake arms a packet; every 128 data pulses require a separate stop pulse.
+ * Keeping the pending pulse in JOYP itself also preserves it across snapshots.
  */
 void cupid_gb_sgb_write_joyp(CupidGb *gb, uint8_t value) {
-    uint16_t command_size;
+    if (!cupid_gb_sgb_active(gb)) {
+        return;
+    }
+    CupidGbSgb *receiver = &gb->sgb;
+    const unsigned lines = (value >> 4) & 3u;
+    const unsigned previous = (gb->io_registers[0] >> 4) & 3u;
+    if ((lines & 2u) && !(previous & 2u) && !(receiver->player_count & 1u)) {
+        receiver->current_player =
+            (uint8_t)((receiver->current_player + 1u) & (receiver->player_count - 1u));
+    }
 
-    if (gb == NULL || !cupid_gb_sgb_active(gb)) {
+    if (lines == 0) {
+        receiver->ready_for_write = false;
+        receiver->ready_for_pulse = false;
+        /* A completed packet can continue into the next one. Resetting during
+         * data or before its stop pulse instead discards the partial command.
+         */
+        const unsigned packet_bits = CUPID_SGB_PACKET_BYTES * 8u;
+        if (!receiver->command_write_index || receiver->command_write_index % packet_bits ||
+            receiver->ready_for_stop) {
+            memset(receiver->command, 0, sizeof(receiver->command));
+            receiver->command_write_index = 0;
+            receiver->ready_for_stop = false;
+        }
+        return;
+    }
+    if (lines != 3) {
+        return;
+    }
+    if (previous == 0) {
+        receiver->ready_for_write = true;
+        return;
+    }
+    if (previous == 3 || !receiver->ready_for_write) {
         return;
     }
 
-    if ((value & 0x20u) != 0u && (gb->io_registers[0x00u] & 0x20u) == 0u) {
-        if ((gb->sgb.player_count & 0x01u) == 0u) {
-            gb->sgb.current_player =
-                (uint8_t)((gb->sgb.current_player + 1u) & (gb->sgb.player_count - 1u));
+    if (receiver->ready_for_stop) {
+        unsigned packet_count = receiver->command[0] & 7u;
+        if (!packet_count || (receiver->command[0] & 0xf1u) == 0xf1u) {
+            packet_count = 1;
         }
+        if (receiver->command_write_index == packet_count * CUPID_SGB_PACKET_BYTES * 8u) {
+            cupid_gb_sgb_handle_command(gb);
+            memset(receiver->command, 0, sizeof(receiver->command));
+            receiver->command_write_index = 0;
+        }
+        receiver->ready_for_stop = false;
+        receiver->ready_for_write = false;
+        return;
     }
 
-    command_size = (uint16_t)((gb->sgb.command[0] & 0x07u) == 0u
-                                  ? CUPID_SGB_PACKET_BYTES * 8u
-                                  : (gb->sgb.command[0] & 0x07u) * CUPID_SGB_PACKET_BYTES * 8u);
-
-    switch ((value >> 4u) & 0x03u) {
-        case 3u:
-            gb->sgb.ready_for_pulse = true;
-            break;
-        case 2u: /* zero */
-            if (!gb->sgb.ready_for_pulse || !gb->sgb.ready_for_write) {
-                return;
-            }
-            if (gb->sgb.ready_for_stop) {
-                if (gb->sgb.command_write_index == command_size) {
-                    cupid_gb_sgb_handle_command(gb);
-                    gb->sgb.command_write_index = 0u;
-                    memset(gb->sgb.command, 0, sizeof(gb->sgb.command));
-                }
-                gb->sgb.ready_for_pulse = false;
-                gb->sgb.ready_for_write = false;
-                gb->sgb.ready_for_stop = false;
-            } else if (gb->sgb.command_write_index < sizeof(gb->sgb.command) * 8u) {
-                gb->sgb.command_write_index = (uint16_t)(gb->sgb.command_write_index + 1u);
-                gb->sgb.ready_for_pulse = false;
-                if ((gb->sgb.command_write_index & (CUPID_SGB_PACKET_BYTES * 8u - 1u)) == 0u) {
-                    gb->sgb.ready_for_stop = true;
-                }
-            }
-            break;
-        case 1u: /* one */
-            if (!gb->sgb.ready_for_pulse || !gb->sgb.ready_for_write) {
-                return;
-            }
-            if (gb->sgb.ready_for_stop) {
-                gb->sgb.command_write_index = 0u;
-                memset(gb->sgb.command, 0, sizeof(gb->sgb.command));
-                gb->sgb.ready_for_pulse = false;
-                gb->sgb.ready_for_write = false;
-                gb->sgb.ready_for_stop = false;
-            } else if (gb->sgb.command_write_index < sizeof(gb->sgb.command) * 8u) {
-                gb->sgb.command[gb->sgb.command_write_index / 8u] |=
-                    (uint8_t)(1u << (gb->sgb.command_write_index & 7u));
-                gb->sgb.command_write_index = (uint16_t)(gb->sgb.command_write_index + 1u);
-                gb->sgb.ready_for_pulse = false;
-                if ((gb->sgb.command_write_index & (CUPID_SGB_PACKET_BYTES * 8u - 1u)) == 0u) {
-                    gb->sgb.ready_for_stop = true;
-                }
-            }
-            break;
-        case 0u:
-            if (!gb->sgb.ready_for_pulse) {
-                return;
-            }
-            gb->sgb.ready_for_write = true;
-            gb->sgb.ready_for_pulse = false;
-            if ((gb->sgb.command_write_index & (CUPID_SGB_PACKET_BYTES * 8u - 1u)) != 0u ||
-                gb->sgb.command_write_index == 0u || gb->sgb.ready_for_stop) {
-                gb->sgb.command_write_index = 0u;
-                memset(gb->sgb.command, 0, sizeof(gb->sgb.command));
-                gb->sgb.ready_for_stop = false;
-            }
-            break;
-        default:
-            break;
+    const unsigned position = receiver->command_write_index;
+    if (position < sizeof(receiver->command) * 8u) {
+        const unsigned bit = previous == 1;
+        receiver->command[position / 8u] |= (uint8_t)(bit << (position % 8u));
+        receiver->command_write_index = (uint16_t)(position + 1u);
+        receiver->ready_for_stop =
+            receiver->command_write_index % (CUPID_SGB_PACKET_BYTES * 8u) == 0;
     }
 }
 

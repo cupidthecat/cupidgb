@@ -37,6 +37,7 @@ static FILE *open_test_file(char *path, size_t capacity) {
 #include "cupid/gb/cpu.h"
 #include "cupid/gb/gb.h"
 #include "cupid/gb/ppu.h"
+#include "cupid/gb/state.h"
 #include "cupid/gb/timer.h"
 #include "cupid/gbc/cgb.h"
 
@@ -336,6 +337,40 @@ static void test_parse_header(void) {
     assert(header.header_checksum_valid);
 }
 
+static void test_header_title_byte_boundaries(void) {
+    uint8_t rom[32u * 1024u];
+    CupidGbCartridgeHeader header;
+    build_test_rom(rom, sizeof(rom));
+    memcpy(rom + 0x134, "FULLTITLE123456Z", 16);
+    rom[0x14d] = compute_header_checksum(rom);
+    assert(cupid_gb_parse_header(rom, sizeof(rom), &header));
+    assert(strcmp(header.title, "FULLTITLE123456Z") == 0);
+    assert(header.cgb_flag == 'Z' && header.header_checksum_valid);
+
+    const uint8_t color_flags[] = {0x80, 0xc0};
+    for (size_t i = 0; i < sizeof(color_flags); ++i) {
+        /* All fifteen text bytes may be populated. The four bytes overlapping
+         * the manufacturer field remain visible when the title has no NUL. */
+        memcpy(rom + 0x134, "TITLE123456ABCD", 15);
+        rom[0x143] = color_flags[i];
+        rom[0x14d] = compute_header_checksum(rom);
+        memset(&header, 0xa5, sizeof(header));
+        assert(cupid_gb_parse_header(rom, sizeof(rom), &header));
+        assert(strcmp(header.title, "TITLE123456ABCD") == 0);
+        assert(header.cgb_flag == color_flags[i] && header.header_checksum_valid);
+
+        const uint8_t terminators[] = {0, 0x1f, 0x80, 0xc0, 0xff};
+        for (size_t j = 0; j < sizeof(terminators); ++j) {
+            memcpy(rom + 0x134, "TITLE123456ABCD", 15);
+            rom[0x13f] = terminators[j];
+            rom[0x14d] = compute_header_checksum(rom);
+            assert(cupid_gb_parse_header(rom, sizeof(rom), &header));
+            assert(strcmp(header.title, "TITLE123456") == 0);
+            assert(header.cgb_flag == color_flags[i] && header.header_checksum_valid);
+        }
+    }
+}
+
 static void test_parse_mbc1_header(void) {
     uint8_t rom[128u * 1024u];
     CupidGbCartridgeHeader header = {0};
@@ -621,13 +656,17 @@ static void test_battery_save_loads_for_valid_rom(void) {
     uint8_t rom[32u * 1024u];
     CupidGb gb = {0};
     char rom_path[1024];
-    uint8_t expected[8] = {0x12u, 0x34u, 0x56u, 0x78u, 0x9au, 0xbcu, 0xdeu, 0xf0u};
+    uint8_t expected[8192];
     FILE *file;
 
     build_test_rom(rom, sizeof(rom));
     rom[0x0147] = 0x03u; /* MBC1+RAM+BATTERY */
     rom[0x0149] = 0x02u; /* 8 KiB RAM */
     rom[0x014d] = compute_header_checksum(rom);
+
+    for (size_t i = 0; i < sizeof(expected); ++i) {
+        expected[i] = (uint8_t)(i * 13u + i / 256u);
+    }
 
     file = open_test_file(rom_path, sizeof(rom_path));
     assert(file != NULL);
@@ -655,8 +694,8 @@ static void test_battery_save_ignored_for_invalid_untitled_rom(void) {
     uint8_t rom[32u * 1024u];
     CupidGb gb = {0};
     char rom_path[1024];
-    uint8_t persisted[8] = {0xffu, 0xeeu, 0xddu, 0xccu, 0xbbu, 0xaau, 0x99u, 0x88u};
-    uint8_t zeroes[8] = {0};
+    uint8_t persisted[8192];
+    uint8_t zeroes[8192] = {0};
     FILE *file;
 
     build_test_rom(rom, sizeof(rom));
@@ -664,6 +703,7 @@ static void test_battery_save_ignored_for_invalid_untitled_rom(void) {
     rom[0x0147] = 0x03u; /* MBC1+RAM+BATTERY */
     rom[0x0149] = 0x02u; /* 8 KiB RAM */
     rom[0x014d] = 0x00u; /* intentionally invalid */
+    memset(persisted, 0x5a, sizeof(persisted));
 
     file = open_test_file(rom_path, sizeof(rom_path));
     assert(file != NULL);
@@ -684,6 +724,51 @@ static void test_battery_save_ignored_for_invalid_untitled_rom(void) {
 
     assert(remove(gb.save_path) == 0);
     assert(remove(rom_path) == 0);
+    cupid_gb_cleanup(&gb);
+}
+
+static void test_mbc3_selection_aliases_and_unmapped_ram(void) {
+    uint8_t rom[32u * 1024u];
+    CupidGb gb = {0};
+    build_test_rom(rom, sizeof(rom));
+    rom[0x147] = 0x10; /* MBC3, RTC, RAM, and battery. */
+    rom[0x149] = 3;
+    rom[0x14d] = compute_header_checksum(rom);
+    assert(cupid_gb_load_rom(&gb, rom, sizeof(rom)));
+    cupid_gb_write_u8(&gb, 0x0000, 0x0a);
+    for (unsigned bank = 0; bank < 4; ++bank) {
+        cupid_gb_write_u8(&gb, 0x4000, (uint8_t)bank);
+        cupid_gb_write_u8(&gb, 0xa000, (uint8_t)(0x50u + bank));
+    }
+    gb.rtc = (CupidGbRtc){.s = 1, .ls = 37, .dh = 0x40};
+    const uint64_t generation = gb.battery_write_generation;
+    for (unsigned upper = 0; upper < 16; ++upper) {
+        for (unsigned bank = 0; bank < 8; ++bank) {
+            cupid_gb_write_u8(&gb, 0x4000, (uint8_t)(upper * 16u + bank));
+            assert(gb.rtc_register == 0 && gb.current_ram_bank == bank);
+            assert(cupid_gb_read_u8(&gb, 0xa000) == (bank < 4 ? 0x50u + bank : 0xffu));
+            if (bank >= 4)
+                cupid_gb_write_u8(&gb, 0xa000, 0xaa);
+        }
+        cupid_gb_write_u8(&gb, 0x4000, (uint8_t)(upper * 16u + 8u));
+        assert(gb.rtc_register == 8 && cupid_gb_read_u8(&gb, 0xa000) == 37);
+        /* An unconnected RTC selection must replace the previous valid one,
+         * and writes through it must not reach that RTC register or RAM. */
+        const CupidGbRtc before = gb.rtc;
+        cupid_gb_write_u8(&gb, 0x4000, (uint8_t)(upper * 16u + 15u));
+        assert(gb.rtc_register == 15);
+        cupid_gb_write_u8(&gb, 0xa000, 0xaa);
+        assert(memcmp(&gb.rtc, &before, sizeof(before)) == 0);
+    }
+    assert(gb.battery_write_generation == generation);
+    for (unsigned bank = 0; bank < 4; ++bank) {
+        cupid_gb_write_u8(&gb, 0x4000, (uint8_t)bank);
+        assert(cupid_gb_read_u8(&gb, 0xa000) == 0x50u + bank);
+    }
+    cupid_gb_write_u8(&gb, 0x4000, 0x38);
+    cupid_gb_write_u8(&gb, 0xa000, 12);
+    assert(gb.rtc.s == 12 && gb.rtc.ls == 37);
+    assert(gb.battery_write_generation == generation + 1);
     cupid_gb_cleanup(&gb);
 }
 
@@ -1013,6 +1098,7 @@ static void test_cgb_speed_switch(void) {
     CupidGb gb = {0};
 
     build_cgb_speed_rom(rom, sizeof(rom));
+    cupid_gb_set_model(&gb, CUPID_GB_MODEL_CGB);
     assert(cupid_gb_load_rom(&gb, rom, sizeof(rom)));
 
     assert(gb.cgb_mode);
@@ -1061,6 +1147,40 @@ static void test_dual_mode_rom_enters_cgb_when_model_selected(void) {
     cupid_gb_cleanup(&gb);
 }
 
+static void test_color_header_preserves_selected_hardware(void) {
+    const CupidGbModel models[] = {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_DMG0, CUPID_GB_MODEL_MGB,
+                                   CUPID_GB_MODEL_SGB,     CUPID_GB_MODEL_SGB2, CUPID_GB_MODEL_CGB};
+    const uint8_t flags[] = {0x80, 0xc0};
+    uint8_t rom[32u * 1024u];
+    CupidGb gb = {0};
+    for (size_t m = 0; m < sizeof(models) / sizeof(models[0]); ++m) {
+        for (size_t f = 0; f < sizeof(flags); ++f) {
+            build_test_rom(rom, sizeof(rom));
+            rom[0x143] = flags[f];
+            rom[0x14d] = compute_header_checksum(rom);
+            cupid_gb_set_model(&gb, models[m]);
+            assert(cupid_gb_load_rom(&gb, rom, sizeof(rom)));
+            const bool color = models[m] == CUPID_GB_MODEL_CGB;
+            assert(gb.model == models[m] && gb.cgb_mode == color);
+            assert(cupid_gb_read_u8(&gb, 0xff4d) == (color ? 0x7e : 0xff));
+            cupid_gb_write_u8(&gb, 0xff4d, 1);
+            assert(gb.speed_switch_armed == color);
+
+            /* Every selected model must produce a state its own loader accepts,
+             * including when the cartridge requires a different physical model. */
+            const size_t capacity = cupid_gb_state_size(&gb);
+            uint8_t *state = malloc(capacity);
+            size_t written = 0;
+            assert(state);
+            assert(cupid_gb_save_state(&gb, state, capacity, &written) == CUPID_GB_STATE_OK);
+            assert(cupid_gb_load_state(&gb, state, written) == CUPID_GB_STATE_OK);
+            assert(gb.model == models[m] && gb.cgb_mode == color);
+            free(state);
+        }
+    }
+    cupid_gb_cleanup(&gb);
+}
+
 static void test_cgb_vram_and_wram_banking(void) {
     uint8_t rom[32u * 1024u];
     CupidGb gb = {0};
@@ -1069,6 +1189,7 @@ static void test_cgb_vram_and_wram_banking(void) {
     rom[0x0143] = 0xc0u;
     rom[0x014d] = compute_header_checksum(rom);
 
+    cupid_gb_set_model(&gb, CUPID_GB_MODEL_CGB);
     assert(cupid_gb_load_rom(&gb, rom, sizeof(rom)));
     assert(gb.cgb_mode);
 
@@ -1096,6 +1217,7 @@ static void test_cgb_palette_registers_and_gdma(void) {
     rom[0x0143] = 0xc0u;
     rom[0x014d] = compute_header_checksum(rom);
 
+    cupid_gb_set_model(&gb, CUPID_GB_MODEL_CGB);
     assert(cupid_gb_load_rom(&gb, rom, sizeof(rom)));
     assert(gb.cgb_mode);
 
@@ -1194,6 +1316,7 @@ static void test_cgb_double_speed_slows_timer_domain(void) {
     uint8_t div_before;
 
     build_cgb_speed_rom(rom, sizeof(rom));
+    cupid_gb_set_model(&gb, CUPID_GB_MODEL_CGB);
     assert(cupid_gb_load_rom(&gb, rom, sizeof(rom)));
 
     assert(cupid_gb_step(&gb));
@@ -1319,6 +1442,7 @@ static void test_dmg_oam_bug_inc_de(void) {
     gb.io_registers[CUPID_GB_IO_STAT] =
         (uint8_t)((gb.io_registers[CUPID_GB_IO_STAT] & (uint8_t)~0x03u) | 0x02u);
     gb.ppu_counter = 3u;
+    memset(&gb.pixels, 0, sizeof(gb.pixels));
 
     memcpy(original_row, &gb.object_attribute_memory[32], sizeof(original_row));
 
@@ -1356,6 +1480,7 @@ static void test_dmg_oam_bug_pop_bc_fdff(void) {
     gb.io_registers[CUPID_GB_IO_STAT] =
         (uint8_t)((gb.io_registers[CUPID_GB_IO_STAT] & (uint8_t)~0x03u) | 0x02u);
     gb.ppu_counter = 3u;
+    memset(&gb.pixels, 0, sizeof(gb.pixels));
 
     memcpy(original_row24, &gb.object_attribute_memory[24], sizeof(original_row24));
     memcpy(original_row32, &gb.object_attribute_memory[32], sizeof(original_row32));
@@ -1395,6 +1520,7 @@ static void test_dmg_oam_bug_push_bc_fef0(void) {
     gb.io_registers[CUPID_GB_IO_STAT] =
         (uint8_t)((gb.io_registers[CUPID_GB_IO_STAT] & (uint8_t)~0x03u) | 0x02u);
     gb.ppu_counter = 3u;
+    memset(&gb.pixels, 0, sizeof(gb.pixels));
 
     memcpy(original_row24, &gb.object_attribute_memory[24], sizeof(original_row24));
     memcpy(original_row32, &gb.object_attribute_memory[32], sizeof(original_row32));
@@ -1473,6 +1599,9 @@ static void test_halt_services_interrupt_requested_during_halt_cycle(void) {
     initial_sp = gb.cpu.sp;
     initial_pc = gb.cpu.pc;
 
+    /* The reload arrives after this cycle's HALT interrupt polling point. */
+    assert(cupid_gb_step(&gb));
+    assert(gb.cpu.halted && gb.cpu.pc == initial_pc);
     assert(cupid_gb_step(&gb));
 
     assert(!gb.cpu.halted);
@@ -1503,6 +1632,8 @@ static void test_halt_ime0_wakes_and_executes_without_extra_step(void) {
     gb.interrupt_flags = 0u;
     gb.tima_overflow_delay = 1u;
 
+    assert(cupid_gb_step(&gb));
+    assert(gb.cpu.halted && gb.cpu.b == 0x12u);
     assert(cupid_gb_step(&gb));
 
     assert(!gb.cpu.halted);
@@ -2098,40 +2229,24 @@ static void test_ppu_background_render(void) {
 }
 
 static void test_ppu_mode3_length_depends_on_scx(void) {
-    uint8_t rom[32u * 1024u];
+    uint8_t rom[32768];
     CupidGb gb = {0};
-
     build_idle_rom(rom, sizeof(rom));
     assert(cupid_gb_load_rom(&gb, rom, sizeof(rom)));
-
-    gb.io_registers[CUPID_GB_IO_LCDC] = 0x91u;
-    gb.io_registers[CUPID_GB_IO_LY] = 1u;
-
-    gb.io_registers[CUPID_GB_IO_SCX] = 0u;
-    gb.ppu_counter = CUPID_GB_PPU_OAM_CYCLES;
-    cupid_gb_set_ppu_mode(&gb, CUPID_GB_PPU_MODE_TRANSFER);
-    cupid_gb_tick_ppu(&gb, CUPID_GB_PPU_TRANSFER_CYCLES);
-    assert((cupid_gb_read_u8(&gb, 0xff41u) & 0x03u) == CUPID_GB_PPU_MODE_TRANSFER);
-    cupid_gb_tick_ppu(&gb, 1u);
-    assert((cupid_gb_read_u8(&gb, 0xff41u) & 0x03u) == CUPID_GB_PPU_MODE_HBLANK);
-
-    gb.io_registers[CUPID_GB_IO_LY] = 1u;
-    gb.io_registers[CUPID_GB_IO_SCX] = 1u;
-    gb.ppu_counter = CUPID_GB_PPU_OAM_CYCLES;
-    cupid_gb_set_ppu_mode(&gb, CUPID_GB_PPU_MODE_TRANSFER);
-    cupid_gb_tick_ppu(&gb, CUPID_GB_PPU_TRANSFER_CYCLES + 1u);
-    assert((cupid_gb_read_u8(&gb, 0xff41u) & 0x03u) == CUPID_GB_PPU_MODE_TRANSFER);
-    cupid_gb_tick_ppu(&gb, 1u);
-    assert((cupid_gb_read_u8(&gb, 0xff41u) & 0x03u) == CUPID_GB_PPU_MODE_HBLANK);
-
-    gb.io_registers[CUPID_GB_IO_LY] = 1u;
-    gb.io_registers[CUPID_GB_IO_SCX] = 5u;
-    gb.ppu_counter = CUPID_GB_PPU_OAM_CYCLES;
-    cupid_gb_set_ppu_mode(&gb, CUPID_GB_PPU_MODE_TRANSFER);
-    cupid_gb_tick_ppu(&gb, CUPID_GB_PPU_TRANSFER_CYCLES + 2u);
-    assert((cupid_gb_read_u8(&gb, 0xff41u) & 0x03u) == CUPID_GB_PPU_MODE_TRANSFER);
-    cupid_gb_tick_ppu(&gb, 1u);
-    assert((cupid_gb_read_u8(&gb, 0xff41u) & 0x03u) == CUPID_GB_PPU_MODE_HBLANK);
+    for (unsigned fine = 0; fine < 8; ++fine) {
+        memset(&gb.pixels, 0, sizeof(gb.pixels));
+        gb.ppu_lcd_startup = false;
+        gb.ppu_counter = 0;
+        gb.io_registers[CUPID_GB_IO_LCDC] = 0x91;
+        gb.io_registers[CUPID_GB_IO_LY] = 1;
+        gb.io_registers[CUPID_GB_IO_SCX] = (uint8_t)fine;
+        cupid_gb_set_ppu_mode(&gb, CUPID_GB_PPU_MODE_OAM);
+        /* LY's line boundary precedes the transfer's STAT transition by one dot. */
+        cupid_gb_tick_ppu(&gb, (uint16_t)((80 + 172 + fine) / 4));
+        assert((cupid_gb_read_u8(&gb, 0xff41) & 3) == CUPID_GB_PPU_MODE_TRANSFER);
+        cupid_gb_tick_ppu(&gb, 1);
+        assert((cupid_gb_read_u8(&gb, 0xff41) & 3) == CUPID_GB_PPU_MODE_HBLANK);
+    }
     cupid_gb_cleanup(&gb);
 }
 
@@ -2150,6 +2265,7 @@ static void test_ppu_hblank_stat_interrupt_is_requested_on_transition(void) {
     gb.stat_irq_line = false;
     gb.stat_irq_delay = 0u;
     gb.ppu_counter = CUPID_GB_PPU_OAM_CYCLES;
+    memset(&gb.pixels, 0, sizeof(gb.pixels));
     cupid_gb_set_ppu_mode(&gb, CUPID_GB_PPU_MODE_TRANSFER);
 
     cupid_gb_tick_ppu(&gb, CUPID_GB_PPU_TRANSFER_CYCLES);
@@ -2177,6 +2293,7 @@ static void test_ppu_mode3_length_includes_left_edge_sprite_penalty(void) {
     gb.object_attribute_memory[2] = 0u;
     gb.object_attribute_memory[3] = 0u;
     gb.ppu_counter = CUPID_GB_PPU_OAM_CYCLES;
+    memset(&gb.pixels, 0, sizeof(gb.pixels));
     cupid_gb_set_ppu_mode(&gb, CUPID_GB_PPU_MODE_TRANSFER);
 
     cupid_gb_tick_ppu(&gb, CUPID_GB_PPU_TRANSFER_CYCLES + 2u);
@@ -2218,6 +2335,7 @@ static void test_push_timing_matches_dma_edge_behavior(void) {
     gb.io_registers[CUPID_GB_IO_LCDC] = 0x91u;
     gb.io_registers[CUPID_GB_IO_LY] = 0x8fu;
     gb.ppu_counter = 0u;
+    memset(&gb.pixels, 0, sizeof(gb.pixels));
     gb.ppu_lcd_startup = false;
     gb.ppu_lcd_warmup_lines = 0u;
     gb.ppu_line_boundary_hold = false;
@@ -2252,11 +2370,14 @@ static void test_ppu_oam_stat_interrupt_is_requested_on_oam_transition(void) {
     gb.ppu_lcd_warmup_lines = 0u;
     gb.ppu_line_boundary_hold = false;
     gb.ppu_counter = (uint16_t)(CUPID_GB_PPU_SCANLINE_CYCLES - 1u);
+    memset(&gb.pixels, 0, sizeof(gb.pixels));
     cupid_gb_set_ppu_mode(&gb, CUPID_GB_PPU_MODE_HBLANK);
 
     cupid_gb_tick_ppu(&gb, 1u);
     assert(cupid_gb_read_u8(&gb, 0xff44u) == 44u);
-    assert((gb.interrupt_flags & CUPID_GB_INTERRUPT_LCD_STAT) == 0u);
+    /* OAM's interrupt input rises one dot before its visible STAT mode. */
+    assert((cupid_gb_read_u8(&gb, 0xff41u) & 0x03u) == CUPID_GB_PPU_MODE_HBLANK);
+    assert((gb.interrupt_flags & CUPID_GB_INTERRUPT_LCD_STAT) != 0u);
     assert(gb.stat_irq_delay == 0u);
 
     cupid_gb_tick_ppu(&gb, 1u);
@@ -2266,7 +2387,7 @@ static void test_ppu_oam_stat_interrupt_is_requested_on_oam_transition(void) {
     cupid_gb_cleanup(&gb);
 }
 
-static void test_ppu_dmg_last_vblank_line_is_shorter(void) {
+static void test_ppu_dmg_last_vblank_line_keeps_full_duration(void) {
     uint8_t rom[32u * 1024u];
     CupidGb gb = {0};
 
@@ -2276,12 +2397,23 @@ static void test_ppu_dmg_last_vblank_line_is_shorter(void) {
     gb.cgb_mode = false;
     gb.io_registers[CUPID_GB_IO_LCDC] = 0x91u;
     gb.io_registers[CUPID_GB_IO_LY] = 153u;
-    gb.ppu_counter = (uint16_t)(CUPID_GB_PPU_SCANLINE_CYCLES - 3u);
+    gb.ppu_counter = 0u;
+    memset(&gb.pixels, 0, sizeof(gb.pixels));
     cupid_gb_set_ppu_mode(&gb, CUPID_GB_PPU_MODE_VBLANK);
 
-    cupid_gb_tick_ppu(&gb, 1u);
-    assert(cupid_gb_read_u8(&gb, 0xff44u) == 153u);
+    /* LY becomes zero near the start of line 153. This does not end VBlank
+     * or shorten the 456-dot scanline. */
+    cupid_gb_tick_ppu(&gb, 2u);
+    assert(cupid_gb_read_u8(&gb, 0xff44u) == 0u);
+    assert(gb.pixels.line == 153u);
+    assert((cupid_gb_read_u8(&gb, 0xff41u) & 0x03u) == CUPID_GB_PPU_MODE_VBLANK);
 
+    cupid_gb_tick_ppu(&gb, CUPID_GB_PPU_SCANLINE_CYCLES - 3u);
+    assert(gb.pixels.line == 153u);
+    assert((cupid_gb_read_u8(&gb, 0xff41u) & 0x03u) == CUPID_GB_PPU_MODE_VBLANK);
+
+    cupid_gb_tick_ppu(&gb, 1u);
+    assert(gb.pixels.line == 0u && gb.pixels.dot == 0u);
     cupid_gb_tick_ppu(&gb, 1u);
     assert(cupid_gb_read_u8(&gb, 0xff44u) == 0u);
     assert((cupid_gb_read_u8(&gb, 0xff41u) & 0x03u) == CUPID_GB_PPU_MODE_OAM);
@@ -2290,6 +2422,7 @@ static void test_ppu_dmg_last_vblank_line_is_shorter(void) {
 
 int main(void) {
     test_parse_header();
+    test_header_title_byte_boundaries();
     test_parse_mbc1_header();
     test_boot_model_profiles();
     test_boot_io_defaults();
@@ -2299,6 +2432,7 @@ int main(void) {
     test_save_path_does_not_overwrite_rom();
     test_battery_save_loads_for_valid_rom();
     test_battery_save_ignored_for_invalid_untitled_rom();
+    test_mbc3_selection_aliases_and_unmapped_ram();
     test_mbc1_bank_switching();
     test_mbc1_multicart_bank_switching();
     test_mbc1_ram_banking_mode_switching();
@@ -2327,7 +2461,7 @@ int main(void) {
     test_ppu_mode3_length_includes_left_edge_sprite_penalty();
     test_push_timing_matches_dma_edge_behavior();
     test_ppu_oam_stat_interrupt_is_requested_on_oam_transition();
-    test_ppu_dmg_last_vblank_line_is_shorter();
+    test_ppu_dmg_last_vblank_line_keeps_full_duration();
     test_dmg_oam_bug_inc_de();
     test_dmg_oam_bug_pop_bc_fdff();
     test_dmg_oam_bug_push_bc_fef0();
@@ -2347,6 +2481,7 @@ int main(void) {
     test_apu_dmg_wave_trigger_while_on_corrupts_wave_ram();
     test_dual_mode_rom_stays_dmg();
     test_dual_mode_rom_enters_cgb_when_model_selected();
+    test_color_header_preserves_selected_hardware();
     test_cgb_vram_and_wram_banking();
     test_cgb_palette_registers_and_gdma();
     test_cgb_dmg_compatibility_palette_for_pokemon_red();

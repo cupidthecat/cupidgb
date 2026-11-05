@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum { STATE_HEADER_SIZE = 128, STATE_VERSION = 1 };
+enum { STATE_HEADER_SIZE = 128, STATE_VERSION = 2 };
 
 static const uint8_t state_magic[8] = {'C', 'U', 'P', 'I', 'D', 'G', 'B', 0};
 
@@ -116,7 +116,7 @@ static void words(StateIo *io, uint16_t *values, size_t count) {
     }
 }
 
-/* The order below is the v1 wire schema. Every scalar has an explicit width and every
+/* The order below is the v2 wire schema. Every scalar has an explicit width and every
  * array has an explicit element encoding. Never replace this with a structure dump:
  * host padding, pointer widths, and bool representations are not part of the format.
  * New hardware state requires a format revision and continuation tests.
@@ -312,6 +312,53 @@ static void state_fields(StateIo *io, CupidGb *gb) {
     }
     U32(apu.buf_write);
     BOOL(boot_rom_enabled);
+    U32(apu.sample_rate);
+    signed_quad_word(io, &gb->apu.mix_left);
+    signed_quad_word(io, &gb->apu.mix_right);
+    signed_quad_word(io, &gb->apu.highpass_left);
+    signed_quad_word(io, &gb->apu.highpass_right);
+    U32(apu.highpass_rate);
+    BOOL(apu.highpass_disabled);
+    U16(pixels.dot);
+    U8(pixels.line);
+    U8(pixels.x);
+    BYTES(pixels.colors);
+    BYTES(pixels.palettes);
+    BYTES(pixels.priorities);
+    U8(pixels.read);
+    U8(pixels.count);
+    U8(pixels.phase);
+    U8(pixels.tile);
+    U8(pixels.attributes);
+    U8(pixels.low);
+    U8(pixels.high);
+    U8(pixels.column);
+    U8(pixels.discard);
+    U8(pixels.delay);
+    U16(pixels.address);
+    BYTES(pixels.objects);
+    BYTES(pixels.object_x);
+    BYTES(pixels.object_y);
+    U8(pixels.object_count);
+    U16(pixels.fetched_objects);
+    U8(pixels.object_delay);
+    U8(pixels.object_index);
+    U8(pixels.object_low);
+    U8(pixels.object_high);
+    U8(pixels.object_attributes);
+    U16(pixels.object_address);
+    BYTES(pixels.sprite_colors);
+    BYTES(pixels.sprite_palettes);
+    BYTES(pixels.sprite_flags);
+    WORDS(pixels.sprite_priorities);
+    BOOL(pixels.initialized);
+    BOOL(pixels.active);
+    BOOL(pixels.window_armed);
+    BOOL(pixels.window_active);
+    BOOL(pixels.window_used);
+    BOOL(pixels.lyc_irq);
+    BOOL(cgb_object_priority_x);
+    BOOL(cpu.just_halted);
 #undef U8
 #undef BOOL
 #undef U16
@@ -333,6 +380,31 @@ static bool ready(const CupidGb *gb) {
 
 static bool valid_hardware(const CupidGb *gb) {
     const CupidGbApu *a = &gb->apu;
+    const CupidGbPixels *p = &gb->pixels;
+    const int64_t area_limit = INT64_C(16320) * a->sample_acc;
+    if ((a->sample_rate && (a->sample_rate < 8000 || a->sample_rate > 192000)) ||
+        a->highpass_rate > UINT32_C(1073741824) || a->mix_left < -area_limit ||
+        a->mix_left > area_limit || a->mix_right < -area_limit || a->mix_right > area_limit ||
+        a->highpass_left < -INT64_C(1069547520) || a->highpass_left > INT64_C(1069547520) ||
+        a->highpass_right < -INT64_C(1069547520) || a->highpass_right > INT64_C(1069547520) ||
+        p->dot >= 456 || p->line >= 154 || p->x > 160 || p->read >= 8 || p->count > 8 ||
+        p->phase > 6 || p->column > 31 || p->discard > 7 || p->delay > 12 || p->address >= 0x4000 ||
+        p->object_count > 10 || p->fetched_objects > 0x3ff || p->object_delay > 11 ||
+        p->object_index >= 10 || p->object_address >= 0x3fff)
+        return false;
+    /* Map fetches read matching attributes from the second VRAM bank. A tile-data
+     * address is valid in other fetch phases, but would cross VRAM's end here. */
+    if (p->phase == 1 && (p->address < 0x1800 || p->address >= 0x2000))
+        return false;
+    for (unsigned i = 0; i < 8; ++i) {
+        if (p->colors[i] > 3 || p->palettes[i] > 7 || p->priorities[i] > 1 ||
+            p->sprite_colors[i] > 3 || p->sprite_palettes[i] > 7 || p->sprite_flags[i] > 1)
+            return false;
+    }
+    for (unsigned i = 0; i < 10; ++i) {
+        if (p->objects[i] >= 40)
+            return false;
+    }
     if (!valid_model(gb->model) || (gb->cpu.f & 15u) || gb->cpu.ime_delay > 1 ||
         gb->div_counter >= 64 || gb->serial_bits_remaining > 8 || gb->tima_overflow_delay > 1 ||
         gb->dma_index > 160 || gb->dma_start_delay > 2 || gb->dma_restart_delay > 2 ||

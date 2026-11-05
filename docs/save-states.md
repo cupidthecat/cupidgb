@@ -10,7 +10,9 @@ Load a native state file through File > Load State File or drop a `.s0` through 
 
 Writes use an atomic file replacement. Loading checks the complete cartridge identity and hardware model. A state captured with an active boot overlay requires the matching local boot binary. Failed validation preserves the running session and its host audio queue. A successful load replaces the emulated state, reapplies current physical input, clears queued host audio, and realigns pacing.
 
-The file content is CupidGB native version 1. Interoperable BESS state imports remain pending. A filename fallback does not imply support for another state format.
+The file content is CupidGB native version 2. Interoperable BESS state imports remain pending. A filename fallback does not imply support for another state format.
+
+Version 1 execution states cannot continue in the changed pixel and audio core. File > Recover Battery from Older State validates the older file and exports supported battery data to a separate file. Recovery preserves the original file and running session. It does not restore execution. See [battery saves](battery-saves.md).
 
 ## Rewind
 
@@ -22,7 +24,7 @@ History resets on cartridge replacement, reset, successful disk-state loading, o
 
 The rewind path caches the identity of the frontend's immutable cartridge. The core context is bound to the instance, ROM pointer, ROM size, and hardware model. A caller that patches ROM bytes in place must discard and recreate this context. Disk-state APIs always recompute the full cartridge hash. Future cheat, patch, or debugger features must honor that cache invalidation rule.
 
-## Native version 1 format
+## Native version 2 format
 
 All numeric payload fields use explicit widths and little-endian encoding. Booleans use validated zero or one bytes. Signed timestamps and PCM samples use explicit two's-complement encoding. The format never stores C structure padding, native pointers, native `size_t`, or native boolean representations.
 
@@ -31,7 +33,7 @@ The 128-byte header contains:
 | Offset | Bytes | Value |
 | --- | --- | --- |
 | 0 | 8 | `CUPIDGB` followed by a zero byte |
-| 8 | 4 | Format version, currently 1 |
+| 8 | 4 | Format version, currently 2 |
 | 12 | 4 | Complete encoded length |
 | 16 | 4 | Stable hardware model tag |
 | 20 | 4 | Cartridge byte length |
@@ -41,14 +43,14 @@ The 128-byte header contains:
 | 64 | 32 | SHA-256 of the required boot binary, otherwise zero |
 | 96 | 32 | SHA-256 of header bytes 0 through 95 followed by the payload |
 
-The payload follows the explicit field order in `src/gb/state.c`. Version 1 currently occupies 300,349 bytes including the header. Adding or reordering hardware fields requires a format revision and a deliberate fixture update.
+The payload follows the explicit field order in `src/gb/state.c`. Version 2 occupies 300,518 bytes including the header. It retains the previous prefix and appends audio sample integration, filter state, pixel fetch queues, pending object/window work, the latched CGB object-priority selection, and the CPU's first HALT polling phase. Adding or reordering hardware fields requires a format revision and a deliberate fixture update. The older recovery reader uses a separate frozen 300,349-byte version 1 layout.
 
 Loading first verifies version, length, integrity, cartridge/model/boot identity, and field domains. It decodes into a separate candidate that retains the current session's ROM ownership and immutable metadata. Only a completely validated candidate replaces the live state.
 
 ## Validation scope
 
-Generated-ROM tests exercise deterministic continuation across the current six hardware profiles, active boot overlays, LCD modes, CGB double speed, pending timer reloads, DMA starts/restarts, and serial phases. Checks compare CPU and memory state, framebuffers, emitted PCM, and the encoded continuation. Additional tests reject every truncation boundary, damaged or invalid fields, wrong inputs, and stale cache bindings while preserving the live instance.
+Generated-ROM tests exercise deterministic continuation across the current six hardware profiles, active boot overlays, LCD modes, CGB double speed, pending timer reloads, DMA starts/restarts, and serial phases. Another 64 continuation scenarios capture pending background/object fetches and window work, then apply scroll and palette writes after restoration. Checks compare CPU and memory state, framebuffers, emitted PCM, and the encoded continuation. Additional tests reject every truncation boundary, damaged or invalid fields, wrong inputs, and stale cache bindings while preserving the live instance.
 
-Windows and Linux produced byte-identical 300,349-byte fixtures with SHA-256 `ac3df28d89204f9a5d91c74570cdae32c9ee7a8e5cb7d54e321ef7f20ae9ab5c`. These checks qualify CupidGB native continuation. They do not establish state interoperability or complete underlying hardware accuracy.
+The portable version 2 fixture has SHA-256 `bceb48a1fadaad1dcf305f6f7bdf27dcefbb291e853eb788b61bdc4bdcf6978b`. Its exact bytes are checked in the regression test. Native continuation checks do not establish state interoperability or complete underlying hardware accuracy.
 
 Forward runtime measurements must be distinguished from state loading and rewind, which change the guest timeline. A guest-clock rate measured during those operations represents net timeline progress rather than forward emulation throughput.
