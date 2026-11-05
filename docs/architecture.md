@@ -22,4 +22,46 @@ The public C API exposes hardware state through `CupidGb`. `src/gb/state.c` enco
 
 Qt owns atomic state-file writes and compressed, bounded rewind history. Trusted rewind contexts cache immutable cartridge identity; disk operations retain complete hashing. Cartridge/model replacement and future ROM patching must invalidate the context. [The state format and workflows](save-states.md) describe the contract.
 
+## Source map
+
+| Files | Responsibility |
+| --- | --- |
+| `src/gb/gb.c` | Instance lifecycle, boot overlay, memory access dispatch, top-level instruction stepping |
+| `src/gb/cpu.c` | Instruction decode, arithmetic/flags, bus phases, interrupts, HALT/STOP |
+| `src/gb/timer.c` | Divider consumers, TIMA reload windows, serial edges, CPU/base-clock coordination |
+| `src/gb/cartridge.c` | Header decode, controller identification, load-time banking/storage metadata |
+| `src/gb/ppu.c`, `src/gb/pixels.c` | LCD timing and persistent pixel fetch/merge queues |
+| `src/gb/apu.c` | Channel state, sequencer, sample integration, filtering, PCM output |
+| `src/gb/input.c` | Physical button masks, selected JOYP lines, input interrupts |
+| `src/gb/sgb.c` | SGB command packets, palette/attribute state, masking, border rendering |
+| `src/gbc/cgb.c` | Color memory/register extensions, compatibility palettes, HDMA and color helpers |
+| `src/gb/battery.c`, `src/gb/state.c` | Explicit battery and execution-state codecs |
+| `src/compat/native_v1.c` | Frozen older-state battery recovery |
+| `src/frontend/qt/main_window.cpp` | Desktop session lifecycle, actions/settings, input, audio queues, rewind, capture, reports |
+| `src/frontend/qt/audio_converter.cpp`, `wave_recorder.cpp`, `display_pipeline.cpp` | Host sample conversion, WAVE encoding, display viewport/palette/blending helpers |
+
+## Host lifecycle and ownership
+
+The frontend reads Unicode paths through Qt and constructs a candidate emulator before replacing the live session. Cartridge header/model checks, battery decoding, and optional boot loading must succeed before replacement. It flushes the previous cartridge's battery data first and preserves the current session if validation fails.
+
+The direct core loader resets its instance and is not a transactional session replacement API. Other hosts need the same candidate/swap pattern when failed loads must preserve execution. See [the core API](core-api.md) for allocation and ownership contracts.
+
+Core execution and UI operations are serialized through the frontend event loop. Audio playback uses a separate host backend with a protected output queue. It must not access or mutate emulated hardware concurrently. Snapshot APIs require an instruction boundary without concurrent core access.
+
+The host tracks emulated battery write generations separately from natural clock progression. It applies a quiet-period save timer and flushes at lifecycle boundaries. Host dirty generations and file paths are not emulated hardware and are excluded from guest snapshots.
+
+## Presentation and pacing
+
+Frontend pacing uses elapsed host time and bounded guest intervals. LCD-off execution still needs a host interval even when no VBlank arrives. Each event-loop turn performs bounded work so input, dialogs, and close remain responsive. Audio backpressure pauses additional guest work when generated output exceeds the queue limit; it does not discard guest cycles to catch up.
+
+The display pipeline maps monochrome shades, keeps hardware color palettes separate, chooses the host viewport, and optionally mixes consecutive completed images. These operations do not modify core framebuffers or hardware timing. Native screenshots and blended window presentation are distinct outputs.
+
+After a successful state load, the frontend reapplies physical input, clears queued host audio, and resets pacing/presentation history. Failed loads preserve those resources. Rewind intentionally replaces snapshots and mutes backward playback; forward audio generation resumes on the restored timeline.
+
+## Build and test boundaries
+
+CMake builds one Qt-free static core and links the desktop/tool targets against it. Tests include generated hardware programs, explicit serialization contracts, isolated host conversion/display helpers, and an integrated Qt workflow check. External ROM corpora and commercial captures remain local inputs.
+
+Treat core tests, Qt workflow tests, native backend checks, paired behavioral comparisons, and sustained commercial sessions as separate evidence. [Testing and measurements](testing.md) describes how to record and interpret them.
+
 Remaining hardware and desktop requirements are tracked in [the parity checklist](parity.md). Source presence alone does not establish runtime compatibility.

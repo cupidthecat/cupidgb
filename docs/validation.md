@@ -102,3 +102,51 @@ Guest-clock progress is computed from base-speed T-cycles and elapsed host time.
 Linux process user-plus-system CPU times were 12.38 and 12.28 seconds over complete process lifetimes of 61.05 and 60.95 seconds. Those lifetimes include work outside the 60-second telemetry windows. Windows sampled CPU counters are retained privately and are not used for utilization claims. Private receipts retain source and binary hashes, ROM/boot/trace identities, queue and priming metrics, paint intervals, memory samples, input counts, screenshots, and exit codes.
 
 Remaining work includes the two measured timing mismatches, finer CPU bus conflicts, decaying open bus, extended and uncommon cartridge controllers, individual hardware revisions, wider frontend tools and devices, and long-term gameplay/audio qualification. Current release packaging and installation have not been qualified by these checks.
+
+## Bus timing, cartridge mapping, and desktop workflows
+
+The 2026-11-05 work corrects the two measured acceptance mismatches above. OAM reads are blocked at the scanline boundary before the visible mode changes, and STAT bit 7 reads high after real boot/reset. LCDC write phases now cover memory read-modify-write instructions, PUSH, CALL, RST, and the first interrupt stack byte. The second interrupt stack byte targeting LCDC remains unqualified; its existing interrupt-request sampling order is preserved.
+
+Cartridge changes cover physical ROM address lines and erased tails independently of header size metadata, multicart detection and RAM selection, 2 KiB SRAM mirrors, extended MBC3 banks, exact MBC5 RAM enable decoding, and independently implemented HuC1 banking/startup behavior. Native state layout remains version 2. Core input now owns selected JOYP falling-edge interrupts and the direction-only opposing-contact policy. Physical contact bounce and monochrome row-switch settling remain incomplete.
+
+Qt adds integer/aspect/fill scaling, logical 1x-8x window sizes with physical-pixel integer rendering, monochrome presets/custom colors, simple gamma-correct blending, SGB border visibility, and audio output-device selection with default fallback. Workflow checks cover settings acceptance/cancellation, palette output, blending history across frame advance/load/rewind, central SGB border overlays, missing audio-device choices, queued device-list notifications, and recording continuity. A simulated device-list notification does not qualify physical hot-unplug behavior.
+
+### Builds and comparisons
+
+Windows MSVC Release with Qt 6.8.3 and Ubuntu 24.04 under WSLg with GCC and Qt 6.4.2 each passed all 17 CTest checks. Linux Debug passed all 13 core/tool checks with AddressSanitizer, UndefinedBehaviorSanitizer, and leak detection. Native audio-enabled workflow checks passed on Windows and Xcb. Windows capture commands need `QT_FORCE_STDERR_LOGGING=1` to retain Qt diagnostics from the GUI executable. Smoke failures now identify their source line.
+
+All comparisons retain revision `ea667ad79aa28409f034b1fd6da7304e1844750d` and equivalent inputs:
+
+| Corpus | CupidGB | Comparison build |
+| --- | --- | --- |
+| Sixty-six selected DMG acceptance cases, shared generated boot | 63 explicit register passes, 3 bounded | 63 explicit register passes, 3 bounded |
+| Eleven CPU instruction cases | 11 explicit serial passes | 11 explicit serial passes |
+| Twelve DMG and twelve CGB sound cases | 24 explicit memory passes | 24 explicit memory passes |
+| Twenty-eight MBC1/MBC2/MBC5 cases, shared generated boot | 28 explicit register passes | 28 explicit register passes |
+
+The remaining bounded acceptance cases concern boot-divider state, boot I/O, and serial alignment. They are inconclusive in both builds under the selected generated firmware. The sprite/HBlank and LCD-startup cases that previously differed now pass under the same shared boot conditions. These counts do not cover the full available hardware corpus.
+
+Separate generated probes matched 266,240 CGB input-row/interrupt observations with contact bounce disabled and 31,025 active cartridge-bus observations. The cartridge probe excludes disabled-RAM open bus and the unresolved unbanked-RAM discrepancy. Both acid2 final images and six bounded commercial scenes again matched with zero differing pixels out of 23,040 each. Final images do not establish complete frame-by-frame, timing, or audio parity.
+
+### Native gameplay samples
+
+Fresh private Tetris and Super Mario Bros. Deluxe copies ran for 60 seconds each on Windows and WSLg/Xcb with normal audio, rewind capture, matching input traces, and the same CGB boot binary. All four processes exited successfully and ended in active gameplay. Existing ROMs and user saves were preserved.
+
+| Environment and game | Nominal guest-clock progress | Audio error / idle events | Widget paint interval p95 / maximum | Peak process memory |
+| --- | --- | --- | --- | --- |
+| Windows, Tetris | 99.6310% | 0 / 2 | 17.72 / 191.98 ms | 73.63 MiB working set |
+| Windows, Mario Deluxe | 99.6034% | 0 / 3 | 17.72 / 201.55 ms | 83.48 MiB working set |
+| WSLg/Xcb, Tetris | 99.9087% | 0 / 4 | 17.59 / 19.93 ms | 85.14 MiB resident |
+| WSLg/Xcb, Mario Deluxe | 99.8777% | 0 / 3 | 17.62 / 20.91 ms | 96.37 MiB resident |
+
+The telemetry windows include startup. The idle-event counter excludes the first 250 ms. Guest-clock progress uses base-speed T-cycles; widget paint intervals are not physical presentation FPS. Windows converted 44.1 kHz guest PCM to 48 kHz stereo float output, while Linux used 44.1 kHz stereo signed output. Backend idle events remain, so these runs do not establish glitch-free or audibly equivalent playback. Linux process user-plus-system times were 12.61 and 12.66 seconds over lifetimes of 60.17 and 60.08 seconds. Windows CPU counters are retained privately and excluded from utilization claims.
+
+Source and binary receipts identify each run. Linux gameplay measurements preceded the smoke-only failure-diagnostic helper; final desktop regressions were rerun after that change. The input-comment clarification produced a byte-identical Linux executable. No guest timing, rendering, audio, or pacing changes followed the gameplay measurements.
+
+### Installation and documentation
+
+A staged Linux installation includes the executable, project license, desktop launcher, GB/GBC MIME declarations, and icon. An isolated MIME database identified `.gb` and `.gbc` inputs correctly; native installed workflow checks passed after the WSLg audio service was ready. A staged Windows folder passed native audio-enabled workflows with deployed Qt dependencies. These checks do not qualify an installer, every Linux desktop, or a machine without the tested runtime environment.
+
+The README and thirteen guides now cover building, installation, use, hardware limits, battery files, states/rewind, troubleshooting, architecture, core integration, testing, contribution requirements, parity, and validation. All 56 local documentation links resolved, and the C11/C++17 integration examples passed compiler syntax checks. Changed project sources pass the supplied formatting configuration, and the configuration matches the supplied file byte for byte.
+
+Remaining work includes individual hardware revisions, full fetch/bus timing, contact settling, uncommon controllers and peripherals, controller devices, debugger tools, cheats, interoperable state imports, advanced color/filter behavior, and long-term gameplay/audio qualification. The parity checklist remains open.

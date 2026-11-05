@@ -330,6 +330,49 @@ static void test_lcd_startup_dot_boundaries(void) {
     }
 }
 
+static void test_oam_read_lock_precedes_visible_scan_mode(void) {
+    CupidGb gb;
+    for (unsigned color = 0; color < 2; ++color) {
+        prepare(&gb, color != 0, 0);
+        gb.object_attribute_memory[0] = 0x52;
+        cupid_gb_write_u8(&gb, 0xff40, 0);
+        assert(cupid_gb_read_u8(&gb, 0xfe00) == 0x52);
+        cupid_gb_write_u8(&gb, 0xff40, 0x91);
+        cupid_gb_tick_ppu_dots(&gb, color ? 451 : 452);
+        assert(gb.pixels.line == 0);
+        assert(cupid_gb_read_u8(&gb, 0xfe00) == 0x52);
+        cupid_gb_tick_ppu_dots(&gb, 1);
+        assert(gb.pixels.line == 1 && gb.pixels.dot == 0);
+        assert((cupid_gb_read_u8(&gb, 0xff41) & 3) == CUPID_GB_PPU_MODE_HBLANK);
+        assert(cupid_gb_read_u8(&gb, 0xfe00) == 0xff);
+        cupid_gb_tick_ppu_dots(&gb, 1);
+        assert((cupid_gb_read_u8(&gb, 0xff41) & 3) == CUPID_GB_PPU_MODE_OAM);
+        assert(cupid_gb_read_u8(&gb, 0xfe00) == 0xff);
+        cupid_gb_tick_ppu_dots(&gb, 455);
+        assert(gb.pixels.line == 2 && gb.pixels.dot == 0);
+        assert(cupid_gb_read_u8(&gb, 0xfe00) == 0xff);
+        cupid_gb_write_u8(&gb, 0xff40, 0);
+        assert(cupid_gb_read_u8(&gb, 0xfe00) == 0x52);
+    }
+}
+
+static void test_stat_unused_bit_reads_high_after_power_on(void) {
+    for (unsigned model = CUPID_GB_MODEL_DMG_ABC; model <= CUPID_GB_MODEL_SGB2; ++model) {
+        CupidGb gb = {0};
+        gb.model = (CupidGbModel)model;
+        gb.boot_rom_size = 256;
+        cupid_gb_enter_boot_rom(&gb);
+        assert(gb.io_registers[CUPID_GB_IO_STAT] == 0);
+        assert(cupid_gb_read_u8(&gb, 0xff41) == 0x80);
+        cupid_gb_write_u8(&gb, 0xff40, 0x80);
+        assert(cupid_gb_read_u8(&gb, 0xff41) == 0x84);
+        cupid_gb_tick_ppu_dots(&gb, 90);
+        assert(cupid_gb_read_u8(&gb, 0xff41) == 0x87);
+        cupid_gb_write_u8(&gb, 0xff40, 0);
+        assert(cupid_gb_read_u8(&gb, 0xff41) == 0x84);
+    }
+}
+
 static void test_dot_chunks_preserve_pipeline_state(void) {
     static const uint16_t chunks[] = {1, 2, 3, 5, 7, 8, 17};
     CupidGb machine, dots;
@@ -368,6 +411,8 @@ int main(void) {
     test_objects_share_background_fetch_wait();
     test_first_line_oam_interrupt_waits_for_visible_mode();
     test_lcd_startup_dot_boundaries();
+    test_oam_read_lock_precedes_visible_scan_mode();
+    test_stat_unused_bit_reads_high_after_power_on();
     test_dot_chunks_preserve_pipeline_state();
     puts("PPU priority checks passed.");
     return 0;

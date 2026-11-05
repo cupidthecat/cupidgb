@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.21)
 project(CupidGB VERSION 0.3.0 LANGUAGES C CXX)
 
+include(GNUInstallDirs)
+
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
@@ -18,7 +20,7 @@ add_library(cupidgb_core STATIC
     src/common/log.c src/common/sha256.c src/core/emulator.c src/core/system.c
     src/compat/native_v1.c src/gb/battery.c
     src/gb/gb.c src/gb/state.c src/gb/cpu.c src/gb/ppu.c src/gb/pixels.c src/gb/apu.c
-    src/gb/timer.c src/gb/cartridge.c src/gb/sgb.c src/gbc/cgb.c
+    src/gb/timer.c src/gb/cartridge.c src/gb/input.c src/gb/sgb.c src/gbc/cgb.c
 )
 target_include_directories(cupidgb_core PUBLIC include)
 if(NOT MSVC)
@@ -49,14 +51,23 @@ if(CUPIDGB_BUILD_QT)
         src/frontend/qt/main_window.h
         src/frontend/qt/audio_converter.cpp
         src/frontend/qt/wave_recorder.cpp
+        src/frontend/qt/display_pipeline.cpp
     )
     target_link_libraries(cupidgb PRIVATE cupidgb_core Qt6::Widgets Qt6::Multimedia)
-    install(TARGETS cupidgb RUNTIME DESTINATION bin)
-    install(FILES LICENSE DESTINATION share/licenses/cupidgb)
+    install(TARGETS cupidgb RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    install(FILES LICENSE DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/cupidgb)
+    if(UNIX AND NOT APPLE)
+        install(FILES packaging/linux/io.github.cupidthecat.CupidGB.desktop
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+        install(FILES packaging/linux/cupidgb.xml
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/mime/packages)
+        install(FILES packaging/linux/cupidgb.svg
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps)
+    endif()
 endif()
 if(CUPIDGB_ENABLE_TESTS)
     enable_testing()
-    foreach(test_name IN ITEMS smoke gb serial ppu apu cpu_timing state battery native_v1_recovery sgb)
+    foreach(test_name IN ITEMS smoke gb serial ppu apu cpu_timing state battery native_v1_recovery sgb input cartridge)
         add_executable(cupidgb_${test_name} tests/test_${test_name}.c)
         target_link_libraries(cupidgb_${test_name} PRIVATE cupidgb_core)
         # Tests use assert for setup and checks, including in Release builds.
@@ -78,6 +89,16 @@ if(CUPIDGB_ENABLE_TESTS)
         set_tests_properties(cupidgb_runner PROPERTIES TIMEOUT 120)
     endif()
     if(TARGET cupidgb)
+        add_executable(cupidgb_display_pipeline
+            tests/frontend/test_display_pipeline.cpp src/frontend/qt/display_pipeline.cpp)
+        target_include_directories(cupidgb_display_pipeline PRIVATE src/frontend/qt)
+        target_link_libraries(cupidgb_display_pipeline PRIVATE Qt6::Gui)
+        if(MSVC)
+            target_compile_options(cupidgb_display_pipeline PRIVATE /UNDEBUG)
+        else()
+            target_compile_options(cupidgb_display_pipeline PRIVATE -UNDEBUG)
+        endif()
+        add_test(NAME cupidgb_display_pipeline COMMAND cupidgb_display_pipeline)
         add_executable(cupidgb_audio_converter
             tests/frontend/test_audio_converter.cpp src/frontend/qt/audio_converter.cpp)
         target_include_directories(cupidgb_audio_converter PRIVATE src/frontend/qt)

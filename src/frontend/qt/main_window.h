@@ -19,6 +19,7 @@ class QAction;
 class QAudioSink;
 class QCloseEvent;
 class QMenu;
+class QMediaDevices;
 class QIODevice;
 class DisplayWidget;
 class AudioBuffer;
@@ -43,6 +44,8 @@ class MainWindow final : public QMainWindow {
 
   private:
     void buildMenus();
+    void applyDisplaySettings();
+    void resizeDisplay(int scale);
     void updateRecentMenu();
     void configure();
     QString bootDirectory() const;
@@ -58,7 +61,7 @@ class MainWindow final : public QMainWindow {
     bool restart();
     void tick();
     bool runFrame();
-    void present();
+    void present(bool completedFrame = false);
     void setupAudio();
     void stopAudio();
     void clearAudio();
@@ -88,12 +91,17 @@ class MainWindow final : public QMainWindow {
     QIODevice *audioDevice_ = nullptr;
     std::unique_ptr<AudioConverter> audioConverter_;
     std::unique_ptr<WaveRecorder> recorder_;
+    QMediaDevices *mediaDevices_ = nullptr;
+    QByteArray activeAudioDeviceId_;
+    QString activeAudioDeviceName_;
+    bool audioDeviceFallback_ = false;
     qint64 audioQueueLimit_ = 8192;
     qint64 audioPrimeBytes_ = 0;
     bool audioPriming_ = true;
     uint64_t audioPrimeEvents_ = 0;
     QTimer timer_;
     QTimer saveTimer_;
+    QTimer audioRefreshTimer_;
     QElapsedTimer clock_;
     qint64 nextFrame_ = 0;
     QString romPath_;
@@ -103,6 +111,8 @@ class MainWindow final : public QMainWindow {
     uint64_t observedBatteryGeneration_ = 0;
     bool batteryDirty_ = false;
     QImage image_;
+    QImage previousDisplayFrame_;
+    QImage currentDisplayFrame_;
     QMenu *recentMenu_ = nullptr;
     QAction *pauseAction_ = nullptr;
     QAction *muteAction_ = nullptr;
@@ -112,6 +122,11 @@ class MainWindow final : public QMainWindow {
     QAction *frameAction_ = nullptr;
     QAction *screenshotAction_ = nullptr;
     QAction *loadStateFileAction_ = nullptr;
+    std::array<QAction *, 3> scalingActions_{};
+    std::array<QAction *, 5> paletteActions_{};
+    std::array<QAction *, 8> windowSizeActions_{};
+    QAction *blendingAction_ = nullptr;
+    QAction *borderAction_ = nullptr;
     std::array<QAction *, 10> saveSlotActions_{};
     std::array<QAction *, 10> loadSlotActions_{};
     std::array<int, 8> keys_{};

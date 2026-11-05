@@ -7,8 +7,8 @@
  * and Game Boy Color (CGB) — both use the same cartridge header format
  * and MBC controllers.
  *
- * Supported MBC types: ROM-only, MBC1 (including multicart), MBC2, MBC3
- * (with optional RTC), MBC5, MBC6, MBC7, MMM01, HuC1, and HuC3.
+ * Implements ROM-only, MBC1 (including multicart), MBC2, MBC3/MBC30,
+ * MBC5, and HuC1 banking. MBC6, MBC7, MMM01, and HuC3 remain partial.
  */
 
 #include "cupid/gb/cartridge.h"
@@ -49,12 +49,6 @@ enum {
     CUPID_GB_OLD_LICENSEE_CODE = 0x014b,
     CUPID_GB_HEADER_CHECKSUM = 0x014d
 };
-
-static const uint8_t cupid_gb_nintendo_logo[] = {
-    0xceu, 0xedu, 0x66u, 0x66u, 0xccu, 0x0du, 0x00u, 0x0bu, 0x03u, 0x73u, 0x00u, 0x83u,
-    0x00u, 0x0cu, 0x00u, 0x0du, 0x00u, 0x08u, 0x11u, 0x1fu, 0x88u, 0x89u, 0x00u, 0x0eu,
-    0xdcu, 0xccu, 0x6eu, 0xe6u, 0xddu, 0xddu, 0xd9u, 0x99u, 0xbbu, 0xbbu, 0x67u, 0x63u,
-    0x6eu, 0x0eu, 0xecu, 0xccu, 0xddu, 0xdcu, 0x99u, 0x9fu, 0xbbu, 0xb9u, 0x33u, 0x3eu};
 
 enum {
     CUPID_GB_SGB_PACKET_START = 0x0104,
@@ -319,36 +313,11 @@ static uint8_t cupid_gb_compute_header_checksum(const uint8_t *rom_data) {
 }
 
 /**
- * @brief Checks whether a ROM image contains the Nintendo logo bitmap.
- *
- * Compares the 48-byte logo region at 0x0104–0x0133 (relative to
- * @p base_offset) against the official reference bitmap.
- *
- * @param rom_data    Pointer to the ROM data buffer.
- * @param rom_size    Size of the ROM data in bytes.
- * @param base_offset Byte offset of the ROM header within @p rom_data.
- *
- * @return `true` if the logo matches exactly, `false` otherwise.
- */
-static bool cupid_gb_has_nintendo_logo(const uint8_t *rom_data, size_t rom_size,
-                                       size_t base_offset) {
-    size_t logo_offset = base_offset + CUPID_GB_LOGO_START;
-
-    if (rom_data == 0 || logo_offset + sizeof(cupid_gb_nintendo_logo) > rom_size) {
-        return false;
-    }
-
-    return memcmp(&rom_data[logo_offset], cupid_gb_nintendo_logo, sizeof(cupid_gb_nintendo_logo)) ==
-           0;
-}
-
-/**
  * @brief Detects whether a MBC1 cartridge uses a multicart banking layout.
  *
- * A MBC1 multicart partitions its 64-bank ROM into four 16-bank sub-ROMs,
- * each with its own valid Nintendo logo and header checksum at a 256 KiB
- * boundary. All four sub-ROM headers must pass validation for detection
- * to succeed.
+ * The repeated logo region at the first 256 KiB boundary identifies
+ * 16-bank subcartridges. A multicart need not fill all four positions,
+ * and the logo probe does not depend on subcartridge checksums.
  *
  * @param rom_data Pointer to the ROM data buffer.
  * @param rom_size Size of the ROM data in bytes.
@@ -356,39 +325,41 @@ static bool cupid_gb_has_nintendo_logo(const uint8_t *rom_data, size_t rom_size,
  *
  * @return `true` if a MBC1 multicart layout is detected, `false` otherwise.
  *
- * @note Returns `false` if @p rom_data or @p header is NULL, if the MBC
- *       type is not MBC1, or if the ROM does not have exactly 64 banks.
+ * @note Returns `false` if the second subcartridge is not populated.
  */
 static bool cupid_gb_detect_mbc1_multicart(const uint8_t *rom_data, size_t rom_size,
                                            const CupidGbCartridgeHeader *header) {
-    size_t index;
-
-    if (rom_data == 0 || header == 0) {
+    if (!rom_data || !header || header->mbc_type != CUPID_GB_MBC1 || rom_size <= 0x40000u)
         return false;
-    }
-
-    if (header->mbc_type != CUPID_GB_MBC1 || header->rom_bank_count != 64u) {
-        return false;
-    }
-
-    for (index = 0u; index < 4u; ++index) {
-        size_t base_offset = index * 0x40000u;
-
-        if (base_offset + CUPID_GB_HEADER_CHECKSUM >= rom_size) {
+    /* Detection observes the same erased tail as ordinary ROM reads, including
+     * files whose final 16 KiB bank is only partially populated. */
+    for (size_t i = CUPID_GB_LOGO_START; i <= CUPID_GB_LOGO_END; ++i) {
+        const size_t repeated = 0x40000u + i;
+        const uint8_t byte = repeated < rom_size ? rom_data[repeated] : 0xffu;
+        if (rom_data[i] != byte)
             return false;
-        }
-
-        if (!cupid_gb_has_nintendo_logo(rom_data, rom_size, base_offset)) {
-            return false;
-        }
-
-        if (cupid_gb_compute_header_checksum_at(rom_data, rom_size, base_offset) !=
-            rom_data[base_offset + CUPID_GB_HEADER_CHECKSUM]) {
-            return false;
-        }
     }
-
     return true;
+}
+
+bool cupid_gb_has_extended_mbc3(const CupidGb *gb) {
+    return gb->header.mbc_type == CUPID_GB_MBC3 &&
+           (gb->rom_size > 0x200000u || gb->cartridge_ram_size > 0x8000u);
+}
+
+void cupid_gb_huc1_write(CupidGb *gb, uint16_t address, uint8_t value) {
+    if (address < 0x2000u)
+        gb->huc1_ir_mode = (value & 0x0fu) == 0x0eu;
+    else if (address < 0x4000u)
+        gb->mbc5_rom_bank = value & 0x3fu;
+    else if (address < 0x6000u)
+        gb->current_ram_bank = value & 7u;
+
+    /* The existing serialized wide-bank register stores HuC1's raw six-bit
+     * value. It starts at zero while the initial upper mapping is bank one.
+     * Every control write applies the raw value, including ignored 6000-7fff
+     * writes. Keeping it separate preserves this distinction across states. */
+    gb->current_rom_bank = gb->mbc5_rom_bank;
 }
 
 // MBC bank helpers (used by memory map in gb.c)
@@ -411,8 +382,7 @@ size_t cupid_gb_effective_rom_bank(const CupidGb *gb, bool lower_region) {
     size_t bank;
 
     switch (gb->header.mbc_type) {
-        case CUPID_GB_MBC1:
-        case CUPID_GB_HUC1: {
+        case CUPID_GB_MBC1: {
             size_t high = (size_t)(gb->mbc1_bank_high2 & 0x03u);
             size_t low = (size_t)(gb->mbc1_bank_low5 & 0x1fu);
 
@@ -448,6 +418,9 @@ size_t cupid_gb_effective_rom_bank(const CupidGb *gb, bool lower_region) {
             bank = lower_region ? 0u : (size_t)(gb->mbc5_rom_bank & 0x01ffu);
             break;
         }
+        case CUPID_GB_HUC1:
+            bank = lower_region ? 0u : gb->current_rom_bank & 0x3fu;
+            break;
         case CUPID_GB_MMM01: {
             if (!gb->mmm01_locked) {
                 bank = lower_region ? 0u : gb->current_rom_bank;
@@ -494,15 +467,18 @@ size_t cupid_gb_effective_ram_bank(const CupidGb *gb) {
         return 0u;
     }
 
-    if (gb->header.mbc_type == CUPID_GB_MBC1 || gb->header.mbc_type == CUPID_GB_HUC1) {
-        if (gb->mbc1_ram_banking_mode) {
+    if (gb->header.mbc_type == CUPID_GB_MBC1) {
+        if (gb->mbc1_ram_banking_mode && !gb->mbc1_multicart) {
             return (size_t)(gb->mbc1_bank_high2 & 0x03u) % gb->ram_bank_count;
         }
 
         return 0u;
     }
 
-    return gb->current_ram_bank % gb->ram_bank_count;
+    size_t bank = gb->current_ram_bank;
+    if (gb->header.mbc_type == CUPID_GB_MBC3 && !cupid_gb_has_extended_mbc3(gb))
+        bank &= 3u;
+    return bank % gb->ram_bank_count;
 }
 
 // Header parsing
@@ -701,12 +677,18 @@ bool cupid_gb_load_rom_file(CupidGb *gb, const char *path) {
  *       loading continues.
  */
 bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size) {
+    CupidGbCartridgeHeader header;
     if (gb == 0 || rom_data == 0) {
         return false;
     }
 
     if (rom_size < 0x0150u || rom_size > CUPID_GB_MAX_ROM_SIZE) {
         cupid_log_error("Game Boy ROM size is out of supported range.");
+        return false;
+    }
+
+    if (!cupid_gb_parse_header(rom_data, rom_size, &header)) {
+        cupid_log_error("Failed to parse Game Boy cartridge header.");
         return false;
     }
 
@@ -717,10 +699,7 @@ bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size) {
     memcpy(gb->rom, rom_data, rom_size);
     gb->rom_size = rom_size;
 
-    if (!cupid_gb_parse_header(rom_data, rom_size, &gb->header)) {
-        cupid_log_error("Failed to parse Game Boy cartridge header.");
-        return false;
-    }
+    gb->header = header;
 
     /* Cartridge requirements cannot turn monochrome hardware into a CGB.
      * Color-only software must still observe the explicitly selected model. */
@@ -750,20 +729,15 @@ bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size) {
         cupid_gb_sgb_apply_compatibility_palette(gb);
     }
 
-    if (gb->header.rom_bank_count == 0u) {
-        cupid_log_error("Unsupported Game Boy ROM size code.");
-        return false;
-    }
-
     if (gb->header.mbc_type == CUPID_GB_MBC_UNKNOWN) {
         cupid_log_errorf("Unrecognised cartridge type 0x%02X; attempting ROM-only mode.",
                          gb->header.cartridge_type);
         gb->header.mbc_type = CUPID_GB_MBC_NONE;
     }
 
-    if (rom_size < gb->header.rom_bank_count * 0x4000u) {
-        cupid_log_error("ROM file is smaller than the header-declared bank count.");
-        return false;
+    if (gb->header.cartridge_type == 0 && rom_size > 0x8000u) {
+        cupid_log_info("ROM-only header exceeds 32 KiB; selecting MBC3 banking.");
+        gb->header.mbc_type = CUPID_GB_MBC3;
     }
 
     gb->cartridge_ram_size = cupid_gb_ram_size_from_code(gb->header.ram_size_code);
@@ -772,7 +746,12 @@ bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size) {
         return false;
     }
 
-    gb->rom_bank_count = gb->header.rom_bank_count;
+    /* Connected ROM address lines follow file population, independently of
+     * header metadata. Missing bytes read as erased 0xff in the memory map.
+     * Keep rom_size unpadded so hashes and native states identify the input file. */
+    gb->rom_bank_count = 2u;
+    while (gb->rom_bank_count * 0x4000u < rom_size)
+        gb->rom_bank_count *= 2u;
     gb->ram_bank_count = gb->header.ram_bank_count;
     gb->current_rom_bank = gb->rom_bank_count > 1u ? 1u : 0u;
     gb->current_ram_bank = 0u;
@@ -781,7 +760,7 @@ bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size) {
     gb->mbc1_multicart = cupid_gb_detect_mbc1_multicart(rom_data, rom_size, &gb->header);
     gb->ram_enabled = gb->header.mbc_type == CUPID_GB_MBC_NONE;
     gb->mbc1_ram_banking_mode = false;
-    gb->mbc5_rom_bank = 1u;
+    gb->mbc5_rom_bank = gb->header.mbc_type == CUPID_GB_HUC1 ? 0u : 1u;
     gb->rtc_register = 0u;
     gb->rtc.base_time = 0;
     gb->mbc7_sensor_x = 0x81d0u;

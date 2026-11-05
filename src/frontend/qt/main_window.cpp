@@ -2,14 +2,18 @@
 #include "audio_converter.h"
 #include "cupid/compat/native_v1.h"
 #include "cupid/gb/battery.h"
+#include "display_pipeline.h"
 #include "wave_recorder.h"
 
 #include <QAction>
+#include <QActionGroup>
 #include <QApplication>
 #include <QAudioDevice>
 #include <QAudioFormat>
 #include <QAudioSink>
+#include <QCheckBox>
 #include <QCloseEvent>
+#include <QColor>
 #include <QComboBox>
 #include <QCryptographicHash>
 #include <QDialog>
@@ -52,6 +56,7 @@
 
 extern "C" {
 #include "cupid/gb/apu.h"
+#include "cupid/gb/input.h"
 #include "cupid/gb/state.h"
 #include "cupid/gbc/cgb.h"
 }
@@ -67,6 +72,11 @@ constexpr std::array<const char *, 5> specialNames = {"Turbo", "Rewind", "Slow m
 constexpr std::array<int, 5> defaultSpecialKeys = {Qt::Key_Space, Qt::Key_Tab, Qt::Key_Shift, 0, 0};
 // A normal-speed LCD frame is 70,224 T-cycles at 4,194,304 Hz.
 constexpr qint64 frameNanoseconds = 16742706;
+
+bool smokeFailure(int line) {
+    qCritical("CupidGB Qt workflow check failed at main_window.cpp:%d", line);
+    return false;
+}
 
 Qt::KeyboardModifiers keyModifier(int key) {
     switch (key) {
@@ -148,7 +158,7 @@ class DisplayWidget final : public QWidget {
     }
 
     QImage image;
-    bool integerScale = true;
+    DisplayScaling scaling = DisplayScaling::Integer;
     uint64_t paintCount = 0;
     QElapsedTimer paintClock;
     qint64 lastPaintAt = 0;
@@ -185,12 +195,7 @@ class DisplayWidget final : public QWidget {
         if (lastPaintAt)
             paintIntervals.push_back(double(now - lastPaintAt) / 1e6);
         lastPaintAt = now;
-        double scale = std::min(double(width()) / image.width(), double(height()) / image.height());
-        if (integerScale && scale >= 1.0)
-            scale = int(scale);
-        const QSize size(int(image.width() * scale), int(image.height() * scale));
-        const QRect target(QPoint((width() - size.width()) / 2, (height() - size.height()) / 2),
-                           size);
+        const QRectF target = displayViewport(image.size(), size(), scaling, devicePixelRatioF());
         painter.drawImage(target, image);
     }
 };
@@ -267,10 +272,13 @@ MainWindow::MainWindow(bool isolated, bool automated, bool audioCheck,
     for (size_t i = 0; i < specialKeys_.size(); ++i)
         specialKeys_[i] =
             settings_.value(QString("input/special/%1").arg(i), defaultSpecialKeys[i]).toInt();
-    display_->integerScale = settings_.value("video/integerScale", true).toBool();
+    if (!settings_.contains("video/scaling"))
+        settings_.setValue("video/scaling", settings_.value("video/integerScale", true).toBool()
+                                                ? int(DisplayScaling::Integer)
+                                                : int(DisplayScaling::Aspect));
     buildMenus();
-    resize(std::max(320, menuBar()->sizeHint().width()),
-           288 + menuBar()->sizeHint().height() + statusBar()->sizeHint().height());
+    applyDisplaySettings();
+    resizeDisplay(std::clamp(settings_.value("video/defaultScale", 2).toInt(), 1, 8));
     if (!isolated_)
         restoreGeometry(settings_.value("window/geometry").toByteArray());
     qApp->installEventFilter(this);
@@ -280,6 +288,20 @@ MainWindow::MainWindow(bool isolated, bool automated, bool audioCheck,
     connect(&saveTimer_, &QTimer::timeout, this, [this] { flushBattery(); });
     saveTimer_.setSingleShot(true);
     saveTimer_.setInterval(250);
+    mediaDevices_ = new QMediaDevices(this);
+    audioRefreshTimer_.setSingleShot(true);
+    connect(mediaDevices_, &QMediaDevices::audioOutputsChanged, this,
+            [this] { audioRefreshTimer_.start(0); });
+    connect(&audioRefreshTimer_, &QTimer::timeout, this, [this] {
+        if (!emulator_ || (isolated_ && !audioCheck_))
+            return;
+        if (stateOperation_) {
+            audioRefreshTimer_.start(10);
+            return;
+        }
+        setupAudio();
+        nextFrame_ = clock_.nsecsElapsed();
+    });
     timer_.start();
     clock_.start();
     refreshActions();
@@ -288,6 +310,7 @@ MainWindow::MainWindow(bool isolated, bool automated, bool audioCheck,
 MainWindow::~MainWindow() {
     timer_.stop();
     saveTimer_.stop();
+    audioRefreshTimer_.stop();
     paused_ = true;
     qApp->removeEventFilter(this);
     stopAudio();
@@ -392,6 +415,63 @@ void MainWindow::buildMenus() {
     screenshotAction_ = view->addAction("Save &Screenshot…", QKeySequence("F12"));
     registerShortcut(screenshotAction_, "screenshot");
     connect(screenshotAction_, &QAction::triggered, this, [this] { screenshot(); });
+    auto *scaling = view->addMenu("Display &Scaling");
+    auto *scalingGroup = new QActionGroup(this);
+    const std::array<const char *, 3> scaleNames = {"Integer Scale", "Retain Aspect Ratio",
+                                                    "Fill Window"};
+    for (size_t i = 0; i < scalingActions_.size(); ++i) {
+        auto *action = scaling->addAction(scaleNames[i]);
+        action->setObjectName(QString("video/scaling/%1").arg(i));
+        action->setCheckable(true);
+        scalingGroup->addAction(action);
+        scalingActions_[i] = action;
+        connect(action, &QAction::triggered, this, [this, i] {
+            settings_.setValue("video/scaling", int(i));
+            applyDisplaySettings();
+        });
+    }
+    auto *windowSize = view->addMenu("&Window Size");
+    auto *sizeGroup = new QActionGroup(this);
+    for (size_t i = 0; i < windowSizeActions_.size(); ++i) {
+        auto *action = windowSize->addAction(QString("%1x").arg(i + 1));
+        action->setObjectName(QString("video/size/%1").arg(i + 1));
+        action->setCheckable(true);
+        sizeGroup->addAction(action);
+        windowSizeActions_[i] = action;
+        connect(action, &QAction::triggered, this, [this, i] {
+            settings_.setValue("video/defaultScale", int(i + 1));
+            resizeDisplay(int(i + 1));
+        });
+    }
+    auto *palette = view->addMenu("&Monochrome Palette");
+    auto *paletteGroup = new QActionGroup(this);
+    const std::array<const char *, 5> paletteNames = {"Lime (Game Boy)", "Grayscale",
+                                                      "Olive (Pocket)", "Teal (Light)", "Custom"};
+    for (size_t i = 0; i < paletteActions_.size(); ++i) {
+        auto *action = palette->addAction(paletteNames[i]);
+        action->setObjectName(QString("video/palette/%1").arg(i));
+        action->setCheckable(true);
+        paletteGroup->addAction(action);
+        paletteActions_[i] = action;
+        connect(action, &QAction::triggered, this, [this, i] {
+            settings_.setValue("video/palette", int(i));
+            applyDisplaySettings();
+        });
+    }
+    blendingAction_ = view->addAction("Simple Frame &Blending");
+    blendingAction_->setCheckable(true);
+    blendingAction_->setObjectName("video/blending");
+    connect(blendingAction_, &QAction::triggered, this, [this](bool enabled) {
+        settings_.setValue("video/blending", enabled);
+        applyDisplaySettings();
+    });
+    borderAction_ = view->addAction("Show &SGB Border");
+    borderAction_->setCheckable(true);
+    borderAction_->setObjectName("video/sgbBorder");
+    connect(borderAction_, &QAction::triggered, this, [this](bool enabled) {
+        settings_.setValue("video/sgbBorder", enabled);
+        applyDisplaySettings();
+    });
     auto *audio = menuBar()->addMenu("&Audio");
     muteAction_ = audio->addAction("&Mute", QKeySequence("Ctrl+M"));
     registerShortcut(muteAction_, "mute");
@@ -449,6 +529,42 @@ void MainWindow::buildMenus() {
                                .arg(QCoreApplication::applicationVersion()));
         setPaused(wasPaused);
     });
+}
+
+void MainWindow::applyDisplaySettings() {
+    const int scaling = std::clamp(settings_.value("video/scaling", 0).toInt(), 0, 2);
+    display_->scaling = DisplayScaling(scaling);
+    const int palette = std::clamp(settings_.value("video/palette", 0).toInt(), 0, 4);
+    for (size_t i = 0; i < scalingActions_.size(); ++i)
+        scalingActions_[i]->setChecked(int(i) == scaling);
+    for (size_t i = 0; i < paletteActions_.size(); ++i)
+        paletteActions_[i]->setChecked(int(i) == palette);
+    const int scale = std::clamp(settings_.value("video/defaultScale", 2).toInt(), 1, 8);
+    for (size_t i = 0; i < windowSizeActions_.size(); ++i)
+        windowSizeActions_[i]->setChecked(int(i) + 1 == scale);
+    blendingAction_->setChecked(settings_.value("video/blending", false).toBool());
+    borderAction_->setChecked(settings_.value("video/sgbBorder", true).toBool());
+    previousDisplayFrame_ = {};
+    currentDisplayFrame_ = {};
+    if (emulator_)
+        present();
+    else
+        display_->update();
+}
+
+void MainWindow::resizeDisplay(int scale) {
+    scale = std::clamp(scale, 1, 8);
+    if (isFullScreen()) {
+        showNormal();
+        if (auto *fullscreen = findChild<QAction *>("fullscreen"))
+            fullscreen->setChecked(false);
+    }
+    const QSize source = image_.isNull() ? QSize(160, 144) : image_.size();
+    const int chromeHeight = menuBar()->sizeHint().height() + statusBar()->sizeHint().height();
+    resize(std::max(source.width() * scale, menuBar()->sizeHint().width()),
+           source.height() * scale + chromeHeight);
+    for (size_t i = 0; i < windowSizeActions_.size(); ++i)
+        windowSizeActions_[i]->setChecked(int(i) + 1 == scale);
 }
 
 void MainWindow::updateRecentMenu() {
@@ -597,6 +713,8 @@ bool MainWindow::openRom(const QString &path) {
     if (emulator_)
         cupid_emulator_shutdown(emulator_.get());
     emulator_ = std::move(candidate);
+    previousDisplayFrame_ = {};
+    currentDisplayFrame_ = {};
     resetRewind();
     ++sessionId_;
     romData_ = data;
@@ -685,6 +803,8 @@ bool MainWindow::closeRom() {
     romPath_.clear();
     romData_.clear();
     image_ = {};
+    previousDisplayFrame_ = {};
+    currentDisplayFrame_ = {};
     display_->image = {};
     display_->setMinimumSize(160, 144);
     display_->update();
@@ -706,13 +826,27 @@ void MainWindow::setupAudio() {
     stopAudio();
     audioConverter_.reset();
     audioBuffer_ = std::make_unique<AudioBuffer>();
+    const QByteArray requested = settings_.value("audio/outputDevice").toByteArray();
+    QAudioDevice device = QMediaDevices::defaultAudioOutput();
+    audioDeviceFallback_ = false;
+    if (!requested.isEmpty()) {
+        const auto available = QMediaDevices::audioOutputs();
+        const auto match = std::find_if(
+            available.cbegin(), available.cend(),
+            [&requested](const QAudioDevice &candidate) { return candidate.id() == requested; });
+        if (match == available.cend())
+            audioDeviceFallback_ = true;
+        else
+            device = *match;
+    }
+    activeAudioDeviceId_ = device.id();
+    activeAudioDeviceName_ = device.description();
     if (isolated_ && !audioCheck_)
         return;
     QAudioFormat format;
     format.setSampleRate(CUPID_GB_APU_SAMPLE_RATE);
     format.setChannelCount(2);
     format.setSampleFormat(QAudioFormat::Int16);
-    const QAudioDevice device = QMediaDevices::defaultAudioOutput();
     if (!device.isNull() && !device.isFormatSupported(format))
         format = device.preferredFormat();
     if (device.isNull() || !format.isValid() || !device.isFormatSupported(format)) {
@@ -738,6 +872,9 @@ void MainWindow::setupAudio() {
     audio_->setBufferSize(audioQueueLimit_);
     audio_->setVolume(
         muteAction_->isChecked() ? 0.0f : settings_.value("audio/volume", 100).toFloat() / 100);
+    if (audioDeviceFallback_)
+        statusBar()->showMessage("Selected audio output is unavailable; using System Default",
+                                 5000);
 }
 
 void MainWindow::stopAudio() {
@@ -877,12 +1014,7 @@ void MainWindow::registerShortcut(QAction *action, const QString &id) {
 }
 
 void MainWindow::setJoypad(uint8_t mask) {
-    auto &gb = emulator_->gb;
-    const uint8_t old = cupid_gb_read_u8(&gb, 0xff00);
-    gb.joypad = mask;
-    const uint8_t current = cupid_gb_read_u8(&gb, 0xff00);
-    if ((old & uint8_t(~current) & 0xf) != 0)
-        gb.interrupt_flags |= 0x10;
+    cupid_gb_set_buttons(&emulator_->gb, mask);
 }
 
 void MainWindow::applyHeldButtons() {
@@ -984,7 +1116,7 @@ bool MainWindow::runFrame() {
         audioBuffer_->append(converted.constData(), converted.size());
         pumpAudio();
     }
-    present();
+    present(gb.frame_ready);
     advanceControls();
     watchBattery();
     rememberFrame();
@@ -1130,6 +1262,8 @@ bool MainWindow::loadStateFile(const QString &path) {
     nextFrame_ = clock_.nsecsElapsed();
     resetRewind();
     rememberFrame();
+    previousDisplayFrame_ = {};
+    currentDisplayFrame_ = {};
     present();
     statusBar()->showMessage("State loaded", 3000);
     return true;
@@ -1284,11 +1418,13 @@ bool MainWindow::rewindFrame() {
     saveTimer_.start();
     rewindBytes_ -= rewindStates_.back().compressed.capacity() + qsizetype(sizeof(RewindSnapshot));
     rewindStates_.pop_back();
+    previousDisplayFrame_ = {};
+    currentDisplayFrame_ = {};
     present();
     return true;
 }
 
-void MainWindow::present() {
+void MainWindow::present(bool completedFrame) {
     if (!emulator_)
         return;
     const auto &gb = emulator_->gb;
@@ -1296,16 +1432,35 @@ void MainWindow::present() {
         image_ = QImage(CUPID_SGB_SCREEN_WIDTH, CUPID_SGB_SCREEN_HEIGHT, QImage::Format_ARGB32);
         cupid_gb_sgb_render_argb(&gb, reinterpret_cast<uint32_t *>(image_.bits()),
                                  size_t(image_.width() * image_.height()));
+        if (!settings_.value("video/sgbBorder", true).toBool())
+            image_ = image_.copy(CUPID_SGB_VIEWPORT_X, CUPID_SGB_VIEWPORT_Y, 160, 144);
     } else {
         image_ = QImage(160, 144, QImage::Format_RGB32);
-        constexpr QRgb palette[] = {0xffc6de8c, 0xff84a563, 0xff396139, 0xff081810};
+        auto custom = monochromeColors(MonochromePalette::Lime, {});
+        for (size_t i = 0; i < custom.size(); ++i) {
+            const QColor value(
+                settings_.value(QString("video/customPalette/%1").arg(i), QColor(custom[i]).name())
+                    .toString());
+            if (value.isValid())
+                custom[i] = value.rgb();
+        }
+        const auto palette = monochromeColors(
+            MonochromePalette(std::clamp(settings_.value("video/palette", 0).toInt(), 0, 4)),
+            custom);
         auto *pixels = reinterpret_cast<QRgb *>(image_.bits());
         for (size_t i = 0; i < 160 * 144; ++i)
             pixels[i] = (gb.cgb_mode || cupid_cgb_compat_active(&gb))
                             ? rgb555(gb.frame_buffer_color[i])
                             : palette[gb.frame_buffer[i] & 3];
     }
-    display_->image = image_;
+    // Repaints and settings dialogs must not turn one guest frame into repeated
+    // blend inputs. Only completed LCD frames advance temporal presentation.
+    if (completedFrame)
+        previousDisplayFrame_ = currentDisplayFrame_;
+    currentDisplayFrame_ = image_;
+    display_->image = settings_.value("video/blending", false).toBool()
+                          ? blendDisplayFrames(currentDisplayFrame_, previousDisplayFrame_)
+                          : currentDisplayFrame_;
     display_->setMinimumSize(image_.size());
     ++presentedImages_;
     display_->update();
@@ -1458,9 +1613,65 @@ void MainWindow::configure() {
     });
     form->addRow("Boot ROM directory", bootRow);
     auto *scaling = new QComboBox;
-    scaling->addItems({"Integer scale", "Retain aspect ratio"});
-    scaling->setCurrentIndex(display_->integerScale ? 0 : 1);
+    scaling->setObjectName("displayScaling");
+    scaling->addItems({"Integer Scale", "Retain Aspect Ratio", "Fill Window"});
+    scaling->setCurrentIndex(int(display_->scaling));
     form->addRow("Display scaling", scaling);
+    auto *windowScale = new QComboBox;
+    windowScale->setObjectName("windowScale");
+    for (int factor = 1; factor <= 8; ++factor)
+        windowScale->addItem(QString("%1x").arg(factor), factor);
+    windowScale->setCurrentIndex(
+        std::clamp(settings_.value("video/defaultScale", 2).toInt(), 1, 8) - 1);
+    form->addRow("Default window size", windowScale);
+    auto *palette = new QComboBox;
+    palette->setObjectName("monochromePalette");
+    palette->addItems({"Lime (Game Boy)", "Grayscale", "Olive (Pocket)", "Teal (Light)", "Custom"});
+    palette->setCurrentIndex(std::clamp(settings_.value("video/palette", 0).toInt(), 0, 4));
+    form->addRow("Monochrome palette", palette);
+    const auto defaultColors = monochromeColors(MonochromePalette::Lime, {});
+    std::array<QLineEdit *, 4> customColors{};
+    for (size_t i = 0; i < customColors.size(); ++i) {
+        customColors[i] = new QLineEdit(
+            settings_
+                .value(QString("video/customPalette/%1").arg(i), QColor(defaultColors[i]).name())
+                .toString());
+        customColors[i]->setObjectName(QString("customPalette/%1").arg(i));
+        customColors[i]->setMaxLength(7);
+        customColors[i]->setPlaceholderText("#RRGGBB");
+        customColors[i]->setEnabled(palette->currentIndex() == int(MonochromePalette::Custom));
+        form->addRow(QString("Custom shade %1 (%2)")
+                         .arg(i)
+                         .arg(i == 0   ? "lightest"
+                              : i == 3 ? "darkest"
+                                       : "middle"),
+                     customColors[i]);
+    }
+    connect(palette, &QComboBox::currentIndexChanged, &dialog, [customColors](int index) {
+        for (auto *color : customColors)
+            color->setEnabled(index == int(MonochromePalette::Custom));
+    });
+    auto *blending = new QCheckBox("Mix consecutive frames in linear light");
+    blending->setObjectName("frameBlending");
+    blending->setChecked(settings_.value("video/blending", false).toBool());
+    form->addRow("Simple frame blending", blending);
+    auto *border = new QCheckBox("Show the Super Game Boy border");
+    border->setObjectName("sgbBorder");
+    border->setChecked(settings_.value("video/sgbBorder", true).toBool());
+    form->addRow("SGB display", border);
+    auto *outputDevice = new QComboBox;
+    outputDevice->setObjectName("audioOutputDevice");
+    outputDevice->addItem("System Default", QByteArray());
+    for (const auto &device : QMediaDevices::audioOutputs())
+        outputDevice->addItem(device.description(), device.id());
+    const QByteArray requestedOutput = settings_.value("audio/outputDevice").toByteArray();
+    int outputIndex = outputDevice->findData(requestedOutput);
+    if (outputIndex < 0) {
+        outputDevice->addItem("Unavailable device (using System Default)", requestedOutput);
+        outputIndex = outputDevice->count() - 1;
+    }
+    outputDevice->setCurrentIndex(outputIndex);
+    form->addRow("Audio output", outputDevice);
     auto *volume = new QSlider(Qt::Horizontal);
     volume->setRange(0, 100);
     volume->setValue(settings_.value("audio/volume", 100).toInt());
@@ -1526,6 +1737,18 @@ void MainWindow::configure() {
     layout->addWidget(buttons);
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
     connect(buttons, &QDialogButtonBox::accepted, &dialog, [&] {
+        std::array<QString, 4> colorNames{};
+        for (size_t i = 0; i < customColors.size(); ++i) {
+            const QString text = customColors[i]->text().trimmed();
+            const QColor color(text);
+            if (text.size() != 7 || !text.startsWith('#') || !color.isValid()) {
+                QMessageBox::warning(
+                    &dialog, "Display",
+                    "Enter each custom color as #RRGGBB using hexadecimal digits.");
+                return;
+            }
+            colorNames[i] = color.name();
+        }
         std::array<int, 8> values{};
         std::array<int, 5> specialValues{};
         std::vector<int> used;
@@ -1586,7 +1809,16 @@ void MainWindow::configure() {
         settings_.setValue("emulation/model", model->currentData());
         settings_.setValue("emulation/bootDirectory", boot->text());
         bootDirectoryOverride_ = QString();
-        settings_.setValue("video/integerScale", scaling->currentIndex() == 0);
+        settings_.setValue("video/scaling", scaling->currentIndex());
+        const int oldScale = settings_.value("video/defaultScale", 2).toInt();
+        settings_.setValue("video/defaultScale", windowScale->currentData());
+        settings_.setValue("video/palette", palette->currentIndex());
+        settings_.setValue("video/blending", blending->isChecked());
+        settings_.setValue("video/sgbBorder", border->isChecked());
+        for (size_t i = 0; i < colorNames.size(); ++i)
+            settings_.setValue(QString("video/customPalette/%1").arg(i), colorNames[i]);
+        const bool outputChanged = requestedOutput != outputDevice->currentData().toByteArray();
+        settings_.setValue("audio/outputDevice", outputDevice->currentData().toByteArray());
         settings_.setValue("audio/volume", volume->value());
         if (settings_.value("emulation/rewindSeconds", 120) != rewindLength->currentData() ||
             settings_.value("emulation/rewindMiB", 256) != rewindBudget->currentData()) {
@@ -1595,9 +1827,12 @@ void MainWindow::configure() {
             resetRewind();
             rememberFrame();
         }
-        display_->integerScale = scaling->currentIndex() == 0;
-        display_->update();
-        if (audio_)
+        applyDisplaySettings();
+        if (oldScale != windowScale->currentData().toInt())
+            resizeDisplay(windowScale->currentData().toInt());
+        if (outputChanged && emulator_)
+            setupAudio();
+        else if (audio_)
             audio_->setVolume(muteAction_->isChecked() ? 0.0f : float(volume->value()) / 100);
         dialog.accept();
     });
@@ -1609,34 +1844,34 @@ void MainWindow::configure() {
 bool MainWindow::smokeTest() {
     QTemporaryDir directory;
     if (!directory.isValid())
-        return false;
+        return smokeFailure(__LINE__);
     QByteArray rom(32768, char(0));
     rom[0x100] = char(0x18);
     rom[0x101] = char(0xfe);
     rom[0x147] = 0x09; // ROM + RAM + battery, used to check persistence.
     rom[0x149] = 0x02;
     if (automaticModel(rom) != CUPID_GB_MODEL_DMG_ABC)
-        return false;
+        return smokeFailure(__LINE__);
     auto modelProbe = rom;
     modelProbe[0x14b] = 1;
     if (automaticModel(modelProbe) != CUPID_GB_MODEL_CGB)
-        return false;
+        return smokeFailure(__LINE__);
     modelProbe[0x146] = 3;
     if (automaticModel(modelProbe) != CUPID_GB_MODEL_SGB)
-        return false;
+        return smokeFailure(__LINE__);
     modelProbe[0x143] = char(0x80);
     if (automaticModel(modelProbe) != CUPID_GB_MODEL_CGB)
-        return false;
+        return smokeFailure(__LINE__);
     modelProbe = rom;
     modelProbe[0x14b] = 0x33;
     modelProbe[0x144] = '0';
     modelProbe[0x145] = '1';
     if (automaticModel(modelProbe) != CUPID_GB_MODEL_CGB)
-        return false;
+        return smokeFailure(__LINE__);
     const QString path = directory.filePath(QString::fromUtf8("cartridge-\xc3\xa9.gb"));
     QFile file(path);
     if (!file.open(QIODevice::WriteOnly) || file.write(rom) != rom.size())
-        return false;
+        return smokeFailure(__LINE__);
     file.close();
     auto dropFile = [this](const QString &path) {
         QMimeData mime;
@@ -1648,14 +1883,14 @@ bool MainWindow::smokeTest() {
         return drop.isAccepted();
     };
     if (!openRom(path) || !runFrame() || image_.size() != QSize(160, 144))
-        return false;
+        return smokeFailure(__LINE__);
     if (audioCheck_ && (!audio_ || !audioPriming_ || audioBuffer_->bytesAvailable() <= 0 ||
                         audioPrimeEvents_ != 0))
-        return false;
+        return smokeFailure(__LINE__);
     const auto beforeInvalidBoot = captureState();
     settings_.setValue("emulation/bootDirectory", directory.filePath("missing-boot-directory"));
     if (openRom(path) || captureState() != beforeInvalidBoot)
-        return false;
+        return smokeFailure(__LINE__);
     settings_.remove("emulation/bootDirectory");
     failed_ = false;
     pauseAction_->trigger();
@@ -1663,71 +1898,71 @@ bool MainWindow::smokeTest() {
     tick();
     if (emulator_->gb.cpu.pc != pc || !pauseAction_->isChecked() ||
         (audioCheck_ && (!audioPriming_ || audioBuffer_->bytesAvailable() != 0)))
-        return false;
+        return smokeFailure(__LINE__);
     setPaused(false);
     const auto beforeTimer = emulator_->gb.elapsed_cycles;
     QEventLoop loop;
     QTimer::singleShot(75, &loop, &QEventLoop::quit);
     loop.exec();
     if (emulator_->gb.elapsed_cycles <= beforeTimer)
-        return false;
+        return smokeFailure(__LINE__);
     emulator_->gb.io_registers[0] = 0x10;
     QKeyEvent down(QEvent::KeyPress, Qt::Key_X, Qt::NoModifier);
     QApplication::sendEvent(display_, &down);
     if ((emulator_->gb.joypad & 0x10) != 0 || !(emulator_->gb.interrupt_flags & 0x10))
-        return false;
+        return smokeFailure(__LINE__);
     QKeyEvent upWithControl(QEvent::KeyRelease, Qt::Key_X, Qt::ControlModifier);
     QApplication::sendEvent(display_, &upWithControl);
     if ((emulator_->gb.joypad & 0x10) == 0)
-        return false;
+        return smokeFailure(__LINE__);
     QKeyEvent turboDown(QEvent::KeyPress, Qt::Key_Space, Qt::NoModifier);
     QKeyEvent turboUp(QEvent::KeyRelease, Qt::Key_Space, Qt::AltModifier);
     QApplication::sendEvent(display_, &turboDown);
     QApplication::sendEvent(display_, &turboUp);
     if (turbo_)
-        return false;
+        return smokeFailure(__LINE__);
     QKeyEvent slowDown(QEvent::KeyPress, Qt::Key_Shift, Qt::ShiftModifier);
     QKeyEvent slowUp(QEvent::KeyRelease, Qt::Key_Shift, Qt::NoModifier);
     QApplication::sendEvent(display_, &slowDown);
     for (unsigned frame = 0; frame < 8; ++frame)
         if (!runFrame())
-            return false;
+            return smokeFailure(__LINE__);
     if (speedSteps_ != 8 || !slowHeld_)
-        return false;
+        return smokeFailure(__LINE__);
     QApplication::sendEvent(display_, &slowUp);
     for (unsigned frame = 0; frame < 8; ++frame)
         if (!runFrame())
-            return false;
+            return smokeFailure(__LINE__);
     if (speedSteps_ != 16 || slowHeld_)
-        return false;
+        return smokeFailure(__LINE__);
     specialKeys_[3] = Qt::Key_C;
     QKeyEvent rapidDown(QEvent::KeyPress, Qt::Key_C, Qt::NoModifier);
     QKeyEvent rapidUp(QEvent::KeyRelease, Qt::Key_C, Qt::ControlModifier);
     QApplication::sendEvent(display_, &rapidDown);
     for (unsigned frame = 0; frame < 8; ++frame) {
         if (bool(emulator_->gb.joypad & 0x10) != (frame % 4 >= 2) || !runFrame())
-            return false;
+            return smokeFailure(__LINE__);
     }
     QApplication::sendEvent(display_, &rapidUp);
     if (!(emulator_->gb.joypad & 0x10))
-        return false;
+        return smokeFailure(__LINE__);
     specialKeys_[3] = 0;
     QApplication::sendEvent(display_, &down);
     QEvent deactivate(QEvent::WindowDeactivate);
     QApplication::sendEvent(this, &deactivate);
     if (emulator_->gb.joypad != 0xff)
-        return false;
+        return smokeFailure(__LINE__);
     auto *running = emulator_.get();
     if (openRom(directory.filePath("missing.gb")) || emulator_.get() != running)
-        return false;
+        return smokeFailure(__LINE__);
     failed_ = false; // The missing-file error above is intentional.
     QFile saveRom(directory.filePath("not-a-cartridge.sav"));
     if (!saveRom.open(QIODevice::WriteOnly) || saveRom.write(rom) != rom.size())
-        return false;
+        return smokeFailure(__LINE__);
     saveRom.close();
     if (openRom(saveRom.fileName()) || emulator_.get() != running ||
         !saveRom.open(QIODevice::ReadOnly) || saveRom.readAll() != rom)
-        return false;
+        return smokeFailure(__LINE__);
     failed_ = false; // Rejecting a save file must preserve the running cartridge and input bytes.
     cupid_gb_write_u8(&emulator_->gb, 0xa017, 0x39);
     watchBattery();
@@ -1737,7 +1972,7 @@ bool MainWindow::smokeTest() {
     QFile automaticSave(savePath_);
     if (batteryDirty_ || !automaticSave.open(QIODevice::ReadOnly) ||
         automaticSave.readAll()[23] != char(0x39))
-        return false;
+        return smokeFailure(__LINE__);
     automaticSave.close();
     cupid_gb_write_u8(&emulator_->gb, 0xa017, 0x40);
     watchBattery();
@@ -1750,21 +1985,21 @@ bool MainWindow::smokeTest() {
     debounceLoop.exec();
     if (!batteryDirty_ || !automaticSave.open(QIODevice::ReadOnly) ||
         automaticSave.readAll()[23] != char(0x39))
-        return false;
+        return smokeFailure(__LINE__);
     automaticSave.close();
     QEventLoop stableLoop;
     QTimer::singleShot(100, &stableLoop, &QEventLoop::quit);
     stableLoop.exec();
     if (batteryDirty_ || !automaticSave.open(QIODevice::ReadOnly) ||
         automaticSave.readAll()[23] != char(0x41))
-        return false;
+        return smokeFailure(__LINE__);
     automaticSave.close();
     const QString shot = directory.filePath("screen.png");
     emulator_->gb.cartridge_ram[23] = 0x5a;
     ++emulator_->gb.battery_write_generation;
     if (!image_.save(shot) || QImage(shot).size() != image_.size() || !restart() ||
         emulator_->gb.cartridge_ram[23] != 0x5a)
-        return false;
+        return smokeFailure(__LINE__);
     setPaused(true);
     const QByteArray checkpoint = captureState();
     // Frozen legacy wire offsets are used only to exercise explicit battery recovery.
@@ -1785,70 +2020,70 @@ bool MainWindow::smokeTest() {
     std::memcpy(olderState.data() + 96, stateDigest.constData(), 32);
     QFile olderFile(directory.filePath("older.s1"));
     if (!olderFile.open(QIODevice::WriteOnly) || olderFile.write(olderState) != olderState.size())
-        return false;
+        return smokeFailure(__LINE__);
     olderFile.close();
     const QString recoveredPath = directory.filePath(QString::fromUtf8("recovered-\xc3\xa9.sav"));
     if (restoreState(olderState, false) || captureState() != checkpoint ||
         !recoverBattery(olderFile.fileName(), recoveredPath) || captureState() != checkpoint)
-        return false;
+        return smokeFailure(__LINE__);
     QFile recovered(recoveredPath);
     if (!recovered.open(QIODevice::ReadOnly) || recovered.size() != 8192 ||
         recovered.readAll()[23] != char(0x72))
-        return false;
+        return smokeFailure(__LINE__);
     if (recoverBattery(olderFile.fileName(), savePath_) ||
         recoverBattery(olderFile.fileName(), romPath_) ||
         recoverBattery(olderFile.fileName(), olderFile.fileName()) || captureState() != checkpoint)
-        return false;
+        return smokeFailure(__LINE__);
     failed_ = false;
     olderState[16529] ^= 1;
     if (!olderFile.open(QIODevice::WriteOnly) || olderFile.write(olderState) != olderState.size())
-        return false;
+        return smokeFailure(__LINE__);
     olderFile.close();
     if (recoverBattery(olderFile.fileName(), directory.filePath("bad-export.sav")) ||
         QFileInfo::exists(directory.filePath("bad-export.sav")) || captureState() != checkpoint)
-        return false;
+        return smokeFailure(__LINE__);
     failed_ = false;
     if (checkpoint.isEmpty() || !saveSlot(1) || !saveSlot(0) ||
         saveSlotActions_[1]->shortcut() != QKeySequence("Ctrl+1") ||
         loadSlotActions_[0]->shortcut() != QKeySequence("Ctrl+Shift+0"))
-        return false;
+        return smokeFailure(__LINE__);
     const QString nativeStatePath = slotPath(1);
     if (openRom(nativeStatePath) || captureState() != checkpoint)
-        return false;
+        return smokeFailure(__LINE__);
     failed_ = false; // State files must never be interpreted as new cartridges.
     if (!runFrame() || !dropFile(nativeStatePath) || !paused_ || captureState() != checkpoint)
-        return false;
+        return smokeFailure(__LINE__);
     if (!runFrame() || !runFrame())
-        return false;
+        return smokeFailure(__LINE__);
     const QByteArray expectedReplay = captureState();
     if (!loadSlot(1) || !paused_ || captureState() != checkpoint || !runFrame() || !runFrame() ||
         captureState() != expectedReplay)
-        return false;
+        return smokeFailure(__LINE__);
     if (!saveSlot(2) || !QFile::rename(slotPath(2), slotPath(2, true)) || !runFrame() ||
         !loadSlot(2) || captureState() != expectedReplay)
-        return false;
+        return smokeFailure(__LINE__);
     QFile corrupt(slotPath(2));
     if (!corrupt.open(QIODevice::WriteOnly) || corrupt.write("invalid") != 7)
-        return false;
+        return smokeFailure(__LINE__);
     corrupt.close();
     const QByteArray beforeInvalid = captureState();
     if (loadSlot(2) || !paused_ || captureState() != beforeInvalid)
-        return false;
+        return smokeFailure(__LINE__);
     failed_ = false; // A malformed primary must not load the valid legacy state.
     if (dropFile(slotPath(2)) || !paused_ || captureState() != beforeInvalid)
-        return false;
+        return smokeFailure(__LINE__);
     failed_ = false; // A damaged dropped state must preserve the running cartridge.
     setPaused(false);
     QApplication::sendEvent(display_, &down);
     if (!saveSlot(3))
-        return false;
+        return smokeFailure(__LINE__);
     QKeyEvent releasedA(QEvent::KeyRelease, Qt::Key_X, Qt::NoModifier);
     QApplication::sendEvent(display_, &releasedA);
     if (!loadSlot(3) || paused_ || (emulator_->gb.joypad & 0x10) == 0)
-        return false;
+        return smokeFailure(__LINE__);
     const QByteArray runningBeforeInvalid = captureState();
     if (loadSlot(2) || paused_ || captureState() != runningBeforeInvalid)
-        return false;
+        return smokeFailure(__LINE__);
     failed_ = false; // Rejected loads must also preserve an unpaused session.
     setPaused(true);
     const QString alternatePath = directory.filePath("different-cartridge.gb");
@@ -1857,46 +2092,46 @@ bool MainWindow::smokeTest() {
     QFile alternateFile(alternatePath);
     if (!alternateFile.open(QIODevice::WriteOnly) ||
         alternateFile.write(alternate) != alternate.size())
-        return false;
+        return smokeFailure(__LINE__);
     alternateFile.close();
     QFile originalSlot(slotPath(1));
     if (!originalSlot.open(QIODevice::ReadOnly))
-        return false;
+        return smokeFailure(__LINE__);
     const QByteArray originalBytes = originalSlot.readAll();
     originalSlot.close();
     if (!openRom(alternatePath))
-        return false;
+        return smokeFailure(__LINE__);
     setPaused(true);
     QFile wrongSlot(slotPath(1));
     if (!wrongSlot.open(QIODevice::WriteOnly) ||
         wrongSlot.write(originalBytes) != originalBytes.size())
-        return false;
+        return smokeFailure(__LINE__);
     wrongSlot.close();
     const QByteArray beforeWrongRom = captureState();
     if (loadSlot(1) || !paused_ || captureState() != beforeWrongRom)
-        return false;
+        return smokeFailure(__LINE__);
     failed_ = false; // A state belonging to another cartridge must preserve this session.
     if (dropFile(nativeStatePath) || !paused_ || captureState() != beforeWrongRom)
-        return false;
+        return smokeFailure(__LINE__);
     failed_ = false;
     if (!openRom(path))
-        return false;
+        return smokeFailure(__LINE__);
     setPaused(true);
     resetRewind();
     rememberFrame();
     for (int i = 0; i < 6; ++i)
         if (!runFrame())
-            return false;
+            return smokeFailure(__LINE__);
     const QByteArray forwardState = captureState();
     for (int i = 0; i < 3; ++i)
         if (!rewindFrame())
-            return false;
+            return smokeFailure(__LINE__);
     for (int i = 0; i < 3; ++i)
         if (!runFrame())
-            return false;
+            return smokeFailure(__LINE__);
     if (captureState() != forwardState) {
         qCritical("Rewind workflow failed to reproduce the forward state");
-        return false;
+        return smokeFailure(__LINE__);
     }
     const auto beforeRewind = emulator_->gb.elapsed_cycles;
     setPaused(false);
@@ -1913,7 +2148,7 @@ bool MainWindow::smokeTest() {
         qCritical("Rewind key workflow failed: held=%d cycles=%llu before=%llu joypad=%02x",
                   rewind_, qulonglong(emulator_->gb.elapsed_cycles), qulonglong(beforeRewind),
                   emulator_->gb.joypad);
-        return false;
+        return smokeFailure(__LINE__);
     }
     // Shift+Tab arrives as Backtab on desktop platforms and must still operate rewind.
     QKeyEvent shiftedRewindDown(QEvent::KeyPress, Qt::Key_Backtab, Qt::ShiftModifier);
@@ -1921,16 +2156,16 @@ bool MainWindow::smokeTest() {
     QApplication::sendEvent(display_, &shiftedRewindDown);
     if (!rewind_) {
         qCritical("Shift+Tab did not start rewind");
-        return false;
+        return smokeFailure(__LINE__);
     }
     QApplication::sendEvent(display_, &shiftedRewindUp);
     if (rewind_) {
         qCritical("Shift+Tab release did not stop rewind");
-        return false;
+        return smokeFailure(__LINE__);
     }
     QApplication::sendEvent(display_, &rightUp);
     if ((emulator_->gb.joypad & 1) == 0)
-        return false;
+        return smokeFailure(__LINE__);
     setPaused(true);
     const QByteArray beforeBudget = captureState();
     settings_.setValue("emulation/rewindMiB", 16);
@@ -1953,23 +2188,23 @@ bool MainWindow::smokeTest() {
     if (rewindFailed_ || rewindBytes_ > 16 * 1024 * 1024 || rewindStates_.size() >= 100 ||
         rewindStates_.size() < 2) {
         qCritical("Rewind memory limit workflow failed");
-        return false;
+        return smokeFailure(__LINE__);
     }
     settings_.setValue("emulation/rewindSeconds", 0);
     resetRewind();
     rememberFrame();
     if (!rewindStates_.empty())
-        return false;
+        return smokeFailure(__LINE__);
     settings_.setValue("emulation/rewindMiB", 256);
     if (!restoreState(beforeBudget, true))
-        return false;
+        return smokeFailure(__LINE__);
     settings_.setValue("emulation/rewindSeconds", 1);
     resetRewind();
     rememberFrame();
     const uint64_t durationStart = emulator_->gb.elapsed_cycles;
     for (int i = 0; i < 90; ++i)
         if (!runFrame())
-            return false;
+            return smokeFailure(__LINE__);
     // Guest execution exceeds the duration limit while memory remains far below its limit.
     if (rewindFailed_ || emulator_->gb.elapsed_cycles - durationStart <= 4194304 ||
         rewindStates_.size() < 2 || rewindStates_.size() >= 91 ||
@@ -1977,17 +2212,17 @@ bool MainWindow::smokeTest() {
         rewindStates_.back().cycles - rewindStates_.front().cycles > 4194304 ||
         rewindBytes_ >= 16 * 1024 * 1024) {
         qCritical("Rewind duration limit workflow failed");
-        return false;
+        return smokeFailure(__LINE__);
     }
     settings_.setValue("emulation/rewindSeconds", 120);
     if (!restoreState(beforeBudget, true))
-        return false;
+        return smokeFailure(__LINE__);
     resetRewind();
     rememberFrame();
     if (audioCheck_) {
         if (!audio_ || audioErrorEvents_) {
             qCritical("Audio workflow check requires a working audio output device");
-            return false;
+            return smokeFailure(__LINE__);
         }
         auto waitForward = [this] {
             setPaused(false);
@@ -2011,9 +2246,9 @@ bool MainWindow::smokeTest() {
             return passed;
         };
         if (!waitForward() || !saveSlot(9) || !waitForward())
-            return false;
+            return smokeFailure(__LINE__);
         if (!loadSlot(9) || audioBuffer_->bytesAvailable() != 0 || !audioPriming_ || !waitForward())
-            return false;
+            return smokeFailure(__LINE__);
         const uint64_t beforeBackwards = emulator_->gb.elapsed_cycles;
         QApplication::sendEvent(display_, &rewindDown);
         QEventLoop backwardsLoop;
@@ -2023,7 +2258,7 @@ bool MainWindow::smokeTest() {
         if (rewind_ || emulator_->gb.elapsed_cycles >= beforeBackwards ||
             audioBuffer_->bytesAvailable() != 0 || !audioPriming_ || !waitForward() ||
             audioErrorEvents_)
-            return false;
+            return smokeFailure(__LINE__);
         qInfo("CupidGB real-audio save/load and rewind transition checks passed");
     }
     const auto originalKeys = keys_;
@@ -2046,12 +2281,117 @@ bool MainWindow::smokeTest() {
         configure();
         return checked;
     };
+    setPaused(true);
+    const QByteArray displayState = captureState();
+    if (displayState.isEmpty())
+        return smokeFailure(__LINE__);
+    scalingActions_[2]->trigger();
+    if (display_->scaling != DisplayScaling::Fill ||
+        settings_.value("video/scaling").toInt() != int(DisplayScaling::Fill))
+        return smokeFailure(__LINE__);
+    scalingActions_[1]->trigger();
+    if (display_->scaling != DisplayScaling::Aspect)
+        return smokeFailure(__LINE__);
+    scalingActions_[0]->trigger();
+    windowSizeActions_[2]->trigger();
+    if (settings_.value("video/defaultScale").toInt() != 3 || !windowSizeActions_[2]->isChecked())
+        return smokeFailure(__LINE__);
+    windowSizeActions_[1]->trigger();
+    for (size_t i = 0; i < paletteActions_.size(); ++i) {
+        paletteActions_[i]->trigger();
+        if (!paletteActions_[i]->isChecked() || settings_.value("video/palette").toInt() != int(i))
+            return smokeFailure(__LINE__);
+    }
+    if (captureState() != displayState)
+        return smokeFailure(__LINE__);
+    if (!settingsDialog([&](QDialog &dialog) {
+            auto *scaling = dialog.findChild<QComboBox *>("displayScaling");
+            auto *palette = dialog.findChild<QComboBox *>("monochromePalette");
+            auto *color = dialog.findChild<QLineEdit *>("customPalette/0");
+            auto *blend = dialog.findChild<QCheckBox *>("frameBlending");
+            if (!scaling || !palette || !color || !blend)
+                return smokeFailure(__LINE__);
+            scaling->setCurrentIndex(int(DisplayScaling::Fill));
+            palette->setCurrentIndex(int(MonochromePalette::Custom));
+            color->setText("#123456");
+            blend->setChecked(true);
+            dialog.findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Cancel)->click();
+            return true;
+        }) ||
+        display_->scaling != DisplayScaling::Integer ||
+        settings_.contains("video/customPalette/0") ||
+        settings_.value("video/blending", false).toBool())
+        return smokeFailure(__LINE__);
+    if (!settingsDialog([&](QDialog &dialog) {
+            auto *palette = dialog.findChild<QComboBox *>("monochromePalette");
+            auto *color = dialog.findChild<QLineEdit *>("customPalette/0");
+            if (!palette || !color)
+                return smokeFailure(__LINE__);
+            palette->setCurrentIndex(int(MonochromePalette::Custom));
+            color->setText("#123456");
+            dialog.findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Ok)->click();
+            return !dialog.isVisible();
+        }) ||
+        settings_.value("video/customPalette/0").toString() != "#123456" ||
+        captureState() != displayState)
+        return smokeFailure(__LINE__);
+    if (!settingsDialog([&](QDialog &dialog) {
+            auto *color = dialog.findChild<QLineEdit *>("customPalette/0");
+            if (!color)
+                return smokeFailure(__LINE__);
+            color->setText("#zzzzzz");
+            bool warningShown = false;
+            QTimer::singleShot(0, &dialog, [&] {
+                if (auto *warning =
+                        qobject_cast<QMessageBox *>(QApplication::activeModalWidget())) {
+                    warningShown = true;
+                    warning->accept();
+                }
+            });
+            dialog.findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Ok)->click();
+            return warningShown && dialog.isVisible();
+        }) ||
+        settings_.value("video/customPalette/0").toString() != "#123456")
+        return smokeFailure(__LINE__);
+    paletteActions_[0]->trigger();
+    std::fill(std::begin(emulator_->gb.frame_buffer), std::end(emulator_->gb.frame_buffer), 0);
+    present();
+    if (image_.pixel(0, 0) != QColor("#c6de8c").rgb())
+        return smokeFailure(__LINE__);
+    paletteActions_[4]->trigger();
+    if (image_.pixel(0, 0) != QColor("#123456").rgb())
+        return smokeFailure(__LINE__);
+    paletteActions_[1]->trigger();
+    blendingAction_->trigger();
+    std::fill(std::begin(emulator_->gb.frame_buffer), std::end(emulator_->gb.frame_buffer), 3);
+    present(true);
+    std::fill(std::begin(emulator_->gb.frame_buffer), std::end(emulator_->gb.frame_buffer), 0);
+    present(true);
+    if (image_.pixel(0, 0) != qRgb(255, 255, 255) ||
+        display_->image.pixel(0, 0) != qRgb(186, 186, 186))
+        return smokeFailure(__LINE__);
+    const QImage blendedFrame = display_->image;
+    present();
+    if (display_->image != blendedFrame || !saveSlot(7) || !loadSlot(7) ||
+        !previousDisplayFrame_.isNull() || display_->image != image_)
+        return smokeFailure(__LINE__);
+    const QImage frameBeforeAdvance = currentDisplayFrame_;
+    if (!runFrame() || previousDisplayFrame_ != frameBeforeAdvance ||
+        display_->image != blendDisplayFrames(image_, frameBeforeAdvance))
+        return smokeFailure(__LINE__);
+    resetRewind();
+    rememberFrame();
+    if (!runFrame() || !runFrame() || !rewindFrame() || !previousDisplayFrame_.isNull() ||
+        display_->image != image_ || !restoreState(displayState, false))
+        return smokeFailure(__LINE__);
+    blendingAction_->trigger();
+    paletteActions_[0]->trigger();
     auto changeMappings = [](QDialog &dialog) {
         auto *button = dialog.findChild<QKeySequenceEdit *>("input/4");
         auto *mode = dialog.findChild<QKeySequenceEdit *>("input/special/0");
         auto *command = dialog.findChild<QKeySequenceEdit *>("shortcut/pause");
         if (!button || !mode || !command)
-            return false;
+            return smokeFailure(__LINE__);
         button->setKeySequence(QKeySequence(Qt::Key_J));
         mode->setKeySequence(QKeySequence(Qt::Key_Control));
         command->setKeySequence(QKeySequence("Ctrl+F8"));
@@ -2061,16 +2401,16 @@ bool MainWindow::smokeTest() {
     QApplication::sendEvent(display_, &down);
     if (!settingsDialog([&](QDialog &dialog) {
             if (!changeMappings(dialog) || !paused_ || emulator_->gb.joypad != 0xff)
-                return false;
+                return smokeFailure(__LINE__);
             dialog.findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Cancel)->click();
             return true;
         }) ||
         paused_ || keys_ != originalKeys || specialKeys_ != originalSpecialKeys ||
         pauseAction_->shortcut() != originalPauseShortcut)
-        return false;
+        return smokeFailure(__LINE__);
     if (!settingsDialog([&](QDialog &dialog) {
             if (!changeMappings(dialog))
-                return false;
+                return smokeFailure(__LINE__);
             dialog.findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Ok)->click();
             return !dialog.isVisible();
         }) ||
@@ -2079,20 +2419,20 @@ bool MainWindow::smokeTest() {
         settings_.value("input/4").toInt() != Qt::Key_J ||
         settings_.value("input/special/0").toInt() != Qt::Key_Control ||
         settings_.value("shortcuts/pause").toString() != "Ctrl+F8")
-        return false;
+        return smokeFailure(__LINE__);
     QKeyEvent controlDown(QEvent::KeyPress, Qt::Key_Control, Qt::ControlModifier);
     QKeyEvent controlUp(QEvent::KeyRelease, Qt::Key_Control, Qt::NoModifier);
     QApplication::sendEvent(display_, &controlDown);
     if (!turbo_)
-        return false;
+        return smokeFailure(__LINE__);
     QApplication::sendEvent(display_, &controlUp);
     if (turbo_)
-        return false;
+        return smokeFailure(__LINE__);
     const auto appliedKeys = keys_;
     if (!settingsDialog([&](QDialog &dialog) {
             auto *conflict = dialog.findChild<QKeySequenceEdit *>("input/5");
             if (!conflict)
-                return false;
+                return smokeFailure(__LINE__);
             conflict->setKeySequence(QKeySequence(Qt::Key_J));
             bool warningShown = false;
             QTimer::singleShot(0, &dialog, [&] {
@@ -2106,108 +2446,176 @@ bool MainWindow::smokeTest() {
             return warningShown && dialog.isVisible();
         }) ||
         paused_ || keys_ != appliedKeys)
-        return false;
+        return smokeFailure(__LINE__);
     setPaused(true);
     const QString recordingPath = directory.filePath("forward-audio.wav");
     if (startRecording(romPath_) || startRecording(savePath_))
-        return false;
+        return smokeFailure(__LINE__);
     failed_ = false;
     if (!startRecording(recordingPath) || !recorder_->active() ||
         recordingAction_->text() != "Stop Audio &Recording")
-        return false;
+        return smokeFailure(__LINE__);
     const uint64_t audioBeforeRecording = generatedAudioFrames_;
     resetRewind();
     rememberFrame();
     if (!saveSlot(8) || !runFrame() || !runFrame())
-        return false;
+        return smokeFailure(__LINE__);
     const uint64_t recordedFrames = recorder_->framesWritten();
+    const QByteArray deviceState = captureState();
+    const QByteArray missingOutput("cupidgb-missing-test-output");
+    settings_.setValue("audio/outputDevice", missingOutput);
+    setupAudio();
+    if (!audioDeviceFallback_ || activeAudioDeviceId_ != QMediaDevices::defaultAudioOutput().id() ||
+        !recorder_->active() || recorder_->framesWritten() != recordedFrames ||
+        captureState() != deviceState || (audioCheck_ && !audio_))
+        return smokeFailure(__LINE__);
+    if (!settingsDialog([&](QDialog &dialog) {
+            auto *output = dialog.findChild<QComboBox *>("audioOutputDevice");
+            if (!output || output->currentData().toByteArray() != missingOutput ||
+                !output->currentText().startsWith("Unavailable device"))
+                return smokeFailure(__LINE__);
+            output->setCurrentIndex(0);
+            dialog.findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Cancel)->click();
+            return true;
+        }) ||
+        settings_.value("audio/outputDevice").toByteArray() != missingOutput)
+        return smokeFailure(__LINE__);
+    const auto outputs = QMediaDevices::audioOutputs();
+    const QByteArray selectedOutput = outputs.isEmpty() ? QByteArray() : outputs.front().id();
+    if (!settingsDialog([&](QDialog &dialog) {
+            auto *output = dialog.findChild<QComboBox *>("audioOutputDevice");
+            if (!output)
+                return smokeFailure(__LINE__);
+            const int selectedIndex = output->findData(selectedOutput);
+            if (selectedIndex < 0)
+                return smokeFailure(__LINE__);
+            output->setCurrentIndex(selectedIndex);
+            dialog.findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Ok)->click();
+            return !dialog.isVisible();
+        }) ||
+        settings_.value("audio/outputDevice").toByteArray() != selectedOutput ||
+        audioDeviceFallback_ || !recorder_->active() ||
+        recorder_->framesWritten() != recordedFrames || captureState() != deviceState ||
+        (!selectedOutput.isEmpty() && activeAudioDeviceId_ != selectedOutput))
+        return smokeFailure(__LINE__);
+    // A controlled device-list notification exercises deferred renegotiation. It
+    // does not substitute for physical disconnection tests on different backends.
+    QMetaObject::invokeMethod(mediaDevices_, "audioOutputsChanged", Qt::DirectConnection);
+    QEventLoop deviceEvents;
+    QTimer::singleShot(20, &deviceEvents, &QEventLoop::quit);
+    deviceEvents.exec();
+    if (!recorder_->active() || recorder_->framesWritten() != recordedFrames ||
+        captureState() != deviceState)
+        return smokeFailure(__LINE__);
+    settings_.setValue("audio/outputDevice", QByteArray());
+    setupAudio();
     if (!recordedFrames || recordedFrames != generatedAudioFrames_ - audioBeforeRecording ||
         !rewindFrame() || recorder_->framesWritten() != recordedFrames || !loadSlot(8) ||
         !recorder_->active() || recorder_->framesWritten() != recordedFrames)
-        return false;
+        return smokeFailure(__LINE__);
     tick();
     if (recorder_->framesWritten() != recordedFrames || !runFrame() ||
         recorder_->framesWritten() <= recordedFrames)
-        return false;
+        return smokeFailure(__LINE__);
     const uint64_t finalFrames = recorder_->framesWritten();
     recordingAction_->trigger();
     QFile recorded(recordingPath);
     if (recorder_->active() || !recorded.open(QIODevice::ReadOnly) ||
         recorded.size() != qint64(44 + finalFrames * 4))
-        return false;
+        return smokeFailure(__LINE__);
     recorded.close();
     const QString rateChangePath = directory.filePath("rate-change.wav");
     if (!startRecording(rateChangePath) || !runFrame() ||
         !cupid_gb_apu_set_sample_rate(&emulator_->gb, 48000) || !runFrame() ||
         recorder_->active() || QFileInfo(rateChangePath).size() <= 44)
-        return false;
+        return smokeFailure(__LINE__);
     const QString loadRatePath = directory.filePath("load-rate-change.wav");
     if (!startRecording(loadRatePath) || !loadSlot(8) || recorder_->active() ||
         QFileInfo(loadRatePath).size() != 44)
-        return false;
+        return smokeFailure(__LINE__);
     const QString resetRecordingPath = directory.filePath("reset-audio.wav");
     if (!startRecording(resetRecordingPath) || !runFrame() || !restart() || recorder_->active() ||
         QFileInfo(resetRecordingPath).size() <= 44)
-        return false;
+        return smokeFailure(__LINE__);
     const QString closingRecordingPath = directory.filePath("close-audio.wav");
     if (!startRecording(closingRecordingPath) || !runFrame())
-        return false;
+        return smokeFailure(__LINE__);
     if (!closeRom() || closeAction_->isEnabled())
-        return false;
+        return smokeFailure(__LINE__);
     if (recorder_->active() || recordingAction_->isEnabled() ||
         QFileInfo(closingRecordingPath).size() <= 44)
-        return false;
+        return smokeFailure(__LINE__);
     const QString exitRecordingPath = directory.filePath("exit-audio.wav");
     {
         MainWindow closing(true);
         if (!closing.openRom(path) || !closing.startRecording(exitRecordingPath) ||
             !closing.runFrame())
-            return false;
+            return smokeFailure(__LINE__);
     }
     if (QFileInfo(exitRecordingPath).size() <= 44)
-        return false;
+        return smokeFailure(__LINE__);
     settings_.setValue("input/4", int(Qt::Key_A));
     settings_.setValue("input/special/0", int(Qt::Key_T));
     settings_.setValue("shortcuts/pause", "Ctrl+F9");
-    settings_.setValue("video/integerScale", false);
+    settings_.setValue("video/scaling", int(DisplayScaling::Aspect));
+    settings_.setValue("video/defaultScale", 3);
+    settings_.setValue("video/palette", int(MonochromePalette::Teal));
     settings_.sync();
     {
         MainWindow restored(true);
         if (restored.keys_[4] != Qt::Key_A || restored.specialKeys_[0] != Qt::Key_T ||
             restored.pauseAction_->shortcut() != QKeySequence("Ctrl+F9") ||
-            restored.display_->integerScale)
-            return false;
+            restored.display_->scaling != DisplayScaling::Aspect ||
+            !restored.paletteActions_[3]->isChecked() ||
+            !restored.windowSizeActions_[2]->isChecked())
+            return smokeFailure(__LINE__);
     }
     InputKeyEdit capture(0);
     QKeyEvent tabCapture(QEvent::KeyPress, Qt::Key_Tab, Qt::NoModifier);
     QApplication::sendEvent(&capture, &tabCapture);
     if (capture.keySequence() != QKeySequence(Qt::Key_Tab))
-        return false;
+        return smokeFailure(__LINE__);
     QApplication::sendEvent(&capture, &slowDown);
     if (capture.keySequence() != QKeySequence(Qt::Key_Shift))
-        return false;
+        return smokeFailure(__LINE__);
     QApplication::sendEvent(&capture, &controlDown);
     if (capture.keySequence() != QKeySequence(Qt::Key_Control))
-        return false;
+        return smokeFailure(__LINE__);
     QApplication::sendEvent(&capture, &shiftedRewindDown);
     if (capture.keySequence() != QKeySequence(Qt::Key_Tab))
-        return false;
+        return smokeFailure(__LINE__);
     settings_.setValue("emulation/model", int(CUPID_GB_MODEL_SGB));
     QFile superCartridge(directory.filePath("super.gb"));
     auto superData = rom;
     superData[0x146] = 3;
     if (!superCartridge.open(QIODevice::WriteOnly) ||
         superCartridge.write(superData) != superData.size())
-        return false;
+        return smokeFailure(__LINE__);
     superCartridge.close();
     if (!openRom(superCartridge.fileName()) || image_.size() != QSize(256, 224) ||
-        display_->minimumSize() != image_.size() || !closeRom())
-        return false;
+        display_->minimumSize() != image_.size())
+        return smokeFailure(__LINE__);
+    setPaused(true);
+    // Border tiles may overlap the central image. Hiding the surrounding frame
+    // must retain those overlays, including their palette-selected colors.
+    emulator_->gb.sgb.border_tiles[0] = 0xff;
+    emulator_->gb.sgb.border_palettes[1] = 0x001f;
+    present();
+    if (image_.pixel(CUPID_SGB_VIEWPORT_X, CUPID_SGB_VIEWPORT_Y) != qRgb(255, 0, 0))
+        return smokeFailure(__LINE__);
+    const QImage bordered = image_;
+    borderAction_->trigger();
+    if (image_.size() != QSize(160, 144) || display_->minimumSize() != image_.size() ||
+        image_ != bordered.copy(CUPID_SGB_VIEWPORT_X, CUPID_SGB_VIEWPORT_Y, 160, 144))
+        return smokeFailure(__LINE__);
+    borderAction_->trigger();
+    if (image_.size() != bordered.size() || !closeRom())
+        return smokeFailure(__LINE__);
     // Exercise model selection and boot overlay after cartridge initialization.
     settings_.setValue("emulation/model", int(CUPID_GB_MODEL_CGB));
     QFile boot(directory.filePath("cgb_boot.bin"));
     if (!boot.open(QIODevice::WriteOnly) || boot.write(QByteArray(0x900, char(0))) != 0x900)
-        return false;
+        return smokeFailure(__LINE__);
     boot.close();
     const QString priorDirectory = directory.filePath("saved-boot-preference");
     settings_.setValue("emulation/bootDirectory", priorDirectory);
@@ -2216,7 +2624,7 @@ bool MainWindow::smokeTest() {
         if (!session.openRom(path) || !session.emulator_->gb.boot_rom_enabled ||
             session.bootDirectory() != directory.path() ||
             settings_.value("emulation/bootDirectory").toString() != priorDirectory)
-            return false;
+            return smokeFailure(__LINE__);
         for (const bool accept : {false, true}) {
             bool checked = false;
             QTimer command;
@@ -2239,16 +2647,16 @@ bool MainWindow::smokeTest() {
                 settings_.value("emulation/bootDirectory").toString() !=
                     (accept ? directory.path() : priorDirectory) ||
                 session.bootDirectoryOverride_.isNull() != accept)
-                return false;
+                return smokeFailure(__LINE__);
         }
     }
     if (!openRom(path) || emulator_->gb.model != CUPID_GB_MODEL_CGB ||
         !emulator_->gb.boot_rom_enabled || emulator_->gb.cpu.pc != 0)
-        return false;
+        return smokeFailure(__LINE__);
     if (!closeRom())
-        return false;
+        return smokeFailure(__LINE__);
     if (dropFile(nativeStatePath) || emulator_)
-        return false;
+        return smokeFailure(__LINE__);
     failed_ = false; // Loading a dropped state requires an active cartridge.
     qInfo("CupidGB Qt workflow smoke test passed");
     return !failed_;
@@ -2293,6 +2701,11 @@ void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
             {"audio_priming_pending", audioPriming_},
             {"audio_error_events", double(audioErrorEvents_)},
             {"audio_sink_created", bool(audio_)},
+            {"audio_requested_device_id_base64",
+             QString::fromLatin1(settings_.value("audio/outputDevice").toByteArray().toBase64())},
+            {"audio_active_device_id_base64", QString::fromLatin1(activeAudioDeviceId_.toBase64())},
+            {"audio_active_device_name", activeAudioDeviceName_},
+            {"audio_device_fallback", audioDeviceFallback_},
             {"audio_sink_state", audio_ ? int(audio_->state()) : -1},
             {"audio_sink_error", audio_ ? int(audio_->error()) : -1},
             {"audio_processed_microseconds", audio_ ? double(audio_->processedUSecs()) : 0},
