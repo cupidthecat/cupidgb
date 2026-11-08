@@ -62,7 +62,7 @@ Loading a cartridge resets hardware. The direct loader is not a transactional se
 
 `cupid_gb_step` and `cupid_emulator_step` execute one instruction, interrupt entry, or bounded HALT/STOP work. They return false when execution cannot continue. They do not sleep or synchronize with a display.
 
-`CupidGb.elapsed_cycles` counts base-speed T-cycles. At normal hardware speed the nominal clock is 4,194,304 Hz; a regular LCD frame spans 70,224 base-speed T-cycles. Do not infer guest time from CPU instruction count or host paint count. CGB double speed changes CPU-domain work while the base-speed clock remains the timekeeping domain.
+`CupidGb.elapsed_cycles` counts base-speed T-cycles. Query `cupid_gb_base_clock_hz(gb)` to convert those cycles to seconds: the SGB NTSC profile uses 4,295,454 Hz, and the other current profiles use 4,194,304 Hz. A null instance returns the default 4,194,304 Hz. SGB PAL is not implemented. A regular LCD frame spans 70,224 base-speed T-cycles for every current profile. Do not infer guest time from CPU instruction count or host paint count. CGB double speed changes CPU-domain work while the base-speed clock remains the timekeeping domain.
 
 Use both a cycle bound and an execution-step bound for unattended runs. The LCD can be disabled, so waiting only for `frame_ready` can leave a host loop without a useful presentation bound. Host stalls must not be corrected by silently dropping guest hardware work.
 
@@ -79,7 +79,7 @@ Check and clear `frame_ready` when consuming completed images. Keep color/model 
 
 Drain audio regularly, including while the LCD is disabled. The core's sample buffer is finite. A host that drains only on VBlank can lose output during prolonged LCD-off execution. `tools/rom_runner.c` drains per instruction; another host can use a bounded interval small enough to preserve every generated sample.
 
-`cupid/gb/apu.h` exposes output sample-rate and high-pass controls. Changing the output rate discards queued and partial output frames while preserving oscillators. Clear or recreate corresponding host conversion state when changing formats or loading a state. Host volume, mute, resampling, and playback-device control belong outside the core.
+`cupid/gb/apu.h` exposes output sample-rate and high-pass controls. The configured rate is samples per physical model-second, so sample scheduling and the high-pass coefficient use the model clock. Changing the output rate discards queued and partial output frames while preserving oscillators. Clear or recreate corresponding host conversion state when changing formats or loading a state. Host volume, mute, resampling, and playback-device control belong outside the core.
 
 ## Input and memory access
 
@@ -90,6 +90,14 @@ The direction-only scan resolves opposing direction contacts consistently; when 
 `cupid_gb_read_u8` and `cupid_gb_write_u8` perform normal device accesses at the current hardware phase. They apply banking and access restrictions. They are not unrestricted debugger peek/poke operations and do not execute a CPU instruction's bus schedule by themselves. Tests that need bus phases should drive CPU execution or the relevant subsystem interface deliberately.
 
 Do not mutate internal fields from another thread. The public structures expose implementation state but do not make concurrent access safe. Pause and serialize access at an instruction boundary before saving, loading, inspecting, or changing host integration settings.
+
+## Serial observation
+
+Register `cupid_gb_set_serial_output_callback(gb, callback, user_data)` to observe completed internal-clock transfers. The callback receives a const instance, the SB byte latched when SC starts the transfer, and the supplied user pointer. It runs synchronously after the eighth shift, the clearing of SC's start bit, and the serial interrupt request. Other work in the enclosing machine cycle can still be pending. The callback must neither mutate nor reenter the emulator. Queue any later host work outside the callback.
+
+The core writes no serial bytes to stdout and performs no host-stream flushing. A host can buffer, display, or ignore observed bytes. This API is a completed-byte observer, not a bit-level cable endpoint; external-clock transport remains incomplete.
+
+Registration survives initialization, cartridge loading, boot reset, and native-state loading. Cleanup or registration with a null callback clears both callback and user pointer. These host fields are excluded from snapshots: restoring guest state preserves the current registration rather than restoring an old pointer. A state load does not replay previously observed bytes.
 
 ## Battery data
 
@@ -107,7 +115,9 @@ Normal disk-state APIs recompute cartridge identity. A rejected load leaves the 
 
 `CupidGbStateContext` caches cartridge identity for trusted in-memory rewind. It binds to one owner, ROM pointer, ROM size, and model. Discard it after cartridge/model changes or any in-place ROM patch. Binding checks cannot detect a patch that preserves the pointer and size. Never use the cached context to validate an untrusted disk file.
 
-The core supplies snapshot bytes. The host supplies compression, history limits, storage, and UI. The complete wire-format and continuation contract is in [save states and rewind](save-states.md).
+The version 2 codec checks a complete word-array range before reading or writing its explicit little-endian elements. It accepts unaligned state buffers without host-endian loads or structure dumps. The complete wire length remains 300,518 bytes; identity, integrity, final-offset, and hardware-domain checks still apply.
+
+The core supplies snapshot bytes. The host supplies compression, history limits, storage, and UI. Convert rewind age from base T-cycles using the selected model clock, not a fixed rate. The complete wire-format and continuation contract is in [save states and rewind](save-states.md).
 
 ## Debugger integration
 
@@ -124,5 +134,7 @@ Disassembly, symbol loading/lookups, bank identification, and breakpoint managem
 ## Errors and compatibility
 
 Lifecycle/step functions use booleans; snapshot and battery operations return typed result codes with readable name helpers. Logging reports additional loading and execution details. File loading through narrow C paths can depend on host filesystem encoding; the Qt frontend reads local cartridge and boot files through Qt before handing bytes to the core.
+
+With GCC mixed C/C++ Release IPO, compile the C++ host with `-fno-strict-aliasing`, as the in-tree build does. Link through the core target to retain cryptography dependencies; external C++ consumers must also preserve the IPO aliasing flag in their own compilation settings.
 
 The exposed structures are an internal integration surface, not a promised stable binary ABI. Preserve persistent model tags and version serialized formats deliberately when hardware state changes. API source presence, unit tests, and a bounded run do not establish complete hardware compatibility.

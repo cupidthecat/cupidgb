@@ -12,6 +12,8 @@ Open an extracted `.gb` or `.gbc` cartridge with Ctrl+O, drag it onto the window
 cupidgb /path/to/cartridge.gbc
 ```
 
+Use `--model dmg`, `--model cgb`, or another supported profile to fix hardware for one session. `--model auto` requests automatic selection regardless of the saved preference. The override survives reset and opening another cartridge, but does not change the saved hardware preference. See [hardware selection](docs/user-guide.md#open-reset-and-close) for accepted names.
+
 | Control | Default |
 | --- | --- |
 | Direction pad | Arrow keys |
@@ -33,7 +35,7 @@ Controllers, advanced debugger commands/watchpoints, connected devices, cheats, 
 
 Requirements: CMake 3.21 or newer, C11/C++17 compilers, Qt 6.4 or newer with Widgets and Multimedia, and Python 3.9 or newer for tests.
 
-On Linux, optional OpenSSL 3 development files enable faster large state hashes. Windows uses its system hashing API. Both retain portable hashing as a fallback.
+Release builds enable interprocedural optimization when the compiler and linker support it. Other configurations and sanitizer builds retain ordinary compilation. Use `-DCUPIDGB_ENABLE_IPO=OFF` to disable it. On Linux, optional OpenSSL 3 development files enable faster large state hashes. Windows uses its system hashing API. Both retain portable hashing as a fallback.
 
 On Debian or Ubuntu:
 
@@ -81,6 +83,6 @@ python3 scripts/run_rom_suite.py ./build/cupidgb_rom_runner /private/test-roms \
 ./build/cupidgb --run-seconds 60 --report .local-research/frontend.json /private/cartridge.gb
 ```
 
-The smoke check isolates settings and uses a generated cartridge. Add `--audio-check` to require a real output device. External suites require explicit success verdicts; bounded runs remain inconclusive. Runtime reports separate guest base-clock progress, VBlank/image counts, widget paint events, and audio/backend measurements. Widget paint events do not establish physical display presentation FPS.
+The smoke check isolates settings and uses a generated cartridge. Add `--audio-check` to require a real output device. External suites require explicit success verdicts; bounded runs remain inconclusive. Runtime reports record the requested and selected model and its base clock. Guest-speed percentages use 4,295,454 Hz for the SGB NTSC profile and 4,194,304 Hz for the other current profiles; SGB PAL is not implemented. Reports separate guest base-clock progress, VBlank/image counts, widget paint events, and audio/backend measurements. Widget paint events do not establish physical display presentation FPS.
 
 Create private output directories before using capture/report paths. Keep ROMs, boot binaries, saves, captured game content, active builds, and comparison receipts out of public commits. [The validation record](docs/validation.md) lists the tested environments, results, and remaining limits. Use the supplied `.clang-format` for project C/C++ files. The project license is in [LICENSE](LICENSE).

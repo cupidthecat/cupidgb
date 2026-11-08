@@ -28,7 +28,9 @@ Format only the changed project sources. Do not reformat generated files or thir
 
 Derive requirements from observed source/runtime behavior, then implement them in CupidGB's own structure. Avoid special cases for test filenames, program counters, individual games, or expected output signatures in the emulation core. Test-success protocols belong in explicit validation tools.
 
-Performance changes must preserve guest execution, timing, sound generation, and capture cadence. Compare equivalent settings and report the work performed. Faster host presentation with fewer emulated events is not an accuracy-preserving optimization.
+Performance changes must preserve guest execution, timing, sound generation, and capture cadence. Compare equivalent settings and report the work performed. Faster host presentation with fewer emulated events is not an accuracy-preserving optimization. Keep a preserved baseline and record compiler/IPO flags, complete wire bytes, image/PCM observations, and capture cadence. Test mixed C/C++ access under the actual Release optimizer when shared hardware records cross that boundary; sanitizer and non-IPO builds cover different paths.
+
+Convert guest base T-cycles through `cupid_gb_base_clock_hz`. SGB NTSC and the other current models have different physical rates, while a normal LCD interval remains 70,224 cycles. Keep audio, pacing, reported percentages, and rewind-duration units consistent with that distinction. Serial diagnostics belong in host observers, without stream output or flushes in the hardware clock path.
 
 When adding hardware state, audit native save encoding, domain validation, continuation, reset/boot profiles, and rewind. Preserve persistent model tags. Revise the native format deliberately when bytes or continuation semantics change. A cached rewind identity must be invalidated by cartridge/model replacement or any ROM patch.
 

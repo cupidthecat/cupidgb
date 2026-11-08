@@ -20,6 +20,10 @@ int main(int argc, char **argv) {
     parser.addOption({"audio-check", "Require real audio during --smoke-test."});
     parser.addOption(
         {"boot-directory", "Use boot ROMs from this directory for this session.", "path"});
+    parser.addOption({"model",
+                      "Use hardware for this session: auto, dmg, dmgabc, dmg0, mgb, "
+                      "cgb, sgb, sgb2.",
+                      "profile"});
     parser.addOption(
         {"run-seconds", "Run the frontend for a bounded duration and exit.", "seconds"});
     parser.addOption({"report", "Write bounded frontend measurements as JSON.", "path"});
@@ -30,7 +34,27 @@ int main(int argc, char **argv) {
     const bool smoke = parser.isSet("smoke-test");
     const bool audioCheck = parser.isSet("audio-check");
     const bool bootOverride = parser.isSet("boot-directory");
-    if ((audioCheck && !smoke) || (smoke && bootOverride))
+    std::optional<int> modelOverride;
+    if (parser.isSet("model")) {
+        const QString name = parser.value("model");
+        if (name == "auto") {
+            modelOverride = -1;
+        } else {
+            for (int model = CUPID_GB_MODEL_DMG_ABC; model <= CUPID_GB_MODEL_SGB2; ++model) {
+                if (name == QString::fromLatin1(cupid_gb_model_name(CupidGbModel(model))) ||
+                    (name == "dmg" && model == CUPID_GB_MODEL_DMG_ABC)) {
+                    modelOverride = model;
+                    break;
+                }
+            }
+        }
+        if (!modelOverride) {
+            qCritical(
+                "Invalid hardware profile. Use --model auto|dmg|dmgabc|dmg0|mgb|cgb|sgb|sgb2.");
+            return 1;
+        }
+    }
+    if ((audioCheck && !smoke) || (smoke && (bootOverride || modelOverride)))
         parser.showHelp(1);
     const bool bounded = parser.isSet("run-seconds");
     QTemporaryDir temporary;
@@ -48,7 +72,7 @@ int main(int argc, char **argv) {
             return 1;
         }
     }
-    MainWindow window(smoke, bounded, audioCheck, bootDirectory);
+    MainWindow window(smoke, bounded, audioCheck, bootDirectory, modelOverride);
     window.show();
     if (smoke)
         return window.smokeTest() ? 0 : 1;

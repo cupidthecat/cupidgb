@@ -75,8 +75,12 @@ constexpr std::array<const char *, 8> buttonNames = {"Right", "Left", "Up",     
 constexpr std::array<const char *, 5> specialNames = {"Turbo", "Rewind", "Slow motion", "Rapid A",
                                                       "Rapid B"};
 constexpr std::array<int, 5> defaultSpecialKeys = {Qt::Key_Space, Qt::Key_Tab, Qt::Key_Shift, 0, 0};
-// A normal-speed LCD frame is 70,224 T-cycles at 4,194,304 Hz.
-constexpr qint64 frameNanoseconds = 16742706;
+
+// LCD geometry stays at 70,224 base cycles; elapsed time follows the model oscillator.
+qint64 nominalFrameNanoseconds(const CupidGb *gb, unsigned speedSteps = 16) {
+    return qint64(uint64_t(70224) * 1000000000 * 16 /
+                  (uint64_t(cupid_gb_base_clock_hz(gb)) * speedSteps));
+}
 
 bool smokeFailure(int line) {
     qCritical("CupidGB Qt workflow check failed at main_window.cpp:%d", line);
@@ -268,9 +272,9 @@ class AudioBuffer final {
 };
 
 MainWindow::MainWindow(bool isolated, bool automated, bool audioCheck,
-                       const QString &bootDirectoryOverride)
-    : bootDirectoryOverride_(bootDirectoryOverride), isolated_(isolated), automated_(automated),
-      audioCheck_(audioCheck) {
+                       const QString &bootDirectoryOverride, std::optional<int> modelOverride)
+    : bootDirectoryOverride_(bootDirectoryOverride), modelOverride_(modelOverride),
+      isolated_(isolated), automated_(automated), audioCheck_(audioCheck) {
     setWindowTitle("CupidGB");
     setAcceptDrops(true);
     display_ = new DisplayWidget(this);
@@ -654,7 +658,7 @@ bool MainWindow::openRom(const QString &path) {
         return false;
     }
     auto candidate = std::make_unique<CupidEmulator>();
-    int model = settings_.value("emulation/model", -1).toInt();
+    int model = modelOverride_.value_or(settings_.value("emulation/model", -1).toInt());
     if (model < 0)
         model = automaticModel(data);
     if (model > CUPID_GB_MODEL_SGB2 || model < CUPID_GB_MODEL_DMG_ABC) {
@@ -1134,7 +1138,7 @@ void MainWindow::tick() {
             rewindFrame();
             if (turbo_)
                 rewindFrame();
-            nextFrame_ = now + frameNanoseconds;
+            nextFrame_ = now + nominalFrameNanoseconds(emulator_ ? &emulator_->gb : nullptr);
             clockPacer_.reset();
         }
         return;
@@ -1160,7 +1164,8 @@ void MainWindow::tick() {
     }
     // LCD startup and re-enabling can finish a partial image. Charge only
     // consumed base-clock time, including the two-dot CGB machine cycles.
-    const auto interval = clockPacer_.advance(emulator_->gb.elapsed_cycles - startCycles, speed);
+    const auto interval = clockPacer_.advance(emulator_->gb.elapsed_cycles - startCycles, speed,
+                                              cupid_gb_base_clock_hz(&emulator_->gb));
     if (!interval || nextFrame_ > std::numeric_limits<qint64>::max() - *interval) {
         setPaused(true);
         reportError("Host pacing duration could not be computed.");
@@ -1168,7 +1173,7 @@ void MainWindow::tick() {
     }
     nextFrame_ += *interval;
     // A short LCD interval must not shrink the host-stall recovery window.
-    const qint64 nominalInterval = frameNanoseconds * 16 / speed;
+    const qint64 nominalInterval = nominalFrameNanoseconds(&emulator_->gb, speed);
     if (turbo_ || now - nextFrame_ > nominalInterval * 4) {
         nextFrame_ = now;
         clockPacer_.reset();
@@ -1451,6 +1456,7 @@ void MainWindow::rememberFrame() {
     const int seconds = std::clamp(settings_.value("emulation/rewindSeconds", 120).toInt(), 0, 600);
     if (!emulator_ || !seconds || rewindFailed_)
         return;
+    const uint32_t clockHz = cupid_gb_base_clock_hz(&emulator_->gb);
     if (!rewindContext_) {
         auto context = std::make_unique<CupidGbStateContext>();
         const auto result = cupid_gb_state_context_init(context.get(), &emulator_->gb);
@@ -1492,7 +1498,7 @@ void MainWindow::rememberFrame() {
     bool budgetLimited = false;
     while (rewindStates_.size() > 1 &&
            (rewindBytes_ > budget || rewindStates_.back().cycles - rewindStates_.front().cycles >
-                                         uint64_t(seconds) * 4194304)) {
+                                         uint64_t(seconds) * clockHz)) {
         budgetLimited |= rewindBytes_ > budget;
         rewindBytes_ -=
             rewindStates_.front().compressed.capacity() + qsizetype(sizeof(RewindSnapshot));
@@ -1501,7 +1507,7 @@ void MainWindow::rememberFrame() {
     if (budgetLimited && clock_.elapsed() - lastRewindBudgetNotice_ > 1000) {
         lastRewindBudgetNotice_ = clock_.elapsed();
         const double available =
-            double(rewindStates_.back().cycles - rewindStates_.front().cycles) / 4194304;
+            double(rewindStates_.back().cycles - rewindStates_.front().cycles) / clockHz;
         statusBar()->showMessage(QString("Rewind memory limit: %1 seconds retained within %2 MiB")
                                      .arg(available, 0, 'f', 1)
                                      .arg(budgetMiB),
@@ -2286,6 +2292,7 @@ void MainWindow::configure() {
     auto *formWidget = new QWidget;
     auto *form = new QFormLayout(formWidget);
     auto *model = new QComboBox;
+    model->setObjectName("hardwareModel");
     model->addItem("Automatic", -1);
     model->addItem("Game Boy", CUPID_GB_MODEL_DMG_ABC);
     model->addItem("Game Boy (DMG0)", CUPID_GB_MODEL_DMG0);
@@ -2293,8 +2300,15 @@ void MainWindow::configure() {
     model->addItem("Game Boy Color", CUPID_GB_MODEL_CGB);
     model->addItem("Super Game Boy", CUPID_GB_MODEL_SGB);
     model->addItem("Super Game Boy 2", CUPID_GB_MODEL_SGB2);
-    model->setCurrentIndex(model->findData(settings_.value("emulation/model", -1).toInt()));
-    form->addRow("Hardware (applies on reset/open)", model);
+    model->setCurrentIndex(
+        model->findData(modelOverride_.value_or(settings_.value("emulation/model", -1).toInt())));
+    if (modelOverride_) {
+        model->setEnabled(false);
+        model->setToolTip("Hardware is fixed by --model for this session. "
+                          "Your saved preference is unchanged.");
+    }
+    form->addRow(
+        modelOverride_ ? "Hardware (session override)" : "Hardware (applies on reset/open)", model);
     auto *bootRow = new QWidget;
     auto *bootLayout = new QHBoxLayout(bootRow);
     bootLayout->setContentsMargins(0, 0, 0, 0);
@@ -2391,7 +2405,8 @@ void MainWindow::configure() {
     const double available =
         rewindStates_.size() < 2
             ? 0.0
-            : double(rewindStates_.back().cycles - rewindStates_.front().cycles) / 4194304;
+            : double(rewindStates_.back().cycles - rewindStates_.front().cycles) /
+                  cupid_gb_base_clock_hz(emulator_ ? &emulator_->gb : nullptr);
     form->addRow("Current retained history",
                  new QLabel(QString("%1 seconds, %2 MiB")
                                 .arg(available, 0, 'f', 1)
@@ -2505,7 +2520,8 @@ void MainWindow::configure() {
             settings_.setValue("shortcuts/" + shortcutActions_[i]->objectName(),
                                commands[i].toString(QKeySequence::PortableText));
         }
-        settings_.setValue("emulation/model", model->currentData());
+        if (!modelOverride_)
+            settings_.setValue("emulation/model", model->currentData());
         settings_.setValue("emulation/bootDirectory", boot->text());
         bootDirectoryOverride_ = QString();
         settings_.setValue("video/scaling", scaling->currentIndex());
@@ -2905,10 +2921,12 @@ bool MainWindow::smokeTest() {
         if (!runFrame())
             return smokeFailure(__LINE__);
     // Guest execution exceeds the duration limit while memory remains far below its limit.
-    if (rewindFailed_ || emulator_->gb.elapsed_cycles - durationStart <= 4194304 ||
+    if (rewindFailed_ ||
+        emulator_->gb.elapsed_cycles - durationStart <= cupid_gb_base_clock_hz(&emulator_->gb) ||
         rewindStates_.size() < 2 || rewindStates_.size() >= 91 ||
         rewindStates_.front().cycles <= durationStart ||
-        rewindStates_.back().cycles - rewindStates_.front().cycles > 4194304 ||
+        rewindStates_.back().cycles - rewindStates_.front().cycles >
+            cupid_gb_base_clock_hz(&emulator_->gb) ||
         rewindBytes_ >= 16 * 1024 * 1024) {
         qCritical("Rewind duration limit workflow failed");
         return smokeFailure(__LINE__);
@@ -3365,8 +3383,9 @@ bool MainWindow::smokeTest() {
     failed_ = false; // Loading a dropped state requires an active cartridge.
     if (!debuggerSmokeTest(directory.path()))
         return smokeFailure(__LINE__);
-    if (!pacingSmokeTest(path) || display_->collectPaintIntervals ||
-        !display_->paintIntervals.empty() || display_->lastPaintAt)
+    if (!pacingSmokeTest(path) || !modelSmokeTest(directory.path()) ||
+        display_->collectPaintIntervals || !display_->paintIntervals.empty() ||
+        display_->lastPaintAt)
         return smokeFailure(__LINE__);
     qInfo("CupidGB Qt workflow smoke test passed");
     return !failed_;
@@ -3761,38 +3780,144 @@ bool MainWindow::debuggerSmokeTest(const QString &directory) {
     return true;
 }
 
-bool MainWindow::pacingSmokeTest(const QString &path) {
-    settings_.setValue("emulation/model", -1);
-    if (!openRom(path))
+bool MainWindow::modelSmokeTest(const QString &directory) {
+    QByteArray rom(32768, char(0));
+    rom[0x100] = char(0x18);
+    rom[0x101] = char(0xfe);
+    const auto writeFixture = [&](const QString &name, uint8_t color, uint8_t licensee) {
+        rom[0x143] = char(color);
+        rom[0x14b] = char(licensee);
+        uint8_t checksum = 0;
+        for (int i = 0x134; i <= 0x14c; ++i)
+            checksum = uint8_t(checksum - uint8_t(rom[i]) - 1);
+        rom[0x14d] = char(checksum);
+        const QString path = QDir(directory).filePath(name);
+        QFile file(path);
+        if (!file.open(QIODevice::WriteOnly) || file.write(rom) != rom.size())
+            return QString();
+        return path;
+    };
+    const QString plain = writeFixture("model-plain.gb", 0, 0);
+    const QString licensed = writeFixture("model-licensed.gb", 0, 1);
+    const QString colorOnly = writeFixture("model-color-only.gbc", 0xc0, 1);
+    if (plain.isEmpty() || licensed.isEmpty() || colorOnly.isEmpty())
         return smokeFailure(__LINE__);
-    auto &gb = emulator_->gb;
-    // Approach VBlank using real hardware steps so the next image covers only
-    // a scanline tail. A presentation-count deadline would overcharge it.
-    unsigned steps = 0;
-    while ((gb.pixels.line != 143 || gb.pixels.dot < 440) && steps++ < 70000) {
-        if (!cupid_gb_step(&gb))
+    const bool hadModel = settings_.contains("emulation/model");
+    const QVariant savedModel = settings_.value("emulation/model");
+    settings_.setValue("emulation/bootDirectory", QString());
+    settings_.setValue("emulation/model", int(CUPID_GB_MODEL_CGB));
+    {
+        MainWindow forced(true, false, false, QString(), CUPID_GB_MODEL_DMG_ABC);
+        if (!forced.openRom(licensed) || forced.emulator_->gb.model != CUPID_GB_MODEL_DMG_ABC ||
+            !forced.restart() || forced.emulator_->gb.model != CUPID_GB_MODEL_DMG_ABC)
+            return smokeFailure(__LINE__);
+        for (const bool accept : {false, true}) {
+            bool checked = false;
+            QTimer command;
+            command.setInterval(1);
+            connect(&command, &QTimer::timeout, &forced, [&] {
+                auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+                if (!dialog || dialog->objectName() != "settings")
+                    return;
+                command.stop();
+                auto *model = dialog->findChild<QComboBox *>("hardwareModel");
+                checked = model && !model->isEnabled() &&
+                          model->currentData().toInt() == CUPID_GB_MODEL_DMG_ABC;
+                // Disabled controls must not become a persisted override even
+                // if another UI path changes the selection programmatically.
+                if (model)
+                    model->setCurrentIndex(model->findData(int(CUPID_GB_MODEL_CGB)));
+                dialog->findChild<QDialogButtonBox *>()
+                    ->button(accept ? QDialogButtonBox::Ok : QDialogButtonBox::Cancel)
+                    ->click();
+            });
+            command.start();
+            forced.configure();
+            if (!checked || settings_.value("emulation/model").toInt() != CUPID_GB_MODEL_CGB ||
+                !forced.restart() || forced.emulator_->gb.model != CUPID_GB_MODEL_DMG_ABC)
+                return smokeFailure(__LINE__);
+        }
+        const QByteArray beforeRejected = forced.captureState();
+        if (forced.openRom(colorOnly) || forced.captureState() != beforeRejected ||
+            !forced.closeRom() || !forced.openRom(plain) ||
+            forced.emulator_->gb.model != CUPID_GB_MODEL_DMG_ABC)
             return smokeFailure(__LINE__);
     }
-    if (steps >= 70000)
-        return smokeFailure(__LINE__);
-    setPaused(false);
-    const uint64_t partialStart = gb.elapsed_cycles;
-    const qint64 partialDeadline = nextFrame_;
-    tick();
-    const uint64_t partialCycles = gb.elapsed_cycles - partialStart;
-    if (paused_ || !partialCycles || partialCycles >= 70224 ||
-        nextFrame_ != partialDeadline + qint64(partialCycles * 1000000000 / 4194304))
-        return smokeFailure(__LINE__);
-    cupid_gb_write_u8(&gb, 0xff40, 0);
-    resetPacing();
-    const uint64_t blankStart = gb.elapsed_cycles;
-    const qint64 blankDeadline = nextFrame_;
-    tick();
-    const uint64_t blankCycles = gb.elapsed_cycles - blankStart;
-    if (paused_ || blankCycles != 70224 ||
-        nextFrame_ != blankDeadline + qint64(blankCycles * 1000000000 / 4194304))
-        return smokeFailure(__LINE__);
-    return closeRom();
+    settings_.setValue("emulation/model", int(CUPID_GB_MODEL_DMG_ABC));
+    {
+        MainWindow automatic(true, false, false, QString(), -1);
+        if (!automatic.openRom(licensed) || automatic.emulator_->gb.model != CUPID_GB_MODEL_CGB ||
+            !automatic.restart() || automatic.emulator_->gb.model != CUPID_GB_MODEL_CGB ||
+            settings_.value("emulation/model").toInt() != CUPID_GB_MODEL_DMG_ABC ||
+            !automatic.openRom(plain) || automatic.emulator_->gb.model != CUPID_GB_MODEL_DMG_ABC ||
+            !automatic.openRom(colorOnly) || automatic.emulator_->gb.model != CUPID_GB_MODEL_CGB)
+            return smokeFailure(__LINE__);
+    }
+    settings_.setValue("emulation/model", int(CUPID_GB_MODEL_CGB));
+    {
+        MainWindow saved(true);
+        if (!saved.openRom(plain) || saved.emulator_->gb.model != CUPID_GB_MODEL_CGB)
+            return smokeFailure(__LINE__);
+    }
+    if (hadModel)
+        settings_.setValue("emulation/model", savedModel);
+    else
+        settings_.remove("emulation/model");
+    return true;
+}
+
+bool MainWindow::pacingSmokeTest(const QString &path) {
+    for (const auto model : {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_SGB, CUPID_GB_MODEL_SGB2}) {
+        settings_.setValue("emulation/model", int(model));
+        if (!openRom(path))
+            return smokeFailure(__LINE__);
+        auto &gb = emulator_->gb;
+        const uint32_t clockHz = cupid_gb_base_clock_hz(&gb);
+        // Approach VBlank using real hardware steps so the next image covers only
+        // a scanline tail. A presentation-count deadline would overcharge it.
+        unsigned steps = 0;
+        while ((gb.pixels.line != 143 || gb.pixels.dot < 440) && steps++ < 70000) {
+            if (!cupid_gb_step(&gb))
+                return smokeFailure(__LINE__);
+        }
+        if (steps >= 70000)
+            return smokeFailure(__LINE__);
+        setPaused(false);
+        const uint64_t partialStart = gb.elapsed_cycles;
+        const qint64 partialDeadline = nextFrame_;
+        tick();
+        const uint64_t partialCycles = gb.elapsed_cycles - partialStart;
+        if (paused_ || !partialCycles || partialCycles >= 70224 ||
+            nextFrame_ != partialDeadline + qint64(partialCycles * 1000000000 / clockHz))
+            return smokeFailure(__LINE__);
+        cupid_gb_write_u8(&gb, 0xff40, 0);
+        resetPacing();
+        const uint64_t blankStart = gb.elapsed_cycles;
+        const qint64 blankDeadline = nextFrame_;
+        tick();
+        const uint64_t blankCycles = gb.elapsed_cycles - blankStart;
+        if (paused_ || blankCycles != 70224 ||
+            nextFrame_ != blankDeadline + qint64(blankCycles * 1000000000 / clockHz))
+            return smokeFailure(__LINE__);
+        if (model == CUPID_GB_MODEL_SGB) {
+            const auto priorDuration = settings_.value("emulation/rewindSeconds", 120);
+            settings_.setValue("emulation/rewindSeconds", 1);
+            resetRewind();
+            rememberFrame();
+            for (unsigned frame = 0; frame < 64; ++frame)
+                if (!runFrame())
+                    return smokeFailure(__LINE__);
+            if (rewindFailed_ || rewindStates_.size() < 2)
+                return smokeFailure(__LINE__);
+            const uint64_t retained = rewindStates_.back().cycles - rewindStates_.front().cycles;
+            if (retained > clockHz || retained <= clockHz - 70224)
+                return smokeFailure(__LINE__);
+            settings_.setValue("emulation/rewindSeconds", priorDuration);
+        }
+        if (!closeRom())
+            return smokeFailure(__LINE__);
+    }
+    return true;
 }
 
 void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
@@ -3828,9 +3953,10 @@ void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
     const uint64_t session = sessionId_;
     const uint64_t timeline = timelineId_;
     const uint64_t measurement = ++boundedRunId_;
-    const auto unchanged = [this, session, timeline, measurement] {
+    const uint32_t clockHz = cupid_gb_base_clock_hz(&emulator_->gb);
+    const auto unchanged = [this, session, timeline, measurement, clockHz] {
         return emulator_ && sessionId_ == session && timelineId_ == timeline &&
-               boundedRunId_ == measurement &&
+               boundedRunId_ == measurement && cupid_gb_base_clock_hz(&emulator_->gb) == clockHz &&
                emulator_->gb.elapsed_cycles >= telemetryStartCycles_;
     };
     if (seconds > warmupSeconds) {
@@ -3853,7 +3979,7 @@ void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
     }
     QTimer::singleShot(
         int(seconds * 1000), Qt::PreciseTimer, this,
-        [this, reportPath, seconds, warmupSeconds, measurement, warmup, unchanged] {
+        [this, reportPath, seconds, warmupSeconds, measurement, warmup, unchanged, clockHz] {
             if (boundedRunId_ != measurement)
                 return;
             display_->collectPaintIntervals = false;
@@ -3868,8 +3994,9 @@ void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
             QJsonObject report{
                 {"elapsed_seconds", elapsed},
                 {"guest_base_speed_t_cycles", double(cycles)},
+                {"base_clock_hz", int(clockHz)},
                 {"guest_cycles_per_second", double(cycles) / elapsed},
-                {"guest_speed_percent", double(cycles) / elapsed / 4194304.0 * 100},
+                {"guest_speed_percent", double(cycles) / elapsed / clockHz * 100},
                 {"images_submitted_to_widget", double(presentedImages_)},
                 {"widget_paint_events", double(display_->paintCount)},
                 {"audio_frames_generated", double(generatedAudioFrames_)},
@@ -3897,7 +4024,9 @@ void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
                 {"qt_version", qVersion()},
                 {"platform", QGuiApplication::platformName()},
                 {"execution_failed", failed_}};
-            QJsonObject postWarmup{{"available", false}, {"warmup_target_seconds", warmupSeconds}};
+            QJsonObject postWarmup{{"available", false},
+                                   {"warmup_target_seconds", warmupSeconds},
+                                   {"base_clock_hz", int(clockHz)}};
             if (seconds <= warmupSeconds) {
                 postWarmup.insert("reason", "run_does_not_exceed_warmup");
             } else if (!warmup->captured || elapsed <= warmup->elapsed) {
@@ -3920,7 +4049,7 @@ void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
                 postWarmup.insert("guest_base_speed_t_cycles", windowCycles);
                 postWarmup.insert("guest_cycles_per_second", windowCycles / windowElapsed);
                 postWarmup.insert("guest_speed_percent",
-                                  windowCycles / windowElapsed / 4194304 * 100);
+                                  windowCycles / windowElapsed / clockHz * 100);
                 postWarmup.insert("images_submitted_to_widget",
                                   double(presentedImages_ - warmup->images));
                 postWarmup.insert("widget_paint_events",
@@ -3953,9 +4082,16 @@ void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
                           rewindStates_.size() < 2
                               ? 0.0
                               : double(rewindStates_.back().cycles - rewindStates_.front().cycles) /
-                                    4194304);
+                                    clockHz);
             report.insert("rewind_capture_failed", rewindFailed_);
             report.insert("hardware_model", cupid_gb_model_name(emulator_->gb.model));
+            QJsonValue requestedModel;
+            if (modelOverride_)
+                requestedModel =
+                    *modelOverride_ < 0
+                        ? QString("auto")
+                        : QString::fromLatin1(cupid_gb_model_name(CupidGbModel(*modelOverride_)));
+            report.insert("requested_model", requestedModel);
             report.insert("guest_double_speed", emulator_->gb.double_speed);
             report.insert("startup_mode", emulator_->gb.boot_rom_size ? "boot-rom" : "post-boot");
             report.insert("boot_rom_bytes", int(emulator_->gb.boot_rom_size));

@@ -1,7 +1,5 @@
 #include "cupid/gb/timer.h"
 
-#include <stdio.h>
-
 #include "cupid/gb/apu.h"
 #include "cupid/gb/cpu.h"
 #include "cupid/gb/ppu.h"
@@ -57,8 +55,9 @@ void cupid_gb_serial_master_edge(CupidGb *gb) {
 
     gb->io_registers[SERIAL_CONTROL] &= 0x7fu;
     cupid_gb_request_interrupt(gb, CUPID_GB_INTERRUPT_SERIAL);
-    fputc(gb->serial_tx_latch, stdout);
-    fflush(stdout);
+    if (gb->serial_output_callback) {
+        gb->serial_output_callback(gb, gb->serial_tx_latch, gb->serial_output_user_data);
+    }
 }
 
 /* DIV changes affect three independent edge consumers. Resetting DIV uses this

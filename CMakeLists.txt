@@ -16,6 +16,24 @@ option(CUPIDGB_ENABLE_TESTS "Build regression tests" ON)
 option(CUPIDGB_BUILD_QT "Build the Qt desktop frontend" ON)
 option(CUPIDGB_ENABLE_SANITIZERS "Enable address and undefined behavior sanitizers" OFF)
 option(CUPIDGB_ENABLE_NATIVE_HASH "Use available platform SHA-256 acceleration" ON)
+option(CUPIDGB_ENABLE_IPO "Use supported interprocedural optimization in Release builds" ON)
+
+set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE FALSE)
+if(CUPIDGB_ENABLE_IPO AND NOT CUPIDGB_ENABLE_SANITIZERS)
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT cupidgb_ipo_supported OUTPUT cupidgb_ipo_output LANGUAGES C CXX)
+    if(cupidgb_ipo_supported)
+        set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE)
+        # Shared C state records cross the C++ frontend boundary. GCC's mixed-language
+        # IPO can otherwise retain stale C++ field values after a valid C aggregate copy.
+        add_compile_options(
+            "$<$<AND:$<CONFIG:Release>,$<COMPILE_LANG_AND_ID:CXX,GNU>>:-fno-strict-aliasing>")
+        message(STATUS "CupidGB Release interprocedural optimization enabled")
+    else()
+        message(STATUS "CupidGB Release interprocedural optimization unavailable")
+    endif()
+endif()
+
 
 add_library(cupidgb_core STATIC
     src/common/log.c src/common/sha256.c src/core/emulator.c src/core/system.c
@@ -99,6 +117,15 @@ if(CUPIDGB_ENABLE_TESTS)
         add_test(NAME cupidgb_${test_name} COMMAND cupidgb_${test_name})
         set_tests_properties(cupidgb_${test_name} PROPERTIES TIMEOUT 120)
     endforeach()
+    add_executable(cupidgb_core_interop tests/test_core_interop.cpp)
+    target_link_libraries(cupidgb_core_interop PRIVATE cupidgb_core)
+    if(MSVC)
+        target_compile_options(cupidgb_core_interop PRIVATE /UNDEBUG)
+    else()
+        target_compile_options(cupidgb_core_interop PRIVATE -UNDEBUG)
+    endif()
+    add_test(NAME cupidgb_core_interop COMMAND cupidgb_core_interop)
+    set_tests_properties(cupidgb_core_interop PROPERTIES TIMEOUT 120)
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
     if(TARGET cupidgb_rom_runner)
         add_test(NAME cupidgb_runner
@@ -171,6 +198,10 @@ if(CUPIDGB_ENABLE_TESTS)
             target_compile_options(cupidgb_wave_recorder PRIVATE -UNDEBUG)
         endif()
         add_test(NAME cupidgb_wave_recorder COMMAND cupidgb_wave_recorder)
+        add_test(NAME cupidgb_qt_cli
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/test_qt_cli.py
+                    $<TARGET_FILE:cupidgb>)
+        set_tests_properties(cupidgb_qt_cli PROPERTIES TIMEOUT 90)
         add_test(NAME cupidgb_qt_workflows COMMAND cupidgb --smoke-test)
         set_tests_properties(cupidgb_qt_workflows PROPERTIES
             ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)

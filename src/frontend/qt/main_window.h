@@ -10,6 +10,7 @@
 #include <array>
 #include <deque>
 #include <memory>
+#include <optional>
 #include <vector>
 
 extern "C" {
@@ -34,7 +35,8 @@ class InspectorsWindow;
 class MainWindow final : public QMainWindow {
   public:
     explicit MainWindow(bool isolated = false, bool automated = false, bool audioCheck = false,
-                        const QString &bootDirectoryOverride = QString());
+                        const QString &bootDirectoryOverride = QString(),
+                        std::optional<int> modelOverride = std::nullopt);
     ~MainWindow() override;
     bool openRom(const QString &path);
     bool smokeTest();
@@ -103,9 +105,11 @@ class MainWindow final : public QMainWindow {
     void drainDebuggerAudio();
     bool debuggerSmokeTest(const QString &directory);
     bool pacingSmokeTest(const QString &path);
+    bool modelSmokeTest(const QString &directory);
 
     QSettings settings_;
     QString bootDirectoryOverride_;
+    const std::optional<int> modelOverride_;
     std::unique_ptr<CupidEmulator> emulator_;
     std::unique_ptr<CupidGbDebugger> debugger_;
     std::unique_ptr<CupidGbStateContext> debuggerContext_;

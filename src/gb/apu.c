@@ -8,7 +8,7 @@
  *   - CH3: Wave (4-bit PCM playback from wave RAM)
  *   - CH4: Noise (Linear Feedback Shift Register)
  *
- * The frame sequencer is clocked at 512 Hz (every 8192 T-cycles) and drives
+ * The frame sequencer advances every 8192 T-cycles (512 Hz at the handheld clock) and drives
  * length counters, volume envelopes, and the CH1 frequency sweep unit.
  * Audio samples default to @ref CUPID_GB_APU_SAMPLE_RATE (44100 Hz).
  * Weighted integration and DC blocking feed a bounded stereo output buffer.
@@ -360,8 +360,10 @@ static void cupid_gb_apu_mix(const CupidGb *gb, int32_t *left, int32_t *right) {
     *right *= (int32_t)((volume & 7u) + 1u) * 34;
 }
 
-static uint32_t cupid_gb_apu_filter_rate(uint32_t sample_rate) {
-    return (uint32_t)(pow(0.999958, 4194304.0 / sample_rate) * 1073741824.0 + 0.5);
+static uint32_t cupid_gb_apu_filter_rate(const CupidGb *gb, uint32_t sample_rate) {
+    return (uint32_t)(pow(0.999958, (double)cupid_gb_base_clock_hz(gb) / sample_rate) *
+                          1073741824.0 +
+                      0.5);
 }
 
 bool cupid_gb_apu_set_sample_rate(CupidGb *gb, uint32_t sample_rate) {
@@ -376,7 +378,7 @@ bool cupid_gb_apu_set_sample_rate(CupidGb *gb, uint32_t sample_rate) {
         gb->apu.buf_write = 0;
     }
     gb->apu.sample_rate = sample_rate;
-    gb->apu.highpass_rate = cupid_gb_apu_filter_rate(sample_rate);
+    gb->apu.highpass_rate = cupid_gb_apu_filter_rate(gb, sample_rate);
     return true;
 }
 
@@ -395,8 +397,8 @@ void cupid_gb_apu_set_highpass(CupidGb *gb, bool enabled) {
 }
 
 static int16_t cupid_gb_apu_filter_sample(int64_t area, int64_t *capacitor, const CupidGbApu *apu,
-                                          bool connected) {
-    int64_t input = (area / 4194304) * 65536;
+                                          bool connected, uint32_t clock_hz) {
+    int64_t input = (area / clock_hz) * 65536;
     int64_t output;
     if (!connected) {
         return 0;
@@ -418,14 +420,15 @@ static int16_t cupid_gb_apu_filter_sample(int64_t area, int64_t *capacitor, cons
     return (int16_t)output;
 }
 
-static void cupid_gb_apu_emit_sample(CupidGb *gb) {
+static void cupid_gb_apu_emit_sample(CupidGb *gb, uint32_t clock_hz) {
     CupidGbApu *apu = &gb->apu;
     /* Monochrome hardware disconnects its coupling capacitor when all DACs are off. */
     bool connected = gb->model == CUPID_GB_MODEL_CGB || apu->ch1_dac || apu->ch2_dac ||
                      apu->ch3_dac || apu->ch4_dac;
-    int16_t left = cupid_gb_apu_filter_sample(apu->mix_left, &apu->highpass_left, apu, connected);
+    int16_t left =
+        cupid_gb_apu_filter_sample(apu->mix_left, &apu->highpass_left, apu, connected, clock_hz);
     int16_t right =
-        cupid_gb_apu_filter_sample(apu->mix_right, &apu->highpass_right, apu, connected);
+        cupid_gb_apu_filter_sample(apu->mix_right, &apu->highpass_right, apu, connected, clock_hz);
     if (apu->buf_write < CUPID_GB_APU_BUF_FRAMES) {
         size_t index = (size_t)apu->buf_write * 2;
         apu->buf[index] = left;
@@ -437,14 +440,15 @@ static void cupid_gb_apu_emit_sample(CupidGb *gb) {
 }
 
 /* Integrate both sides of a sample boundary instead of point-sampling a fast oscillator.
- * The area is measured in sample-phase units: one output frame always spans 4194304.
+ * The area uses sample-phase units: each output frame spans the model's base clock rate.
  * This box integration attenuates aliasing; it is not a full reconstruction filter.
  */
-static void cupid_gb_apu_integrate(CupidGb *gb, uint32_t sample_rate, int32_t left, int32_t right) {
+static void cupid_gb_apu_integrate(CupidGb *gb, uint32_t sample_rate, uint32_t clock_hz,
+                                   int32_t left, int32_t right) {
     CupidGbApu *apu = &gb->apu;
     uint32_t remaining = sample_rate;
     while (remaining) {
-        uint32_t portion = 4194304u - apu->sample_acc;
+        uint32_t portion = clock_hz - apu->sample_acc;
         if (portion > remaining) {
             portion = remaining;
         }
@@ -452,9 +456,9 @@ static void cupid_gb_apu_integrate(CupidGb *gb, uint32_t sample_rate, int32_t le
         apu->mix_right += (int64_t)right * portion;
         apu->sample_acc += portion;
         remaining -= portion;
-        if (apu->sample_acc == 4194304u) {
+        if (apu->sample_acc == clock_hz) {
             apu->sample_acc = 0;
-            cupid_gb_apu_emit_sample(gb);
+            cupid_gb_apu_emit_sample(gb, clock_hz);
         }
     }
 }
@@ -957,8 +961,9 @@ void cupid_gb_tick_apu(CupidGb *gb, uint16_t cycles) {
     int32_t left = 0;
     int32_t right = 0;
     uint32_t sample_rate = cupid_gb_apu_get_sample_rate(gb);
+    const uint32_t clock_hz = cupid_gb_base_clock_hz(gb);
     if (!apu->highpass_rate) {
-        apu->highpass_rate = cupid_gb_apu_filter_rate(sample_rate);
+        apu->highpass_rate = cupid_gb_apu_filter_rate(gb, sample_rate);
     }
 
     for (c = 0u; c < cycles; ++c) {
@@ -1053,7 +1058,7 @@ void cupid_gb_tick_apu(CupidGb *gb, uint16_t cycles) {
         if (mix_changed) {
             cupid_gb_apu_mix(gb, &left, &right);
         }
-        cupid_gb_apu_integrate(gb, sample_rate, left, right);
+        cupid_gb_apu_integrate(gb, sample_rate, clock_hz, left, right);
     }
 }
 

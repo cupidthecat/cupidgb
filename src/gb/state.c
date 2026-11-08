@@ -1,6 +1,7 @@
 #include "cupid/gb/state.h"
 
 #include "cupid/common/sha256.h"
+#include "cupid/gb/apu.h"
 
 #include <limits.h>
 #include <stdlib.h>
@@ -111,9 +112,30 @@ static void size_value(StateIo *io, size_t *value) {
 }
 
 static void words(StateIo *io, uint16_t *values, size_t count) {
-    for (size_t i = 0; i < count; ++i) {
-        word(io, values + i);
+    /* Check the entire wire range before touching an array. Each element still has
+     * an explicit byte order, including when the state buffer is unaligned. */
+    if (count > SIZE_MAX / 2) {
+        io->invalid = true;
+        return;
     }
+    const size_t byte_count = count * 2;
+    if (!reserve(io, byte_count)) {
+        return;
+    }
+    if (io->input) {
+        const uint8_t *source = io->input + io->offset;
+        for (size_t i = 0; i < count; ++i) {
+            values[i] =
+                (uint16_t)((uint16_t)source[i * 2] | (uint16_t)((uint16_t)source[i * 2 + 1] << 8));
+        }
+    } else if (io->output) {
+        uint8_t *destination = io->output + io->offset;
+        for (size_t i = 0; i < count; ++i) {
+            destination[i * 2] = (uint8_t)values[i];
+            destination[i * 2 + 1] = (uint8_t)(values[i] >> 8);
+        }
+    }
+    io->offset += byte_count;
 }
 
 /* The order below is the v2 wire schema. Every scalar has an explicit width and every
@@ -429,7 +451,7 @@ static bool valid_hardware(const CupidGb *gb) {
         a->ch1_sweep_period > 7 || a->ch1_sweep_shift > 7 || a->ch3_out_level > 3 ||
         a->ch3_wave_pos > 31 || a->ch3_current_byte > 15 || a->ch3_wave_access_ticks > 1 ||
         a->ch3_sample > 15 || a->ch4_div_code > 7 || a->ch4_shift > 15 || a->ch4_lfsr > 0x7fff ||
-        a->sample_acc >= 4194304 || a->buf_write > CUPID_GB_APU_BUF_FRAMES ||
+        a->sample_acc >= cupid_gb_base_clock_hz(gb) || a->buf_write > CUPID_GB_APU_BUF_FRAMES ||
         (gb->sgb.player_count != 1 && gb->sgb.player_count != 2 && gb->sgb.player_count != 4) ||
         gb->sgb.current_player >= gb->sgb.player_count || gb->sgb.mask_mode > 3 ||
         gb->sgb.command_write_index > sizeof(gb->sgb.command) * 8) {
@@ -586,6 +608,14 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
         !valid_hardware(candidate)) {
         free(candidate);
         return CUPID_GB_STATE_INVALID;
+    }
+    if (candidate->model == CUPID_GB_MODEL_SGB && candidate->apu.highpass_rate) {
+        /* Older SGB snapshots used the handheld clock for this derived host filter
+         * coefficient. Refresh it at the same rate without dropping queued samples
+         * or the partially integrated frame. Keep the zero/default rate sentinel. */
+        uint32_t configured_rate = candidate->apu.sample_rate;
+        cupid_gb_apu_set_sample_rate(candidate, cupid_gb_apu_get_sample_rate(candidate));
+        candidate->apu.sample_rate = configured_rate;
     }
     *gb = *candidate;
     free(candidate);

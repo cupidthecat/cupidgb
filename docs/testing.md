@@ -20,6 +20,8 @@ Hash regressions cover known vectors, span partitions, large inputs, unaligned b
 
 Core tests exercise lifecycle, CPU/memory behavior, serial, timer/bus phases, graphics, audio, cartridge persistence, native snapshots, older-state battery recovery, and SGB behavior. Frontend checks cover sample conversion, WAVE file output, display processing, and integrated desktop workflows as those targets are present in the current build. Query the exact list with `ctest --test-dir build -N`; avoid carrying test counts from an older revision into a new result.
 
+C++/C integration checks exercise shared hardware records, initialization/reset, serial observers, and native-state restoration. Run them with Release IPO enabled as well as any fallback configuration being qualified. IPO comparisons must record the effective setting and, for GCC C++, the `-fno-strict-aliasing` flag. The build disables IPO with sanitizers.
+
 Release tests explicitly keep their assertions enabled. Run the GCC/Clang sanitizer configuration as a separate check, with leak detection where available. Preserve the failing command and complete diagnostic when a sanitizer reports a defect.
 
 ## Qt workflow checks
@@ -58,7 +60,7 @@ On Windows, also set `QT_FORCE_STDERR_LOGGING=1` when capturing diagnostic outpu
 
 Create the output directory first. Model names are `dmg`, `mgb`, `cgb`, `sgb`, and `sgb2`. The runner defaults to `dmg` and protocol `none`; choose the actual test's model and success protocol deliberately. `--boot` accepts one local binary. Without it, the run uses the approximate post-boot profile.
 
-`--frames N` limits elapsed guest time to approximately `N * 70,224` base-speed T-cycles, including LCD-off execution. It does not request N displayed images. `--max-steps N` adds a separate instruction/work bound; the default is derived from the frame limit.
+`--frames N` limits elapsed guest time to approximately `N * 70,224` base-speed T-cycles, including LCD-off execution. It does not request N displayed images. Those intervals have different physical durations for SGB NTSC at 4,295,454 Hz and the other profiles at 4,194,304 Hz. The runner does not accept the Qt-only `auto`, `dmgabc`, or `dmg0` selections. `--max-steps N` adds a separate instruction/work bound; the default is derived from the frame limit.
 
 | Protocol | Required observation |
 | --- | --- |
@@ -69,7 +71,9 @@ Create the output directory first. Model names are `dmg`, `mgb`, `cgb`, `sgb`, a
 
 These protocols are opt-in interpretations for test ROMs. They must not affect ordinary guest execution. A ROM using a different result mechanism needs a suitable observation method; it cannot be called passed because it reached the duration limit.
 
-The runner prints a `CUPIDGB_RESULT` JSON object containing status, model, protocol, executed steps, base cycles, VBlank counts, sample counts, output checksums, and elapsed host time. Memory-protocol results include the code and encoded diagnostic text. Serial/debug text can appear before that record, so consumers should locate the prefixed result rather than treating all stdout as JSON.
+The runner always observes completed serial bytes, reports their count as `serial_bytes`, and evaluates serial verdict text when that protocol is selected. It suppresses raw serial output by default. Add `--serial-output` to emit the transmitted bytes to stdout; the host buffers them and flushes at the report boundary. This diagnostic choice does not change serial clocks or verdict detection. Output errors are reported as `output_error`.
+
+The runner prints a `CUPIDGB_RESULT` JSON object containing status, model, protocol, executed steps, base cycles, `base_clock_hz`, VBlank counts, audio-frame and serial-byte counts, output checksums, and elapsed host time. Memory-protocol results include the code and encoded diagnostic text. Raw bytes requested with `--serial-output` can appear before that record, so consumers should locate the prefixed result rather than treating all stdout as JSON.
 
 Exit codes are zero for an explicit pass or a completed measurement, one for a test failure, two for input/core/output errors, and three for a verdict-enabled run without an explicit pass. Measurement status `bounded` or `step_limit` remains inconclusive even when exit code is zero. Inspect both status and process exit code.
 
@@ -111,13 +115,21 @@ An input trace is repeatable host input, not evidence that a game reached active
     --input-trace /private/start.trace /private/cartridge.gbc
 ```
 
-The frontend isolates its settings, opens a normal audio device, and exits after the requested duration. A report path and cartridge are required. Supported durations are greater than zero and no more than 86,400 seconds. The report has a companion PNG.
+Use `--model dmg`, `--model cgb`, or another supported Qt profile to avoid automatic hardware selection in comparable runs. Explicit `--model auto` deliberately requests automatic selection. The frontend isolates its settings, opens a normal audio device, and exits after the requested duration. A report path and cartridge are required. Supported durations are greater than zero and no more than 86,400 seconds. The report has a companion PNG.
+
+`requested_model` is null when the option is absent, `"auto"` for explicit automatic selection, or the canonical selected profile name for a fixed request. The `dmg` alias reports `"dmgabc"`. `hardware_model` records the actual hardware chosen for the cartridge. `base_clock_hz` records that model's physical clock, and the whole-run and post-warmup speed calculations use it. This distinction matters when comparing automatic, fixed DMG, and SGB runs.
 
 Reports describe guest-clock progress, images submitted to the widget, widget paint counts/intervals, host audio format, generated samples, queue depth, backend idle/error events, rewind storage/capture work, and input progress. Check the exact report emitted by the current build rather than assuming a fixed schema.
 
 The `post_warmup` object reports a separate window after a five-second host warmup. It records the actual sampling time, counter baselines, measured duration, guest-clock rate, image/paint/sample deltas, audio events, and paint intervals wholly inside that window. Runs of five seconds or less report it as unavailable. This is a time window, not proof of steady gameplay or audible correctness. Whole-run fields retain startup observations. Cartridge or timeline replacement cancels the measurement instead of combining different sessions. Ordinary playback collects no paint-interval history; collection runs only for bounded reports.
 
 Record process exit status and sample resource usage separately if those observations are needed. State whether measurements include startup, stream priming, menus, dialogs, or steady gameplay. Backend idle events are observations requiring investigation; zero reported errors alone does not establish audible correctness.
+
+## Optimization measurements
+
+Separate state encoding, hashing, compression, complete capture, and restoration costs. Preserve a baseline before changing production code, use the same captured state or generated hardware state, and alternate variants to reduce ordering effects. Compare complete encoded bytes and continuation behavior as well as runtime. Codec-only timings do not establish the cost of capture plus compression, and neither establishes gameplay speed.
+
+Compare IPO on and off using the same revision, compiler, optimization level, model, boot inputs, input trace, cycles, and generated audio. Verify images and PCM before reporting a speed ratio. A headless throughput comparison excludes Qt presentation, real audio-device behavior, and rewind capture unless those paths were part of the measurement. [The validation record](validation.md#stream-snapshot-and-build-performance) records the measured component scopes.
 
 ## Comparable evidence
 
@@ -131,6 +143,6 @@ For each behavioral comparison, record:
 
 Keep the comparison source identity and local paths in private receipts. The public checklist records its pinned revision. Match models, boot inputs, palettes/correction, audio settings, and input timing before interpreting differences. Independently written code can match an observation without establishing every surrounding hardware behavior.
 
-Measure guest emulation speed from base-clock progress divided by nominal guest clock and host elapsed time. Report VBlank counts and host paint events separately. A paint event does not prove physical display presentation. State loads and rewind change the guest timeline, so net cycle progress during those operations is not a forward-throughput benchmark.
+Measure guest emulation speed from base-clock progress divided by the selected model's nominal clock and host elapsed time. Use `cupid_gb_base_clock_hz` or the report's `base_clock_hz`, rather than assuming every profile runs at 4,194,304 Hz. Report VBlank counts and host paint events separately. A paint event does not prove physical display presentation. State loads and rewind change the guest timeline, so net cycle progress during those operations is not a forward-throughput benchmark.
 
 Commercial validation should exercise active play, graphics, audio, input, in-game save/reload, native-state continuation, and sustained operation on private disposable cartridge/save copies. A title screen, menu, passing unit test, or bounded session is a narrower result. Preserve existing user saves and retain unresolved gaps in the validation record.

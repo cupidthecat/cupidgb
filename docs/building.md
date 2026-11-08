@@ -93,9 +93,14 @@ This still builds `cupidgb_core` and `cupidgb_rom_runner`. It does not test the 
 | --- | --- | --- |
 | `CUPIDGB_BUILD_QT` | `ON` | Build the desktop executable and frontend checks |
 | `CUPIDGB_ENABLE_TESTS` | `ON` | Build and register regression checks; requires Python |
+| `CUPIDGB_ENABLE_IPO` | `ON` | Enable compiler/linker interprocedural optimization in Release when supported; disabled with sanitizers |
 | `CUPIDGB_ENABLE_NATIVE_HASH` | `ON` | Use Windows system hashing or detected OpenSSL 3 Crypto on Linux for large hashes; `OFF` selects the portable path |
 | `CUPIDGB_ENABLE_WARNINGS` | `ON` | Enable the core's compiler warning flags |
 | `CUPIDGB_ENABLE_SANITIZERS` | `OFF` | Enable AddressSanitizer and UndefinedBehaviorSanitizer with GCC or compatible Clang command-line options |
+
+CMake probes interprocedural optimization support for both C and C++. A successful probe enables it only for `Release`; an unsupported toolchain falls back to ordinary compilation. `CUPIDGB_ENABLE_IPO=OFF` also forces that fallback. This option does not change guest accuracy settings or remove validation.
+
+For GCC Release builds with IPO, project C++ targets also use `-fno-strict-aliasing`. This protects shared C hardware records when calls across the C/C++ boundary copy or replace an aggregate. The C/C++ integration regression checks reset, memory access, state restoration, and serial observation under optimization. Keep this flag when reproducing or embedding that build configuration.
 
 For a sanitizer build on Linux:
 
@@ -106,7 +111,7 @@ cmake --build build-sanitized --parallel 4
 ASAN_OPTIONS=detect_leaks=1 ctest --test-dir build-sanitized --output-on-failure
 ```
 
-The MSVC configuration rejects this sanitizer option. Keep sanitizer results separate from Release runtime measurements.
+The MSVC configuration rejects this sanitizer option. Enabling sanitizers suppresses IPO even in Release. Keep sanitizer results separate from Release runtime measurements, and record the effective IPO setting in performance comparisons.
 
 ## Installation and deployment
 

@@ -144,17 +144,48 @@ static bool load_input_trace(const char *path, InputEvent *events, size_t *count
     return valid;
 }
 
+typedef struct SerialCapture {
+    char text[4096];
+    size_t length;
+    uint64_t bytes;
+    bool output;
+    bool output_error;
+    bool changed;
+} SerialCapture;
+
+static void observe_serial(const CupidGb *gb, uint8_t transmitted, void *user_data) {
+    (void)gb;
+    SerialCapture *capture = user_data;
+    ++capture->bytes;
+    capture->changed = true;
+    if (capture->length == sizeof(capture->text) - 1) {
+        memmove(capture->text, capture->text + 1024, capture->length - 1024);
+        capture->length -= 1024;
+    }
+    capture->text[capture->length++] = transmitted ? (char)transmitted : ' ';
+    capture->text[capture->length] = '\0';
+    if (capture->output && !capture->output_error && fputc(transmitted, stdout) == EOF) {
+        capture->output_error = true;
+    }
+}
+
 int main(int argc, char **argv) {
     const char *rom = NULL, *boot = NULL, *image_path = NULL, *audio_path = NULL;
     const char *protocol = "none", *model_name = "dmg", *trace_path = NULL;
     uint64_t frames = 600, max_steps = 0;
+    bool serial_output = false;
     CupidGbModel model = CUPID_GB_MODEL_DMG_ABC;
     for (int i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "--help")) {
-            puts("CupidGB ROM runner: [--model dmg|mgb|cgb|sgb|sgb2] [--frames N] "
-                 "[--max-steps N] [--protocol none|serial|register|memory] [--boot FILE] "
-                 "[--image FILE.ppm] [--audio FILE.pcm] [--input-trace FILE] ROM");
+            puts(
+                "CupidGB ROM runner: [--model dmg|mgb|cgb|sgb|sgb2] [--frames N] "
+                "[--max-steps N] [--protocol none|serial|register|memory] [--boot FILE] "
+                "[--image FILE.ppm] [--audio FILE.pcm] [--input-trace FILE] [--serial-output] ROM");
             return 0;
+        }
+        if (!strcmp(argv[i], "--serial-output")) {
+            serial_output = true;
+            continue;
         }
         if (argv[i][0] == '-') {
             if (i + 1 >= argc) {
@@ -207,6 +238,9 @@ int main(int argc, char **argv) {
         fprintf(stderr, "A ROM, valid model and valid protocol are required. Use --help.\n");
         return 2;
     }
+    const bool protocol_register = !strcmp(protocol, "register");
+    const bool protocol_memory = !strcmp(protocol, "memory");
+    const bool protocol_serial = !strcmp(protocol, "serial");
     if (!max_steps) {
         max_steps = frames * UINT64_C(100000);
     }
@@ -238,8 +272,8 @@ int main(int argc, char **argv) {
     }
     uint64_t steps = 0, vblank_frames = 0, audio_frames = 0;
     uint32_t audio_crc = UINT32_MAX, image_crc = 0;
-    char serial[4096] = {0};
-    size_t serial_length = 0;
+    SerialCapture serial = {.output = serial_output};
+    cupid_gb_set_serial_output_callback(gb, observe_serial, &serial);
     bool memory_running = false;
     int memory_code = -1;
     const char *status = "bounded";
@@ -250,14 +284,13 @@ int main(int argc, char **argv) {
                gb->elapsed_cycles >= events[event_index].frame * UINT64_C(70224)) {
             cupid_gb_set_buttons(gb, events[event_index++].mask);
         }
-        if (!strcmp(protocol, "register")) {
+        if (protocol_register) {
             int detected = register_result(gb);
             if (detected) {
                 status = detected > 0 ? "pass" : "fail";
                 break;
             }
         }
-        uint8_t remaining = gb->serial_bits_remaining, latch = gb->serial_tx_latch;
         if (!cupid_gb_step(gb)) {
             status = "core_error";
             result = 2;
@@ -265,7 +298,7 @@ int main(int argc, char **argv) {
         }
         ++steps;
         bool test_finished = false;
-        if (!strcmp(protocol, "memory") && cupid_gb_read_u8(gb, 0xa001) == 0xde &&
+        if (protocol_memory && cupid_gb_read_u8(gb, 0xa001) == 0xde &&
             cupid_gb_read_u8(gb, 0xa002) == 0xb0 && cupid_gb_read_u8(gb, 0xa003) == 0x61) {
             memory_code = cupid_gb_read_u8(gb, 0xa000);
             if (memory_code == 0x80) {
@@ -279,22 +312,19 @@ int main(int argc, char **argv) {
                 test_finished = true;
             }
         }
-        if (remaining && !gb->serial_bits_remaining && !(gb->io_registers[2] & 0x80)) {
-            if (serial_length == sizeof(serial) - 1) {
-                memmove(serial, serial + 1024, serial_length - 1024);
-                serial_length -= 1024;
-            }
-            serial[serial_length++] = latch ? (char)latch : ' ';
-            serial[serial_length] = '\0';
-            if (!strcmp(protocol, "serial")) {
-                if (strstr(serial, "Failed") || strstr(serial, "FAILED")) {
-                    status = "fail";
-                    test_finished = true;
-                }
-                if (strstr(serial, "Passed") || strstr(serial, "PASSED")) {
-                    status = "pass";
-                    test_finished = true;
-                }
+        if (serial.output_error) {
+            status = "output_error";
+            result = 2;
+            break;
+        }
+        if (protocol_serial && serial.changed) {
+            serial.changed = false;
+            if (strstr(serial.text, "Failed") || strstr(serial.text, "FAILED")) {
+                status = "fail";
+                test_finished = true;
+            } else if (strstr(serial.text, "Passed") || strstr(serial.text, "PASSED")) {
+                status = "pass";
+                test_finished = true;
             }
         }
         if (gb->frame_ready) {
@@ -320,6 +350,11 @@ int main(int argc, char **argv) {
         }
     }
     double elapsed = host_seconds() - start;
+    // Serial output is a host diagnostic. Flush once at the report boundary.
+    if (serial_output && fflush(stdout) == EOF) {
+        result = 2;
+        status = "output_error";
+    }
     if (audio && fclose(audio)) {
         result = 2;
         status = "output_error";
@@ -344,12 +379,15 @@ int main(int argc, char **argv) {
         }
     }
     printf("\nCUPIDGB_RESULT {\"status\":\"%s\",\"model\":\"%s\",\"protocol\":\"%s\","
-           "\"steps\":%" PRIu64 ",\"base_cycles\":%" PRIu64 ",\"vblank_frames\":%" PRIu64 ","
-           "\"audio_frames\":%" PRIu64 ",\"audio_crc32\":\"%08" PRIx32 "\","
+           "\"steps\":%" PRIu64 ",\"base_cycles\":%" PRIu64 ",\"base_clock_hz\":%" PRIu32 ","
+           "\"vblank_frames\":%" PRIu64 ","
+           "\"audio_frames\":%" PRIu64 ",\"serial_bytes\":%" PRIu64 ","
+           "\"audio_crc32\":\"%08" PRIx32 "\","
            "\"image_crc32\":\"%08" PRIx32 "\",\"host_seconds\":%.9f,"
            "\"memory_result_code\":%d,\"memory_text_hex\":\"%s\"}\n",
-           status, model_name, protocol, steps, gb->elapsed_cycles, vblank_frames, audio_frames,
-           audio_crc ^ UINT32_MAX, image_crc, elapsed, memory_code, memory_text);
+           status, model_name, protocol, steps, gb->elapsed_cycles, cupid_gb_base_clock_hz(gb),
+           vblank_frames, audio_frames, serial.bytes, audio_crc ^ UINT32_MAX, image_crc, elapsed,
+           memory_code, memory_text);
     if (!strcmp(status, "fail")) {
         result = 1;
     } else if (strcmp(protocol, "none") && strcmp(status, "pass") && !result) {

@@ -1,4 +1,5 @@
 #include "cupid/common/sha256.h"
+#include "cupid/gb/apu.h"
 #include "cupid/gb/gb.h"
 #include "cupid/gb/state.h"
 #include "cupid/gb/timer.h"
@@ -276,6 +277,73 @@ static void update_integrity(uint8_t *bytes, size_t length) {
     cupid_sha256_final(&hash, bytes + 96);
 }
 
+static void test_word_array_wire_encoding(void) {
+    CupidGb *source = calloc(1, sizeof(*source)), *restored = calloc(1, sizeof(*restored));
+    assert(source && restored);
+    const CupidGbModel models[] = {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_CGB, CUPID_GB_MODEL_SGB2};
+    const uint16_t boundary_values[] = {0, 1, 0xff, 0x100, 0x7fff, 0x8000, 0xffff, 0x1234};
+    for (size_t model = 0; model < sizeof(models) / sizeof(models[0]); ++model) {
+        prepare(source, models[model], false);
+        prepare(restored, models[model], false);
+        size_t length;
+        uint8_t *expected = encode(source, &length);
+
+        struct WordArray {
+            uint16_t *source;
+            uint16_t *restored;
+            size_t count;
+            size_t wire_offset;
+        };
+
+#define ARRAY(field, offset)                                                                       \
+    {                                                                                              \
+        source->field, restored->field, sizeof(source->field) / sizeof(source->field[0]), offset   \
+    }
+        const struct WordArray arrays[] = {
+            ARRAY(frame_buffer_color, 203824),  ARRAY(sgb.screen_palettes, 254666),
+            ARRAY(sgb.ram_palettes, 254698),    ARRAY(sgb.border_map, 266986),
+            ARRAY(sgb.border_palettes, 268778), ARRAY(pixels.sprite_priorities, 300494)};
+#undef ARRAY
+        /* Fixed v2 offsets check both ends of every word array and the neighboring
+         * fields. Constructing expected bytes also detects symmetric codec errors. */
+        for (size_t array = 0; array < sizeof(arrays) / sizeof(arrays[0]); ++array) {
+            const struct WordArray *words = &arrays[array];
+            assert(words->wire_offset + words->count * 2 <= length);
+            for (size_t i = 0; i < words->count; ++i) {
+                uint16_t value = i < sizeof(boundary_values) / sizeof(boundary_values[0])
+                                     ? boundary_values[i]
+                                     : (uint16_t)(i * 257u + (i >> 4) + array);
+                if (i + 1 == words->count) {
+                    value = 0xfe80;
+                }
+                words->source[i] = value;
+                expected[words->wire_offset + i * 2] = (uint8_t)value;
+                expected[words->wire_offset + i * 2 + 1] = (uint8_t)(value >> 8);
+            }
+        }
+        update_integrity(expected, length);
+        uint8_t *guarded = malloc(length + 2);
+        assert(guarded);
+        memset(guarded, 0x5a, length + 2);
+        size_t written = 0;
+        assert(cupid_gb_save_state(source, guarded + 1, length, &written) == CUPID_GB_STATE_OK);
+        assert(written == length && guarded[0] == 0x5a && guarded[length + 1] == 0x5a);
+        assert(memcmp(expected, guarded + 1, length) == 0);
+        assert(cupid_gb_load_state(restored, guarded + 1, length) == CUPID_GB_STATE_OK);
+        for (size_t array = 0; array < sizeof(arrays) / sizeof(arrays[0]); ++array) {
+            assert(memcmp(arrays[array].source, arrays[array].restored,
+                          arrays[array].count * sizeof(uint16_t)) == 0);
+        }
+        assert_encoded_equal(source, restored);
+        free(guarded);
+        free(expected);
+        cupid_gb_cleanup(source);
+        cupid_gb_cleanup(restored);
+    }
+    free(source);
+    free(restored);
+}
+
 static void test_rejection(void) {
     CupidGb *gb = calloc(1, sizeof(*gb));
     assert(gb);
@@ -382,6 +450,65 @@ static void test_rejection(void) {
     free(valid);
     cupid_gb_cleanup(gb);
     free(gb);
+}
+
+static void test_sgb_sample_phase_and_legacy_filter(void) {
+    CupidGb *source = calloc(1, sizeof(*source)), *target = calloc(1, sizeof(*target));
+    assert(source && target);
+    prepare(source, CUPID_GB_MODEL_SGB, false);
+    prepare(target, CUPID_GB_MODEL_SGB, false);
+    const uint32_t clock_hz = cupid_gb_base_clock_hz(source);
+    source->apu.sample_acc = clock_hz - 1;
+    size_t length;
+    uint8_t *state = encode(source, &length);
+    assert(cupid_gb_load_state(target, state, length) == CUPID_GB_STATE_OK);
+    assert(target->apu.sample_acc == clock_hz - 1);
+    assert_encoded_equal(source, target);
+
+    /* A correctly hashed phase at the model's clock boundary must fail validation. */
+    size_t phase_offset = 0, matches = 0;
+    for (size_t offset = 128; offset + 4 <= length; ++offset) {
+        uint32_t value = (uint32_t)state[offset] | ((uint32_t)state[offset + 1] << 8) |
+                         ((uint32_t)state[offset + 2] << 16) | ((uint32_t)state[offset + 3] << 24);
+        if (value == clock_hz - 1) {
+            phase_offset = offset;
+            ++matches;
+        }
+    }
+    assert(matches == 1);
+    for (unsigned byte = 0; byte < 4; ++byte) {
+        state[phase_offset + byte] = (uint8_t)(clock_hz >> (byte * 8));
+    }
+    update_integrity(state, length);
+    rejected_unchanged(target, state, length, CUPID_GB_STATE_INVALID);
+    free(state);
+
+    CupidGb handheld = {0}, corrected = {0};
+    corrected.model = CUPID_GB_MODEL_SGB;
+    assert(cupid_gb_apu_set_sample_rate(&handheld, CUPID_GB_APU_SAMPLE_RATE));
+    assert(cupid_gb_apu_set_sample_rate(&corrected, CUPID_GB_APU_SAMPLE_RATE));
+    source->apu.sample_rate = 0; /* Legacy default-rate sentinel must survive migration. */
+    source->apu.sample_acc = 4194303;
+    source->apu.mix_left = 123456;
+    source->apu.mix_right = -456789;
+    source->apu.highpass_rate = handheld.apu.highpass_rate;
+    source->apu.highpass_left = 123;
+    source->apu.highpass_right = -456;
+    source->apu.buf_write = 2;
+    source->apu.buf[0] = 1234;
+    source->apu.buf[1] = -2345;
+    state = encode(source, &length);
+    assert(cupid_gb_load_state(target, state, length) == CUPID_GB_STATE_OK);
+    assert(target->apu.highpass_rate == corrected.apu.highpass_rate);
+    assert(target->apu.highpass_rate != source->apu.highpass_rate);
+    source->apu.highpass_rate = corrected.apu.highpass_rate;
+    assert_encoded_equal(source, target);
+    assert_hardware_equal(source, target);
+    free(state);
+    cupid_gb_cleanup(source);
+    cupid_gb_cleanup(target);
+    free(source);
+    free(target);
 }
 
 static void print_fixture(const char *path) {
@@ -727,12 +854,14 @@ int main(int argc, char **argv) {
     assert(argc == 1 || (argc == 3 && strcmp(argv[1], "--write-fixture") == 0));
     test_sha256();
     test_resume();
+    test_word_array_wire_encoding();
     test_rejection();
     test_trusted_context();
     test_restored_rtc_extreme_timestamps();
     test_mapper_snapshots();
     test_pixel_pipeline_resume();
     test_first_halt_poll_resume();
+    test_sgb_sample_phase_and_legacy_filter();
     print_fixture(argc == 3 ? argv[2] : NULL);
     puts("Portable state checks passed.");
     return 0;

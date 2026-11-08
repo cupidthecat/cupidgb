@@ -5,8 +5,9 @@
 #include <iostream>
 #include <limits>
 
-static std::int64_t advance(GuestClockPacer &pacer, std::uint64_t cycles, unsigned steps = 16) {
-    const auto duration = pacer.advance(cycles, steps);
+static std::int64_t advance(GuestClockPacer &pacer, std::uint64_t cycles, unsigned steps = 16,
+                            std::uint64_t clockHz = GuestClockPacer::baseClockHz) {
+    const auto duration = pacer.advance(cycles, steps, clockHz);
     assert(duration);
     return *duration;
 }
@@ -92,6 +93,8 @@ static void invalid_inputs_preserve_carry() {
     assert(!pacer.advance(1, 0));
     assert(!pacer.advance(1, 7));
     assert(!pacer.advance(1, 17));
+    assert(!pacer.advance(1, 16, 0));
+    assert(!pacer.advance(1, 16, std::numeric_limits<std::uint64_t>::max()));
     assert(!pacer.advance(std::numeric_limits<std::uint64_t>::max(), 16));
     assert(advance(pacer, 1) == 239);
 
@@ -106,11 +109,70 @@ static void invalid_inputs_preserve_carry() {
     }
 }
 
+static void model_clocks_and_switches() {
+    constexpr std::uint64_t adapterClockHz = 4295454;
+    for (unsigned steps = 8; steps <= 16; ++steps) {
+        GuestClockPacer pacer;
+        std::int64_t elapsed = 0;
+        for (unsigned second = 0; second < steps; ++second)
+            elapsed += advance(pacer, adapterClockHz, steps, adapterClockHz);
+        assert(elapsed == INT64_C(16000000000));
+    }
+
+    GuestClockPacer pacer;
+    std::uint64_t cycles = 0;
+    std::int64_t elapsed = 0;
+    for (unsigned frame = 0; frame < 10000; ++frame) {
+        cycles += 70224;
+        elapsed += advance(pacer, 65664, 16, adapterClockHz);
+        elapsed += advance(pacer, 4560, 16, adapterClockHz);
+        assert(elapsed == std::int64_t(cycles * UINT64_C(1000000000) / adapterClockHz));
+    }
+
+    pacer.reset();
+    assert(advance(pacer, 1, 16, adapterClockHz) == 232);
+    assert(advance(pacer, 1, 16, adapterClockHz) == 233);
+    assert(advance(pacer, 1) == 238);
+    assert(advance(pacer, 1, 16, adapterClockHz) == 232);
+    assert(advance(pacer, 0) == 0);
+    assert(advance(pacer, 1) == 238);
+    assert(advance(pacer, 1) == 238);
+    // A rejected call with another clock must not clear the pending fraction.
+    assert(!pacer.advance(std::numeric_limits<std::uint64_t>::max(), 16, adapterClockHz));
+    assert(advance(pacer, 1) == 239);
+}
+
+static void wide_clock_arithmetic() {
+    constexpr auto maximum = std::numeric_limits<std::uint64_t>::max();
+    constexpr auto clockHz = maximum / 16;
+    constexpr auto denominator = clockHz * 16;
+    GuestClockPacer pacer;
+    // Exercise the large-residue path without overflowing the exact quotient.
+    assert(advance(pacer, denominator - 1, 16, clockHz) == INT64_C(15999999999));
+    assert(advance(pacer, 1, 16, clockHz) == 1);
+    assert(advance(pacer, denominator, 16, clockHz) == INT64_C(16000000000));
+    pacer.reset();
+    assert(advance(pacer, maximum, 16, clockHz) == INT64_C(16000000000));
+    assert(!pacer.advance(1, 16, clockHz + 1));
+
+    pacer.reset();
+    assert(advance(pacer, 1, 16, 1) == INT64_C(1000000000));
+    assert(!pacer.advance(maximum, 16, 1));
+    assert(advance(pacer, 1, 8, 1) == INT64_C(2000000000));
+
+    constexpr auto signedMaximum = std::numeric_limits<std::int64_t>::max();
+    pacer.reset();
+    assert(advance(pacer, std::uint64_t(signedMaximum), 16, UINT64_C(1000000000)) == signedMaximum);
+    assert(!pacer.advance(std::uint64_t(signedMaximum) + 1, 16, UINT64_C(1000000000)));
+}
+
 int main() {
     frame_and_partial_intervals();
     exact_clock_and_double_speed_granularity();
     long_running_variable_chunks();
     reset_and_rate_changes();
     invalid_inputs_preserve_carry();
+    model_clocks_and_switches();
+    wide_clock_arithmetic();
     std::cout << "Guest-clock pacing, fractional carry and rate changes passed.\n";
 }

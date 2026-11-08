@@ -384,6 +384,52 @@ static void test_sample_rates_and_batching(void) {
     assert(one.apu.ch1_duty_pos == batch.apu.ch1_duty_pos);
 }
 
+static void test_physical_model_clocks(void) {
+    assert(cupid_gb_base_clock_hz(NULL) == 4194304u);
+    uint32_t handheld_filter = 0;
+    for (unsigned model = CUPID_GB_MODEL_DMG_ABC; model <= CUPID_GB_MODEL_SGB2; ++model) {
+        CupidGb gb = {0};
+        gb.model = (CupidGbModel)model;
+        uint32_t clock_hz = model == CUPID_GB_MODEL_SGB ? 4295454u : 4194304u;
+        assert(cupid_gb_base_clock_hz(&gb) == clock_hz);
+        gb.double_speed = true;
+        assert(cupid_gb_base_clock_hz(&gb) == clock_hz);
+        assert(cupid_gb_apu_set_sample_rate(&gb, 48000));
+        if (model == CUPID_GB_MODEL_DMG_ABC) {
+            handheld_filter = gb.apu.highpass_rate;
+        }
+        assert(model == CUPID_GB_MODEL_SGB ? gb.apu.highpass_rate < handheld_filter
+                                           : gb.apu.highpass_rate == handheld_filter);
+        uint32_t count = 0, cycles = clock_hz;
+        int16_t output[CUPID_GB_APU_BUF_FRAMES * 2];
+        while (cycles) {
+            uint16_t chunk = cycles > 8192 ? 8192 : (uint16_t)cycles;
+            tick_audio(&gb, chunk);
+            count += cupid_gb_apu_drain(&gb, output, CUPID_GB_APU_BUF_FRAMES);
+            cycles -= chunk;
+        }
+        assert(count == 48000 && gb.apu.sample_acc == 0);
+    }
+
+    CupidGb one, batch;
+    prepare_dc(&one);
+    one.model = CUPID_GB_MODEL_SGB;
+    cupid_gb_apu_set_highpass(&one, false);
+    batch = one;
+    for (unsigned dot = 0; dot < 12000; ++dot) {
+        cupid_gb_tick_apu(&one, 1);
+    }
+    tick_audio(&batch, 12000);
+    assert(one.apu.buf_write && one.apu.buf_write == batch.apu.buf_write);
+    assert(memcmp(one.apu.buf, batch.apu.buf, one.apu.buf_write * 2 * sizeof(int16_t)) == 0);
+    assert(one.apu.sample_acc == batch.apu.sample_acc);
+    assert(one.apu.mix_left == batch.apu.mix_left && one.apu.mix_right == batch.apu.mix_right);
+    for (unsigned frame = 0; frame < one.apu.buf_write; ++frame) {
+        /* Clock changes affect pitch and sample boundaries, not the DAC's DC gain. */
+        assert(one.apu.buf[frame * 2] == 4080 && one.apu.buf[frame * 2 + 1] == 0);
+    }
+}
+
 static void test_fast_pulse_integration(void) {
     CupidGb gb;
     int16_t output[CUPID_GB_APU_BUF_FRAMES * 2];
@@ -593,6 +639,7 @@ int main(void) {
     test_highpass_dc_and_disconnect();
     test_duty_phase();
     test_sample_rates_and_batching();
+    test_physical_model_clocks();
     test_fast_pulse_integration();
     test_pcm_taps();
     test_length_control_matrix();

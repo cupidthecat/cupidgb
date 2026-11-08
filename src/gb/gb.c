@@ -107,6 +107,12 @@ void cupid_gb_set_model(CupidGb *gb, CupidGbModel model) {
     gb->model = model;
 }
 
+uint32_t cupid_gb_base_clock_hz(const CupidGb *gb) {
+    /* The first SGB divides its NTSC host clock by five. SGB2 has an
+     * independent oscillator matching the handheld base clock. */
+    return gb && gb->model == CUPID_GB_MODEL_SGB ? 4295454u : 4194304u;
+}
+
 /**
  * @brief Applies the post-boot-ROM CPU and I/O register state for the selected model.
  *
@@ -223,12 +229,15 @@ static void cupid_gb_apply_boot_profile(CupidGb *gb) {
  *
  * @param gb Pointer to the Game Boy state to initialize.
  *
- * @note The `model` and `rom` fields are preserved across a re-init.
+ * @note The instance must be zero-initialized before its first initialization.
+ * @note The `model`, `rom`, and serial observer registration survive a re-init.
  * @note Does nothing if @p gb is NULL.
  */
 void cupid_gb_init(CupidGb *gb) {
     CupidGbModel model;
     uint8_t *rom;
+    CupidGbSerialOutputCallback serial_output_callback;
+    void *serial_output_user_data;
 
     if (gb == 0) {
         return;
@@ -236,9 +245,13 @@ void cupid_gb_init(CupidGb *gb) {
 
     model = gb->model;
     rom = gb->rom;
+    serial_output_callback = gb->serial_output_callback;
+    serial_output_user_data = gb->serial_output_user_data;
     memset(gb, 0, sizeof(*gb));
     gb->model = model;
     gb->rom = rom;
+    gb->serial_output_callback = serial_output_callback;
+    gb->serial_output_user_data = serial_output_user_data;
 
     if (gb->rom == 0) {
         gb->rom = malloc(CUPID_GB_MAX_ROM_SIZE);
@@ -480,6 +493,17 @@ void cupid_gb_cleanup(CupidGb *gb) {
 
     free(gb->rom);
     gb->rom = 0;
+    gb->serial_output_callback = NULL;
+    gb->serial_output_user_data = NULL;
+}
+
+void cupid_gb_set_serial_output_callback(CupidGb *gb, CupidGbSerialOutputCallback callback,
+                                         void *user_data) {
+    if (!gb) {
+        return;
+    }
+    gb->serial_output_callback = callback;
+    gb->serial_output_user_data = callback ? user_data : NULL;
 }
 
 // Memory map: read

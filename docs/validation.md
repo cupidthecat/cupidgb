@@ -1,6 +1,8 @@
 # Validation record
 
-This record starts with the desktop and timing checks on 2026-11-04 and includes later work through 2026-11-07. Results apply to each stated build, input set, and scope. They do not establish complete hardware or frontend parity. The comparison source revision is `ea667ad79aa28409f034b1fd6da7304e1844750d`.
+This record starts with the desktop and timing checks on 2026-11-04 and includes later work through 2026-11-08. Results apply to each stated build, input set, and scope. They do not establish complete hardware or frontend parity. The comparison source revision is `ea667ad79aa28409f034b1fd6da7304e1844750d`.
+
+Earlier sections retain the results and assumptions of their original builds. A result without a recorded model clock does not qualify the corrected SGB clock. Use the current model-clock reports when comparing physical speed across profiles.
 
 ## Builds and automated checks
 
@@ -258,3 +260,113 @@ All fourteen whole-run and post-warmup windows report zero backend audio idle/er
 Complete Linux process user-plus-system times for the two 60-second titles were 9.82 and 10.33 seconds. Their rewind capture totals were 3.16 and 3.50 seconds, compared with 5.96 and 6.17 seconds in the preceding paced samples. Those separate process runs are observations; the component comparison above isolates the capture/compression change more directly. Windows sampled CPU counters remain private and excluded from utilization claims. Working set and resident memory are different host metrics and should not be treated as equivalent cross-platform measurements.
 
 The README and fourteen documentation files resolve all 67 local links, and the C11/C++17 embedding examples pass syntax checks. These results cover the stated scenes, hardware choices, builds, and durations. Full-game correctness, audible equivalence, long-term saving, uncommon cartridges, and complete hardware/frontend parity remain unqualified.
+
+
+## Stream, snapshot, and build performance
+
+The 2026-11-08 component comparisons preserve commit `a6d6474c9026ddcd0034b9cde217188137fb3c3c` as their baseline. They isolate serial host output, word-array serialization, and Release IPO. They do not measure the combined application, and their percentage changes must not be added together.
+
+### Serial host output
+
+A generated Linux GCC Release stress case drives 131,072 CGB fast-clock transfers through 16,777,216 base T-cycles. Each variant ran three times under WSL with stdout redirected to a file on the Windows-mounted workspace filesystem. The baseline flushes every completed byte; the candidate either has no observer, counts bytes in an observer, or buffers identical bytes through a host callback.
+
+| Variant | Median host elapsed time | Median process CPU time |
+| --- | --- | --- |
+| Baseline per-byte flush | 7.858 seconds | 0.432 seconds |
+| No observer | 0.101 seconds | 0.110 seconds |
+| Counting observer | 0.099 seconds | 0.108 seconds |
+| Buffered host output | 0.106 seconds | 0.110 seconds |
+
+Buffered output reproduces the complete baseline byte stream. Observers receive all 131,072 bytes, and every variant advances the same guest cycles. The large elapsed-time difference is specific to this artificial transfer-heavy case and its host output path. It is not a commercial gameplay speedup, a Windows timing result, or a link-cable compatibility claim. The runner continues to detect serial verdicts without printing raw bytes; `--serial-output` enables buffered diagnostics explicitly.
+
+### Word-array codec
+
+A separate A/B uses generated DMG, CGB, and SGB2 states, five alternating repetitions, and 500 operations per sample. Both variants link the same preserved core library on each platform. Linux uses GCC Release and native hashing; Windows uses MSVC Release and system hashing. Capture includes identity-cache checks, hardware validation, encoding, and integrity hashing, but excludes compression and Qt history management.
+
+| Platform | State profile | Median cached capture before / after | Reduction |
+| --- | --- | --- | --- |
+| Linux | DMG | 232.0 / 163.8 microseconds | 29.4% |
+| Linux | CGB | 233.8 / 164.9 microseconds | 29.4% |
+| Linux | SGB2 | 241.2 / 158.3 microseconds | 34.4% |
+| Windows | DMG | 261.1 / 164.1 microseconds | 37.2% |
+| Windows | CGB | 261.5 / 163.0 microseconds | 37.7% |
+| Windows | SGB2 | 263.5 / 167.0 microseconds | 36.6% |
+
+Isolated field encoding costs fall by about 81-82% on Linux and 78% on Windows. Linux cached-load medians improve by 21-25%; Windows load samples vary too much across profiles and repetitions to support a load-speed claim. These are component measurements on this host, not frame-rate or sustained-gameplay results.
+
+Every 300,518-byte baseline and candidate state matches across Windows and Linux for all three sampled profiles. The codec retains explicit little-endian elements, one complete checked array range, overflow rejection, unaligned buffers, full integrity checks, and hardware validation. Targeted tests check fixed array boundaries and construct the expected bytes independently. Continuation and rejection checks pass, and the CGB fixture remains SHA-256 `6106c038f80d9ef4ca4417f31305dc05bb714d9252e6caff3eec0205ea4ec0eb`.
+
+### Release IPO
+
+A preserved-source comparison uses 2,400 guest-clock intervals per run, normal graphics and generated stereo PCM, and two runs per variant in ABBA order. Linux uses GCC 13.3.0 and Windows uses MSVC 19.43.34809.0. These headless process measurements exclude Qt presentation, real audio-device playback, and frontend rewind capture.
+
+| Platform | Input and model | Median no-IPO / IPO elapsed time | Throughput ratio |
+| --- | --- | --- | --- |
+| Linux | Tetris, DMG | 3.458 / 3.276 seconds | 1.055x |
+| Linux | Mario Deluxe, CGB | 3.881 / 3.866 seconds | 1.004x |
+| Windows | Tetris, DMG | 4.157 / 3.930 seconds | 1.058x |
+| Windows | Mario Deluxe, CGB | 4.724 / 4.225 seconds | 1.118x |
+
+Variants advance identical base cycles and instruction counts and reproduce image and PCM hashes for each input. The small Linux CGB difference is close enough to host variation that it does not establish a general CGB gain. The preserved baseline predates the serial and codec changes above, so this table isolates the build setting rather than the combined branch.
+
+The active CMake configuration probes C and C++ IPO support, enables it only in Release, falls back to ordinary compilation when unavailable or disabled, and suppresses it with sanitizers. GCC C++ Release IPO targets use `-fno-strict-aliasing` for shared C hardware records. A mixed-language regression covers aggregate replacement, reset, memory access, native-state loading, and callback observation; the sanitizer build tests a different optimizer path.
+
+### Current checks and model-clock scope
+
+The final model-clock build passes all 24 desktop/core CTest checks on Windows and Linux. Linux also passes all 16 core/tool checks under ASan/UBSan with leak detection. These checks include the C/C++ integration boundary, serial callback/runner behavior, Qt hardware overrides, model-clock pacing, and generated SGB/SGB2 sample-count checks. They do not establish native gameplay or a real audio-device result for this build.
+
+The current SGB NTSC profile uses 4,295,454 Hz; SGB2 and the other current profiles use 4,194,304 Hz. Audio sample scheduling/filtering, Qt deadlines, rewind seconds, and guest-speed percentages use that model clock. LCD geometry and the 70,224-cycle input-trace interval remain unchanged. Reports include `base_clock_hz`, and Qt reports distinguish `requested_model` from the actual `hardware_model`. SGB PAL, complete SGB host behavior, and sustained gameplay/audio qualification remain open.
+
+Forced portable hashing with IPO disabled passes the snapshot, hash, and mixed C/C++ checks on Windows and sanitized Linux. The expanded Qt workflow smoke passes under ASan/UBSan. A Linux runner check directs serial output to a failing stream and verifies exit status 2, including a failure delayed until the final buffered flush.
+
+The combined build repeats the 129 equivalent-input external cases: both builds produce 126 explicit passes and three bounded results. The bounded results remain inconclusive. Both acid2 images and six commercial final images match with zero differing pixels out of 23,040 each. The comparison revision remains pinned to the revision recorded above.
+
+Three commercial CGB checkpoint replays also pass. Each advances 1,800 guest intervals, captures a native state, advances 180 more intervals, restores, and repeats the same input. Complete final state bytes and the combined image/PCM/sample-count observations match, including the two cases using CGB double speed. This is bounded native continuation, not in-game save-file or full-game qualification.
+
+### Combined headless throughput
+
+A separate comparison measures the final combined implementation against the preserved baseline without IPO. Each variant runs twice in ABBA order for 2,400 guest intervals with normal graphics and stereo sample generation. This includes the clock and serial changes, but excludes Qt playback and rewind. It is distinct from the isolated IPO comparison above.
+
+| Platform | Input and model | Median baseline / combined elapsed time | Throughput ratio |
+| --- | --- | --- | --- |
+| Linux | Tetris, DMG | 3.152 / 3.143 seconds | 1.003x |
+| Linux | Mario Deluxe, CGB | 3.677 / 3.397 seconds | 1.082x |
+| Windows | Tetris, DMG | 4.476 / 3.975 seconds | 1.126x |
+| Windows | Mario Deluxe, CGB | 4.525 / 4.070 seconds | 1.112x |
+
+Complete PCM and image files, sample counts, instruction counts, and guest-cycle counts match across variants and platforms for both inputs. The Linux Tetris difference is inconclusive. Two runs per variant do not characterize every host or cartridge; the table supports these bounded comparisons rather than a general gameplay speedup.
+
+### Native runtime samples across model profiles
+
+The installed combined build ran nine title/profile cases on each platform with normal audio and rewind capture enabled. Tetris on DMG and Mario Deluxe ran for 60 seconds, Mario Tennis for 65 seconds, and the remaining cases for 30 seconds. Inputs, requested hardware, boot binaries, and traces match across platforms. Reports confirm a real audio sink, screenshot and battery-save flushing, and no execution or rewind-capture failure.
+
+| Platform | Title | Model | Seconds | Post-warmup guest progress | Post-warmup paint p95 / maximum | Peak process memory |
+| --- | --- | --- | --- | --- | --- | --- |
+| Windows | Tetris | DMG | 60 | 100.0073% | 17.86 / 33.70 ms | 63.15 MiB working set |
+| Windows | Mario Deluxe | CGB | 60 | 99.9821% | 17.84 / 36.63 ms | 84.55 MiB working set |
+| Windows | Tetris | SGB NTSC | 30 | 99.9702% | 17.45 / 35.46 ms | 49.63 MiB working set |
+| Windows | Tetris | SGB2 | 30 | 99.9723% | 17.83 / 37.57 ms | 49.06 MiB working set |
+| Windows | Kirby | DMG | 30 | 99.9961% | 17.81 / 35.69 ms | 52.85 MiB working set |
+| Windows | Super Mario Land | DMG | 30 | 100.0295% | 17.81 / 33.47 ms | 49.09 MiB working set |
+| Windows | Crystal | CGB | 30 | 99.9844% | 17.77 / 33.88 ms | 52.27 MiB working set |
+| Windows | Mario Tennis | CGB | 65 | 99.9986% | 17.84 / 35.71 ms | 104.66 MiB working set |
+| Windows | Tomb Raider | CGB | 30 | 99.9694% | 17.85 / 38.71 ms | 81.55 MiB working set |
+| WSLg/Xcb | Tetris | DMG | 60 | 99.9783% | 17.49 / 19.50 ms | 80.00 MiB resident |
+| WSLg/Xcb | Mario Deluxe | CGB | 60 | 100.0136% | 17.39 / 20.37 ms | 101.39 MiB resident |
+| WSLg/Xcb | Tetris | SGB NTSC | 30 | 100.0357% | 17.09 / 17.88 ms | 63.61 MiB resident |
+| WSLg/Xcb | Tetris | SGB2 | 30 | 100.0364% | 17.21 / 20.74 ms | 64.92 MiB resident |
+| WSLg/Xcb | Kirby | DMG | 30 | 99.9962% | 17.43 / 20.03 ms | 70.84 MiB resident |
+| WSLg/Xcb | Super Mario Land | DMG | 30 | 99.9609% | 17.24 / 18.50 ms | 63.23 MiB resident |
+| WSLg/Xcb | Crystal | CGB | 30 | 99.9832% | 17.38 / 19.22 ms | 68.12 MiB resident |
+| WSLg/Xcb | Mario Tennis | CGB | 65 | 99.9997% | 17.58 / 19.31 ms | 123.94 MiB resident |
+| WSLg/Xcb | Tomb Raider | CGB | 30 | 99.9671% | 17.55 / 19.19 ms | 96.18 MiB resident |
+
+Windows memory is the per-process PeakWorkingSet64 sampled every 500 ms; Linux memory is the maximum resident set from the process resource report. These metrics are different and are not a cross-platform memory comparison. Percentages use the physical model clock: 4,295,454 Hz for SGB NTSC and 4,194,304 Hz for the other current profiles. Paint intervals describe widget activity rather than physical display presentation.
+
+Audio event exceptions are retained: Windows Tomb Raider: whole-run idle/errors 1/0, post-warmup idle/errors 0/0. All other sampled windows report zero backend idle/error events.
+
+A separate 30-second Windows Tomb Raider repeat reports zero whole-run and post-warmup idle/error events. It does not replace or erase the event in the original run. Zero events alone does not establish audible correctness.
+
+Installed Windows and Linux/Xcb workflow smoke checks also pass with `--audio-check`. An initial WSLg attempt could not connect to PulseAudio. The retry passes after checking server readiness and selecting the WSLg audio socket explicitly; audio-service availability is separate from guest timing.
+
+Captures on both platforms show active Tetris under DMG, SGB, and SGB2; Mario Deluxe; Kirby; and Super Mario Land gameplay. Crystal shows introduction text, Mario Tennis character selection, and Tomb Raider a load menu. These scene qualifications do not establish complete gameplay for those titles, long-term saving, or audible equivalence.
