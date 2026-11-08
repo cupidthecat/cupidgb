@@ -12,7 +12,9 @@ The `cupidgb_core` static library has no Qt dependency. Configure with `-DCUPIDG
 
 The core uses M-cycles for CPU/timer work. `CupidGb.elapsed_cycles` counts base-speed T-cycles, including execution with the LCD disabled. `cupid_gb_base_clock_hz` supplies the conversion to physical seconds: 4,295,454 Hz for SGB NTSC and 4,194,304 Hz for the other current profiles. SGB PAL remains pending. CGB double speed advances CPU and timer work twice as often as the PPU/audio domain. Frontend pacing must use guest time rather than assuming one completed image per instruction budget.
 
-Each machine cycle advances four LCD/APU dots at normal speed and two at double speed. The interrupt acknowledgment helper divides the final interrupt cycle at its CPU T18 edge, so requests arriving on either side of that edge remain distinguishable. Snapshot fields retain their explicit wire encoding; timing repairs can change generated field values without changing that encoding.
+Each machine cycle advances four LCD/APU dots at normal speed and two at double speed. The interrupt-entry tail schedules stack-register effects, IE/IF selection, and the CPU T18 acknowledgment on one local timeline. Requests arriving on either side of that edge remain distinguishable. Snapshot fields retain their explicit wire encoding; timing repairs can change generated field values without changing that encoding.
+
+[Timing and clock domains](timing.md) describes CPU/base-clock units, bus phases, interrupt sampling, the shared STAT line, audio integration, and host deadline invariants. Use it when changing a clock boundary; subsystem totals and register ordering need separate checks.
 
 `src/gb/pixels.c` maintains background and object queues across LCD dots. Fetched bytes remain stable across later CPU writes; palette lookup happens as a pixel leaves the queue. `src/gb/ppu.c` owns scanline state, bus access modes, STAT edges, and DMA scheduling. These boundaries allow mid-scanline changes without rendering already emitted pixels again. FIFO presence alone does not establish correct fetch or interrupt timing.
 

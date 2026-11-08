@@ -370,3 +370,64 @@ A separate 30-second Windows Tomb Raider repeat reports zero whole-run and post-
 Installed Windows and Linux/Xcb workflow smoke checks also pass with `--audio-check`. An initial WSLg attempt could not connect to PulseAudio. The retry passes after checking server readiness and selecting the WSLg audio socket explicitly; audio-service availability is separate from guest timing.
 
 Captures on both platforms show active Tetris under DMG, SGB, and SGB2; Mario Deluxe; Kirby; and Super Mario Land gameplay. Crystal shows introduction text, Mario Tennis character selection, and Tomb Raider a load menu. These scene qualifications do not establish complete gameplay for those titles, long-term saving, or audible equivalence.
+
+## Interrupt register phases and LCD edges
+
+The next timing comparison uses the same pinned revision and preserves `2dddf47b15ec77d0269cecc3e37f8548297eeaa0` as its CupidGB baseline. Interrupt entry previously committed only the final STAT value. With SP at `ff42`, return address `8091`, and a particular LCD startup phase, that omitted transient selected vector `0050` and cleared the timer request. The corrected sequence selects vector `0048` and retains the timer request in IF. Stack writes remain within 20 CPU T-cycles, with acknowledgment at T18.
+
+The register sequence also needs the correct LCD-start comparison edge. LCD enable preserves the frozen comparison and combined STAT latches until the model-specific refresh; an early synchronous refresh would change interrupt selection. A separate coincidence edge now preserves a pending HBlank transition rather than canceling it. The [timing guide](timing.md) explains these contracts and their remaining limits.
+
+| Paired comparison | Cases | Matches | Observations |
+| --- | --- | --- | --- |
+| STAT/LCDC stack targets | 720 | 720 | Elapsed clocks, PC, SP, IF, STAT, LCDC; staged writes observed |
+| Ordinary RAM stack controls | 720 | 720 | The same reported clocks and register fields |
+| IF/IE stack aliases and timer phases | 720 | 720 | Duration, PC, SP, IF, IE, TIMA, DIV |
+| Earlier acknowledgment phase sweep | 76 | 76 | Duration, vector, IF, visible LCD mode |
+| LCD-start comparison and explicit writes | 144 | 144 | Byte-identical observation logs across automatic refresh, LYC writes, and STAT writes |
+
+The paired profiles are DMG-B, Pocket, SGB NTSC and SGB2 without the host processor, and CGB-E at normal and double speed. The early local DMG profile is covered by continuation tests but has no enabled equivalent profile in this comparison build. Final-field equality does not establish complete register-conflict coverage or general half-cycle accuracy. Odd CGB CPU phases are local to the atomic interrupt scheduler; the startup comparison helper advances no pixel, oscillator, or sample clock.
+
+Windows and Linux pass all 24 desktop/core CTest checks. Linux passes all 16 core/tool checks under ASan/UBSan with leak detection, plus the Qt workflow smoke under sanitizers. The Qt run disables leak detection for host-library allocations. Forced portable hashing with IPO disabled passes snapshot, hash, and mixed C/C++ checks on Windows and sanitized Linux.
+
+Fourteen startup continuation captures and two pending-HBlank captures preserve their resumed IF/mode behavior and complete encoded states. No serialized fields were added. Version 2 remains 300,518 bytes, and the CGB fixture remains SHA-256 `6106c038f80d9ef4ca4417f31305dc05bb714d9252e6caff3eec0205ea4ec0eb`.
+
+The repeated external corpus produces 126 explicit passes and three bounded results in each build. All eight final images match with zero differing pixels. Three commercial CGB checkpoint replays again reproduce complete final state bytes and image/PCM/sample-count observations, including two double-speed cases. Native runtime measurements for this timing build are recorded separately from these component and continuation checks.
+
+### Expanded test coverage and remaining failures
+
+An inventory found 236 distinct compiled local GB/GBC test ROMs. An additional 80-case batch uses verified explicit-verdict protocols and corresponding DMG or CGB-E profiles. The comparison build produces 79 passes and one bounded result. CupidGB produces 15 passes, 62 failures, and three bounded results. The preserved `2dddf47` build produces exactly the same CupidGB observations, including verdicts, instruction/cycle counts, images, generated audio, serial counts, and memory result text. Host time is excluded from that equality check.
+
+The 62 explicit failures comprise 59 APU sample-timing cases and three DMA cases covering address masking, LCD-off behavior, and mode-0 transfers. Two hardware-I/O cases pass in the comparison build but remain bounded in both CupidGB builds. One divider-startup case remains bounded in all builds. These results identify substantial remaining accuracy work. They do not invalidate the narrower passing scopes above, and neither a bounded native run nor this interrupt repair resolves them.
+
+The full inventory also includes unsupported hardware revisions, boot-dependent cases, tests needing completion adapters, manual/experimental tests, and a clock procedure. They require their own model and validation setup; they are not counted as passing or dismissed as unnecessary. Private receipts retain every selected row, input hash, executable hash, outcome, and baseline comparison. The current parity goal remains open.
+
+### Native playback after the timing repair
+
+The installed timing build ran nine title/profile cases on each platform with normal audio and rewind capture enabled. Tetris on DMG and Mario Deluxe ran for 60 seconds, Mario Tennis for 65 seconds, and the remaining cases for 30 seconds. Inputs, requested hardware, boot binaries, and traces match across platforms. Reports confirm a real audio sink, screenshot and battery-save flushing, and no execution or rewind-capture failure.
+
+| Platform | Title | Model | Seconds | Post-warmup guest progress | Post-warmup paint p95 / maximum | Peak process memory |
+| --- | --- | --- | --- | --- | --- | --- |
+| Windows | Tetris | DMG | 60 | 100.0065% | 17.80 / 35.02 ms | 63.58 MiB working set |
+| Windows | Mario Deluxe | CGB | 60 | 100.0090% | 17.81 / 39.45 ms | 84.19 MiB working set |
+| Windows | Tetris | SGB NTSC | 30 | 100.0353% | 17.31 / 34.53 ms | 49.39 MiB working set |
+| Windows | Tetris | SGB2 | 30 | 100.0332% | 17.85 / 28.78 ms | 49.24 MiB working set |
+| Windows | Kirby | DMG | 30 | 99.9970% | 17.87 / 38.33 ms | 52.96 MiB working set |
+| Windows | Super Mario Land | DMG | 30 | 100.0288% | 17.92 / 37.15 ms | 48.87 MiB working set |
+| Windows | Crystal | CGB | 30 | 99.9884% | 17.72 / 41.72 ms | 51.85 MiB working set |
+| Windows | Mario Tennis | CGB | 65 | 99.9980% | 17.85 / 37.66 ms | 103.95 MiB working set |
+| Windows | Tomb Raider | CGB | 30 | 99.9650% | 17.85 / 36.92 ms | 81.62 MiB working set |
+| WSLg/Xcb | Tetris | DMG | 60 | 99.9772% | 17.56 / 20.08 ms | 79.88 MiB resident |
+| WSLg/Xcb | Mario Deluxe | CGB | 60 | 100.0134% | 17.36 / 20.06 ms | 99.59 MiB resident |
+| WSLg/Xcb | Tetris | SGB NTSC | 30 | 100.0331% | 17.07 / 20.70 ms | 66.05 MiB resident |
+| WSLg/Xcb | Tetris | SGB2 | 30 | 100.0356% | 17.44 / 19.11 ms | 67.10 MiB resident |
+| WSLg/Xcb | Kirby | DMG | 30 | 99.9988% | 17.47 / 18.85 ms | 69.18 MiB resident |
+| WSLg/Xcb | Super Mario Land | DMG | 30 | 99.9654% | 17.28 / 18.22 ms | 60.69 MiB resident |
+| WSLg/Xcb | Crystal | CGB | 30 | 99.9808% | 17.34 / 19.87 ms | 67.71 MiB resident |
+| WSLg/Xcb | Mario Tennis | CGB | 65 | 99.9997% | 17.60 / 20.61 ms | 122.64 MiB resident |
+| WSLg/Xcb | Tomb Raider | CGB | 30 | 99.9770% | 17.59 / 19.75 ms | 97.46 MiB resident |
+
+Windows memory is the per-process PeakWorkingSet64 sampled every 500 ms; Linux memory is the maximum resident set from the process resource report. These metrics are different and are not a cross-platform memory comparison. Percentages use the physical model clock: 4,295,454 Hz for SGB NTSC and 4,194,304 Hz for the other current profiles. Paint intervals describe widget activity rather than physical display presentation.
+
+All whole-run and post-warmup windows report zero backend idle/error events. Installed Windows and Linux/Xcb workflow smoke checks also pass with real audio required.
+
+Captures on both platforms show active Tetris under DMG, SGB, and SGB2; Mario Deluxe; Kirby; and Super Mario Land gameplay. Crystal shows introduction text, Mario Tennis character selection, and Tomb Raider a load menu. These scene qualifications do not establish complete gameplay for those titles, long-term saving, or audible equivalence.

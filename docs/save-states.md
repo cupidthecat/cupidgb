@@ -59,4 +59,6 @@ Generated-ROM tests exercise deterministic continuation across the current six h
 
 The portable version 2 fixture has SHA-256 `6106c038f80d9ef4ca4417f31305dc05bb714d9252e6caff3eec0205ea4ec0eb`. Its exact bytes are checked in the regression test. Native continuation checks do not establish state interoperability or complete underlying hardware accuracy.
 
+Continuation tests also capture LCD startup before its comparison refresh and a pending HBlank transition after a coincidence interrupt. Restored state must preserve the same mode change, combined-line behavior, and IF bits. The interrupt-entry scheduler consumes its local subcycle cursor before returning to the host; it adds no persistent half-dot field or wire-format revision.
+
 Forward runtime measurements must be distinguished from state loading and rewind, which change the guest timeline. A guest-clock rate measured during those operations represents net timeline progress rather than forward emulation throughput.

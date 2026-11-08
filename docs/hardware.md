@@ -48,6 +48,8 @@ The frontend's `.sav` support is separate from controller emulation. Its complet
 
 The CPU executes SM83 instructions with instruction-specific bus phases, interrupt dispatch, delayed interrupt enable, HALT, and STOP handling. CPU and timer work use machine cycles; elapsed guest time is counted in base-speed T-cycles. CGB double speed increases CPU-domain work without doubling LCD or sound generator clocks.
 
+Interrupt entry samples enable and request state separately because either stack byte can target an I/O register. STAT transients and LCDC control phases can change which interrupt wins before the T18 acknowledgment. The entry still consumes 20 CPU T-cycles, including cancellation. [Timing and clock domains](timing.md) describes the tested stack-register phases and the limits of that coverage.
+
 The memory map includes cartridge windows, VRAM, banked WRAM, echo RAM, OAM, I/O, high RAM, and interrupt enable. Device access restrictions depend on LCD and DMA state. Open-bus decay, fine bus conflicts, interrupt races, and revision differences remain incomplete. Passing ordinary instruction tests cannot establish those behaviors.
 
 The timer derives edges from divider phase and models delayed TIMA reloads and register-write windows. Serial supports an internal slow clock and the color fast clock with disconnected incoming data. Completed transfers can notify a host callback without changing hardware execution or writing to a host stream. External serial transport, infrared, and attached devices remain pending.
@@ -57,6 +59,8 @@ OAM DMA and CGB general/HBlank DMA are implemented. Bus contention, restarts, co
 ## Graphics
 
 The pixel pipeline keeps background and object fetch queues across LCD dots. It handles scroll, window activation, object selection and priority, color attributes, palettes, and a latched color object-priority choice. The PPU owns scanline progression, access modes, LCD startup, STAT signaling, and DMA coordination.
+
+Coincidence and mode sources feed one combined STAT interrupt line. A rising coincidence source must preserve a pending HBlank transition; suppressing a second interrupt edge does not cancel the display's mode change. LCD power cycling preserves the comparison and combined-line latches until startup refreshes them. Automatic refresh follows the measured model-specific startup edge, while explicit STAT and LYC writes can update the comparison earlier.
 
 SGB behavior includes packet reception, palette/attribute commands, screen masking, and a border framebuffer. A border image and the NTSC clock do not establish complete SGB host emulation, four-player input, audio extensions, or PAL timing.
 

@@ -201,6 +201,136 @@ void cupid_gb_acknowledge_interrupt(CupidGb *gb, uint8_t mask) {
         clock_lcd_dot(gb);
 }
 
+typedef enum InterruptWriteKind {
+    INTERRUPT_WRITE_ORDINARY,
+    INTERRUPT_WRITE_STAT,
+    INTERRUPT_WRITE_LCDC,
+    INTERRUPT_WRITE_LCDC_DOUBLE
+} InterruptWriteKind;
+
+typedef struct InterruptWrite {
+    uint16_t address;
+    uint8_t value, previous;
+    unsigned early, commit, sample;
+    InterruptWriteKind kind;
+} InterruptWrite;
+
+static InterruptWrite interrupt_write_plan(const CupidGb *gb, uint16_t address, uint8_t value,
+                                           unsigned boundary, bool first) {
+    InterruptWrite write = {address, value, 0, 0, boundary, boundary, INTERRUPT_WRITE_ORDINARY};
+    if (address == 0xff41u) {
+        write.previous = gb->io_registers[CUPID_GB_IO_STAT];
+        write.kind = INTERRUPT_WRITE_STAT;
+        write.early = boundary;
+        write.commit = write.sample = boundary + 1;
+    } else if (address == 0xff40u) {
+        write.previous = gb->io_registers[CUPID_GB_IO_LCDC];
+        if (gb->model != CUPID_GB_MODEL_CGB) {
+            write.kind = INTERRUPT_WRITE_LCDC;
+            write.early = boundary - 2;
+            write.commit = write.sample = boundary - 1;
+        } else if (gb->double_speed) {
+            write.kind = INTERRUPT_WRITE_LCDC_DOUBLE;
+            write.early = boundary - 2;
+        } else if ((write.previous & (uint8_t)~value & 0x10u) != 0u) {
+            /* Tile selection has a trailing one-T-cycle conflict window. */
+            write.sample = boundary + 1;
+        }
+    } else if (address == 0xff0fu && first) {
+        /* A first stack write to IF wins over that cycle's hardware request.
+         * The second stack write to IF has its separate old-value sample. */
+        write.commit = write.sample = boundary + 1;
+    }
+    return write;
+}
+
+static void interrupt_write_early(CupidGb *gb, const InterruptWrite *write) {
+    uint8_t value;
+    if (write->kind == INTERRUPT_WRITE_STAT) {
+        if (gb->model != CUPID_GB_MODEL_CGB) {
+            value = 0xff;
+        } else if (gb->double_speed) {
+            value = (uint8_t)((write->value & (uint8_t)~8u) | (write->previous & 8u));
+        } else {
+            value = (uint8_t)((write->value & (uint8_t)~0x40u) | (write->previous & 0x40u));
+        }
+        cupid_gb_write_u8(gb, write->address, value);
+    } else if (write->kind == INTERRUPT_WRITE_LCDC_DOUBLE) {
+        value = (uint8_t)((write->value & (uint8_t)~0x81u) | (write->previous & 0x81u));
+        cupid_gb_write_u8(gb, write->address, value);
+    } else if (gb->model == CUPID_GB_MODEL_SGB || gb->model == CUPID_GB_MODEL_SGB2) {
+        /* Object fetching observes the pulse even though the old register value
+         * is restored before the next LCD dot. */
+        cupid_gb_write_u8(gb, write->address, write->value);
+        cupid_gb_write_u8(gb, write->address, write->previous);
+    } else {
+        cupid_gb_write_u8(gb, write->address, (uint8_t)(write->previous | (write->value & 1u)));
+    }
+}
+
+void cupid_gb_interrupt_tail(CupidGb *gb, uint16_t return_address) {
+    const uint16_t high_address = --gb->cpu.sp;
+    const uint16_t low_address = (uint16_t)(high_address - 1u);
+    const InterruptWrite high =
+        interrupt_write_plan(gb, high_address, (uint8_t)(return_address >> 8), 12, true);
+    InterruptWrite low = interrupt_write_plan(gb, low_address, (uint8_t)return_address, 16, false);
+    uint8_t enabled = 0, selected = 0, low_old_if = 0;
+
+    for (unsigned phase = 9; phase <= 20; ++phase) {
+        /* Odd double-speed T-cycles fall between LCD dots. This local phase is
+         * fully consumed before returning; native states need no half-dot field. */
+        if (!gb->double_speed || !(phase & 1u)) {
+            clock_lcd_dot(gb);
+        } else {
+            /* CGB LCD-start comparison settles on the first half-dot. No
+             * oscillator or sample clock advances until the complete dot. */
+            cupid_gb_sync_lcd_startup(gb);
+        }
+        if (high.early == phase) {
+            interrupt_write_early(gb, &high);
+        }
+        if (high.commit == phase) {
+            cupid_gb_write_u8(gb, high.address, high.value);
+        }
+        if (high.sample == phase) {
+            enabled = gb->interrupt_enable;
+            --gb->cpu.sp;
+            /* The second register access sees the completed first write. */
+            low = interrupt_write_plan(gb, low_address, (uint8_t)return_address, 16, false);
+        }
+        if (low.early == phase) {
+            interrupt_write_early(gb, &low);
+        }
+        if (low.commit == phase) {
+            low_old_if = gb->interrupt_flags;
+            cupid_gb_write_u8(gb, low.address, low.value);
+        }
+        if (low.sample == phase) {
+            uint8_t requested = low.address == 0xff0fu ? low_old_if : gb->interrupt_flags;
+            uint8_t pending = (uint8_t)(enabled & requested & 0x1fu);
+            selected = (uint8_t)(pending & (uint8_t)(0u - pending));
+        }
+        if (phase == 18) {
+            /* Low IF writes replace the register, but acknowledgment still clears
+             * the request chosen from its pre-write value. Later requests survive. */
+            gb->interrupt_flags &= (uint8_t)~selected;
+            gb->cpu.pc = 0;
+            for (unsigned bit = 0; bit < 5; ++bit) {
+                if (selected == (1u << bit)) {
+                    gb->cpu.pc = (uint16_t)(0x40u + 8u * bit);
+                }
+            }
+        }
+        if ((phase & 3u) == 2u) {
+            clock_cpu_domain(gb);
+            cupid_gb_tick_dma(gb);
+            if (gb->double_speed) {
+                gb->speed_phase = !gb->speed_phase;
+            }
+        }
+    }
+}
+
 void cupid_gb_cpu_write(CupidGb *gb, uint16_t address, uint8_t value, uint16_t leading_mcycles) {
     if (address != 0xff40u || gb->model == CUPID_GB_MODEL_CGB || leading_mcycles == 0u) {
         cupid_gb_tick(gb, leading_mcycles);

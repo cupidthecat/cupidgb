@@ -233,6 +233,126 @@ static void test_interrupt_acknowledgment_dot_phase(void) {
     cupid_gb_cleanup(&gb);
 }
 
+static void test_interrupt_stack_stat_priority(void) {
+    const CupidGbModel models[] = {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_MGB, CUPID_GB_MODEL_SGB,
+                                   CUPID_GB_MODEL_SGB2};
+    CupidGb gb = {0};
+    for (unsigned model = 0; model < sizeof(models) / sizeof(models[0]); ++model) {
+        for (unsigned retained_hblank = 0; retained_hblank < 2; ++retained_hblank) {
+            for (unsigned phase = 232; phase <= 250; ++phase) {
+                prepare(&gb, 0, 0);
+                gb.model = models[model];
+                cupid_gb_write_u8(&gb, 0xff40, 0);
+                cupid_gb_write_u8(&gb, 0xff41, 0);
+                cupid_gb_write_u8(&gb, 0xff45, 0);
+                cupid_gb_write_u8(&gb, 0xff4b, 255);
+                cupid_gb_write_u8(&gb, 0xff40, 0x91);
+                cupid_gb_tick_ppu_dots(&gb, (uint16_t)phase);
+                gb.cpu.pc = retained_hblank ? 0x8891 : 0x8091;
+                gb.cpu.sp = 0xff42;
+                gb.cpu.ime = true;
+                gb.interrupt_enable = 6;
+                gb.interrupt_flags = 4;
+                step_cycles(&gb, 20);
+                /* The first stack byte targets STAT. Its monochrome transient
+                 * requests a higher-priority LCD interrupt before either byte
+                 * finishes, even when the final STAT value enables no source. */
+                assert(gb.cpu.pc == 0x48 && gb.cpu.sp == 0xff40);
+                assert(gb.interrupt_flags & 4);
+                assert(gb.io_registers[CUPID_GB_IO_LCDC] == 0x91);
+            }
+        }
+    }
+    cupid_gb_cleanup(&gb);
+}
+
+static void test_interrupt_lcdc_startup_selection(void) {
+    const CupidGbModel models[] = {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_MGB, CUPID_GB_MODEL_SGB,
+                                   CUPID_GB_MODEL_SGB2,    CUPID_GB_MODEL_CGB, CUPID_GB_MODEL_CGB};
+    CupidGb gb = {0};
+    for (unsigned model = 0; model < sizeof(models) / sizeof(models[0]); ++model) {
+        prepare(&gb, 0, 0);
+        gb.model = models[model];
+        gb.cgb_mode = gb.model == CUPID_GB_MODEL_CGB;
+        gb.double_speed = model == 5;
+        cupid_gb_write_u8(&gb, 0xff40, 0);
+        cupid_gb_write_u8(&gb, 0xff41, 0);
+        cupid_gb_write_u8(&gb, 0xff45, 0);
+        gb.cpu.pc = 0xc091;
+        gb.cpu.sp = 0xff42;
+        gb.cpu.ime = true;
+        gb.interrupt_enable = 6;
+        gb.interrupt_flags = 4;
+        step_cycles(&gb, gb.double_speed ? 10 : 20);
+        /* LCDC is the second byte. The first STAT edge after LCD enable occurs
+         * after request selection, so it remains pending behind the timer ISR. */
+        assert(gb.cpu.pc == 0x50 && gb.cpu.sp == 0xff40);
+        assert(gb.interrupt_flags == 2);
+        assert(gb.pixels.dot == (model < 4 ? 5 : model == 4 ? 4 : 2));
+    }
+    cupid_gb_cleanup(&gb);
+}
+
+static void test_interrupt_if_ie_stack_aliases(void) {
+    const CupidGbModel models[] = {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_MGB, CUPID_GB_MODEL_SGB,
+                                   CUPID_GB_MODEL_SGB2,    CUPID_GB_MODEL_CGB, CUPID_GB_MODEL_CGB};
+    const uint16_t stack[] = {0xff10, 0xff11, 0x0000, 0x0001};
+    const uint16_t returns[] = {0x0000, 0x0400, 0x0c00, 0x1204, 0x1200, 0x001f};
+    CupidGb gb = {0};
+    for (unsigned model = 0; model < sizeof(models) / sizeof(models[0]); ++model) {
+        for (unsigned alias = 0; alias < sizeof(stack) / sizeof(stack[0]); ++alias) {
+            for (unsigned ret = 0; ret < sizeof(returns) / sizeof(returns[0]); ++ret) {
+                for (unsigned divider = 0; divider < 5; ++divider) {
+                    prepare(&gb, 0, 0);
+                    gb.model = models[model];
+                    gb.cgb_mode = gb.model == CUPID_GB_MODEL_CGB;
+                    gb.double_speed = model == 5;
+                    cupid_gb_write_u8(&gb, 0xff40, 0);
+                    gb.cpu.pc = returns[ret];
+                    gb.cpu.sp = stack[alias];
+                    gb.cpu.ime = true;
+                    gb.interrupt_enable = 12;
+                    gb.interrupt_flags = 8;
+                    gb.io_registers[7] = divider == 4 ? 0 : 5;
+                    gb.io_registers[5] = 255;
+                    gb.io_registers[6] = 0x73;
+                    gb.io_registers[4] = 0;
+                    gb.div_counter = divider & 3u;
+                    gb.tima_overflow_delay = 0;
+                    step_cycles(&gb, gb.double_speed ? 10 : 20);
+
+                    const uint8_t high = (uint8_t)(returns[ret] >> 8);
+                    const uint8_t low = (uint8_t)returns[ret];
+                    /* Divider starts select a timer reload before the high byte,
+                     * between the bytes, after selection/acknowledgment, or none.
+                     * High IF replaces earlier requests. Low IF instead preserves
+                     * its pre-write request for selecting the interrupt vector. */
+                    const bool timer_before = divider > 0 && divider < 4;
+                    uint8_t requested = (uint8_t)(8u | (timer_before ? 4u : 0u));
+                    if (alias == 0) {
+                        requested = (uint8_t)((high & 31u) | (divider == 1 ? 4u : 0u));
+                    }
+                    uint8_t enabled = alias == 2 ? high : 12;
+                    uint8_t pending = (uint8_t)(requested & enabled & 31u);
+                    uint8_t selected = (uint8_t)(pending & (uint8_t)(0u - pending));
+                    uint16_t vector = selected == 4 ? 0x50 : selected == 8 ? 0x58 : 0;
+                    uint8_t final_if = alias == 1 ? (uint8_t)(low & 31u) : requested;
+                    final_if &= (uint8_t)~selected;
+                    if (divider == 0) {
+                        final_if |= 4; /* Reload at T19 survives the T18 acknowledge. */
+                    }
+                    assert(gb.cpu.pc == vector && gb.cpu.sp == (uint16_t)(stack[alias] - 2u));
+                    assert(gb.interrupt_flags == final_if);
+                    assert(gb.interrupt_enable == (alias == 2 ? high : alias == 3 ? low : 12));
+                    assert(gb.div_counter == (divider & 3u) + 5u);
+                    assert(gb.io_registers[5] == (divider == 4 ? 255 : divider == 3 ? 0x74 : 0x73));
+                }
+            }
+        }
+    }
+    cupid_gb_cleanup(&gb);
+}
+
 static void test_double_speed_clock_domains(void) {
     CupidGb gb = {0};
     prepare(&gb, 0, 0);
@@ -714,6 +834,9 @@ int main(void) {
     test_interrupt_stack_if_acknowledgment();
     test_interrupt_stack_bus_phase();
     test_interrupt_acknowledgment_dot_phase();
+    test_interrupt_stack_stat_priority();
+    test_interrupt_lcdc_startup_selection();
+    test_interrupt_if_ie_stack_aliases();
     test_double_speed_clock_domains();
     test_halt_pending_enable_and_fetch_phase();
     test_stop_clock_and_selected_input();

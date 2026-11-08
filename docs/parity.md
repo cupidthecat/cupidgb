@@ -8,15 +8,15 @@ Reference source revision: `ea667ad79aa28409f034b1fd6da7304e1844750d`. The local
 
 | Area | Current implementation | Acceptance still required |
 | --- | --- | --- |
-| Models | Grouped DMG profiles, Pocket, one CGB profile, SGB NTSC base clock and SGB2 | Separately qualified DMG-B, CGB 0/A/B/C/D/E, complete SGB NTSC behavior, SGB PAL and host-integration variants, SGB2 variants |
-| CPU | SM83 decoder, control-flow and interrupt regressions, model-specific HALT polling, STOP input behavior, T18 interrupt acknowledgment, LCDC phases for ordinary stores, memory read-modify-write, PUSH/CALL/RST, and the first interrupt stack write | Complete instruction/timing suites, invalid opcodes, remaining interrupt races, the second interrupt stack write targeting LCDC, equivalent-model coverage |
+| Models | Grouped DMG profiles, Pocket, one CGB profile, SGB NTSC base clock and SGB2 | Separately qualified DMG-B, CGB 0/A/B/C/D/E, complete SGB NTSC behavior, SGB PAL and host-integration variants, SGB2 variants, later-host GB/GBC compatibility profiles |
+| CPU | SM83 decoder, control-flow and interrupt regressions, model-specific HALT polling, STOP input behavior, T18 interrupt acknowledgment, LCDC phases for ordinary stores, memory read-modify-write, PUSH/CALL/RST, and model-specific interrupt stack phases for STAT/LCDC/IF | Complete instruction/timing suites, invalid opcodes, HBlank/OAM boundary STAT-write qualification, other register conflicts and interrupt races, equivalent-model coverage |
 | Memory | ROM/RAM/VRAM/WRAM banks, echo and I/O maps | Open bus, model-specific read/write conflicts, bank-switch timing |
 | Cartridges | Physical ROM address lines and erased padding, 2 KiB RAM aliases, MBC1/multicart, MBC2, MBC3/extended MBC3, MBC5 enable decoding, HuC1 banking | MBC7 EEPROM/motion, MMM01, HuC1 infrared, HuC3, camera, TPP1, disabled-RAM bus behavior, unbanked RAM comparison gaps; legacy partial MBC6 behavior has separate scope |
 | Timers | DIV/TIMA reload and write behavior | Complete timer acceptance corpus and model differences |
 | Serial | Internal slow and CGB fast clock, disconnected input, optional completed-byte host observation without core stream I/O | External link transport, infrared, clock-change races and broad serial suite coverage |
-| DMA | OAM DMA and CGB HDMA/GDMA | Bus contention, restart/collision timing, double-speed cases |
-| Graphics | Persistent dot-driven background/object queues, window activation, raw-index priority, latched CGB object priority, palettes, SGB border, two-dot double-speed machine cycles and corrected double-speed HBlank readback | Complete FIFO/fetcher timing, sprite/window conflicts, broad pixel comparisons, color correction and blending |
-| Audio | Four channels, DIV-driven frame sequencer, CGB hardware quirks, model-clock sample scheduling/filtering, stereo 44100 Hz samples | Sweep/envelope/wave quirks, complete APU corpus, filtering and interference, measured audio stability |
+| DMA | OAM DMA and CGB HDMA/GDMA | Expanded-suite address-mask, LCD-off and mode-0 failures; bus contention, restart/collision timing, double-speed cases |
+| Graphics | Persistent dot-driven background/object queues, window activation, raw-index priority, latched CGB object priority, palettes, SGB border, two-dot double-speed machine cycles and corrected double-speed HBlank readback; pending HBlank survives coincidence edges, with model-specific startup comparison refresh | Complete FIFO/fetcher timing, sprite/window conflicts, broad pixel comparisons, color correction and blending |
+| Audio | Four channels, DIV-driven frame sequencer, CGB hardware quirks, model-clock sample scheduling/filtering, stereo 44100 Hz samples | 59 expanded sample-timing failures; sweep/envelope/wave quirks, complete APU corpus, filtering and interference, measured audio stability |
 | Input | Core API for eight active-low buttons, selected JOYP falling-edge interrupts, direction-only opposing-contact policy | Contact bounce, monochrome row-switch settling, controller devices, motion, four-player SGB input |
 | Boot | HLE profiles and optional local boot ROM | Model-specific startup comparisons and verified boot-ROM provenance |
 | RTC and saves | Battery RAM and MBC3 live/latched clock persistence, halt/carry arithmetic, transactional loads, explicit older-native-state battery recovery | Wider file interoperability, other clock/EEPROM/flash controllers, long-term real-game save qualification |
@@ -47,7 +47,7 @@ Ctrl+C opens the debugger from the game window. [The debugger guide](debugging.m
 
 ## Source-audited scope
 
-The pinned hardware model list includes DMG-B, Pocket, CGB 0/A/B/C/D/E, SGB NTSC/PAL, SGB2, and SGB host-integration variants. Current CupidGB profile tags group several of these behaviors. An early monochrome profile is also present locally; its existence does not establish a separately qualified revision.
+The pinned hardware model list includes DMG-B, Pocket, CGB 0/A/B/C/D/E, SGB NTSC/PAL, SGB2, and SGB host-integration variants. It also defines AGB/Player compatibility profiles for GB/GBC execution; these remain unimplemented. Current CupidGB profile tags group several of these behaviors. An early monochrome profile is also present locally; its existence does not establish a separately qualified revision.
 
 The cartridge audit identifies ROM-only, MBC1, MBC2, MBC3 and its extended wiring, MBC5, MBC7, MMM01, HuC1, HuC3, camera, and TPP1 as comparison requirements. A controller name in CupidGB's decoder is not evidence of complete behavior. In particular, the retained partial MBC6 implementation must not be mistaken for a verified comparison requirement.
 
