@@ -26,7 +26,7 @@ When the core reports that CPU execution stopped, CupidGB pauses with the cartri
 
 Click the game area and make sure emulation is not paused. Check button and special-key bindings in Settings. Empty bindings disable an action. Buttons accept individual keys; command shortcuts can use modifiers. Duplicate or conflicting mappings are rejected on acceptance.
 
-CupidGB releases inputs on pause or application deactivation. Test a reported stuck key by pressing/releasing it while the game has focus, then switching away and back. Include the modifier sequence and keyboard layout in a bug report. Controllers and four-player mapping remain pending.
+CupidGB releases inputs on ordinary pause or application deactivation. Paused [debugger inspection](debugging.md) preserves the guest latch while releasing physical bindings; resuming playback reconciles the two. Test a reported stuck key by pressing/releasing it while the game has focus, then switching away and back. Include the modifier sequence and keyboard layout in a bug report. Controllers and four-player mapping remain pending.
 
 ## Sound is missing or unstable
 

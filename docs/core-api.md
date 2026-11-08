@@ -1,6 +1,6 @@
 # Core API
 
-`cupidgb_core` is a C11 static library with no Qt dependency. Public declarations live under `include/cupid`. The core owns emulated hardware; callers own host files, windows, device queues, pacing, and lifecycle coordination.
+`cupidgb_core` is a C11 static library with no Qt dependency. Public declarations live under `include/cupid`. Link through the CMake target to retain its platform dependencies: Windows system cryptography or optional OpenSSL 3 Crypto on Linux when native hashing is enabled. No external Crypto library is required for a portable-hash build. The core owns emulated hardware; callers own host files, windows, device queues, pacing, and lifecycle coordination.
 
 ## Instance lifetime
 
@@ -83,7 +83,7 @@ Drain audio regularly, including while the LCD is disabled. The core's sample bu
 
 ## Input and memory access
 
-Buttons use an active-low byte, ordered Right, Left, Up, Down, A, B, Select, Start. All released is `0xff`; pressing A alone is `0xef`. Call `cupid_gb_set_buttons(gb, released_mask)` from `cupid/gb/input.h` when supplying physical button state so selected-line interrupt behavior remains in the core. Selecting a row containing an already-held key can also request an interrupt. Releases and unchanged selected-line levels do not.
+Buttons use an active-low byte, ordered Right, Left, Up, Down, A, B, Select, Start. All released is `0xff`; pressing A alone is `0xef`. Call `cupid_gb_set_buttons(gb, released_mask)` from `cupid/gb/input.h` when supplying physical button state so selected-line interrupt behavior remains in the core. Selecting a row containing an already-held key can also request an interrupt. Only falling selected-line levels request an interrupt. Resolving opposing directions can expose a new falling level even when a physical contact is released.
 
 The direction-only scan resolves opposing direction contacts consistently; when both rows are selected, it preserves their wired-AND result. Monochrome row-switch settling and physical contact bouncing remain unimplemented. Do not interpret the immediate input API as complete electrical input timing.
 
@@ -108,6 +108,18 @@ Normal disk-state APIs recompute cartridge identity. A rejected load leaves the 
 `CupidGbStateContext` caches cartridge identity for trusted in-memory rewind. It binds to one owner, ROM pointer, ROM size, and model. Discard it after cartridge/model changes or any in-place ROM patch. Binding checks cannot detect a patch that preserves the pointer and size. Never use the cached context to validate an untrusted disk file.
 
 The core supplies snapshot bytes. The host supplies compression, history limits, storage, and UI. The complete wire-format and continuation contract is in [save states and rewind](save-states.md).
+
+## Debugger integration
+
+`cupid/gb/debugger.h` exposes host-only `CupidGbDebugger` state. Initialize it once, clean up its owned symbol table, and reset execution after a state change or edit. Its breakpoints and symbols are not guest hardware and are not serialized. A host can preserve that metadata while invalidating a running command and its history.
+
+Begin RUN, STEP, NEXT, or FINISH with `cupid_gb_debugger_begin`, then call `cupid_gb_debugger_step` or the bounded `cupid_gb_debugger_run`. Budgets count hardware-step attempts. A budget result leaves the command active for a later slice; an actual stop pauses the debugger. Ordinary hosts can use the before-instruction `cupid_gb_debugger_check` hook for execution breakpoints. A breakpoint resumes past its stopped occurrence once, without disabling later matches.
+
+`cupid_gb_step_observed` fills a caller-owned `CupidGbStepTrace` for actual CPU fetch, interrupt dispatch, or an idle step. It uses the same hardware execution path as `cupid_gb_step`, so debugger call/return tracking does not infer opcodes from a raw memory view. No trace or debugger resource is added to a native snapshot.
+
+`cupid_gb_debug_peek` reads underlying mapped memory without ticking hardware or applying CPU VRAM/OAM/wave restrictions. `cupid_gb_debug_poke` rejects ROM/unusable ranges, edits writable mapped storage, and applies device semantics for I/O. It requires the same exclusive instruction-boundary access as state operations. Raw observation and intentional edits are different contracts; an I/O edit can have hardware side effects.
+
+Disassembly, symbol loading/lookups, bank identification, and breakpoint management have separate APIs. Symbol-buffer loading is transactional and bounded. The Qt host implements Backstep with trusted native snapshots; C hosts must provide their own instruction history and reconcile audio/pacing after restoration. See [debugging](debugging.md) for command behavior, memory scopes, and remaining capabilities.
 
 ## Errors and compatibility
 

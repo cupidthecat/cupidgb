@@ -30,6 +30,7 @@ Emulation > Reset reloads the cartridge and battery data and applies the selecte
 | Open / close cartridge | Ctrl+O / Ctrl+W |
 | Reset / pause | Ctrl+R / Ctrl+P |
 | Advance one interval | Ctrl+N |
+| Debugger | Ctrl+C |
 | Settings | Ctrl+, |
 | Fullscreen | Ctrl+F |
 | Mute | Ctrl+M |
@@ -43,7 +44,7 @@ Pause releases held game inputs and clears queued playback. Advance Frame pauses
 
 Turbo removes normal host pacing while preserving guest hardware execution. Host playback is suppressed during turbo. Slow motion gradually changes the host target to half normal speed and adjusts playback conversion; releasing it returns to normal. Rapid A and B alternate two forward intervals pressed and two released while their assigned keys are held.
 
-Input is released when the application loses focus, so returning to the window does not leave a key stuck. Click the game area before playing if a dialog or another window has focus.
+Ordinary focus loss releases input so returning to the window does not leave a key stuck. Paused debugger inspection preserves the stopped guest input while releasing physical bindings; normal playback reconciles it before resuming. See [debugging](debugging.md) for that inspection behavior. Click the game area before playing if a dialog or another window has focus.
 
 ## Configure keys and shortcuts
 
@@ -113,4 +114,6 @@ Rewind changes emulated battery data and can schedule a later battery save. Make
 
 CupidGB uses Qt's per-user native settings backend with organization and application name `CupidGB`. Settings include window geometry, recent paths, hardware choice, boot directory, bindings, shortcuts, display choices, audio output/volume/mute, and rewind limits. Their physical storage location depends on platform and environment.
 
-`--smoke-test` and `--run-seconds` use isolated temporary settings. They do not overwrite normal desktop preferences. For command-line checks, input traces, and bounded runtime reports, see [testing and measurements](testing.md). Debugger tools, cheats, connected link devices, printer support, and music-file playback remain incomplete; absent controls do not imply those features are implemented.
+`--smoke-test` and `--run-seconds` use isolated temporary settings. They do not overwrite normal desktop preferences. For command-line checks, input traces, and bounded runtime reports, see [testing and measurements](testing.md).
+
+Tools > Debugger (Ctrl+C) pauses for CPU stepping, breakpoints, symbols, register/memory commands, and bounded instruction Backstep. Tools > Memory and Graphics opens memory, tile, map, OAM, and palette inspectors. Read [the debugger guide](debugging.md) before editing a session. Advanced debugger commands, cheats, connected link devices, printer support, and music-file playback remain incomplete; absent controls do not imply those features are implemented.

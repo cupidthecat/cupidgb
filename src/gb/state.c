@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum { STATE_HEADER_SIZE = 128, STATE_VERSION = 2 };
+enum { STATE_HEADER_SIZE = 128, STATE_VERSION = 2, STATE_WIRE_SIZE_V2 = 300518 };
 
 static const uint8_t state_magic[8] = {'C', 'U', 'P', 'I', 'D', 'G', 'B', 0};
 
@@ -452,10 +452,9 @@ size_t cupid_gb_state_size(const CupidGb *gb) {
     if (!ready(gb)) {
         return 0;
     }
-    StateIo io = {NULL, NULL, STATE_HEADER_SIZE, SIZE_MAX, false};
-    /* Measurement and encoding do not write through the instance pointer. */
-    state_fields(&io, (CupidGb *)gb);
-    return io.invalid ? 0 : io.offset;
+    /* Version 2 stores every model's fixed-capacity fields. Encoding and loading
+     * still check their final offset against this size, so schema drift fails closed. */
+    return STATE_WIRE_SIZE_V2;
 }
 
 static void put_u32(uint8_t *data, uint32_t value) {
@@ -470,11 +469,7 @@ static uint32_t get_u32(const uint8_t *data) {
 }
 
 static void integrity(const uint8_t *data, size_t length, uint8_t digest[32]) {
-    CupidSha256 context;
-    cupid_sha256_init(&context);
-    cupid_sha256_update(&context, data, 96);
-    cupid_sha256_update(&context, data + STATE_HEADER_SIZE, length - STATE_HEADER_SIZE);
-    cupid_sha256_final(&context, digest);
+    cupid_sha256_parts(data, 96, data + STATE_HEADER_SIZE, length - STATE_HEADER_SIZE, digest);
 }
 
 static bool overlaps(const void *a, size_t a_size, const void *b, size_t b_size) {

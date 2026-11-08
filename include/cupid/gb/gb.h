@@ -289,6 +289,21 @@ typedef struct CupidGb {
     bool boot_rom_enabled; /* true while boot ROM is mapped */
 } CupidGb;
 
+/* Optional host observation for one hardware step. This output is not stored
+ * in the hardware instance or native state. Address is the actual opcode fetch
+ * address, the interrupted PC, or the idle PC according to the event. */
+typedef enum CupidGbStepEvent {
+    CUPID_GB_STEP_IDLE = 0,
+    CUPID_GB_STEP_INSTRUCTION,
+    CUPID_GB_STEP_INTERRUPT
+} CupidGbStepEvent;
+
+typedef struct CupidGbStepTrace {
+    CupidGbStepEvent event;
+    uint16_t address;
+    uint8_t opcode;
+} CupidGbStepTrace;
+
 void cupid_gb_init(CupidGb *gb);
 void cupid_gb_cleanup(CupidGb *gb);
 void cupid_gb_set_model(CupidGb *gb, CupidGbModel model);
@@ -298,6 +313,7 @@ bool cupid_gb_parse_header(const uint8_t *rom_data, size_t rom_size,
 bool cupid_gb_load_rom_file(CupidGb *gb, const char *path);
 bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size);
 bool cupid_gb_step(CupidGb *gb);
+bool cupid_gb_step_observed(CupidGb *gb, CupidGbStepTrace *trace);
 uint8_t cupid_gb_read_u8(const CupidGb *gb, uint16_t address);
 void cupid_gb_write_u8(CupidGb *gb, uint16_t address, uint8_t value);
 const char *cupid_gb_cartridge_type_name(uint8_t cartridge_type);

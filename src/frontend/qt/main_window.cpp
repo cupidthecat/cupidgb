@@ -2,7 +2,9 @@
 #include "audio_converter.h"
 #include "cupid/compat/native_v1.h"
 #include "cupid/gb/battery.h"
+#include "debugger_window.h"
 #include "display_pipeline.h"
+#include "inspectors_window.h"
 #include "wave_recorder.h"
 
 #include <QAction>
@@ -41,7 +43,9 @@
 #include <QMutex>
 #include <QMutexLocker>
 #include <QPainter>
+#include <QPlainTextEdit>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QSaveFile>
 #include <QScopedValueRollback>
 #include <QScreen>
@@ -53,6 +57,7 @@
 #include <QVBoxLayout>
 #include <algorithm>
 #include <cstring>
+#include <limits>
 
 extern "C" {
 #include "cupid/gb/apu.h"
@@ -162,16 +167,17 @@ class DisplayWidget final : public QWidget {
     uint64_t paintCount = 0;
     QElapsedTimer paintClock;
     qint64 lastPaintAt = 0;
+    bool collectPaintIntervals = false;
     std::vector<double> paintIntervals;
 
     QSize sizeHint() const override {
         return {320, 288};
     }
 
-    QJsonObject paintTelemetry() const {
-        if (paintIntervals.empty())
+    QJsonObject paintTelemetry(size_t first = 0) const {
+        if (first >= paintIntervals.size())
             return {};
-        auto intervals = paintIntervals;
+        std::vector<double> intervals(paintIntervals.begin() + first, paintIntervals.end());
         std::sort(intervals.begin(), intervals.end());
         return {{"minimum", intervals.front()},
                 {"median", intervals[intervals.size() / 2]},
@@ -191,10 +197,12 @@ class DisplayWidget final : public QWidget {
             return;
         }
         ++paintCount;
-        const qint64 now = paintClock.nsecsElapsed();
-        if (lastPaintAt)
-            paintIntervals.push_back(double(now - lastPaintAt) / 1e6);
-        lastPaintAt = now;
+        if (collectPaintIntervals) {
+            const qint64 now = paintClock.nsecsElapsed();
+            if (lastPaintAt)
+                paintIntervals.push_back(double(now - lastPaintAt) / 1e6);
+            lastPaintAt = now;
+        }
         const QRectF target = displayViewport(image.size(), size(), scaling, devicePixelRatioF());
         painter.drawImage(target, image);
     }
@@ -300,10 +308,12 @@ MainWindow::MainWindow(bool isolated, bool automated, bool audioCheck,
             return;
         }
         setupAudio();
-        nextFrame_ = clock_.nsecsElapsed();
+        resetPacing();
     });
     timer_.start();
     clock_.start();
+    debuggerTimer_.setInterval(0);
+    connect(&debuggerTimer_, &QTimer::timeout, this, [this] { debuggerSlice(); });
     refreshActions();
 }
 
@@ -311,6 +321,13 @@ MainWindow::~MainWindow() {
     timer_.stop();
     saveTimer_.stop();
     audioRefreshTimer_.stop();
+    debuggerTimer_.stop();
+    if (debuggerWindow_)
+        debuggerWindow_->setHandlers({}, {}, {});
+    if (inspectorsWindow_)
+        inspectorsWindow_->setSession({}, {});
+    if (debugger_)
+        cupid_gb_debugger_cleanup(debugger_.get());
     paused_ = true;
     qApp->removeEventFilter(this);
     stopAudio();
@@ -345,7 +362,7 @@ void MainWindow::buildMenus() {
             "State files (*.s? *.sn?);;All files (*)");
         if (!path.isEmpty())
             loadStateFile(path);
-        nextFrame_ = clock_.nsecsElapsed();
+        resetPacing();
     });
     auto *recover = file->addAction("Recover Battery from Older State…");
     connect(recover, &QAction::triggered, this, [this] {
@@ -365,7 +382,7 @@ void MainWindow::buildMenus() {
             "Battery saves (*.sav)");
         if (!destination.isEmpty())
             recoverBattery(source, destination);
-        nextFrame_ = clock_.nsecsElapsed();
+        resetPacing();
     });
     closeAction_ = file->addAction("&Close ROM", QKeySequence("Ctrl+W"));
     registerShortcut(closeAction_, "close");
@@ -385,9 +402,17 @@ void MainWindow::buildMenus() {
     frameAction_ = emulation->addAction("Advance &Frame", QKeySequence("Ctrl+N"));
     registerShortcut(frameAction_, "frame");
     connect(frameAction_, &QAction::triggered, this, [this] {
+        const auto previousStop = debugger_ ? debugger_->last_stop : CUPID_GB_DEBUG_STOP_NONE;
         setPaused(true);
+        resetDebuggerTimeline();
+        if (debugger_ && emulator_) {
+            if (previousStop == CUPID_GB_DEBUG_STOP_BREAKPOINT)
+                debugger_->last_stop = previousStop;
+            cupid_gb_debugger_begin(debugger_.get(), &emulator_->gb, CUPID_GB_DEBUG_RUN);
+        }
         runFrame();
         clearAudio();
+        refreshDebugger();
     });
     auto *saveStates = emulation->addMenu("Save State");
     auto *loadStates = emulation->addMenu("Load State");
@@ -505,6 +530,12 @@ void MainWindow::buildMenus() {
     auto *settings = emulation->addAction("&Settings…", QKeySequence("Ctrl+,"));
     registerShortcut(settings, "settings");
     connect(settings, &QAction::triggered, this, [this] { configure(); });
+    auto *tools = menuBar()->addMenu("&Tools");
+    debuggerAction_ = tools->addAction("&Debugger", QKeySequence("Ctrl+C"));
+    registerShortcut(debuggerAction_, "debugger");
+    connect(debuggerAction_, &QAction::triggered, this, [this] { openDebugger(); });
+    inspectorsAction_ = tools->addAction("&Memory and Graphics");
+    connect(inspectorsAction_, &QAction::triggered, this, [this] { openInspectors(); });
     auto *help = menuBar()->addMenu("&Help");
     connect(help->addAction("&Controls"), &QAction::triggered, this, [this] {
         const bool wasPaused = paused_;
@@ -517,7 +548,8 @@ void MainWindow::buildMenus() {
             "Open: Ctrl+O   Reset: Ctrl+R   Pause: Ctrl+P\n"
             "Fullscreen: Ctrl+F   Mute: Ctrl+M   Screenshot: F12\n\n"
             "Save state: Ctrl+0–9   Load state: Ctrl+Shift+0–9\n\n"
-            "Controllers and debugging tools are not available yet.");
+            "Debugger: Ctrl+C. Use Tools for memory and graphics inspectors.\n"
+            "Controller devices remain incomplete.");
         setPaused(wasPaused);
     });
     connect(help->addAction("&About CupidGB"), &QAction::triggered, this, [this] {
@@ -542,6 +574,15 @@ void MainWindow::applyDisplaySettings() {
     const int scale = std::clamp(settings_.value("video/defaultScale", 2).toInt(), 1, 8);
     for (size_t i = 0; i < windowSizeActions_.size(); ++i)
         windowSizeActions_[i]->setChecked(int(i) + 1 == scale);
+    auto custom = monochromeColors(MonochromePalette::Lime, {});
+    for (size_t i = 0; i < custom.size(); ++i) {
+        const QColor value(
+            settings_.value(QString("video/customPalette/%1").arg(i), QColor(custom[i]).name())
+                .toString());
+        if (value.isValid())
+            custom[i] = value.rgb();
+    }
+    displayPalette_ = monochromeColors(MonochromePalette(palette), custom);
     blendingAction_->setChecked(settings_.value("video/blending", false).toBool());
     borderAction_->setChecked(settings_.value("video/sgbBorder", true).toBool());
     previousDisplayFrame_ = {};
@@ -584,7 +625,7 @@ void MainWindow::reportError(const QString &message) {
     else {
         QScopedValueRollback<bool> operation(stateOperation_, true);
         QMessageBox::critical(this, "CupidGB", message);
-        nextFrame_ = clock_.nsecsElapsed();
+        resetPacing();
     }
 }
 
@@ -710,6 +751,9 @@ bool MainWindow::openRom(const QString &path) {
         cupid_emulator_shutdown(candidate.get());
         return false;
     }
+    const bool sameCartridge = emulator_ && romData_ == data &&
+                               romPath_.compare(absolute, pathCase) == 0 &&
+                               emulator_->gb.model == candidate->gb.model;
     if (emulator_)
         cupid_emulator_shutdown(emulator_.get());
     emulator_ = std::move(candidate);
@@ -717,8 +761,16 @@ bool MainWindow::openRom(const QString &path) {
     currentDisplayFrame_ = {};
     resetRewind();
     ++sessionId_;
+    resetDebuggerTimeline(!sameCartridge);
+    if (inspectorsWindow_)
+        inspectorsWindow_->sessionChanged();
     romData_ = data;
     romPath_ = absolute;
+    if (debugger_ && !sameCartridge) {
+        const QString symbols = info.dir().filePath(info.completeBaseName() + ".sym");
+        if (QFileInfo::exists(symbols))
+            loadDebuggerSymbols(symbols);
+    }
     savePath_ = save;
     saveTimer_.stop();
     observedBatteryGeneration_ = emulator_->gb.battery_write_generation;
@@ -791,6 +843,7 @@ bool MainWindow::closeRom() {
     if (!flushBattery() || !stopRecording())
         return false;
     ++sessionId_;
+    resetDebuggerTimeline(true);
     saveTimer_.stop();
     batteryDirty_ = false;
     releaseKeys();
@@ -799,6 +852,8 @@ bool MainWindow::closeRom() {
     if (emulator_)
         cupid_emulator_shutdown(emulator_.get());
     emulator_.reset();
+    if (inspectorsWindow_)
+        inspectorsWindow_->sessionChanged();
     resetRewind();
     romPath_.clear();
     romData_.clear();
@@ -979,14 +1034,32 @@ bool MainWindow::stopRecording() {
 }
 
 void MainWindow::setPaused(bool value) {
+    if (!value)
+        debuggerInputPaused_ = false;
+    if (debugger_) {
+        const auto previousStop = debugger_->last_stop;
+        debuggerTimer_.stop();
+        if (!value) {
+            resetDebuggerTimeline();
+            if (previousStop == CUPID_GB_DEBUG_STOP_BREAKPOINT)
+                debugger_->last_stop = previousStop;
+            if (emulator_)
+                cupid_gb_debugger_begin(debugger_.get(), &emulator_->gb, CUPID_GB_DEBUG_RUN);
+        } else {
+            cupid_gb_debugger_reset_execution(debugger_.get());
+            if (previousStop == CUPID_GB_DEBUG_STOP_BREAKPOINT)
+                debugger_->last_stop = previousStop;
+        }
+    }
     paused_ = value;
     releaseKeys();
     QSignalBlocker blocker(pauseAction_);
     pauseAction_->setChecked(value);
-    nextFrame_ = clock_.nsecsElapsed();
+    resetPacing();
     clearAudio();
     if (value)
         flushBattery();
+    refreshDebugger();
 }
 
 void MainWindow::releaseKeys() {
@@ -1000,7 +1073,7 @@ void MainWindow::releaseKeys() {
     rapidHeld_.fill(false);
     rapidPhase_.fill(0);
     physicalJoypad_ = 0xff;
-    if (emulator_)
+    if (emulator_ && !(paused_ && debuggerInputPaused_))
         emulator_->gb.joypad = 0xff;
 }
 
@@ -1047,6 +1120,11 @@ void MainWindow::advanceControls() {
                                       speedSteps_ / 16);
 }
 
+void MainWindow::resetPacing() {
+    nextFrame_ = clock_.nsecsElapsed();
+    clockPacer_.reset();
+}
+
 void MainWindow::tick() {
     if (!emulator_ || paused_ || stateOperation_)
         return;
@@ -1057,21 +1135,44 @@ void MainWindow::tick() {
             if (turbo_)
                 rewindFrame();
             nextFrame_ = now + frameNanoseconds;
+            clockPacer_.reset();
         }
         return;
     }
     pumpAudio();
+    // Starting a native audio stream may dispatch window/session actions.
+    if (!emulator_ || paused_ || stateOperation_)
+        return;
     if (!turbo_ && now < nextFrame_)
         return;
     // Bound each event-loop turn so dialogs, input, and close remain responsive.
     if (audio_ && !turbo_ && audioBuffer_->bytesAvailable() > audioQueueLimit_)
         return;
-    if (!runFrame())
+    const uint64_t session = sessionId_;
+    const uint64_t timeline = timelineId_;
+    const uint64_t startCycles = emulator_->gb.elapsed_cycles;
+    const unsigned speed = speedSteps_;
+    if (!runFrame() || paused_ || !emulator_ || sessionId_ != session || timelineId_ != timeline)
         return;
-    const qint64 interval = frameNanoseconds * 16 / speedSteps_;
-    nextFrame_ += interval;
-    if (turbo_ || now - nextFrame_ > interval * 4)
+    if (emulator_->gb.elapsed_cycles < startCycles) {
+        resetPacing();
+        return;
+    }
+    // LCD startup and re-enabling can finish a partial image. Charge only
+    // consumed base-clock time, including the two-dot CGB machine cycles.
+    const auto interval = clockPacer_.advance(emulator_->gb.elapsed_cycles - startCycles, speed);
+    if (!interval || nextFrame_ > std::numeric_limits<qint64>::max() - *interval) {
+        setPaused(true);
+        reportError("Host pacing duration could not be computed.");
+        return;
+    }
+    nextFrame_ += *interval;
+    // A short LCD interval must not shrink the host-stall recovery window.
+    const qint64 nominalInterval = frameNanoseconds * 16 / speed;
+    if (turbo_ || now - nextFrame_ > nominalInterval * 4) {
         nextFrame_ = now;
+        clockPacer_.reset();
+    }
 }
 
 bool MainWindow::runFrame() {
@@ -1094,6 +1195,11 @@ bool MainWindow::runFrame() {
                 physicalJoypad_ = inputTrace_[inputTraceIndex_++].second;
                 setJoypad(physicalJoypad_);
             }
+        }
+        if (debugger_ && debugger_->bp_count &&
+            cupid_gb_debugger_check(debugger_.get(), &gb) == CUPID_GB_DEBUG_STOP_BREAKPOINT) {
+            stopDebugger("Breakpoint reached.");
+            return true;
         }
         if (!cupid_emulator_step(emulator_.get())) {
             setPaused(true);
@@ -1175,6 +1281,7 @@ bool MainWindow::restoreState(const QByteArray &bytes, bool reportFailure, bool 
                         QString::fromUtf8(cupid_gb_state_result_name(result)));
         return false;
     }
+    ++timelineId_;
     return true;
 }
 
@@ -1211,7 +1318,7 @@ bool MainWindow::saveSlot(int slot) {
         return false;
     }
     statusBar()->showMessage(QString("State saved to slot %1").arg(slot ? slot : 10), 3000);
-    nextFrame_ = clock_.nsecsElapsed();
+    resetPacing();
     return true;
 }
 
@@ -1246,6 +1353,9 @@ bool MainWindow::loadStateFile(const QString &path) {
     }
     if (!restoreState(bytes, true))
         return false;
+    resetDebuggerTimeline();
+    if (inspectorsWindow_)
+        inspectorsWindow_->sessionChanged();
     if (recorder_ && recorder_->active() &&
         recorder_->sampleRate() != cupid_gb_apu_get_sample_rate(&emulator_->gb))
         stopRecording();
@@ -1259,7 +1369,7 @@ bool MainWindow::loadStateFile(const QString &path) {
     rewind_ = false;
     turbo_ = false;
     clearAudio();
-    nextFrame_ = clock_.nsecsElapsed();
+    resetPacing();
     resetRewind();
     rememberFrame();
     previousDisplayFrame_ = {};
@@ -1413,6 +1523,9 @@ bool MainWindow::rewindFrame() {
         statusBar()->showMessage("Rewind disabled: stored state could not be restored");
         return false;
     }
+    resetDebuggerTimeline();
+    if (inspectorsWindow_)
+        inspectorsWindow_->sessionChanged();
     applyHeldButtons();
     batteryDirty_ = true;
     saveTimer_.start();
@@ -1432,33 +1545,26 @@ void MainWindow::present(bool completedFrame) {
         image_ = QImage(CUPID_SGB_SCREEN_WIDTH, CUPID_SGB_SCREEN_HEIGHT, QImage::Format_ARGB32);
         cupid_gb_sgb_render_argb(&gb, reinterpret_cast<uint32_t *>(image_.bits()),
                                  size_t(image_.width() * image_.height()));
-        if (!settings_.value("video/sgbBorder", true).toBool())
+        if (!borderAction_->isChecked())
             image_ = image_.copy(CUPID_SGB_VIEWPORT_X, CUPID_SGB_VIEWPORT_Y, 160, 144);
     } else {
         image_ = QImage(160, 144, QImage::Format_RGB32);
-        auto custom = monochromeColors(MonochromePalette::Lime, {});
-        for (size_t i = 0; i < custom.size(); ++i) {
-            const QColor value(
-                settings_.value(QString("video/customPalette/%1").arg(i), QColor(custom[i]).name())
-                    .toString());
-            if (value.isValid())
-                custom[i] = value.rgb();
-        }
-        const auto palette = monochromeColors(
-            MonochromePalette(std::clamp(settings_.value("video/palette", 0).toInt(), 0, 4)),
-            custom);
         auto *pixels = reinterpret_cast<QRgb *>(image_.bits());
-        for (size_t i = 0; i < 160 * 144; ++i)
-            pixels[i] = (gb.cgb_mode || cupid_cgb_compat_active(&gb))
-                            ? rgb555(gb.frame_buffer_color[i])
-                            : palette[gb.frame_buffer[i] & 3];
+        // Hardware mode stays fixed while this framebuffer is converted.
+        if (gb.cgb_mode || cupid_cgb_compat_active(&gb)) {
+            for (size_t i = 0; i < 160 * 144; ++i)
+                pixels[i] = rgb555(gb.frame_buffer_color[i]);
+        } else {
+            for (size_t i = 0; i < 160 * 144; ++i)
+                pixels[i] = displayPalette_[gb.frame_buffer[i] & 3];
+        }
     }
     // Repaints and settings dialogs must not turn one guest frame into repeated
     // blend inputs. Only completed LCD frames advance temporal presentation.
     if (completedFrame)
         previousDisplayFrame_ = currentDisplayFrame_;
     currentDisplayFrame_ = image_;
-    display_->image = settings_.value("video/blending", false).toBool()
+    display_->image = blendingAction_->isChecked()
                           ? blendDisplayFrames(currentDisplayFrame_, previousDisplayFrame_)
                           : currentDisplayFrame_;
     display_->setMinimumSize(image_.size());
@@ -1503,10 +1609,11 @@ bool MainWindow::eventFilter(QObject *object, QEvent *event) {
                 case 4:
                     rapidHeld_[action - 3] = held;
                     rapidPhase_[action - 3] = 0;
-                    applyHeldButtons();
+                    if (!(paused_ && debuggerInputPaused_))
+                        applyHeldButtons();
                     break;
             }
-            nextFrame_ = clock_.nsecsElapsed();
+            resetPacing();
             return true;
         }
         for (size_t i = 0; i < keys_.size(); ++i) {
@@ -1517,7 +1624,8 @@ bool MainWindow::eventFilter(QObject *object, QEvent *event) {
                 } else {
                     physicalJoypad_ |= mask;
                 }
-                applyHeldButtons();
+                if (!(paused_ && debuggerInputPaused_))
+                    applyHeldButtons();
                 return true;
             }
         }
@@ -1548,6 +1656,594 @@ void MainWindow::dropEvent(QDropEvent *event) {
     }
 }
 
+void MainWindow::ensureDebugger() {
+    const bool created = !debugger_;
+    if (!debugger_) {
+        debugger_ = std::make_unique<CupidGbDebugger>();
+        cupid_gb_debugger_init(debugger_.get());
+    }
+    if (!debuggerWindow_) {
+        debuggerWindow_ = new DebuggerWindow(this);
+        debuggerWindow_->setHandlers(
+            [this](const QString &command) { debuggerCommand(command); },
+            [this](const QString &path) { return loadDebuggerSymbols(path); },
+            [this] {
+                if (debuggerTimer_.isActive())
+                    stopDebugger("Debugger window closed; execution paused.");
+                if (paused_) {
+                    resetDebuggerTimeline();
+                } else {
+                    debuggerHistory_.clear();
+                    debuggerHistoryBytes_ = 0;
+                    debuggerContext_.reset();
+                }
+            });
+    }
+    if (created && emulator_) {
+        const QFileInfo rom(romPath_);
+        const QString symbols = rom.dir().filePath(rom.completeBaseName() + ".sym");
+        if (QFileInfo::exists(symbols))
+            loadDebuggerSymbols(symbols);
+    }
+}
+
+void MainWindow::openDebugger() {
+    ensureDebugger();
+    pauseDebugger();
+    refreshDebugger();
+    debuggerWindow_->show();
+    debuggerWindow_->raise();
+    debuggerWindow_->activateWindow();
+}
+
+void MainWindow::openInspectors() {
+    pauseDebugger();
+    if (!inspectorsWindow_) {
+        inspectorsWindow_ = new InspectorsWindow(this);
+        inspectorsWindow_->setSession(
+            [this] { return emulator_ ? &emulator_->gb : nullptr; },
+            [this](uint16_t address, uint8_t value) { return debuggerWrite(address, value); });
+    }
+    inspectorsWindow_->refresh();
+    inspectorsWindow_->show();
+    inspectorsWindow_->raise();
+    inspectorsWindow_->activateWindow();
+}
+
+void MainWindow::resetDebuggerTimeline(bool clearSession) {
+    debuggerTimer_.stop();
+    debuggerHistory_.clear();
+    debuggerHistoryBytes_ = 0;
+    debuggerContext_.reset();
+    debuggerCommandSteps_ = 0;
+    if (debugger_) {
+        if (clearSession) {
+            cupid_gb_debugger_cleanup(debugger_.get());
+            cupid_gb_debugger_init(debugger_.get());
+        } else {
+            cupid_gb_debugger_reset_execution(debugger_.get());
+        }
+    }
+}
+
+void MainWindow::pauseDebugger() {
+    debuggerInputPaused_ = true;
+    debuggerTimer_.stop();
+    const auto previousStop = debugger_ ? debugger_->last_stop : CUPID_GB_DEBUG_STOP_NONE;
+    if (debugger_) {
+        cupid_gb_debugger_reset_execution(debugger_.get());
+        if (previousStop == CUPID_GB_DEBUG_STOP_BREAKPOINT)
+            debugger_->last_stop = previousStop;
+    }
+    if (!paused_) {
+        // Host focus/key releases continue to clear physical bindings, while
+        // paused tools inspect the guest input at the stopped boundary.
+        setPaused(true);
+    }
+}
+
+void MainWindow::refreshDebugger() {
+    if (inspectorsWindow_ && inspectorsWindow_->isVisible())
+        inspectorsWindow_->refresh();
+    if (!debuggerWindow_)
+        return;
+    if (!emulator_ || !debugger_) {
+        debuggerWindow_->updateState({}, {}, {}, false, false, false);
+        return;
+    }
+    const auto &gb = emulator_->gb;
+    const auto &cpu = gb.cpu;
+    const QString registers = QString::asprintf(
+        "AF  %02X%02X\nBC  %02X%02X\nDE  %02X%02X\nHL  %02X%02X\n"
+        "SP  %04X\nPC  %04X\nIME %s\nHALT %s  STOP %s\n"
+        "Z %u  N %u  H %u  C %u\n\nBase T-cycles: %llu",
+        cpu.a, cpu.f, cpu.b, cpu.c, cpu.d, cpu.e, cpu.h, cpu.l, cpu.sp, cpu.pc,
+        cpu.ime ? "on" : "off", cpu.halted ? "yes" : "no", cpu.stopped ? "yes" : "no",
+        !!(cpu.f & 0x80), !!(cpu.f & 0x40), !!(cpu.f & 0x20), !!(cpu.f & 0x10),
+        static_cast<unsigned long long>(gb.elapsed_cycles));
+    QString listing;
+    uint16_t address = cpu.pc;
+    for (unsigned line = 0; line < 16; ++line) {
+        CupidGbDebugInstruction instruction{};
+        cupid_gb_debug_disassemble(&gb, address, &instruction);
+        const int bank = cupid_gb_debugger_bank(&gb, address);
+        const char *symbol =
+            cupid_gb_debugger_symbol_for_address(debugger_.get(), bank, address, true);
+        if (symbol)
+            listing += QString::fromUtf8(symbol) + ":\n";
+        QString bytes;
+        for (unsigned byte = 0; byte < instruction.length; ++byte)
+            bytes += QString("%1 ").arg(instruction.bytes[byte], 2, 16, QChar('0')).toUpper();
+        listing += QString("$%1:$%2  %3 %4\n")
+                       .arg(bank, 2, 16, QChar('0'))
+                       .arg(address, 4, 16, QChar('0'))
+                       .arg(bytes, -9)
+                       .arg(QString::fromUtf8(instruction.text));
+        address = uint16_t(address + std::max<unsigned>(1, instruction.length));
+    }
+    QString breakpoints = "Breakpoints (delete by number):\n";
+    for (size_t index = 0; index < debugger_->bp_count; ++index) {
+        const auto &point = debugger_->breakpoints[index];
+        breakpoints += QString("%1  %2:$%3%4\n")
+                           .arg(index + 1)
+                           .arg(point.bank < 0 ? "*" : "$" + QString::number(point.bank, 16))
+                           .arg(point.address, 4, 16, QChar('0'))
+                           .arg(point.enabled ? "" : " [disabled]");
+    }
+    if (!debugger_->bp_count)
+        breakpoints += "None\n";
+    breakpoints += QString("\nSymbols: %1\nInstruction history: %2 / 128")
+                       .arg(debugger_->symbol_count)
+                       .arg(debuggerHistory_.size());
+    debuggerWindow_->updateState(registers, listing, breakpoints, true,
+                                 !paused_ || debuggerTimer_.isActive(), !debuggerHistory_.empty());
+}
+
+bool MainWindow::loadDebuggerSymbols(const QString &path) {
+    ensureDebugger();
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly) || file.size() > 4 * 1024 * 1024) {
+        debuggerWindow_->appendOutput("Cannot read symbols: " + path + "\n" + file.errorString());
+        return false;
+    }
+    const QByteArray text = file.readAll();
+    size_t errorLine = 0;
+    if (text.size() != file.size() ||
+        !cupid_gb_debugger_load_symbols(debugger_.get(), text.constData(), size_t(text.size()),
+                                        &errorLine)) {
+        debuggerWindow_->appendOutput(
+            QString("Symbols rejected at line %1; existing symbols are unchanged.").arg(errorLine));
+        return false;
+    }
+    debuggerWindow_->appendOutput(QString("Loaded %1 symbols from %2.")
+                                      .arg(debugger_->symbol_count)
+                                      .arg(QFileInfo(path).fileName()));
+    refreshDebugger();
+    return true;
+}
+
+bool MainWindow::rememberDebuggerStep() {
+    if (!emulator_)
+        return false;
+    if (!debuggerContext_) {
+        debuggerContext_ = std::make_unique<CupidGbStateContext>();
+        if (cupid_gb_state_context_init(debuggerContext_.get(), &emulator_->gb) !=
+            CUPID_GB_STATE_OK) {
+            debuggerContext_.reset();
+            return false;
+        }
+    }
+    const size_t size = cupid_gb_state_size(&emulator_->gb);
+    if (!size || size > 16 * 1024 * 1024)
+        return false;
+    QByteArray state(qsizetype(size), Qt::Uninitialized);
+    size_t written = 0;
+    if (cupid_gb_save_state_with_context(&emulator_->gb, reinterpret_cast<uint8_t *>(state.data()),
+                                         size, &written,
+                                         debuggerContext_.get()) != CUPID_GB_STATE_OK)
+        return false;
+    state.resize(qsizetype(written));
+    QByteArray compressed = qCompress(state, 1);
+    if (compressed.isEmpty())
+        return false;
+    // Compression can retain space for an incompressible input. Release that
+    // spare capacity before accounting for the retained snapshot allocation.
+    compressed.squeeze();
+    debuggerHistoryBytes_ += compressed.capacity() + qsizetype(sizeof(QByteArray));
+    debuggerHistory_.push_back(std::move(compressed));
+    while (debuggerHistory_.size() > 128 || debuggerHistoryBytes_ > 32 * 1024 * 1024) {
+        debuggerHistoryBytes_ -=
+            debuggerHistory_.front().capacity() + qsizetype(sizeof(QByteArray));
+        debuggerHistory_.pop_front();
+    }
+    return true;
+}
+
+void MainWindow::drainDebuggerAudio() {
+    if (!emulator_)
+        return;
+    int16_t samples[CUPID_GB_APU_BUF_FRAMES * 2];
+    const auto frames = cupid_gb_apu_drain(&emulator_->gb, samples, CUPID_GB_APU_BUF_FRAMES);
+    generatedAudioFrames_ += frames;
+    if (recorder_ && recorder_->active() && !recorder_->append(samples, frames)) {
+        const QString error = recorder_->errorString();
+        stopRecording();
+        reportError("Audio recording stopped: " + error);
+    }
+}
+
+void MainWindow::stopDebugger(const QString &message) {
+    pauseDebugger();
+    drainDebuggerAudio();
+    if (emulator_) {
+        present();
+        watchBattery();
+    }
+    if (debuggerWindow_)
+        debuggerWindow_->appendOutput(message);
+    if (debuggerWindow_ && !debuggerWindow_->isVisible()) {
+        debuggerWindow_->show();
+        debuggerWindow_->raise();
+    }
+    statusBar()->showMessage(message, 5000);
+    refreshDebugger();
+}
+
+void MainWindow::debuggerSlice() {
+    if (!emulator_ || !debugger_ || sessionId_ != debuggerSessionId_) {
+        resetDebuggerTimeline();
+        refreshDebugger();
+        return;
+    }
+    if (stateOperation_)
+        return;
+    QScopedValueRollback<bool> operation(stateOperation_, true);
+    QElapsedTimer slice;
+    slice.start();
+    for (unsigned count = 0; count < 128 && slice.elapsed() < 4; ++count) {
+        if (!rememberDebuggerStep()) {
+            stopDebugger("Debugger stopped: instruction history could not be captured.");
+            return;
+        }
+        const auto result = cupid_gb_debugger_step(debugger_.get(), &emulator_->gb);
+        if (result == CUPID_GB_DEBUG_STOP_BREAKPOINT || result == CUPID_GB_DEBUG_STOP_NO_ROM) {
+            // A breakpoint stops before execution. Do not offer a fictitious
+            // backstep for an instruction that did not run.
+            debuggerHistoryBytes_ -=
+                debuggerHistory_.back().capacity() + qsizetype(sizeof(QByteArray));
+            debuggerHistory_.pop_back();
+        }
+        ++debuggerCommandSteps_;
+        drainDebuggerAudio();
+        if (result != CUPID_GB_DEBUG_STOP_NONE) {
+            stopDebugger(QString::fromUtf8(cupid_gb_debugger_stop_name(result)));
+            return;
+        }
+        if (debuggerCommandSteps_ >= 1000000) {
+            stopDebugger("Debugger instruction budget exhausted before the target was reached.");
+            return;
+        }
+    }
+    present();
+    refreshDebugger();
+}
+
+bool MainWindow::debuggerBackstep() {
+    if (!emulator_ || debuggerHistory_.empty()) {
+        if (debuggerWindow_)
+            debuggerWindow_->appendOutput(
+                "No instruction history. Only explicit debugger stepping is recorded.");
+        return false;
+    }
+    pauseDebugger();
+    const QByteArray state = qUncompress(debuggerHistory_.back());
+    if (state.isEmpty() || cupid_gb_load_state_with_context(
+                               &emulator_->gb, reinterpret_cast<const uint8_t *>(state.constData()),
+                               size_t(state.size()), debuggerContext_.get()) != CUPID_GB_STATE_OK) {
+        stopDebugger("Debugger history could not be restored.");
+        return false;
+    }
+    ++timelineId_;
+    debuggerHistoryBytes_ -= debuggerHistory_.back().capacity() + qsizetype(sizeof(QByteArray));
+    debuggerHistory_.pop_back();
+    if (inspectorsWindow_)
+        inspectorsWindow_->sessionChanged();
+    batteryDirty_ = true;
+    saveTimer_.start();
+    clearAudio();
+    resetRewind();
+    rememberFrame();
+    previousDisplayFrame_ = {};
+    currentDisplayFrame_ = {};
+    present();
+    refreshDebugger();
+    return true;
+}
+
+bool MainWindow::debuggerWrite(uint16_t address, uint8_t value) {
+    if (!emulator_)
+        return false;
+    pauseDebugger();
+    if (!cupid_gb_debug_poke(&emulator_->gb, address, value))
+        return false;
+    ++timelineId_;
+    resetDebuggerTimeline();
+    resetRewind();
+    rememberFrame();
+    watchBattery();
+    previousDisplayFrame_ = {};
+    currentDisplayFrame_ = {};
+    present();
+    refreshDebugger();
+    return true;
+}
+
+void MainWindow::debuggerCommand(const QString &input) {
+    ensureDebugger();
+    const QString command = input.trimmed();
+    const QStringList words = command.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
+    if (words.isEmpty())
+        return;
+    const QString verb = words.front().toLower();
+    const auto output = [this](const QString &text) { debuggerWindow_->appendOutput(text); };
+    if (verb == "help" || verb == "?") {
+        output("break [bank:address|symbol]   delete NUMBER|all   breakpoints\n"
+               "continue (c)   step (s)   next (n)   finish (f)   backstep (bs)\n"
+               "registers (r)   disassemble [address]   x address [decimal count]\n"
+               "write address byte   set register value   symbols path\n"
+               "Numbers are decimal; use $ or 0x for hexadecimal. Symbols are supported.\n"
+               "Backstep retains up to 128 explicit debugger steps within 32 MiB.\n"
+               "Continuous playback does not record instruction history.");
+        return;
+    }
+    if (verb == "symbols") {
+        QString path = command.mid(words.front().size()).trimmed();
+        if (path.size() >= 2 && path.startsWith('"') && path.endsWith('"'))
+            path = path.mid(1, path.size() - 2);
+        if (path.isEmpty()) {
+            output("Usage: symbols path");
+            return;
+        }
+        loadDebuggerSymbols(path);
+        return;
+    }
+    if (!emulator_) {
+        output("Open a cartridge before using debugger execution or memory commands.");
+        return;
+    }
+    const auto number = [](QString text, unsigned maximum, unsigned *value) {
+        int base = 10;
+        if (text.startsWith('$')) {
+            text.remove(0, 1);
+            base = 16;
+        } else if (text.startsWith("0x", Qt::CaseInsensitive)) {
+            text.remove(0, 2);
+            base = 16;
+        }
+        bool valid = false;
+        *value = text.toUInt(&valid, base);
+        return valid && *value <= maximum;
+    };
+    const auto address = [this, &number](const QString &text, int *bank, uint16_t *value) {
+        const auto parts = text.split(':');
+        unsigned raw = 0;
+        *bank = -1;
+        if (parts.size() == 2) {
+            unsigned rawBank = 0;
+            if (parts[0] != "*" && !number(parts[0], 0xffffu, &rawBank))
+                return false;
+            if (!number(parts[1], 0xffffu, &raw))
+                return false;
+            *bank = parts[0] == "*" ? -1 : int(rawBank);
+            *value = uint16_t(raw);
+            return true;
+        }
+        if (parts.size() != 1)
+            return false;
+        uint16_t symbolBank = 0;
+        const QByteArray name = text.toUtf8();
+        if (cupid_gb_debugger_lookup_symbol(debugger_.get(), name.constData(), &symbolBank,
+                                            value)) {
+            *bank = symbolBank;
+            return true;
+        }
+        if (number(text, 0xffffu, &raw)) {
+            *value = uint16_t(raw);
+            return true;
+        }
+        return false;
+    };
+    if ((verb == "break" || verb == "b") && words.size() == 2) {
+        int bank;
+        uint16_t location;
+        if (!address(words[1], &bank, &location) ||
+            !cupid_gb_debugger_breakpoint_add(debugger_.get(), bank, location)) {
+            output("Cannot add breakpoint: invalid address/bank or breakpoint limit reached.");
+            return;
+        }
+        output(QString("Breakpoint added at %1.").arg(words[1]));
+        refreshDebugger();
+        return;
+    }
+    if (verb == "delete" && words.size() == 2) {
+        if (words[1].compare("all", Qt::CaseInsensitive) == 0) {
+            cupid_gb_debugger_breakpoints_clear(debugger_.get());
+        } else {
+            bool valid = false;
+            const auto index = words[1].toULongLong(&valid, 10);
+            if (!valid || !index ||
+                !cupid_gb_debugger_breakpoint_remove(debugger_.get(), size_t(index - 1))) {
+                output("No breakpoint with that number.");
+                return;
+            }
+        }
+        refreshDebugger();
+        return;
+    }
+    if (verb == "breakpoints" && words.size() == 1) {
+        output(QString("%1 breakpoints configured.").arg(debugger_->bp_count));
+        refreshDebugger();
+        return;
+    }
+    if ((verb == "continue" || verb == "c") && words.size() == 1) {
+        setPaused(false);
+        output("Continuing; instruction history cleared.");
+        refreshDebugger();
+        return;
+    }
+    if ((verb == "break" || verb == "b") && words.size() == 1) {
+        stopDebugger("Break requested.");
+        return;
+    }
+    if ((verb == "backstep" || verb == "bs") && words.size() == 1) {
+        if (debuggerBackstep())
+            output("Restored the preceding instruction boundary.");
+        return;
+    }
+    CupidGbDebugMode mode = CUPID_GB_DEBUG_PAUSED;
+    if (verb == "step" || verb == "s")
+        mode = CUPID_GB_DEBUG_STEP;
+    else if (verb == "next" || verb == "n")
+        mode = CUPID_GB_DEBUG_NEXT;
+    else if (verb == "finish" || verb == "f")
+        mode = CUPID_GB_DEBUG_FINISH;
+    if (mode != CUPID_GB_DEBUG_PAUSED && words.size() == 1) {
+        pauseDebugger();
+        debuggerCommandSteps_ = 0;
+        debuggerSessionId_ = sessionId_;
+        cupid_gb_debugger_begin(debugger_.get(), &emulator_->gb, mode);
+        debuggerTimer_.start();
+        refreshDebugger();
+        return;
+    }
+    if ((verb == "registers" || verb == "r") && words.size() == 1) {
+        pauseDebugger();
+        refreshDebugger();
+        output(debuggerWindow_->findChild<QPlainTextEdit *>("debuggerRegisters")->toPlainText());
+        return;
+    }
+    if (verb == "set" && words.size() == 3) {
+        unsigned value;
+        if (!number(words[2], 0xffffu, &value)) {
+            output("Register value must fit in sixteen bits.");
+            return;
+        }
+        const QString name = words[1].toUpper();
+        if (!QStringList{"AF", "BC", "DE", "HL", "SP", "PC", "A", "F", "B", "C", "D", "E", "H", "L",
+                         "IME"}
+                 .contains(name) ||
+            (name.size() == 1 && value > 255) || (name == "IME" && value > 1)) {
+            output("Unknown register or value outside its range.");
+            return;
+        }
+        pauseDebugger();
+        auto &cpu = emulator_->gb.cpu;
+        if (name == "AF") {
+            cpu.a = uint8_t(value >> 8);
+            cpu.f = uint8_t(value & 0xf0u);
+        } else if (name == "BC") {
+            cpu.b = uint8_t(value >> 8);
+            cpu.c = uint8_t(value);
+        } else if (name == "DE") {
+            cpu.d = uint8_t(value >> 8);
+            cpu.e = uint8_t(value);
+        } else if (name == "HL") {
+            cpu.h = uint8_t(value >> 8);
+            cpu.l = uint8_t(value);
+        } else if (name == "PC")
+            cpu.pc = uint16_t(value);
+        else if (name == "SP")
+            cpu.sp = uint16_t(value);
+        else if (name == "IME") {
+            cpu.ime = value != 0;
+            cpu.ime_delay = 0;
+        } else if (name == "A")
+            cpu.a = uint8_t(value);
+        else if (name == "F")
+            cpu.f = uint8_t(value & 0xf0u);
+        else if (name == "B")
+            cpu.b = uint8_t(value);
+        else if (name == "C")
+            cpu.c = uint8_t(value);
+        else if (name == "D")
+            cpu.d = uint8_t(value);
+        else if (name == "E")
+            cpu.e = uint8_t(value);
+        else if (name == "H")
+            cpu.h = uint8_t(value);
+        else if (name == "L")
+            cpu.l = uint8_t(value);
+        ++timelineId_;
+        resetDebuggerTimeline();
+        if (inspectorsWindow_)
+            inspectorsWindow_->sessionChanged();
+        resetRewind();
+        rememberFrame();
+        refreshDebugger();
+        return;
+    }
+    int bank = -1;
+    uint16_t location = emulator_->gb.cpu.pc;
+    if (verb == "x" || verb == "memory" || verb == "write" || verb == "disassemble" ||
+        verb == "dis") {
+        const bool disassemble = verb == "disassemble" || verb == "dis";
+        if (words.size() > (disassemble ? 2 : 3) || (!disassemble && words.size() < 2) ||
+            (words.size() >= 2 && !address(words[1], &bank, &location))) {
+            output("Invalid memory address or command arguments.");
+            return;
+        }
+        if (bank >= 0 && bank != cupid_gb_debugger_bank(&emulator_->gb, location)) {
+            output("That bank is not currently mapped at the requested address.");
+            return;
+        }
+        if (verb == "write") {
+            unsigned value;
+            if (words.size() != 3 || !number(words[2], 255, &value) ||
+                !debuggerWrite(location, uint8_t(value))) {
+                output("Write rejected. ROM and unusable memory cannot be edited.");
+                return;
+            }
+            output("Memory edited; instruction and rewind history cleared.");
+            return;
+        }
+        unsigned count = 64;
+        if (!disassemble && words.size() == 3) {
+            bool valid = false;
+            count = words[2].toUInt(&valid, 10);
+            if (!valid || !count || count > 256) {
+                output("Memory count must be between 1 and 256 decimal bytes.");
+                return;
+            }
+        }
+        pauseDebugger();
+        QString result;
+        if (disassemble) {
+            for (unsigned line = 0; line < 16; ++line) {
+                CupidGbDebugInstruction instruction{};
+                cupid_gb_debug_disassemble(&emulator_->gb, location, &instruction);
+                result += QString("$%1: %2\n")
+                              .arg(location, 4, 16, QChar('0'))
+                              .arg(QString::fromUtf8(instruction.text));
+                location = uint16_t(location + std::max<unsigned>(1, instruction.length));
+            }
+        } else {
+            for (unsigned byte = 0; byte < count; ++byte) {
+                if (byte % 16 == 0)
+                    result += QString("$%1: ").arg(uint16_t(location + byte), 4, 16, QChar('0'));
+                result += QString("%1 ").arg(
+                    cupid_gb_debug_peek(&emulator_->gb, uint16_t(location + byte)), 2, 16,
+                    QChar('0'));
+                if (byte % 16 == 15 || byte + 1 == count)
+                    result += '\n';
+            }
+        }
+        output(result);
+        refreshDebugger();
+        return;
+    }
+    output("Unknown command or arguments. Type help for supported commands.");
+}
+
 void MainWindow::refreshActions() {
     for (auto *action : {closeAction_, resetAction_, pauseAction_, frameAction_, screenshotAction_,
                          loadStateFileAction_, recordingAction_})
@@ -1558,6 +2254,9 @@ void MainWindow::refreshActions() {
         action->setEnabled(bool(emulator_));
     for (auto *action : loadSlotActions_)
         action->setEnabled(bool(emulator_));
+    debuggerAction_->setEnabled(bool(emulator_));
+    inspectorsAction_->setEnabled(bool(emulator_));
+    refreshDebugger();
 }
 
 void MainWindow::screenshot() {
@@ -2285,6 +2984,12 @@ bool MainWindow::smokeTest() {
     const QByteArray displayState = captureState();
     if (displayState.isEmpty())
         return smokeFailure(__LINE__);
+    const uint64_t ordinaryPaints = display_->paintCount;
+    display_->grab();
+    display_->grab();
+    if (display_->paintCount < ordinaryPaints + 2 || display_->collectPaintIntervals ||
+        !display_->paintIntervals.empty() || display_->lastPaintAt)
+        return smokeFailure(__LINE__);
     scalingActions_[2]->trigger();
     if (display_->scaling != DisplayScaling::Fill ||
         settings_.value("video/scaling").toInt() != int(DisplayScaling::Fill))
@@ -2658,11 +3363,453 @@ bool MainWindow::smokeTest() {
     if (dropFile(nativeStatePath) || emulator_)
         return smokeFailure(__LINE__);
     failed_ = false; // Loading a dropped state requires an active cartridge.
+    if (!debuggerSmokeTest(directory.path()))
+        return smokeFailure(__LINE__);
+    if (!pacingSmokeTest(path) || display_->collectPaintIntervals ||
+        !display_->paintIntervals.empty() || display_->lastPaintAt)
+        return smokeFailure(__LINE__);
     qInfo("CupidGB Qt workflow smoke test passed");
     return !failed_;
 }
 
+bool MainWindow::debuggerSmokeTest(const QString &directory) {
+    settings_.setValue("emulation/model", int(CUPID_GB_MODEL_DMG_ABC));
+    settings_.setValue("emulation/bootDirectory", QString());
+    bootDirectoryOverride_ = {};
+    QByteArray rom(32768, char(0));
+    const std::array<uint8_t, 3> entry = {0xc3, 0x50, 0x01};
+    const std::array<uint8_t, 11> program = {0x31, 0xfe, 0xff, 0x3e, 0x11, 0xcd,
+                                             0x60, 0x01, 0x3c, 0x18, 0xfe};
+    std::memcpy(rom.data() + 0x100, entry.data(), entry.size());
+    std::memcpy(rom.data() + 0x150, program.data(), program.size());
+    rom[0x160] = char(0x3c);
+    rom[0x161] = char(0xc9);
+    rom.replace(0x134, 14, QByteArray("DEBUG WORKFLOW", 14));
+    uint8_t checksum = 0;
+    for (int i = 0x134; i <= 0x14c; ++i)
+        checksum = uint8_t(checksum - uint8_t(rom[i]) - 1);
+    rom[0x14d] = char(checksum);
+    const QString path = QDir(directory).filePath(QString::fromUtf8("debugger-\xc3\xa9.gb"));
+    QFile cartridge(path);
+    if (!cartridge.open(QIODevice::WriteOnly) || cartridge.write(rom) != rom.size())
+        return smokeFailure(__LINE__);
+    cartridge.close();
+    if (!openRom(path))
+        return smokeFailure(__LINE__);
+    physicalJoypad_ = 0xef;
+    cupid_gb_set_buttons(&emulator_->gb, physicalJoypad_);
+    const QByteArray beforeTools = captureState();
+    openDebugger();
+    if (!paused_ || !debuggerWindow_ || !debugger_ || !debuggerHistory_.empty())
+        return smokeFailure(__LINE__);
+    QEvent deactivateTools(QEvent::WindowDeactivate);
+    QEvent deactivateApp(QEvent::ApplicationDeactivate);
+    QApplication::sendEvent(this, &deactivateTools);
+    QApplication::sendEvent(this, &deactivateApp);
+    if (emulator_->gb.joypad != 0xef || physicalJoypad_ != 0xff || captureState() != beforeTools)
+        return smokeFailure(__LINE__);
+    QKeyEvent lateRelease(QEvent::KeyRelease, keys_[4], Qt::NoModifier);
+    QKeyEvent latePress(QEvent::KeyPress, keys_[5], Qt::NoModifier);
+    QApplication::sendEvent(this, &lateRelease);
+    QApplication::sendEvent(display_, &latePress);
+    const int oldRapidA = specialKeys_[3];
+    specialKeys_[3] = Qt::Key_V;
+    QKeyEvent rapidPress(QEvent::KeyPress, Qt::Key_V, Qt::NoModifier);
+    QKeyEvent rapidRelease(QEvent::KeyRelease, Qt::Key_V, Qt::NoModifier);
+    QApplication::sendEvent(this, &rapidPress);
+    QApplication::sendEvent(display_, &rapidRelease);
+    specialKeys_[3] = oldRapidA;
+    if (captureState() != beforeTools || physicalJoypad_ != 0xff)
+        return smokeFailure(__LINE__);
+    openInspectors();
+    QApplication::sendEvent(this, &deactivateTools);
+    if (captureState() != beforeTools)
+        return smokeFailure(__LINE__);
+    inspectorsWindow_->close();
+    setPaused(false);
+    physicalJoypad_ = 0xef;
+    cupid_gb_set_buttons(&emulator_->gb, physicalJoypad_);
+    QApplication::sendEvent(this, &deactivateTools);
+    if (emulator_->gb.joypad != 0xff || physicalJoypad_ != 0xff)
+        return smokeFailure(__LINE__);
+    pauseDebugger();
+    const auto complete = [this] {
+        QElapsedTimer deadline;
+        deadline.start();
+        while (debuggerTimer_.isActive() && deadline.elapsed() < 5000)
+            debuggerSlice();
+        return !debuggerTimer_.isActive();
+    };
+    debuggerWindow_->submitCommand("set pc 336");
+    if (emulator_->gb.cpu.pc != 0x150)
+        return smokeFailure(__LINE__);
+    debuggerWindow_->submitCommand("set pc 0x0153");
+    if (emulator_->gb.cpu.pc != 0x153)
+        return smokeFailure(__LINE__);
+    debuggerWindow_->submitCommand("set pc $0150");
+    const QByteArray beforeStep = captureState();
+    debuggerWindow_->submitCommand("step");
+    if (!complete() || emulator_->gb.cpu.pc != 0x153 || debuggerHistory_.size() != 1 ||
+        !debuggerBackstep() || captureState() != beforeStep)
+        return smokeFailure(__LINE__);
+    debuggerWindow_->submitCommand("set pc $0153");
+    debuggerWindow_->submitCommand("step");
+    if (!complete() || emulator_->gb.cpu.a != 0x11 || emulator_->gb.cpu.pc != 0x155)
+        return smokeFailure(__LINE__);
+    debuggerWindow_->submitCommand("next");
+    if (!complete() || emulator_->gb.cpu.pc != 0x158 || emulator_->gb.cpu.a != 0x12 ||
+        !debuggerBackstep() || emulator_->gb.cpu.pc != 0x161 || emulator_->gb.cpu.sp != 0xfffc)
+        return smokeFailure(__LINE__);
+    debuggerWindow_->submitCommand("step");
+    if (!complete() || emulator_->gb.cpu.pc != 0x158)
+        return smokeFailure(__LINE__);
+    debuggerWindow_->submitCommand("set pc $0155");
+    debuggerWindow_->submitCommand("step");
+    if (!complete() || emulator_->gb.cpu.pc != 0x160)
+        return smokeFailure(__LINE__);
+    debuggerWindow_->submitCommand("finish");
+    if (!complete() || emulator_->gb.cpu.pc != 0x158 || !debuggerBackstep() ||
+        emulator_->gb.cpu.pc != 0x161)
+        return smokeFailure(__LINE__);
+    if (debuggerHistory_.empty())
+        return smokeFailure(__LINE__);
+    frameAction_->trigger();
+    const QByteArray afterFrameAdvance = captureState();
+    if (!paused_ || !debuggerHistory_.empty() || debuggerTimer_.isActive() || debuggerBackstep() ||
+        captureState() != afterFrameAdvance)
+        return smokeFailure(__LINE__);
+    debuggerWindow_->submitCommand("set sp $fffe");
+    debuggerWindow_->submitCommand("set pc $0150");
+    debuggerWindow_->submitCommand("break $00:$0155");
+    debuggerWindow_->submitCommand("continue");
+    if (paused_ || !runFrame() || !paused_ || emulator_->gb.cpu.pc != 0x155 ||
+        !debuggerHistory_.empty())
+        return smokeFailure(__LINE__);
+    if (!saveSlot(8))
+        return smokeFailure(__LINE__);
+    debuggerWindow_->submitCommand("step");
+    if (!complete() || !loadSlot(8))
+        return smokeFailure(__LINE__);
+    const uint64_t loadedCycles = emulator_->gb.elapsed_cycles;
+    debuggerWindow_->submitCommand("continue");
+    if (!runFrame() || !paused_ || emulator_->gb.cpu.pc != 0x155 ||
+        emulator_->gb.elapsed_cycles != loadedCycles)
+        return smokeFailure(__LINE__);
+    frameAction_->trigger();
+    if (!paused_ || emulator_->gb.cpu.pc == 0x155 || !debuggerHistory_.empty())
+        return smokeFailure(__LINE__);
+    debuggerWindow_->submitCommand("set pc $0150");
+    debuggerWindow_->submitCommand("continue");
+    if (!runFrame() || !paused_ || emulator_->gb.cpu.pc != 0x155)
+        return smokeFailure(__LINE__);
+    pauseAction_->trigger();
+    if (paused_ || !runFrame() || emulator_->gb.cpu.pc == 0x155)
+        return smokeFailure(__LINE__);
+    debuggerWindow_->submitCommand("break");
+    debuggerWindow_->submitCommand("set pc $0150");
+    debuggerWindow_->submitCommand("continue");
+    if (!runFrame() || !paused_ || emulator_->gb.cpu.pc != 0x155)
+        return smokeFailure(__LINE__);
+    // Resuming a hit skips it once; a later visit must stop at the same point.
+    debuggerWindow_->submitCommand("continue");
+    if (paused_ || !runFrame() || emulator_->gb.cpu.pc == 0x155)
+        return smokeFailure(__LINE__);
+    debuggerWindow_->submitCommand("break");
+    debuggerWindow_->submitCommand("delete all");
+    if (!paused_ || debugger_->bp_count)
+        return smokeFailure(__LINE__);
+    const QString symbolsPath = QDir(directory).filePath("debugger.sym");
+    QFile symbols(symbolsPath);
+    if (!symbols.open(QIODevice::WriteOnly) ||
+        symbols.write("00:0155 Subcall\n00:0160 Inner\n") <= 0)
+        return smokeFailure(__LINE__);
+    symbols.close();
+    const QByteArray beforeSymbols = captureState();
+    if (!loadDebuggerSymbols(symbolsPath) || debugger_->symbol_count != 2 ||
+        captureState() != beforeSymbols)
+        return smokeFailure(__LINE__);
+    const QString invalidPath = QDir(directory).filePath("invalid.sym");
+    QFile invalid(invalidPath);
+    if (!invalid.open(QIODevice::WriteOnly) || invalid.write("invalid symbol file\n") <= 0)
+        return smokeFailure(__LINE__);
+    invalid.close();
+    if (loadDebuggerSymbols(invalidPath) || debugger_->symbol_count != 2 ||
+        captureState() != beforeSymbols)
+        return smokeFailure(__LINE__);
+    debuggerWindow_->submitCommand("break Inner");
+    if (debugger_->bp_count != 1 || debugger_->breakpoints[0].address != 0x160)
+        return smokeFailure(__LINE__);
+    if (!restart() || debugger_->bp_count != 1 || debugger_->symbol_count != 2 ||
+        !debuggerHistory_.empty())
+        return smokeFailure(__LINE__);
+    pauseDebugger();
+    debuggerWindow_->submitCommand("delete 1");
+    debuggerWindow_->submitCommand("set af $123f");
+    if (emulator_->gb.cpu.a != 0x12 || emulator_->gb.cpu.f != 0x30)
+        return smokeFailure(__LINE__);
+    const QByteArray beforeInvalid = captureState();
+    debuggerWindow_->submitCommand("set f $1ff");
+    debuggerWindow_->submitCommand("write $0100 $00");
+    if (captureState() != beforeInvalid)
+        return smokeFailure(__LINE__);
+    debuggerWindow_->submitCommand("set pc $0159");
+    for (unsigned instruction = 0; instruction < 132; ++instruction) {
+        debuggerWindow_->submitCommand("step");
+        if (!complete())
+            return smokeFailure(__LINE__);
+    }
+    if (debuggerHistory_.size() != 128 || debuggerHistoryBytes_ > 32 * 1024 * 1024)
+        return smokeFailure(__LINE__);
+    const auto historyCount = debuggerHistory_.size();
+    if (openRom(QDir(directory).filePath("absent-debugger.gb")) ||
+        debuggerHistory_.size() != historyCount)
+        return smokeFailure(__LINE__);
+    failed_ = false;
+    const QByteArray beforeNoise = captureState();
+    resetDebuggerTimeline();
+    uint32_t randomState = 0x17382fadu;
+    const auto randomByte = [&randomState] {
+        randomState ^= randomState << 13;
+        randomState ^= randomState >> 17;
+        randomState ^= randomState << 5;
+        return uint8_t(randomState >> 24);
+    };
+    const auto fillNoise = [&randomByte](void *data, size_t length) {
+        auto *bytes = static_cast<uint8_t *>(data);
+        for (size_t i = 0; i < length; ++i)
+            bytes[i] = randomByte();
+    };
+    auto &noisy = emulator_->gb;
+    fillNoise(noisy.video_ram, sizeof(noisy.video_ram));
+    fillNoise(noisy.cartridge_ram, sizeof(noisy.cartridge_ram));
+    fillNoise(noisy.work_ram, sizeof(noisy.work_ram));
+    fillNoise(noisy.high_ram, sizeof(noisy.high_ram));
+    fillNoise(noisy.object_attribute_memory, sizeof(noisy.object_attribute_memory));
+    fillNoise(noisy.apu.buf, sizeof(noisy.apu.buf));
+    fillNoise(noisy.sgb.border_tiles, sizeof(noisy.sgb.border_tiles));
+    fillNoise(noisy.sgb.attribute_files, sizeof(noisy.sgb.attribute_files));
+    fillNoise(noisy.sgb.ram_palettes, sizeof(noisy.sgb.ram_palettes));
+    fillNoise(noisy.sgb.border_map, sizeof(noisy.sgb.border_map));
+    fillNoise(noisy.sgb.border_palettes, sizeof(noisy.sgb.border_palettes));
+    for (size_t i = 0; i < 160 * 144; ++i) {
+        noisy.frame_buffer[i] = randomByte() & 3u;
+        noisy.sgb.freeze_buffer[i] = randomByte() & 3u;
+        noisy.frame_buffer_color[i] =
+            uint16_t((uint16_t(randomByte()) * 256u + randomByte()) & 0x7fffu);
+    }
+    for (auto &attribute : noisy.sgb.attribute_map)
+        attribute = randomByte() & 3u;
+    for (unsigned instruction = 0; instruction < 132; ++instruction) {
+        debuggerWindow_->submitCommand("step");
+        if (!complete())
+            return smokeFailure(__LINE__);
+    }
+    qsizetype retainedBytes = 0;
+    for (const auto &snapshot : debuggerHistory_)
+        retainedBytes += snapshot.capacity() + qsizetype(sizeof(QByteArray));
+    if (debuggerHistory_.empty() || debuggerHistory_.size() >= 128 ||
+        retainedBytes != debuggerHistoryBytes_ || retainedBytes > 32 * 1024 * 1024 ||
+        !restoreState(beforeNoise, false))
+        return smokeFailure(__LINE__);
+    resetDebuggerTimeline();
+    const QString debuggerAudio = QDir(directory).filePath("debugger-audio.wav");
+    if (!startRecording(debuggerAudio))
+        return smokeFailure(__LINE__);
+    for (unsigned instruction = 0; instruction < 16; ++instruction) {
+        debuggerWindow_->submitCommand("step");
+        if (!complete())
+            return smokeFailure(__LINE__);
+    }
+    const uint64_t debuggerAudioFrames = recorder_->framesWritten();
+    if (!debuggerAudioFrames || !debuggerBackstep() || !recorder_->active() ||
+        recorder_->framesWritten() != debuggerAudioFrames || !stopRecording())
+        return smokeFailure(__LINE__);
+    if (!saveSlot(9))
+        return smokeFailure(__LINE__);
+    debuggerWindow_->submitCommand("step");
+    if (!complete() || !loadSlot(9) || !debuggerHistory_.empty() || debuggerTimer_.isActive())
+        return smokeFailure(__LINE__);
+    openInspectors();
+    if (!inspectorsWindow_ || !paused_ || !inspectorsWindow_->writeByte(0xc000, 0x5a) ||
+        cupid_gb_debug_peek(&emulator_->gb, 0xc000) != 0x5a ||
+        inspectorsWindow_->writeByte(0x100, 0) || !debuggerHistory_.empty())
+        return smokeFailure(__LINE__);
+    for (int tab = 0; tab < 5; ++tab)
+        inspectorsWindow_->selectTab(tab);
+    debuggerWindow_->submitCommand("finish");
+    if (!debuggerTimer_.isActive())
+        return smokeFailure(__LINE__);
+    QKeyEvent escapeDebugger(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QApplication::sendEvent(debuggerWindow_, &escapeDebugger);
+    if (debuggerWindow_->isVisible() || debuggerTimer_.isActive() || !debuggerHistory_.empty() ||
+        !paused_)
+        return smokeFailure(__LINE__);
+    openDebugger();
+    debuggerWindow_->submitCommand("finish");
+    if (!debuggerTimer_.isActive())
+        return smokeFailure(__LINE__);
+    if (!openRom(path) || debuggerTimer_.isActive() || !debuggerHistory_.empty())
+        return smokeFailure(__LINE__);
+    const QString replacementPath = QDir(directory).filePath("replacement-debugger.gb");
+    QFile replacement(replacementPath);
+    if (!replacement.open(QIODevice::WriteOnly) || replacement.write(rom) != rom.size())
+        return smokeFailure(__LINE__);
+    replacement.close();
+    QFile companion(QDir(directory).filePath("replacement-debugger.sym"));
+    if (!companion.open(QIODevice::WriteOnly) || companion.write("00:0159 Replacement\n") <= 0)
+        return smokeFailure(__LINE__);
+    companion.close();
+    debuggerWindow_->submitCommand("break Inner");
+    if (!openRom(replacementPath) || debugger_->bp_count || debugger_->symbol_count != 1 ||
+        QString::fromUtf8(cupid_gb_debugger_symbol_for_address(debugger_.get(), 0, 0x159, true)) !=
+            "Replacement")
+        return smokeFailure(__LINE__);
+    rom[0x150] = char(0xd3);
+    const QString illegalPath = QDir(directory).filePath("illegal-debugger.gb");
+    QFile illegal(illegalPath);
+    if (!illegal.open(QIODevice::WriteOnly) || illegal.write(rom) != rom.size())
+        return smokeFailure(__LINE__);
+    illegal.close();
+    if (!openRom(illegalPath))
+        return smokeFailure(__LINE__);
+    openDebugger();
+    debuggerWindow_->submitCommand("set pc $0150");
+    const QByteArray beforeIllegal = captureState();
+    debuggerWindow_->submitCommand("step");
+    if (!complete() || !emulator_->gb.cpu.halted || !debuggerBackstep() ||
+        captureState() != beforeIllegal)
+        return smokeFailure(__LINE__);
+    const QString captureDirectory = qEnvironmentVariable("CUPIDGB_UI_CAPTURE_DIR");
+    if (!captureDirectory.isEmpty()) {
+        QDir captures(captureDirectory);
+        if (!captures.mkpath("."))
+            return smokeFailure(__LINE__);
+        settings_.setValue("emulation/model", int(CUPID_GB_MODEL_CGB));
+        rom[0x143] = char(0x80);
+        rom[0x150] = char(0x31);
+        checksum = 0;
+        for (int i = 0x134; i <= 0x14c; ++i)
+            checksum = uint8_t(checksum - uint8_t(rom[i]) - 1);
+        rom[0x14d] = char(checksum);
+        const QString capturePath = QDir(directory).filePath("capture-debugger.gbc");
+        QFile captureRom(capturePath);
+        if (!captureRom.open(QIODevice::WriteOnly) || captureRom.write(rom) != rom.size())
+            return smokeFailure(__LINE__);
+        captureRom.close();
+        if (!openRom(capturePath))
+            return smokeFailure(__LINE__);
+        openDebugger();
+        debuggerWindow_->submitCommand("set pc $0150");
+        if (!loadDebuggerSymbols(symbolsPath))
+            return smokeFailure(__LINE__);
+        debuggerWindow_->submitCommand("break Inner");
+        auto &fixture = emulator_->gb;
+        for (size_t bank = 0; bank < 2; ++bank) {
+            for (size_t tile = 0; tile < 384; ++tile) {
+                for (size_t row = 0; row < 8; ++row) {
+                    fixture.video_ram[bank * 0x2000 + tile * 16 + row * 2] =
+                        uint8_t(0x81u >> ((tile + row) % 4));
+                    fixture.video_ram[bank * 0x2000 + tile * 16 + row * 2 + 1] =
+                        uint8_t((tile & 1u) ? 0x55u : 0xaau);
+                }
+            }
+        }
+        for (size_t cell = 0; cell < 1024; ++cell) {
+            fixture.video_ram[0x1800 + cell] = uint8_t(cell);
+            fixture.video_ram[0x1c00 + cell] = uint8_t(255 - cell);
+            fixture.video_ram[0x3800 + cell] = uint8_t((cell / 32) & 7u);
+            fixture.video_ram[0x3c00 + cell] = uint8_t((cell / 32) & 7u);
+        }
+        for (size_t object = 0; object < 40; ++object) {
+            fixture.object_attribute_memory[object * 4] = uint8_t(16 + (object / 10) * 24);
+            fixture.object_attribute_memory[object * 4 + 1] = uint8_t(8 + (object % 10) * 16);
+            fixture.object_attribute_memory[object * 4 + 2] = uint8_t(object);
+            fixture.object_attribute_memory[object * 4 + 3] = uint8_t(object & 7u);
+        }
+        for (size_t color = 0; color < 32; ++color) {
+            const uint16_t rgb = uint16_t((color % 4) * 10 + (((color / 4) % 4) * 10 << 5) +
+                                          ((color % 4) * 8 << 10));
+            fixture.cgb_bg_palette_ram[color * 2] = uint8_t(rgb);
+            fixture.cgb_bg_palette_ram[color * 2 + 1] = uint8_t(rgb >> 8);
+            fixture.cgb_obj_palette_ram[color * 2] = uint8_t(rgb);
+            fixture.cgb_obj_palette_ram[color * 2 + 1] = uint8_t(rgb >> 8);
+        }
+        refreshDebugger();
+        QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+        if (!debuggerWindow_->grab().save(captures.filePath("debugger.png")))
+            return smokeFailure(__LINE__);
+        openInspectors();
+        const std::array<const char *, 5> names = {"memory.png", "tiles.png", "maps.png",
+                                                   "objects.png", "palettes.png"};
+        for (int tab = 0; tab < 5; ++tab) {
+            inspectorsWindow_->selectTab(tab);
+            QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+            if (!inspectorsWindow_->grab().save(captures.filePath(names[size_t(tab)])))
+                return smokeFailure(__LINE__);
+        }
+    }
+    if (!closeRom())
+        return smokeFailure(__LINE__);
+    inspectorsWindow_->refresh();
+    const auto noRomOutput = debuggerWindow_->outputText();
+    debuggerWindow_->submitCommand("step");
+    if (emulator_ || debuggerTimer_.isActive() || debuggerWindow_->outputText() == noRomOutput ||
+        !debuggerWindow_->findChild<QPlainTextEdit *>("debuggerRegisters")->toPlainText().isEmpty())
+        return smokeFailure(__LINE__);
+    debuggerWindow_->close();
+    inspectorsWindow_->close();
+    return true;
+}
+
+bool MainWindow::pacingSmokeTest(const QString &path) {
+    settings_.setValue("emulation/model", -1);
+    if (!openRom(path))
+        return smokeFailure(__LINE__);
+    auto &gb = emulator_->gb;
+    // Approach VBlank using real hardware steps so the next image covers only
+    // a scanline tail. A presentation-count deadline would overcharge it.
+    unsigned steps = 0;
+    while ((gb.pixels.line != 143 || gb.pixels.dot < 440) && steps++ < 70000) {
+        if (!cupid_gb_step(&gb))
+            return smokeFailure(__LINE__);
+    }
+    if (steps >= 70000)
+        return smokeFailure(__LINE__);
+    setPaused(false);
+    const uint64_t partialStart = gb.elapsed_cycles;
+    const qint64 partialDeadline = nextFrame_;
+    tick();
+    const uint64_t partialCycles = gb.elapsed_cycles - partialStart;
+    if (paused_ || !partialCycles || partialCycles >= 70224 ||
+        nextFrame_ != partialDeadline + qint64(partialCycles * 1000000000 / 4194304))
+        return smokeFailure(__LINE__);
+    cupid_gb_write_u8(&gb, 0xff40, 0);
+    resetPacing();
+    const uint64_t blankStart = gb.elapsed_cycles;
+    const qint64 blankDeadline = nextFrame_;
+    tick();
+    const uint64_t blankCycles = gb.elapsed_cycles - blankStart;
+    if (paused_ || blankCycles != 70224 ||
+        nextFrame_ != blankDeadline + qint64(blankCycles * 1000000000 / 4194304))
+        return smokeFailure(__LINE__);
+    return closeRom();
+}
+
 void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
+    struct WarmupSample {
+        bool captured = false;
+        double elapsed = 0;
+        uint64_t cycles = 0;
+        uint64_t images = 0;
+        uint64_t paints = 0;
+        uint64_t audioFrames = 0;
+        uint64_t audioIdle = 0;
+        uint64_t audioErrors = 0;
+        size_t firstPaintInterval = 0;
+    };
+
+    constexpr double warmupSeconds = 5;
+    const auto warmup = std::make_shared<WarmupSample>();
     telemetryStartCycles_ = emulator_->gb.elapsed_cycles;
     presentedImages_ = 0;
     generatedAudioFrames_ = 0;
@@ -2674,91 +3821,173 @@ void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
     display_->paintCount = 0;
     display_->lastPaintAt = 0;
     display_->paintIntervals.clear();
+    display_->collectPaintIntervals = true;
     if (audioBuffer_)
         audioBuffer_->resetTelemetry();
     telemetryClock_.start();
     const uint64_t session = sessionId_;
-    QTimer::singleShot(int(seconds * 1000), Qt::PreciseTimer, this, [this, reportPath, session] {
-        if (!emulator_ || sessionId_ != session ||
-            emulator_->gb.elapsed_cycles < telemetryStartCycles_) {
-            qCritical("Bounded frontend run cancelled because the cartridge changed");
-            QApplication::exit(1);
-            return;
-        }
-        const double elapsed = double(telemetryClock_.nsecsElapsed()) / 1e9;
-        const uint64_t cycles = emulator_->gb.elapsed_cycles - telemetryStartCycles_;
-        QJsonObject report{
-            {"elapsed_seconds", elapsed},
-            {"guest_base_speed_t_cycles", double(cycles)},
-            {"guest_cycles_per_second", double(cycles) / elapsed},
-            {"guest_speed_percent", double(cycles) / elapsed / 4194304.0 * 100},
-            {"images_submitted_to_widget", double(presentedImages_)},
-            {"widget_paint_events", double(display_->paintCount)},
-            {"audio_frames_generated", double(generatedAudioFrames_)},
-            {"audio_idle_events_after_startup", double(audioIdleEvents_)},
-            {"audio_priming_target_microseconds", 30000},
-            {"audio_priming_events", double(audioPrimeEvents_)},
-            {"audio_priming_pending", audioPriming_},
-            {"audio_error_events", double(audioErrorEvents_)},
-            {"audio_sink_created", bool(audio_)},
-            {"audio_requested_device_id_base64",
-             QString::fromLatin1(settings_.value("audio/outputDevice").toByteArray().toBase64())},
-            {"audio_active_device_id_base64", QString::fromLatin1(activeAudioDeviceId_.toBase64())},
-            {"audio_active_device_name", activeAudioDeviceName_},
-            {"audio_device_fallback", audioDeviceFallback_},
-            {"audio_sink_state", audio_ ? int(audio_->state()) : -1},
-            {"audio_sink_error", audio_ ? int(audio_->error()) : -1},
-            {"audio_processed_microseconds", audio_ ? double(audio_->processedUSecs()) : 0},
-            {"audio_sample_rate", int(cupid_gb_apu_get_sample_rate(&emulator_->gb))},
-            {"audio_channels", 2},
-            {"host_audio_sample_rate", audio_ ? audio_->format().sampleRate() : 0},
-            {"host_audio_channels", audio_ ? audio_->format().channelCount() : 0},
-            {"host_audio_format", audio_ ? int(audio_->format().sampleFormat()) : 0},
-            {"qt_version", qVersion()},
-            {"platform", QGuiApplication::platformName()},
-            {"execution_failed", failed_}};
-        report.insert("input_events_applied", double(inputTraceIndex_));
-        report.insert("rewind_snapshots_captured", double(rewindSnapshotsCaptured_));
-        report.insert("rewind_capture_total_ms", double(rewindCaptureNanoseconds_) / 1e6);
-        report.insert("rewind_capture_maximum_ms", double(rewindCaptureMaximumNanoseconds_) / 1e6);
-        report.insert("rewind_memory_bytes", double(rewindBytes_));
-        report.insert("rewind_history_seconds",
-                      rewindStates_.size() < 2
-                          ? 0.0
-                          : double(rewindStates_.back().cycles - rewindStates_.front().cycles) /
-                                4194304);
-        report.insert("rewind_capture_failed", rewindFailed_);
-        report.insert("hardware_model", cupid_gb_model_name(emulator_->gb.model));
-        report.insert("startup_mode", emulator_->gb.boot_rom_size ? "boot-rom" : "post-boot");
-        report.insert("boot_rom_bytes", int(emulator_->gb.boot_rom_size));
-        if (emulator_->gb.boot_rom_size)
+    const uint64_t timeline = timelineId_;
+    const uint64_t measurement = ++boundedRunId_;
+    const auto unchanged = [this, session, timeline, measurement] {
+        return emulator_ && sessionId_ == session && timelineId_ == timeline &&
+               boundedRunId_ == measurement &&
+               emulator_->gb.elapsed_cycles >= telemetryStartCycles_;
+    };
+    if (seconds > warmupSeconds) {
+        QTimer::singleShot(5000, Qt::PreciseTimer, this, [this, warmup, unchanged] {
+            if (!unchanged())
+                return;
+            warmup->elapsed = double(telemetryClock_.nsecsElapsed()) / 1e9;
+            warmup->cycles = emulator_->gb.elapsed_cycles;
+            warmup->images = presentedImages_;
+            warmup->paints = display_->paintCount;
+            warmup->audioFrames = generatedAudioFrames_;
+            warmup->audioIdle = audioIdleEvents_;
+            warmup->audioErrors = audioErrorEvents_;
+            // The next recorded interval starts before this sample. Exclude it
+            // from the later window without changing the whole-run history.
+            warmup->firstPaintInterval =
+                display_->paintIntervals.size() + (display_->lastPaintAt ? 1 : 0);
+            warmup->captured = true;
+        });
+    }
+    QTimer::singleShot(
+        int(seconds * 1000), Qt::PreciseTimer, this,
+        [this, reportPath, seconds, warmupSeconds, measurement, warmup, unchanged] {
+            if (boundedRunId_ != measurement)
+                return;
+            display_->collectPaintIntervals = false;
+            if (!unchanged()) {
+                qCritical(
+                    "Bounded frontend run cancelled because the cartridge or timeline changed");
+                QApplication::exit(1);
+                return;
+            }
+            const double elapsed = double(telemetryClock_.nsecsElapsed()) / 1e9;
+            const uint64_t cycles = emulator_->gb.elapsed_cycles - telemetryStartCycles_;
+            QJsonObject report{
+                {"elapsed_seconds", elapsed},
+                {"guest_base_speed_t_cycles", double(cycles)},
+                {"guest_cycles_per_second", double(cycles) / elapsed},
+                {"guest_speed_percent", double(cycles) / elapsed / 4194304.0 * 100},
+                {"images_submitted_to_widget", double(presentedImages_)},
+                {"widget_paint_events", double(display_->paintCount)},
+                {"audio_frames_generated", double(generatedAudioFrames_)},
+                {"audio_idle_events_after_startup", double(audioIdleEvents_)},
+                {"audio_priming_target_microseconds", 30000},
+                {"audio_priming_events", double(audioPrimeEvents_)},
+                {"audio_priming_pending", audioPriming_},
+                {"audio_error_events", double(audioErrorEvents_)},
+                {"audio_sink_created", bool(audio_)},
+                {"audio_requested_device_id_base64",
+                 QString::fromLatin1(
+                     settings_.value("audio/outputDevice").toByteArray().toBase64())},
+                {"audio_active_device_id_base64",
+                 QString::fromLatin1(activeAudioDeviceId_.toBase64())},
+                {"audio_active_device_name", activeAudioDeviceName_},
+                {"audio_device_fallback", audioDeviceFallback_},
+                {"audio_sink_state", audio_ ? int(audio_->state()) : -1},
+                {"audio_sink_error", audio_ ? int(audio_->error()) : -1},
+                {"audio_processed_microseconds", audio_ ? double(audio_->processedUSecs()) : 0},
+                {"audio_sample_rate", int(cupid_gb_apu_get_sample_rate(&emulator_->gb))},
+                {"audio_channels", 2},
+                {"host_audio_sample_rate", audio_ ? audio_->format().sampleRate() : 0},
+                {"host_audio_channels", audio_ ? audio_->format().channelCount() : 0},
+                {"host_audio_format", audio_ ? int(audio_->format().sampleFormat()) : 0},
+                {"qt_version", qVersion()},
+                {"platform", QGuiApplication::platformName()},
+                {"execution_failed", failed_}};
+            QJsonObject postWarmup{{"available", false}, {"warmup_target_seconds", warmupSeconds}};
+            if (seconds <= warmupSeconds) {
+                postWarmup.insert("reason", "run_does_not_exceed_warmup");
+            } else if (!warmup->captured || elapsed <= warmup->elapsed) {
+                postWarmup.insert("reason", "warmup_sample_unavailable");
+            } else if (emulator_->gb.elapsed_cycles < warmup->cycles ||
+                       presentedImages_ < warmup->images || display_->paintCount < warmup->paints ||
+                       generatedAudioFrames_ < warmup->audioFrames ||
+                       audioIdleEvents_ < warmup->audioIdle ||
+                       audioErrorEvents_ < warmup->audioErrors) {
+                qCritical("Bounded frontend run cancelled because measurement counters changed");
+                QApplication::exit(1);
+                return;
+            } else {
+                const double windowElapsed = elapsed - warmup->elapsed;
+                const double windowCycles = double(emulator_->gb.elapsed_cycles - warmup->cycles);
+                postWarmup.insert("available", true);
+                postWarmup.insert("sample_start_elapsed_seconds", warmup->elapsed);
+                postWarmup.insert("sample_end_elapsed_seconds", elapsed);
+                postWarmup.insert("elapsed_seconds", windowElapsed);
+                postWarmup.insert("guest_base_speed_t_cycles", windowCycles);
+                postWarmup.insert("guest_cycles_per_second", windowCycles / windowElapsed);
+                postWarmup.insert("guest_speed_percent",
+                                  windowCycles / windowElapsed / 4194304 * 100);
+                postWarmup.insert("images_submitted_to_widget",
+                                  double(presentedImages_ - warmup->images));
+                postWarmup.insert("widget_paint_events",
+                                  double(display_->paintCount - warmup->paints));
+                postWarmup.insert("audio_frames_generated",
+                                  double(generatedAudioFrames_ - warmup->audioFrames));
+                postWarmup.insert("audio_idle_events",
+                                  double(audioIdleEvents_ - warmup->audioIdle));
+                postWarmup.insert("audio_error_events",
+                                  double(audioErrorEvents_ - warmup->audioErrors));
+                postWarmup.insert("widget_paint_interval_ms",
+                                  display_->paintTelemetry(warmup->firstPaintInterval));
+                postWarmup.insert(
+                    "baseline", QJsonObject{{"elapsed_seconds", warmup->elapsed},
+                                            {"guest_base_speed_t_cycles", double(warmup->cycles)},
+                                            {"images_submitted_to_widget", double(warmup->images)},
+                                            {"widget_paint_events", double(warmup->paints)},
+                                            {"audio_frames_generated", double(warmup->audioFrames)},
+                                            {"audio_idle_events", double(warmup->audioIdle)},
+                                            {"audio_error_events", double(warmup->audioErrors)}});
+            }
+            report.insert("post_warmup", postWarmup);
+            report.insert("input_events_applied", double(inputTraceIndex_));
+            report.insert("rewind_snapshots_captured", double(rewindSnapshotsCaptured_));
+            report.insert("rewind_capture_total_ms", double(rewindCaptureNanoseconds_) / 1e6);
+            report.insert("rewind_capture_maximum_ms",
+                          double(rewindCaptureMaximumNanoseconds_) / 1e6);
+            report.insert("rewind_memory_bytes", double(rewindBytes_));
+            report.insert("rewind_history_seconds",
+                          rewindStates_.size() < 2
+                              ? 0.0
+                              : double(rewindStates_.back().cycles - rewindStates_.front().cycles) /
+                                    4194304);
+            report.insert("rewind_capture_failed", rewindFailed_);
+            report.insert("hardware_model", cupid_gb_model_name(emulator_->gb.model));
+            report.insert("guest_double_speed", emulator_->gb.double_speed);
+            report.insert("startup_mode", emulator_->gb.boot_rom_size ? "boot-rom" : "post-boot");
+            report.insert("boot_rom_bytes", int(emulator_->gb.boot_rom_size));
+            if (emulator_->gb.boot_rom_size)
+                report.insert("boot_rom_sha256",
+                              QString::fromLatin1(
+                                  QCryptographicHash::hash(
+                                      QByteArray::fromRawData(
+                                          reinterpret_cast<const char *>(emulator_->gb.boot_rom),
+                                          qsizetype(emulator_->gb.boot_rom_size)),
+                                      QCryptographicHash::Sha256)
+                                      .toHex()));
             report.insert(
-                "boot_rom_sha256",
-                QString::fromLatin1(QCryptographicHash::hash(
-                                        QByteArray::fromRawData(
-                                            reinterpret_cast<const char *>(emulator_->gb.boot_rom),
-                                            qsizetype(emulator_->gb.boot_rom_size)),
-                                        QCryptographicHash::Sha256)
-                                        .toHex()));
-        report.insert("rom_sha256",
-                      QString::fromLatin1(
-                          QCryptographicHash::hash(romData_, QCryptographicHash::Sha256).toHex()));
-        if (audioBuffer_)
-            report.insert("audio_queue", audioBuffer_->telemetry());
-        report.insert("widget_paint_interval_ms", display_->paintTelemetry());
-        if (!image_.isNull()) {
-            const QString screenshotPath = reportPath + ".png";
-            report.insert("screenshot_saved", image_.save(screenshotPath, "PNG"));
-        }
-        report.insert("battery_flushed", flushBattery());
-        QSaveFile file(reportPath);
-        const QByteArray bytes = QJsonDocument(report).toJson();
-        const bool written =
-            file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size() && file.commit();
-        if (!written)
-            qCritical("Could not write frontend report: %s", qPrintable(file.errorString()));
-        QApplication::exit(written && !failed_ ? 0 : 1);
-    });
+                "rom_sha256",
+                QString::fromLatin1(
+                    QCryptographicHash::hash(romData_, QCryptographicHash::Sha256).toHex()));
+            if (audioBuffer_)
+                report.insert("audio_queue", audioBuffer_->telemetry());
+            report.insert("widget_paint_interval_ms", display_->paintTelemetry());
+            if (!image_.isNull()) {
+                const QString screenshotPath = reportPath + ".png";
+                report.insert("screenshot_saved", image_.save(screenshotPath, "PNG"));
+            }
+            report.insert("battery_flushed", flushBattery());
+            QSaveFile file(reportPath);
+            const QByteArray bytes = QJsonDocument(report).toJson();
+            const bool written = file.open(QIODevice::WriteOnly) &&
+                                 file.write(bytes) == bytes.size() && file.commit();
+            if (!written)
+                qCritical("Could not write frontend report: %s", qPrintable(file.errorString()));
+            QApplication::exit(written && !failed_ ? 0 : 1);
+        });
 }
 
 bool MainWindow::loadInputTrace(const QString &path) {

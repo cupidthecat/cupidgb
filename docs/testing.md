@@ -16,6 +16,8 @@ ctest --test-dir build --output-on-failure
 
 For a Visual Studio build, use `ctest --test-dir build -C Release --output-on-failure`. Run Windows and Linux configurations separately. Core-only checks do not cover the desktop frontend.
 
+Hash regressions cover known vectors, span partitions, large inputs, unaligned bytes, and digest/input aliasing. Test the portable path separately with `-DCUPIDGB_ENABLE_NATIVE_HASH=OFF`; compare its native-state fixture bytes with the enabled build.
+
 Core tests exercise lifecycle, CPU/memory behavior, serial, timer/bus phases, graphics, audio, cartridge persistence, native snapshots, older-state battery recovery, and SGB behavior. Frontend checks cover sample conversion, WAVE file output, display processing, and integrated desktop workflows as those targets are present in the current build. Query the exact list with `ctest --test-dir build -N`; avoid carrying test counts from an older revision into a new result.
 
 Release tests explicitly keep their assertions enabled. Run the GCC/Clang sanitizer configuration as a separate check, with leak detection where available. Preserve the failing command and complete diagnostic when a sanitizer reports a defect.
@@ -32,6 +34,16 @@ The first command uses isolated temporary settings and a generated disposable ca
 The second command requires an actual output device and exercises playback around state loading and rewind. Also run native visible checks on each target platform. Offscreen checks do not establish dialogs, font/layout behavior, input focus, actual device playback, or physical display presentation under the native backend.
 
 Generated inputs protect normal user data and allow repeatable failure cases. Commercial-game checks still need real cartridge execution, visual inspection, input, sound, and saving.
+
+Set `CUPIDGB_UI_CAPTURE_DIR` when running the smoke check to retain private images of the generated-cartridge debugger and all five inspector tabs. The optional hook creates the supplied directory and writes fixed `debugger.png`, `memory.png`, `tiles.png`, `maps.png`, `objects.png`, and `palettes.png` files. Capture failures fail the check. Use the native platform to inspect actual Qt layout and fonts; a widget capture does not measure physical display presentation.
+
+For example, from a Linux desktop session:
+
+```sh
+CUPIDGB_UI_CAPTURE_DIR=.local-research/ui ./build/cupidgb --smoke-test --audio-check
+```
+
+On Windows, also set `QT_FORCE_STDERR_LOGGING=1` when capturing diagnostic output from the GUI executable.
 
 ## Headless ROM runner
 
@@ -102,6 +114,8 @@ An input trace is repeatable host input, not evidence that a game reached active
 The frontend isolates its settings, opens a normal audio device, and exits after the requested duration. A report path and cartridge are required. Supported durations are greater than zero and no more than 86,400 seconds. The report has a companion PNG.
 
 Reports describe guest-clock progress, images submitted to the widget, widget paint counts/intervals, host audio format, generated samples, queue depth, backend idle/error events, rewind storage/capture work, and input progress. Check the exact report emitted by the current build rather than assuming a fixed schema.
+
+The `post_warmup` object reports a separate window after a five-second host warmup. It records the actual sampling time, counter baselines, measured duration, guest-clock rate, image/paint/sample deltas, audio events, and paint intervals wholly inside that window. Runs of five seconds or less report it as unavailable. This is a time window, not proof of steady gameplay or audible correctness. Whole-run fields retain startup observations. Cartridge or timeline replacement cancels the measurement instead of combining different sessions. Ordinary playback collects no paint-interval history; collection runs only for bounded reports.
 
 Record process exit status and sample resource usage separately if those observations are needed. State whether measurements include startup, stream priming, menus, dialogs, or steady gameplay. Backend idle events are observations requiring investigation; zero reported errors alone does not establish audible correctness.
 

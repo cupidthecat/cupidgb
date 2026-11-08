@@ -12,6 +12,8 @@ Writes use an atomic file replacement. Loading checks the complete cartridge ide
 
 The file content is CupidGB native version 2. Interoperable BESS state imports remain pending. A filename fallback does not imply support for another state format.
 
+The version identifies the wire encoding, not a promise to preserve emulation bugs between builds. Corrected double-speed clock advancement changes elapsed time and APU fields in newly generated snapshots while retaining the version 2 schema. Older version 2 files remain loadable, but subsequent execution follows the corrected engine. Exact continuation comparisons must use the same qualified build and inputs.
+
 Version 1 execution states cannot continue in the changed pixel and audio core. File > Recover Battery from Older State validates the older file and exports supported battery data to a separate file. Recovery preserves the original file and running session. It does not restore execution. See [battery saves](battery-saves.md).
 
 ## Rewind
@@ -21,6 +23,8 @@ Hold Tab to move backward through captured frames. Space with Tab moves backward
 Settings control the requested history duration and memory budget. The default requests up to 120 seconds within a 256 MiB budget. The buffer evicts its oldest snapshots when either limit is reached. Actual retained duration depends on how well the cartridge's state compresses; the interface reports shorter history when the memory limit is reached. Set the duration to zero to disable capture.
 
 History resets on cartridge replacement, reset, successful disk-state loading, or relevant configuration changes. Failed disk-state loading preserves history. Rewind snapshots stay in memory.
+
+The debugger has a separate, smaller instruction snapshot history. It captures only explicit debugger stepping and is invalidated when ordinary playback or session-changing operations resume. Breakpoints, symbols, tool windows, and pending host commands are excluded from native state files. See [debugger history](debugging.md#instruction-history-and-playback).
 
 The rewind path caches the identity of the frontend's immutable cartridge. The core context is bound to the instance, ROM pointer, ROM size, and hardware model. A caller that patches ROM bytes in place must discard and recreate this context. Disk-state APIs always recompute the full cartridge hash. Future cheat, patch, or debugger features must honor that cache invalidation rule.
 
@@ -51,6 +55,6 @@ Loading first verifies version, length, integrity, cartridge/model/boot identity
 
 Generated-ROM tests exercise deterministic continuation across the current six hardware profiles, active boot overlays, LCD modes, CGB double speed, pending timer reloads, DMA starts/restarts, and serial phases. Another 64 continuation scenarios capture pending background/object fetches and window work, then apply scroll and palette writes after restoration. Checks compare CPU and memory state, framebuffers, emitted PCM, and the encoded continuation. Additional tests reject every truncation boundary, damaged or invalid fields, wrong inputs, and stale cache bindings while preserving the live instance.
 
-The portable version 2 fixture has SHA-256 `bceb48a1fadaad1dcf305f6f7bdf27dcefbb291e853eb788b61bdc4bdcf6978b`. Its exact bytes are checked in the regression test. Native continuation checks do not establish state interoperability or complete underlying hardware accuracy.
+The portable version 2 fixture has SHA-256 `6106c038f80d9ef4ca4417f31305dc05bb714d9252e6caff3eec0205ea4ec0eb`. Its exact bytes are checked in the regression test. Native continuation checks do not establish state interoperability or complete underlying hardware accuracy.
 
 Forward runtime measurements must be distinguished from state loading and rewind, which change the guest timeline. A guest-clock rate measured during those operations represents net timeline progress rather than forward emulation throughput.

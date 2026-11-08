@@ -403,8 +403,7 @@ bool cupid_gb_service_interrupt(CupidGb *gb) {
     }
     /* The low stack byte can itself target IF. Clear the acknowledged request
      * in the replacement value while preserving unrelated newly written bits. */
-    gb->interrupt_flags &= (uint8_t)~selected;
-    cupid_gb_tick(gb, 1);
+    cupid_gb_acknowledge_interrupt(gb, selected);
     return true;
 }
 

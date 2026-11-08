@@ -1,6 +1,6 @@
 # Validation record
 
-This record covers the Qt desktop and GB/GBC timing milestone on 2026-11-04. It does not establish complete hardware or frontend parity. The comparison source revision is `ea667ad79aa28409f034b1fd6da7304e1844750d`.
+This record starts with the desktop and timing checks on 2026-11-04 and includes later work through 2026-11-07. Results apply to each stated build, input set, and scope. They do not establish complete hardware or frontend parity. The comparison source revision is `ea667ad79aa28409f034b1fd6da7304e1844750d`.
 
 ## Builds and automated checks
 
@@ -150,3 +150,111 @@ A staged Linux installation includes the executable, project license, desktop la
 The README and thirteen guides now cover building, installation, use, hardware limits, battery files, states/rewind, troubleshooting, architecture, core integration, testing, contribution requirements, parity, and validation. All 56 local documentation links resolved, and the C11/C++17 integration examples passed compiler syntax checks. Changed project sources pass the supplied formatting configuration, and the configuration matches the supplied file byte for byte.
 
 Remaining work includes individual hardware revisions, full fetch/bus timing, contact settling, uncommon controllers and peripherals, controller devices, debugger tools, cheats, interoperable state imports, advanced color/filter behavior, and long-term gameplay/audio qualification. The parity checklist remains open.
+
+## Debugger tools and clock-phase repairs
+
+The 2026-11-07 work adds an independently written debugger and hardware inspectors. CPU execution, mapped-memory inspection, and host presentation remain separate. The debugger has bank-aware execution breakpoints, symbols, disassembly of all primary/prefixed encodings with invalid opcodes marked, Step/Next/Finish, and bounded instruction Backstep. Memory, tiles, maps, OAM, and palette views operate on the current session. [The debugger guide](debugging.md) documents commands, limits, edits, and session behavior.
+
+Desktop pacing now charges actual guest base-clock progress for partial LCD intervals and carries fractional host time across ordinary playback. A Qt regression drives the real LCD to a scanline tail and checks the resulting deadline, then checks a full LCD-off interval. Standalone pacing tests cover one-/two-/four-T-cycle chunks, all playback rates from half through normal speed, 100,000 variable intervals, reset behavior, and overflow rejection. Ordinary play no longer accumulates an unbounded paint-timing history. Bounded reports retain whole-run results and add a separate five-second post-warmup window.
+
+Clock repairs move interrupt acknowledgment to CPU T18 and advance every double-speed machine cycle by two LCD/APU dots. Double-speed HBlank readback changes at its corrected edge. These changes do not add snapshot fields. The second interrupt stack write targeting LCDC remains unqualified.
+
+### Equivalent-input checks
+
+Comparisons retain revision `ea667ad79aa28409f034b1fd6da7304e1844750d`. Generated interrupt-entry probes match all 76 selected phases across normal-speed DMG/Pocket/CGB and double-speed CGB, compared with 51 matches before the repair. Observations cover base-cycle duration, destination PC, final interrupt flags, and visible LCD mode. Separate regressions check timer requests on either side of acknowledgment, equal guest-time audio generation, DMA duration, and pending LCD handoff.
+
+Nine debugger command checkpoints match on each of DMG and CGB, for 18 matched observations. They cover stepping, nested calls, Finish, interrupt entry/return, and Next with a pending interrupt. Direct-step/observed-step regressions preserve complete native state, including a HALT wake that crosses a bus-lock edge. Another regression compares 8,192 ordinary and debugger-run steps. Read-only peeks across all 65,536 addresses preserve hardware state in the generated fixture.
+
+Inspector rendering matches 6,114,816 pixels and 4,356 metadata values across three fixtures each for DMG-B, CGB-E, and CGB monochrome compatibility. These are direct rendering comparisons with grayscale palettes and color correction disabled, not complete gameplay rendering coverage.
+
+| Corpus | CupidGB | Comparison build |
+| --- | --- | --- |
+| Sixty-six selected DMG acceptance cases, shared generated boot | 63 explicit register passes, 3 bounded | 63 explicit register passes, 3 bounded |
+| Eleven CPU instruction cases | 11 explicit serial passes | 11 explicit serial passes |
+| Twelve DMG and twelve CGB sound cases | 24 explicit memory passes | 24 explicit memory passes |
+| Twenty-eight MBC1/MBC2/MBC5 cases, shared generated boot | 28 explicit register passes | 28 explicit register passes |
+
+The three bounded cases still concern boot-divider state, boot I/O, and serial alignment under the selected generated firmware. Both acid2 final images and six bounded commercial scenes match with zero differing pixels out of 23,040 each. The six commercial inputs are Tetris, Kirby, Super Mario Land, Crystal, Mario Tennis, and Tomb Raider. These outcomes do not establish complete frame-by-frame timing or audible equivalence.
+
+Crystal, Mario Tennis, and Tomb Raider each ran 1,800 guest-clock intervals before a checkpoint and replayed another 180 intervals twice. The encoded end state, both framebuffers, generated PCM/sample counts, and cycles match on replay. Mario Tennis and Tomb Raider exercised double speed. Existing cartridges and saves were preserved; these checks do not establish in-game save interoperability or long-term gameplay correctness.
+
+### Snapshot compatibility
+
+Native version 2 remains 300,518 bytes with the same field encoding. Windows and Linux produce the same updated fixture, SHA-256 `6106c038f80d9ef4ca4417f31305dc05bb714d9252e6caff3eec0205ea4ec0eb`. A decoded comparison isolates the changed fixture fields to the corrected two-dot clock position and dependent audio timing/integration. The preceding version 2 fixture remains loadable. Format compatibility does not preserve the earlier engine's timing bug when that state continues in the repaired core.
+
+### Desktop and regression checks
+
+Windows MSVC Release with Qt 6.8.3 and Ubuntu 24.04 under WSLg with GCC and Qt 6.4.2 each pass all 21 CTest checks. Linux Debug passes all 14 core/tool checks with AddressSanitizer, UndefinedBehaviorSanitizer, and leak detection enabled. The expanded Qt workflow smoke also passes under those sanitizers.
+
+New frontend regressions cover command dispatch/history, symbol loading failures, register and memory edits, breakpoint resumption, Next/Finish cancellation, instruction Backstep, frame-advance history invalidation, preserved paused input including late key events, ROM/reset/load/rewind boundaries, and stale memory-editor cancellation. Escape, explicit rejection, and window close all cancel a running debugger command before hiding its window.
+
+Installed Windows and Linux/Xcb builds pass native audio-enabled workflows. All six tool panes were captured and visually reviewed on each platform. The Windows run uses deployed Qt dependencies without development paths; the Linux run uses the ready WSLg audio service. These checks qualify the tested installations and workflows, not every desktop or a standalone installer.
+
+### Clock-pacing gameplay samples
+
+Two fresh private cartridges ran for 60 seconds each in the installed Linux/Xcb build with normal audio, rewind capture, the same CGB boot input, and the existing per-game input traces. Both ended in active gameplay and exited successfully. The source manifest remained unchanged throughout. Tetris used monochrome compatibility; Mario Deluxe entered double speed.
+
+| Game | Whole-run guest-clock progress | Post-warmup guest-clock progress | Audio error / idle events | Post-warmup paint interval p95 / maximum | Peak resident memory |
+| --- | --- | --- | --- | --- | --- |
+| Tetris | 100.0225% | 99.9939% | 0 / 0 | 17.67 / 20.06 ms | 84.85 MiB |
+| Mario Deluxe | 100.0222% | 100.0129% | 0 / 0 | 17.41 / 19.99 ms | 96.43 MiB |
+
+The post-warmup window starts at an actual sample taken near five seconds. Frame-sized execution quanta can put a bounded measurement slightly above or below 100%. Paint intervals describe widget work, not physical display presentation. Zero reported backend events does not establish audible equivalence or qualify every game. Windows commercial speed measurements of this pacing change remain pending at this checkpoint; native Windows audio-enabled workflows pass.
+
+Complete process user-plus-system CPU times were 12.66 and 13.05 seconds over lifetimes of 60.22 and 60.83 seconds. Rewind capture consumed 5.96 and 6.17 seconds inside the telemetry windows. These figures describe this host and these runs; earlier samples under different host conditions are not a controlled optimization comparison.
+
+The README and fourteen guides cover the application and core, including debugger controls, memory scopes, state compatibility, build/install steps, testing, and remaining parity work. Local links and the C11/C++17 embedding examples are checked separately. Individual hardware revisions, finer fetch/bus timing, the second interrupt stack write targeting LCDC, contact settling, uncommon controllers/peripherals, device controls, advanced debugger commands, cheats, state interchange, advanced filters, and long-term gameplay/audio/save qualification remain open.
+
+## Snapshot and display performance follow-up
+
+The next change reduces host work while retaining every captured frame and all state validation. Large one-shot hashes use Windows system SHA-256 or optional OpenSSL 3 Crypto on Linux. Small hashes and incremental hashing retain the portable path; a failed native operation retries the complete portable calculation. Native output is staged before it can overwrite an input. The fixed version 2 size query no longer walks the schema repeatedly, while encoding/loading still require the exact final byte offset.
+
+### Component measurements
+
+A Linux GCC Release comparison used the same two captured commercial states, compiler flags, 1,000 iterations per variant, and Qt 6.4.2 compression at level 1. The baseline is commit `fe303db7b829f140574884b3ee0e70397797d7b7`. Candidate and baseline produced identical complete encoded states and compressed bytes.
+
+| Captured state | Cached capture before / after | Capture plus compression before / after | Combined reduction |
+| --- | --- | --- | --- |
+| Tetris | 1,010.2 / 283.6 microseconds | 1,577.8 / 840.4 microseconds | 46.7% |
+| Mario Deluxe | 1,015.7 / 233.9 microseconds | 1,663.6 / 833.4 microseconds | 49.9% |
+
+These are component costs, not gameplay FPS. Separate native digest probes measured about 119 versus 806 microseconds on Linux and 128 versus 817 microseconds on Windows for the sampled Tetris state. Provider initialization and full application lifetimes are different measurements.
+
+Display conversion now resolves the four host palette colors when preferences change and chooses the hardware color path once per frame. Thirty synthetic comparisons across DMG, CGB compatibility, CGB, five palettes, and blending on/off produced identical images. The prototype saved about 2-37 microseconds per converted frame, depending on mode. This small conversion saving does not establish a whole-game speedup.
+
+### Correctness checks
+
+Windows and Linux each pass all 22 desktop/core CTest checks. Linux passes all 15 core/tool checks with ASan/UBSan and leak detection, and the expanded Qt workflow smoke also passes under sanitizers. Forced portable hashing passes the snapshot and hash checks on Windows and sanitized Linux. Private fault-injection checks force native allocation/provider, initialization/create, update, and finalization failures on both backends, including a finalization that writes incorrect bytes before failing; digest/input alias tests still pass.
+
+All four Windows/Linux and accelerated/portable fixture files are 300,518 bytes with SHA-256 `6106c038f80d9ef4ca4417f31305dc05bb714d9252e6caff3eec0205ea4ec0eb`. Installed native audio-enabled workflows pass on Windows and Linux/Xcb. The selected equivalent-input corpora still produce 126 explicit passes and three bounded results in each build. Both acid2 and six commercial final images still match exactly. The three commercial checkpoint replays still reproduce their state, framebuffer, PCM/sample-count, and cycle observations.
+
+Timed native gameplay qualification for this optimization is recorded separately from these component results. The remaining hardware/frontend checklist stays open; these changes do not establish compatibility or correct speed for every cartridge.
+
+### Expanded native runtime samples
+
+The optimized installed build ran seven private titles on each platform, for fourteen successful processes. Tetris and Mario Deluxe ran for 60 seconds each; the other five ran for 30 seconds each. Normal audio and every-frame rewind capture remained enabled. Each platform used fresh cartridge copies, matching per-game traces and boot input, and an unchanged source manifest. All reports confirmed a real audio sink, successful screenshot/save flushing, and no execution or rewind failure.
+
+Automatic selection chose color hardware for these inputs. Monochrome titles used compatibility mode; these commercial samples do not separately qualify the physical DMG profile. Captures show active Tetris, Mario Deluxe, and Kirby gameplay; paused Super Mario Land gameplay; Crystal introduction text; Mario Tennis character selection; and a Tomb Raider load menu. The shorter runs qualify those scenes rather than complete gameplay.
+
+| Platform | Title | Seconds | Post-warmup guest-clock progress | Post-warmup paint interval p95 / maximum | Peak process memory |
+| --- | --- | --- | --- | --- | --- |
+| Windows | Tetris | 60 | 100.0190% | 17.65 / 33.94 ms | 73.80 MiB working set |
+| Windows | Mario Deluxe | 60 | 100.0120% | 17.67 / 40.23 ms | 84.34 MiB working set |
+| Windows | Kirby | 30 | 99.9732% | 17.62 / 27.66 ms | 62.77 MiB working set |
+| Windows | Super Mario Land | 30 | 100.0098% | 17.66 / 20.96 ms | 51.66 MiB working set |
+| Windows | Crystal | 30 | 99.9821% | 17.70 / 25.72 ms | 51.76 MiB working set |
+| Windows | Mario Tennis | 30 | 99.9755% | 17.69 / 22.23 ms | 67.66 MiB working set |
+| Windows | Tomb Raider | 30 | 99.9712% | 17.66 / 38.56 ms | 81.06 MiB working set |
+| WSLg/Xcb | Tetris | 60 | 99.9943% | 17.28 / 20.01 ms | 90.88 MiB resident |
+| WSLg/Xcb | Mario Deluxe | 60 | 100.0136% | 17.47 / 21.72 ms | 98.63 MiB resident |
+| WSLg/Xcb | Kirby | 30 | 99.9798% | 17.51 / 19.48 ms | 75.38 MiB resident |
+| WSLg/Xcb | Super Mario Land | 30 | 100.0023% | 17.25 / 18.13 ms | 68.02 MiB resident |
+| WSLg/Xcb | Crystal | 30 | 99.9853% | 17.37 / 19.30 ms | 65.95 MiB resident |
+| WSLg/Xcb | Mario Tennis | 30 | 99.9717% | 17.63 / 24.03 ms | 85.13 MiB resident |
+| WSLg/Xcb | Tomb Raider | 30 | 99.9759% | 17.51 / 18.89 ms | 93.42 MiB resident |
+
+All fourteen whole-run and post-warmup windows report zero backend audio idle/error events. Windows whole-run guest-clock progress ranges from 99.4289% to 99.7944%, including startup; Linux ranges from 100.0189% to 100.0566%. The post-warmup values above use actual sample times near five seconds, so frame-sized endpoint quantization remains visible. They do not imply overclocking or establish physical presentation FPS. Windows output uses 48 kHz stereo float and Linux uses 44.1 kHz stereo signed samples. Zero reported events is not an audible comparison.
+
+Complete Linux process user-plus-system times for the two 60-second titles were 9.82 and 10.33 seconds. Their rewind capture totals were 3.16 and 3.50 seconds, compared with 5.96 and 6.17 seconds in the preceding paced samples. Those separate process runs are observations; the component comparison above isolates the capture/compression change more directly. Windows sampled CPU counters remain private and excluded from utilization claims. Working set and resident memory are different host metrics and should not be treated as equivalent cross-platform measurements.
+
+The README and fourteen documentation files resolve all 67 local links, and the C11/C++17 embedding examples pass syntax checks. These results cover the stated scenes, hardware choices, builds, and durations. Full-game correctness, audible equivalence, long-term saving, uncommon cartridges, and complete hardware/frontend parity remain unqualified.

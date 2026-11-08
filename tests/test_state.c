@@ -219,6 +219,8 @@ static void test_resume(void) {
                 prepare_phase(a, phase);
                 size_t length;
                 uint8_t *state = encode(a, &length);
+                /* Every version 2 model and power phase has the same portable wire shape. */
+                assert(length == 300518);
                 uint8_t *rom_pointer = b->rom;
                 strcpy(b->save_path, "host-session-save.sav");
                 assert(cupid_gb_load_state(b, state, length) == CUPID_GB_STATE_OK);
@@ -398,7 +400,7 @@ static void print_fixture(const char *path) {
     /* Native format v2 compatibility fixture: changing its schema or generated
      * machine state requires an intentional update to this portable golden. */
     assert(length == 300518);
-    assert(strcmp(sha256, "bceb48a1fadaad1dcf305f6f7bdf27dcefbb291e853eb788b61bdc4bdcf6978b") == 0);
+    assert(strcmp(sha256, "6106c038f80d9ef4ca4417f31305dc05bb714d9252e6caff3eec0205ea4ec0eb") == 0);
     if (path) {
         FILE *file = fopen(path, "wb");
         assert(file && fwrite(bytes, 1, length, file) == length && fclose(file) == 0);

@@ -1,6 +1,16 @@
 #include "cupid/common/sha256.h"
 
+#include <limits.h>
+#include <stdbool.h>
 #include <string.h>
+
+#if defined(CUPID_SHA256_CNG)
+#include <windows.h>
+
+#include <bcrypt.h>
+#elif defined(CUPID_SHA256_OPENSSL)
+#include <openssl/evp.h>
+#endif
 
 /* SHA-256 compression, padding, and initial values follow FIPS 180-4 sections 4-6. */
 static uint32_t rotate_right(uint32_t value, unsigned bits) {
@@ -116,9 +126,85 @@ void cupid_sha256_final(CupidSha256 *context, uint8_t digest[32]) {
     memset(context, 0, sizeof(*context));
 }
 
-void cupid_sha256(const void *data, size_t length, uint8_t digest[32]) {
+static bool native_parts(const void *first, size_t first_length, const void *second,
+                         size_t second_length, uint8_t digest[32]) {
+#if defined(CUPID_SHA256_CNG)
+    BCRYPT_ALG_HANDLE algorithm = NULL;
+    BCRYPT_HASH_HANDLE hash = NULL;
+    bool ok = BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, NULL, 0) >= 0;
+    if (ok) {
+        ok = BCryptCreateHash(algorithm, &hash, NULL, 0, NULL, 0, 0) >= 0;
+    }
+    const void *parts[2] = {first, second};
+    const size_t lengths[2] = {first_length, second_length};
+    for (unsigned part = 0; ok && part < 2; ++part) {
+        const uint8_t *bytes = parts[part];
+        size_t remaining = lengths[part];
+        while (ok && remaining) {
+            ULONG amount = remaining > ULONG_MAX ? ULONG_MAX : (ULONG)remaining;
+            ok = BCryptHashData(hash, (PUCHAR)bytes, amount, 0) >= 0;
+            bytes += amount;
+            remaining -= amount;
+        }
+    }
+    if (ok) {
+        ok = BCryptFinishHash(hash, digest, 32, 0) >= 0;
+    }
+    if (hash) {
+        BCryptDestroyHash(hash);
+    }
+    if (algorithm) {
+        BCryptCloseAlgorithmProvider(algorithm, 0);
+    }
+    return ok;
+#elif defined(CUPID_SHA256_OPENSSL)
+    EVP_MD_CTX *context = EVP_MD_CTX_new();
+    if (!context) {
+        return false;
+    }
+    bool ok = EVP_DigestInit_ex(context, EVP_sha256(), NULL) == 1;
+    if (ok && first_length) {
+        ok = EVP_DigestUpdate(context, first, first_length) == 1;
+    }
+    if (ok && second_length) {
+        ok = EVP_DigestUpdate(context, second, second_length) == 1;
+    }
+    unsigned length = 0;
+    if (ok) {
+        ok = EVP_DigestFinal_ex(context, digest, &length) == 1 && length == 32;
+    }
+    EVP_MD_CTX_free(context);
+    return ok;
+#else
+    (void)first;
+    (void)first_length;
+    (void)second;
+    (void)second_length;
+    (void)digest;
+    return false;
+#endif
+}
+
+void cupid_sha256_parts(const void *first, size_t first_length, const void *second,
+                        size_t second_length, uint8_t digest[32]) {
+    /* Keep small hashes on the portable path: provider setup costs more than their work.
+     * Compare without summing lengths, which may overflow size_t. Native failures must
+     * leave both input spans intact so the complete portable calculation can retry. */
+    const size_t threshold = 64 * 1024;
+    uint8_t native_digest[32];
+    bool large = first_length >= threshold || second_length >= threshold ||
+                 first_length >= threshold - second_length;
+    if (large && native_parts(first, first_length, second, second_length, native_digest)) {
+        memcpy(digest, native_digest, sizeof(native_digest));
+        return;
+    }
     CupidSha256 context;
     cupid_sha256_init(&context);
-    cupid_sha256_update(&context, data, length);
+    cupid_sha256_update(&context, first, first_length);
+    cupid_sha256_update(&context, second, second_length);
     cupid_sha256_final(&context, digest);
+}
+
+void cupid_sha256(const void *data, size_t length, uint8_t digest[32]) {
+    cupid_sha256_parts(data, length, NULL, 0, digest);
 }

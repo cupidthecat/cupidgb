@@ -1,5 +1,7 @@
 #pragma once
 
+#include "guest_clock_pacer.h"
+
 #include <QElapsedTimer>
 #include <QImage>
 #include <QMainWindow>
@@ -12,6 +14,7 @@
 
 extern "C" {
 #include "cupid/core/emulator.h"
+#include "cupid/gb/debugger.h"
 #include "cupid/gb/state.h"
 }
 
@@ -25,6 +28,8 @@ class DisplayWidget;
 class AudioBuffer;
 class AudioConverter;
 class WaveRecorder;
+class DebuggerWindow;
+class InspectorsWindow;
 
 class MainWindow final : public QMainWindow {
   public:
@@ -59,6 +64,7 @@ class MainWindow final : public QMainWindow {
     bool flushBattery();
     bool closeRom();
     bool restart();
+    void resetPacing();
     void tick();
     bool runFrame();
     void present(bool completedFrame = false);
@@ -81,10 +87,37 @@ class MainWindow final : public QMainWindow {
     bool rewindFrame();
     void reportError(const QString &message);
     void refreshActions();
+    void ensureDebugger();
+    void openDebugger();
+    void openInspectors();
+    void refreshDebugger();
+    void debuggerCommand(const QString &command);
+    bool loadDebuggerSymbols(const QString &path);
+    void resetDebuggerTimeline(bool clearSession = false);
+    void pauseDebugger();
+    void debuggerSlice();
+    void stopDebugger(const QString &message);
+    bool rememberDebuggerStep();
+    bool debuggerBackstep();
+    bool debuggerWrite(uint16_t address, uint8_t value);
+    void drainDebuggerAudio();
+    bool debuggerSmokeTest(const QString &directory);
+    bool pacingSmokeTest(const QString &path);
 
     QSettings settings_;
     QString bootDirectoryOverride_;
     std::unique_ptr<CupidEmulator> emulator_;
+    std::unique_ptr<CupidGbDebugger> debugger_;
+    std::unique_ptr<CupidGbStateContext> debuggerContext_;
+    DebuggerWindow *debuggerWindow_ = nullptr;
+    InspectorsWindow *inspectorsWindow_ = nullptr;
+    QTimer debuggerTimer_;
+    std::deque<QByteArray> debuggerHistory_;
+    qsizetype debuggerHistoryBytes_ = 0;
+    uint64_t debuggerCommandSteps_ = 0;
+    uint64_t debuggerSessionId_ = 0;
+    QAction *debuggerAction_ = nullptr;
+    QAction *inspectorsAction_ = nullptr;
     DisplayWidget *display_ = nullptr;
     std::unique_ptr<AudioBuffer> audioBuffer_;
     std::unique_ptr<QAudioSink> audio_;
@@ -104,12 +137,14 @@ class MainWindow final : public QMainWindow {
     QTimer audioRefreshTimer_;
     QElapsedTimer clock_;
     qint64 nextFrame_ = 0;
+    GuestClockPacer clockPacer_;
     QString romPath_;
     QString savePath_;
     QByteArray romData_;
     QByteArray savedRam_;
     uint64_t observedBatteryGeneration_ = 0;
     bool batteryDirty_ = false;
+    std::array<QRgb, 4> displayPalette_{};
     QImage image_;
     QImage previousDisplayFrame_;
     QImage currentDisplayFrame_;
@@ -138,6 +173,7 @@ class MainWindow final : public QMainWindow {
     unsigned speedSteps_ = 16;
     uint8_t physicalJoypad_ = 0xff;
     bool paused_ = false;
+    bool debuggerInputPaused_ = false;
     bool turbo_ = false;
     bool rewind_ = false;
     bool stateOperation_ = false;
@@ -168,4 +204,6 @@ class MainWindow final : public QMainWindow {
     std::vector<std::pair<uint64_t, uint8_t>> inputTrace_;
     size_t inputTraceIndex_ = 0;
     uint64_t sessionId_ = 0;
+    uint64_t timelineId_ = 0;
+    uint64_t boundedRunId_ = 0;
 };

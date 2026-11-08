@@ -19,6 +19,9 @@ jobs:
           version: '6.8.3'
           modules: qtmultimedia
           cache: true
+      - name: Linux hashing dependency
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
       - name: Build
@@ -29,9 +32,17 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - name: Hashing dependency
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCUPIDGB_BUILD_QT=OFF -DCUPIDGB_ENABLE_SANITIZERS=ON
       - name: Build
         run: cmake --build build --parallel 4
       - name: Test
         run: ctest --test-dir build --output-on-failure
+      - name: Configure portable hashing
+        run: cmake -S . -B build-portable -DCMAKE_BUILD_TYPE=Debug -DCUPIDGB_BUILD_QT=OFF -DCUPIDGB_ENABLE_SANITIZERS=ON -DCUPIDGB_ENABLE_NATIVE_HASH=OFF
+      - name: Build portable snapshot checks
+        run: cmake --build build-portable --target cupidgb_state cupidgb_sha256 --parallel 4
+      - name: Test portable snapshot checks
+        run: ctest --test-dir build-portable --output-on-failure -R "cupidgb_(state|sha256)$"
