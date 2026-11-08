@@ -2,7 +2,7 @@
 
 CupidGB is a Game Boy and Game Boy Color emulator with a C11 hardware core and a Qt 6 desktop interface for Windows and Linux. Development is ongoing. Complete hardware accuracy, feature parity, and compatibility with every cartridge have not been established.
 
-The desktop supports cartridge open/recent files and drag/drop, configurable keyboard controls and shortcuts, pause/reset/frame advance, fullscreen and display settings, audio playback and WAVE recording, battery RAM/clock persistence, ten native state slots, and bounded rewind history. The hardware core remains separate from Qt.
+The desktop supports cartridge open/recent files and drag/drop, configurable keyboard controls and shortcuts, pause/reset/frame advance, fullscreen and display settings, audio playback and WAVE recording, battery RAM/clock persistence, ten native state slots, and bounded rewind history. CPU debugging and memory/graphics inspectors help examine a running cartridge. The hardware core remains separate from Qt.
 
 ## Start playing
 
@@ -21,13 +21,13 @@ cupidgb /path/to/cartridge.gbc
 | Open / reset / pause | Ctrl+O / Ctrl+R / Ctrl+P |
 | Save / load numbered slot | Ctrl+digit / Ctrl+Shift+digit |
 | Fullscreen / mute / screenshot | Ctrl+F / Ctrl+M / F12 |
-| Settings | Ctrl+, |
+| Settings / debugger | Ctrl+, / Ctrl+C |
 
 Emulation > Settings controls hardware, the optional boot-ROM directory, input, display, volume, and rewind limits. Model and boot choices apply on the next reset or open. Without a boot binary, startup uses an approximate post-boot profile. Boot binaries and game inputs are not distributed.
 
 Battery data uses `.sav` beside the cartridge. State slots use `.s0` through `.s9`; the zero key selects slot 10. States use CupidGB native version 2. Older version 1 states can export supported battery data through File > Recover Battery from Older State, but cannot resume execution in the changed core. Keep backups of saves you need to preserve.
 
-Controllers, debugger tools, connected devices, cheats, state interchange, individual hardware revisions, uncommon cartridge behavior, and advanced display/audio features remain incomplete. [The parity checklist](docs/parity.md) records the full scope.
+Controllers, advanced debugger commands/watchpoints, connected devices, cheats, state interchange, individual hardware revisions, uncommon cartridge behavior, and advanced display/audio features remain incomplete. [The parity checklist](docs/parity.md) records the full scope.
 
 ## Build
 
@@ -62,6 +62,7 @@ See [build and installation](docs/building.md) for Ninja, core-only builds, sani
 
 - [User guide](docs/user-guide.md): controls, settings, display/audio, boot, capture, and save workflows.
 - [Hardware support](docs/hardware.md): current models/controllers and their limits.
+- [Debugger and inspectors](docs/debugging.md): execution controls, breakpoints, symbols, memory editing, and hardware views.
 - [Battery saves](docs/battery-saves.md) and [save states/rewind](docs/save-states.md): locations, encodings, continuation, and recovery.
 - [Troubleshooting](docs/troubleshooting.md): loading, input, sound, saves, and Qt problems.
 - [Architecture](docs/architecture.md) and [core API](docs/core-api.md): subsystem boundaries and embedding contracts.

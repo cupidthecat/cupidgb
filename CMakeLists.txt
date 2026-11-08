@@ -20,7 +20,7 @@ add_library(cupidgb_core STATIC
     src/common/log.c src/common/sha256.c src/core/emulator.c src/core/system.c
     src/compat/native_v1.c src/gb/battery.c
     src/gb/gb.c src/gb/state.c src/gb/cpu.c src/gb/ppu.c src/gb/pixels.c src/gb/apu.c
-    src/gb/timer.c src/gb/cartridge.c src/gb/input.c src/gb/sgb.c src/gbc/cgb.c
+    src/gb/timer.c src/gb/cartridge.c src/gb/input.c src/gb/debugger.c src/gb/sgb.c src/gbc/cgb.c
 )
 target_include_directories(cupidgb_core PUBLIC include)
 if(NOT MSVC)
@@ -49,9 +49,13 @@ if(CUPIDGB_BUILD_QT)
         src/frontend/qt/main.cpp
         src/frontend/qt/main_window.cpp
         src/frontend/qt/main_window.h
+        src/frontend/qt/guest_clock_pacer.cpp
         src/frontend/qt/audio_converter.cpp
         src/frontend/qt/wave_recorder.cpp
         src/frontend/qt/display_pipeline.cpp
+        src/frontend/qt/debugger_window.cpp
+        src/frontend/qt/inspector_renderer.cpp
+        src/frontend/qt/inspectors_window.cpp
     )
     target_link_libraries(cupidgb PRIVATE cupidgb_core Qt6::Widgets Qt6::Multimedia)
     install(TARGETS cupidgb RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
@@ -67,7 +71,7 @@ if(CUPIDGB_BUILD_QT)
 endif()
 if(CUPIDGB_ENABLE_TESTS)
     enable_testing()
-    foreach(test_name IN ITEMS smoke gb serial ppu apu cpu_timing state battery native_v1_recovery sgb input cartridge)
+    foreach(test_name IN ITEMS smoke gb serial ppu apu cpu_timing state battery native_v1_recovery sgb input cartridge debugger)
         add_executable(cupidgb_${test_name} tests/test_${test_name}.c)
         target_link_libraries(cupidgb_${test_name} PRIVATE cupidgb_core)
         # Tests use assert for setup and checks, including in Release builds.
@@ -89,6 +93,40 @@ if(CUPIDGB_ENABLE_TESTS)
         set_tests_properties(cupidgb_runner PROPERTIES TIMEOUT 120)
     endif()
     if(TARGET cupidgb)
+        add_executable(cupidgb_guest_clock_pacer
+            tests/frontend/test_guest_clock_pacer.cpp src/frontend/qt/guest_clock_pacer.cpp)
+        target_include_directories(cupidgb_guest_clock_pacer PRIVATE src/frontend/qt)
+        if(MSVC)
+            target_compile_options(cupidgb_guest_clock_pacer PRIVATE /UNDEBUG)
+        else()
+            target_compile_options(cupidgb_guest_clock_pacer PRIVATE -UNDEBUG)
+        endif()
+        add_test(NAME cupidgb_guest_clock_pacer COMMAND cupidgb_guest_clock_pacer)
+        add_executable(cupidgb_debugger_window
+            tests/frontend/test_debugger_window.cpp src/frontend/qt/debugger_window.cpp)
+        target_include_directories(cupidgb_debugger_window PRIVATE src/frontend/qt)
+        target_link_libraries(cupidgb_debugger_window PRIVATE Qt6::Widgets)
+        if(MSVC)
+            target_compile_options(cupidgb_debugger_window PRIVATE /UNDEBUG)
+        else()
+            target_compile_options(cupidgb_debugger_window PRIVATE -UNDEBUG)
+        endif()
+        add_test(NAME cupidgb_debugger_window COMMAND cupidgb_debugger_window)
+        set_tests_properties(cupidgb_debugger_window PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+        add_executable(cupidgb_inspectors
+            tests/frontend/test_inspectors.cpp
+            src/frontend/qt/inspector_renderer.cpp src/frontend/qt/inspectors_window.cpp)
+        target_include_directories(cupidgb_inspectors PRIVATE src/frontend/qt)
+        target_link_libraries(cupidgb_inspectors PRIVATE cupidgb_core Qt6::Widgets)
+        if(MSVC)
+            target_compile_options(cupidgb_inspectors PRIVATE /UNDEBUG)
+        else()
+            target_compile_options(cupidgb_inspectors PRIVATE -UNDEBUG)
+        endif()
+        add_test(NAME cupidgb_inspectors COMMAND cupidgb_inspectors)
+        set_tests_properties(cupidgb_inspectors PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
         add_executable(cupidgb_display_pipeline
             tests/frontend/test_display_pipeline.cpp src/frontend/qt/display_pipeline.cpp)
         target_include_directories(cupidgb_display_pipeline PRIVATE src/frontend/qt)

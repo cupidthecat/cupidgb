@@ -7,6 +7,7 @@
 
 void cupid_gb_tick(CupidGb *gb, uint16_t cycles);
 uint8_t cupid_gb_tick_halt(CupidGb *gb);
+void cupid_gb_acknowledge_interrupt(CupidGb *gb, uint8_t mask);
 void cupid_gb_cpu_write(CupidGb *gb, uint16_t address, uint8_t value, uint16_t leading_mcycles);
 void cupid_gb_timer_apply_div_reset(CupidGb *gb);
 void cupid_gb_timer_apply_tac_write(CupidGb *gb, uint8_t value);

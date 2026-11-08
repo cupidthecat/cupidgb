@@ -373,6 +373,25 @@ static void test_stat_unused_bit_reads_high_after_power_on(void) {
     }
 }
 
+static void test_double_speed_hblank_mode_and_irq_edge(void) {
+    CupidGb gb;
+    prepare(&gb, true, 0);
+    gb.double_speed = true;
+    cupid_gb_write_u8(&gb, 0xff40, 0);
+    cupid_gb_write_u8(&gb, 0xff41, 8);
+    cupid_gb_write_u8(&gb, 0xff40, 0x91);
+    gb.interrupt_flags = 0;
+    while (gb.pixels.active || gb.pixels.x != CUPID_GB_SCREEN_WIDTH) {
+        assert(gb.pixels.dot < 300);
+        cupid_gb_tick_ppu_dots(&gb, 1);
+    }
+    assert((cupid_gb_read_u8(&gb, 0xff41) & 3) == CUPID_GB_PPU_MODE_TRANSFER);
+    assert(gb.stat_irq_delay == 1 && !(gb.interrupt_flags & 2));
+    cupid_gb_tick_ppu_dots(&gb, 1);
+    assert((cupid_gb_read_u8(&gb, 0xff41) & 3) == CUPID_GB_PPU_MODE_HBLANK);
+    assert(gb.stat_irq_delay == 0 && (gb.interrupt_flags & 2));
+}
+
 static void test_dot_chunks_preserve_pipeline_state(void) {
     static const uint16_t chunks[] = {1, 2, 3, 5, 7, 8, 17};
     CupidGb machine, dots;
@@ -413,6 +432,7 @@ int main(void) {
     test_lcd_startup_dot_boundaries();
     test_oam_read_lock_precedes_visible_scan_mode();
     test_stat_unused_bit_reads_high_after_power_on();
+    test_double_speed_hblank_mode_and_irq_edge();
     test_dot_chunks_preserve_pipeline_state();
     puts("PPU priority checks passed.");
     return 0;

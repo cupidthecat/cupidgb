@@ -117,7 +117,7 @@ static void test_base_clock_counts_with_lcd_off(void) {
     CupidGb gb;
     prepare(&gb, true, true);
     cupid_gb_tick(&gb, 1);
-    assert(gb.elapsed_cycles == 0);
+    assert(gb.elapsed_cycles == 2);
     cupid_gb_tick(&gb, 1);
     assert(gb.elapsed_cycles == 4);
     gb.double_speed = false;

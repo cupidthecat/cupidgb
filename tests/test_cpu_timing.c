@@ -187,6 +187,102 @@ static void test_interrupt_stack_bus_phase(void) {
     cupid_gb_cleanup(&gb);
 }
 
+static void test_interrupt_acknowledgment_dot_phase(void) {
+    static const CupidGbModel models[] = {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_MGB,
+                                          CUPID_GB_MODEL_CGB, CUPID_GB_MODEL_CGB};
+    CupidGb gb = {0};
+    for (unsigned model = 0; model < sizeof(models) / sizeof(models[0]); ++model) {
+        for (unsigned phase = 232; phase <= 250; ++phase) {
+            prepare(&gb, 0, 0);
+            gb.model = models[model];
+            gb.cgb_mode = gb.model == CUPID_GB_MODEL_CGB;
+            gb.double_speed = model == 3;
+            cupid_gb_write_u8(&gb, 0xff4b, 255);
+            cupid_gb_write_u8(&gb, 0xff40, 0x91);
+            cupid_gb_tick_ppu_dots(&gb, (uint16_t)phase);
+            cupid_gb_write_u8(&gb, 0xff41, 8);
+            gb.cpu.ime = true;
+            gb.interrupt_enable = gb.interrupt_flags = 2;
+            step_cycles(&gb, gb.double_speed ? 10 : 20);
+            assert(gb.cpu.pc == 0x48 && gb.div_counter == 5);
+            /* A second HBlank edge before the T18 acknowledge is cleared.
+             * A later edge remains pending for the next instruction. */
+            bool pending = model < 2    ? phase == 233 || phase == 234
+                           : model == 2 ? phase == 232 || phase == 233
+                                        : phase == 242;
+            assert(gb.interrupt_flags == (pending ? 2 : 0));
+            assert((cupid_gb_read_u8(&gb, 0xff41) & 3) == (gb.double_speed && phase < 242 ? 3 : 0));
+        }
+    }
+
+    for (unsigned color = 0; color < 2; ++color) {
+        for (unsigned reload = 4; reload <= 5; ++reload) {
+            prepare(&gb, 0, 0);
+            gb.model = color ? CUPID_GB_MODEL_CGB : CUPID_GB_MODEL_DMG_ABC;
+            gb.cgb_mode = color != 0;
+            gb.double_speed = color != 0;
+            gb.cpu.ime = true;
+            gb.interrupt_enable = gb.interrupt_flags = 4;
+            gb.tima_overflow_delay = (uint8_t)reload;
+            gb.io_registers[6] = 0x73;
+            step_cycles(&gb, gb.double_speed ? 10 : 20);
+            assert(gb.cpu.pc == 0x50 && gb.io_registers[5] == 0x73);
+            assert(gb.interrupt_flags == (reload == 5 ? 4 : 0));
+        }
+    }
+    cupid_gb_cleanup(&gb);
+}
+
+static void test_double_speed_clock_domains(void) {
+    CupidGb gb = {0};
+    prepare(&gb, 0, 0);
+    gb.model = CUPID_GB_MODEL_CGB;
+    gb.cgb_mode = true;
+    gb.apu = (CupidGbApu){0};
+    cupid_gb_write_u8(&gb, 0xff26, 0x80);
+    cupid_gb_write_u8(&gb, 0xff16, 0x80);
+    cupid_gb_write_u8(&gb, 0xff17, 0xf1);
+    cupid_gb_write_u8(&gb, 0xff18, 0xf8);
+    cupid_gb_write_u8(&gb, 0xff19, 0x87);
+    cupid_gb_write_u8(&gb, 0xff24, 0x77);
+    cupid_gb_write_u8(&gb, 0xff25, 0x22);
+    CupidGb doubled = gb;
+    doubled.double_speed = true;
+    for (unsigned cycle = 1; cycle <= 2200; ++cycle) {
+        cupid_gb_tick(&doubled, 1);
+        assert(doubled.elapsed_cycles == cycle * 4u - 2u);
+        cupid_gb_tick(&doubled, 1);
+        cupid_gb_tick(&gb, 1);
+        assert(gb.elapsed_cycles == cycle * 4u);
+        assert(doubled.elapsed_cycles == gb.elapsed_cycles);
+        assert(memcmp(&gb.apu, &doubled.apu, sizeof(gb.apu)) == 0);
+    }
+    assert(gb.apu.buf_write > 0 && gb.apu.fs_step != 0);
+    assert(gb.div_counter == 2200u % 64u);
+    assert(doubled.div_counter == 4400u % 64u);
+    for (unsigned phase = 0; phase < 2; ++phase) {
+        prepare(&gb, 0, 0);
+        gb.model = CUPID_GB_MODEL_CGB;
+        gb.cgb_mode = gb.double_speed = true;
+        gb.speed_phase = phase != 0;
+        for (unsigned i = 0; i < sizeof(gb.object_attribute_memory); ++i)
+            gb.work_ram[i] = (uint8_t)(i + 1u);
+        cupid_gb_run_dma_transfer(&gb, 0xc0);
+        cupid_gb_tick(&gb, 1);
+        assert(gb.elapsed_cycles == 2 && gb.dma_start_delay == 1 && !gb.dma_active);
+        cupid_gb_tick(&gb, 1);
+        assert(gb.elapsed_cycles == 4 && gb.dma_active && gb.dma_index == 0);
+        for (unsigned i = 0; i < sizeof(gb.object_attribute_memory); ++i) {
+            cupid_gb_tick(&gb, 1);
+            assert(gb.elapsed_cycles == 6u + i * 2u);
+            assert(gb.object_attribute_memory[i] == (uint8_t)(i + 1u));
+        }
+        assert(!gb.dma_active && gb.dma_index == 160);
+        assert(gb.elapsed_cycles == 324 && gb.speed_phase == (phase != 0));
+    }
+    cupid_gb_cleanup(&gb);
+}
+
 static void test_halt_pending_enable_and_fetch_phase(void) {
     CupidGb gb = {0};
     prepare(&gb, 0x76, 0);
@@ -617,6 +713,8 @@ int main(void) {
     test_sp_offset_operand_bus_phase();
     test_interrupt_stack_if_acknowledgment();
     test_interrupt_stack_bus_phase();
+    test_interrupt_acknowledgment_dot_phase();
+    test_double_speed_clock_domains();
     test_halt_pending_enable_and_fetch_phase();
     test_stop_clock_and_selected_input();
     test_stop_key_prevents_speed_switch();

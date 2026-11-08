@@ -142,17 +142,15 @@ void cupid_gb_tick(CupidGb *gb, uint16_t cycles) {
         clock_cpu_domain(gb);
         cupid_gb_tick_dma(gb);
 
-        /* CPU timers and OAM DMA run twice as fast in double speed. The LCD and
-         * sound generators stay in the base clock domain, including during HALT. */
+        /* Each CPU machine cycle occupies two LCD dots in double speed.
+         * Batching pairs of cycles would move reads and interrupts by two dots. */
         if (gb->double_speed) {
             gb->speed_phase = !gb->speed_phase;
-            if (gb->speed_phase) {
-                continue;
-            }
         }
-        gb->elapsed_cycles += 4u;
-        cupid_gb_tick_ppu(gb, 1u);
-        cupid_gb_tick_apu(gb, 4u);
+        const uint16_t dots = gb->double_speed ? 2u : 4u;
+        gb->elapsed_cycles += dots;
+        cupid_gb_tick_ppu_dots(gb, dots);
+        cupid_gb_tick_apu(gb, dots);
     }
 }
 
@@ -183,6 +181,25 @@ static void clock_lcd_dot(CupidGb *gb) {
     ++gb->elapsed_cycles;
     cupid_gb_tick_ppu_dots(gb, 1u);
     cupid_gb_tick_apu(gb, 1u);
+}
+
+void cupid_gb_acknowledge_interrupt(CupidGb *gb, uint8_t mask) {
+    if (!gb)
+        return;
+
+    /* Acknowledge halfway through the final entry cycle, at CPU T18.
+     * Earlier PPU edges are cleared; later edges must remain pending.
+     * The divider's third-T-cycle event follows the acknowledge edge. */
+    const unsigned half = gb->double_speed ? 1u : 2u;
+    for (unsigned dot = 0; dot < half; ++dot)
+        clock_lcd_dot(gb);
+    gb->interrupt_flags &= (uint8_t)~mask;
+    clock_cpu_domain(gb);
+    cupid_gb_tick_dma(gb);
+    if (gb->double_speed)
+        gb->speed_phase = !gb->speed_phase;
+    for (unsigned dot = 0; dot < half; ++dot)
+        clock_lcd_dot(gb);
 }
 
 void cupid_gb_cpu_write(CupidGb *gb, uint16_t address, uint8_t value, uint16_t leading_mcycles) {

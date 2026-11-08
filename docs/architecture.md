@@ -12,6 +12,8 @@ The `cupidgb_core` static library has no Qt dependency. Configure with `-DCUPIDG
 
 The core uses M-cycles for CPU/timer work. `CupidGb.elapsed_cycles` counts base-speed T-cycles, including execution with the LCD disabled. CGB double speed advances CPU and timer work twice as often as the PPU/audio domain. Frontend pacing must use guest time rather than assuming one completed image per instruction budget.
 
+Each machine cycle advances four LCD/APU dots at normal speed and two at double speed. The interrupt acknowledgment helper divides the final interrupt cycle at its CPU T18 edge, so requests arriving on either side of that edge remain distinguishable. Snapshot fields retain their explicit wire encoding; timing repairs can change generated field values without changing that encoding.
+
 `src/gb/pixels.c` maintains background and object queues across LCD dots. Fetched bytes remain stable across later CPU writes; palette lookup happens as a pixel leaves the queue. `src/gb/ppu.c` owns scanline state, bus access modes, STAT edges, and DMA scheduling. These boundaries allow mid-scanline changes without rendering already emitted pixels again. FIFO presence alone does not establish correct fetch or interrupt timing.
 
 The APU integrates channel output over each sample interval and keeps coupling-capacitor state separate from channel power. Host sample-rate selection changes sample production rather than the guest audio clock. Qt consumes signed stereo samples, applies host format conversion, and bounds its output queue. WAVE recording captures those guest samples before host mute and volume.
@@ -20,7 +22,13 @@ The APU integrates channel output over each sample interval and keeps coupling-c
 
 The public C API exposes hardware state through `CupidGb`. `src/gb/state.c` encodes an explicit, versioned native snapshot format rather than serializing that structure. The loader checks identity and integrity, decodes into a separate candidate, and commits only after complete validation. Host resources and input binaries stay with the current session. `src/common/sha256.c` supplies portable hashing for file identity and integrity.
 
+Qt advances playback deadlines from the base-speed T-cycles actually consumed, rather than charging every completed image as a full frame. `guest_clock_pacer.cpp` carries fractional nanoseconds at a stable playback rate and resets that host fraction after a timeline rebase or rate change. LCD transitions can produce partial images without changing the guest clock. Turbo, frame rewind, and long host-stall recovery remain separate host policies.
+
 Qt owns atomic state-file writes and compressed, bounded rewind history. Trusted rewind contexts cache immutable cartridge identity; disk operations retain complete hashing. Cartridge/model replacement and future ROM patching must invalidate the context. [The state format and workflows](save-states.md) describe the contract.
+
+`src/gb/debugger.c` owns host debugger state, bank-aware breakpoints, symbols, disassembly, and bounded execution commands. `cupid_gb_step_observed` reports the actual fetch/interrupt/idle event through a caller-owned output value; it shares the ordinary execution path and stores no trace resource in hardware state. Raw inspection is separate from CPU-visible memory access, which matters when a bus lock changes the opcode the CPU fetches.
+
+Qt's debugger window presents commands and views through callbacks. MainWindow owns instruction history, pause/audio coordination, and session invalidation. Inspector rendering is a separate module that reads hardware buffers without advancing them. Both tool windows use current-session access and discard pending edits or run targets when that session changes. [The debugger guide](debugging.md) describes their user-facing contracts and limits.
 
 ## Source map
 

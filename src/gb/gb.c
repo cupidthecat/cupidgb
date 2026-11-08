@@ -1146,11 +1146,16 @@ void cupid_gb_write_u8(CupidGb *gb, uint16_t address, uint8_t value) {
  * @return `true` if an instruction (or halt cycle) was executed,
  *         `false` if @p gb is NULL or no ROM is loaded.
  */
-bool cupid_gb_step(CupidGb *gb) {
+static bool cupid_gb_step_internal(CupidGb *gb, CupidGbStepTrace *trace) {
     uint8_t cycles;
     uint8_t opcode;
     bool ime_enable_pending;
 
+    if (trace) {
+        trace->event = CUPID_GB_STEP_IDLE;
+        trace->address = gb ? gb->cpu.pc : 0;
+        trace->opcode = 0;
+    }
     if (gb == 0 || !gb->loaded) {
         return false;
     }
@@ -1172,14 +1177,24 @@ bool cupid_gb_step(CupidGb *gb) {
         }
         gb->cpu.halted = false;
         if (cupid_gb_service_interrupt(gb)) {
+            if (trace)
+                trace->event = CUPID_GB_STEP_INTERRUPT;
             return true;
         }
     } else if (cupid_gb_service_interrupt(gb)) {
+        if (trace)
+            trace->event = CUPID_GB_STEP_INTERRUPT;
         return true;
     }
 
     ime_enable_pending = gb->cpu.ime_delay > 0u;
+    if (trace) {
+        trace->event = CUPID_GB_STEP_INSTRUCTION;
+        trace->address = gb->cpu.pc;
+    }
     opcode = cupid_gb_fetch_u8(gb);
+    if (trace)
+        trace->opcode = opcode;
 
     if (opcode == 0xf0u) {
         uint8_t n = cupid_gb_fetch_u8(gb);
@@ -1219,4 +1234,12 @@ bool cupid_gb_step(CupidGb *gb) {
     return cycles > 0u || opcode == 0x10u || opcode == 0x76u || opcode == 0xf0u ||
            opcode == 0xe0u || opcode == 0xc3u || opcode == 0xc2u || opcode == 0xcau ||
            opcode == 0xd2u || opcode == 0xdau;
+}
+
+bool cupid_gb_step(CupidGb *gb) {
+    return cupid_gb_step_internal(gb, NULL);
+}
+
+bool cupid_gb_step_observed(CupidGb *gb, CupidGbStepTrace *trace) {
+    return cupid_gb_step_internal(gb, trace);
 }

@@ -240,6 +240,11 @@ static void tick_ppu(CupidGb *gb, uint32_t dots, uint8_t *midpoint) {
         for (unsigned subcycle = 0; subcycle < 4 && dots; ++subcycle, --dots) {
             if (gb->stat_irq_delay) {
                 --gb->stat_irq_delay;
+                /* Double-speed hardware keeps mode 3 visible for the final
+                 * LCD dot; mode 0 and its interrupt input then change together. */
+                if (gb->double_speed && !p->active && p->x == CUPID_GB_SCREEN_WIDTH &&
+                    (gb->io_registers[CUPID_GB_IO_STAT] & 3u) == CUPID_GB_PPU_MODE_TRANSFER)
+                    cupid_gb_set_ppu_mode(gb, CUPID_GB_PPU_MODE_HBLANK);
                 cupid_gb_update_stat_irq(gb);
             }
             unsigned transfer =
@@ -263,8 +268,9 @@ static void tick_ppu(CupidGb *gb, uint32_t dots, uint8_t *midpoint) {
                     p->active = false;
                     if (p->window_used)
                         ++gb->window_line_counter;
-                    cupid_gb_set_ppu_mode(gb, CUPID_GB_PPU_MODE_HBLANK);
-                    /* The mode bits change one dot before the HBlank IRQ input. */
+                    if (!gb->double_speed)
+                        cupid_gb_set_ppu_mode(gb, CUPID_GB_PPU_MODE_HBLANK);
+                    /* At normal speed, mode bits precede the interrupt by one dot. */
                     gb->stat_irq_delay = 1;
                     cupid_gb_update_stat_irq(gb);
                     cupid_cgb_tick_hdma(gb);
