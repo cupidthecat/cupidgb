@@ -393,6 +393,14 @@ Fourteen startup continuation captures and two pending-HBlank captures preserve 
 
 The repeated external corpus produces 126 explicit passes and three bounded results in each build. All eight final images match with zero differing pixels. Three commercial CGB checkpoint replays again reproduce complete final state bytes and image/PCM/sample-count observations, including two double-speed cases. Native runtime measurements for this timing build are recorded separately from these component and continuation checks.
 
+### Expanded test coverage and remaining failures
+
+An inventory found 236 distinct compiled local GB/GBC test ROMs. An additional 80-case batch uses verified explicit-verdict protocols and corresponding DMG or CGB-E profiles. The comparison build produces 79 passes and one bounded result. CupidGB produces 15 passes, 62 failures, and three bounded results. The preserved `2dddf47` build produces exactly the same CupidGB observations, including verdicts, instruction/cycle counts, images, generated audio, serial counts, and memory result text. Host time is excluded from that equality check.
+
+The 62 explicit failures comprise 59 APU sample-timing cases and three DMA cases covering address masking, LCD-off behavior, and mode-0 transfers. Two hardware-I/O cases pass in the comparison build but remain bounded in both CupidGB builds. One divider-startup case remains bounded in all builds. These results identify substantial remaining accuracy work. They do not invalidate the narrower passing scopes above, and neither a bounded native run nor this interrupt repair resolves them.
+
+The full inventory also includes unsupported hardware revisions, boot-dependent cases, tests needing completion adapters, manual/experimental tests, and a clock procedure. They require their own model and validation setup; they are not counted as passing or dismissed as unnecessary. Private receipts retain every selected row, input hash, executable hash, outcome, and baseline comparison. The current parity goal remains open.
+
 ### Native playback after the timing repair
 
 The installed timing build ran nine title/profile cases on each platform with normal audio and rewind capture enabled. Tetris on DMG and Mario Deluxe ran for 60 seconds, Mario Tennis for 65 seconds, and the remaining cases for 30 seconds. Inputs, requested hardware, boot binaries, and traces match across platforms. Reports confirm a real audio sink, screenshot and battery-save flushing, and no execution or rewind-capture failure.
