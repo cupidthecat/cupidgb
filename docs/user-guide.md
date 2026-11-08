@@ -14,6 +14,10 @@ Use an extracted cartridge image. The application does not currently offer an ar
 
 Automatic hardware selection uses the cartridge header. It selects color hardware for color-capable cartridges, SGB for SGB-enhanced monochrome cartridges, and may select color hardware for licensed monochrome cartridges to provide their compatibility palette. Select a specific model in Emulation > Settings when reproducing model-dependent behavior. A color-only cartridge cannot open under a selected monochrome model.
 
+For a hardware choice that lasts only until the application exits, pass `--model auto|dmg|dmgabc|dmg0|mgb|cgb|sgb|sgb2`. Here `dmg` and `dmgabc` select the same grouped Game Boy profile. An omitted option uses the saved preference; explicit `auto` performs automatic selection for every cartridge even when a fixed preference is saved. A fixed override applies on reset, close/reopen, and opening another cartridge. Settings displays the session choice in a disabled hardware selector and does not overwrite the saved model when accepted.
+
+The SGB profile uses its NTSC base clock of 4,295,454 Hz. SGB2 and the other current profiles use 4,194,304 Hz. Normal-speed playback and rewind duration follow the selected clock. A higher SGB image rate is part of that profile; SGB PAL is not available.
+
 Emulation > Reset reloads the cartridge and battery data and applies the selected hardware and boot settings. It discards rewind history. File > Close ROM flushes battery data and closes the current session. Failed cartridge or battery loads preserve the current session; failed battery writes are reported and can prevent closing or replacement.
 
 ## Controls
@@ -113,6 +117,8 @@ Rewind changes emulated battery data and can schedule a later battery save. Make
 ## Settings and automation
 
 CupidGB uses Qt's per-user native settings backend with organization and application name `CupidGB`. Settings include window geometry, recent paths, hardware choice, boot directory, bindings, shortcuts, display choices, audio output/volume/mute, and rewind limits. Their physical storage location depends on platform and environment.
+
+`--model` and `--boot-directory` are session overrides for ordinary launches; neither requires a bounded measurement. `--smoke-test` rejects either override so its generated workflows remain controlled.
 
 `--smoke-test` and `--run-seconds` use isolated temporary settings. They do not overwrite normal desktop preferences. For command-line checks, input traces, and bounded runtime reports, see [testing and measurements](testing.md).
 

@@ -70,6 +70,27 @@ def main():
         passed = run(runner, rom, "--protocol", "serial", "--frames", "20",
                      "--image", str(image), "--audio", str(audio))
         assert passed["status"] == "pass"
+        assert passed["base_clock_hz"] == 4194304
+        assert passed["serial_bytes"] == len(b"Passed")
+        quiet = subprocess.run([str(runner), "--protocol", "serial", str(rom)],
+                               capture_output=True, check=True)
+        assert b"Passed" not in quiet.stdout.split(b"CUPIDGB_RESULT", 1)[0]
+        printed = subprocess.run([str(runner), "--protocol", "serial", "--serial-output",
+                                  str(rom)], capture_output=True, check=True)
+        assert b"Passed" in printed.stdout.split(b"CUPIDGB_RESULT", 1)[0]
+        printed_record = json.loads(next(line.removeprefix("CUPIDGB_RESULT ")
+                                        for line in printed.stdout.decode().splitlines()
+                                        if line.startswith("CUPIDGB_RESULT ")))
+        assert printed_record["serial_bytes"] == passed["serial_bytes"]
+        for field in ("status", "base_cycles", "audio_frames", "audio_crc32", "image_crc32"):
+            assert printed_record[field] == passed[field], field
+        if sys.platform.startswith("linux"):
+            # A buffered stream can accept every byte and fail only at the final flush.
+            with open("/dev/full", "wb") as failed_output:
+                failed = subprocess.run([str(runner), "--protocol", "serial", "--serial-output",
+                                         str(rom)], stdout=failed_output, stderr=subprocess.PIPE,
+                                        timeout=15)
+            assert failed.returncode == 2, failed.stderr
         assert passed["base_cycles"] > 0
         assert passed["audio_frames"] > 0
         assert image.read_bytes().startswith(b"P6\n160 144\n255\n")
@@ -92,6 +113,11 @@ def main():
         assert bounded["status"] == "bounded"
         assert bounded["vblank_frames"] == 0
         assert bounded["base_cycles"] >= 140448
+        for model, clock in (("sgb", 4295454), ("sgb2", 4194304)):
+            model_result = run(runner, rom, "--frames", "2", "--model", model)
+            assert model_result["base_clock_hz"] == clock
+            assert model_result["base_cycles"] == bounded["base_cycles"]
+            assert model_result["audio_frames"] == model_result["base_cycles"] * 44100 // clock
         assert run(runner, rom, "--frames", "2", "--protocol", "serial",
                    expected_code=3)["status"] == "bounded"
         assert run(runner, rom, "--max-steps", "1")["status"] == "step_limit"

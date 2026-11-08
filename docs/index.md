@@ -4,7 +4,7 @@ CupidGB emulates Game Boy and Game Boy Color hardware with a C core and a Qt des
 
 | Guide | Contents |
 | --- | --- |
-| [Build and installation](building.md) | Dependencies, Windows and Linux builds, tests, deployment, core-only builds, and sanitizers |
+| [Build and installation](building.md) | Dependencies, Windows and Linux builds, Release IPO, deployment, core-only builds, and sanitizers |
 | [User guide](user-guide.md) | Opening cartridges, controls, settings, display, audio, capture, and save workflows |
 | [Hardware support](hardware.md) | Models, startup, cartridge controllers, hardware subsystems, and known limits |
 | [Debugger and inspectors](debugging.md) | CPU execution controls, breakpoints, symbols, memory editing, and graphics views |
@@ -12,7 +12,7 @@ CupidGB emulates Game Boy and Game Boy Color hardware with a C core and a Qt des
 | [Save states and rewind](save-states.md) | Numbered slots, validation, rewind limits, and the native state format |
 | [Troubleshooting](troubleshooting.md) | Loading, input, display, sound, saving, and build problems |
 | [Architecture](architecture.md) | Subsystem ownership, clock domains, and host integration |
-| [Core API](core-api.md) | Lifecycle, stepping, input/output, snapshots, and embedding contracts |
+| [Core API](core-api.md) | Lifecycle, model clocks, stepping, serial observation, snapshots, and embedding contracts |
 | [Testing and measurements](testing.md) | Regression checks, external ROM suites, comparable runtime evidence, and reports |
 | [Contributing](contributing.md) | Source changes, formatting, documentation, private inputs, and review requirements |
 | [Parity checklist](parity.md) | Implemented behavior and remaining hardware and desktop requirements |

@@ -197,6 +197,10 @@ typedef struct CupidGbPixels {
     bool initialized, active, window_armed, window_active, window_used, lyc_irq;
 } CupidGbPixels;
 
+struct CupidGb;
+typedef void (*CupidGbSerialOutputCallback)(const struct CupidGb *gb, uint8_t transmitted,
+                                            void *user_data);
+
 typedef struct CupidGb {
     CupidGbCpu cpu;
     CupidGbModel model;
@@ -287,6 +291,9 @@ typedef struct CupidGb {
     uint8_t boot_rom[CUPID_GB_MAX_BOOT_ROM_SIZE];
     size_t boot_rom_size;  /* 0x0100 for DMG, 0x0900 for CGB */
     bool boot_rom_enabled; /* true while boot ROM is mapped */
+    /* Host observation only; never encoded in hardware snapshots. */
+    CupidGbSerialOutputCallback serial_output_callback;
+    void *serial_output_user_data;
 } CupidGb;
 
 /* Optional host observation for one hardware step. This output is not stored
@@ -306,7 +313,20 @@ typedef struct CupidGbStepTrace {
 
 void cupid_gb_init(CupidGb *gb);
 void cupid_gb_cleanup(CupidGb *gb);
+/* Optional observer of completed internal-clock bytes. Called synchronously after
+ * SB shifts, SC clears its start bit, and the serial interrupt becomes pending.
+ * The observer must not mutate or reenter the emulator. Registration survives
+ * init, ROM loading, boot resets, and state loading; cleanup clears it. NULL
+ * disables observation. The byte is SB latched when SC starts the transfer;
+ * this observation does not provide a bit-level cable endpoint. The core never
+ * writes serial bytes to a host stream. */
+void cupid_gb_set_serial_output_callback(CupidGb *gb, CupidGbSerialOutputCallback callback,
+                                         void *user_data);
 void cupid_gb_set_model(CupidGb *gb, CupidGbModel model);
+/* Physical base-speed T-cycles per second, independent of CGB double speed.
+ * SGB uses its NTSC host-derived clock; other current models use 4194304 Hz.
+ * A NULL instance returns the ordinary handheld clock. */
+uint32_t cupid_gb_base_clock_hz(const CupidGb *gb);
 const char *cupid_gb_model_name(CupidGbModel model);
 bool cupid_gb_parse_header(const uint8_t *rom_data, size_t rom_size,
                            CupidGbCartridgeHeader *header);

@@ -8,7 +8,7 @@ Use an extracted cartridge image. ZIP/archive loading is not an implemented work
 
 Check that the file is readable and its size/header are supported. The frontend accepts files from 336 bytes through 8 MiB. Physical ROM banks follow the actual loaded length rather than the header's ROM-size field, with missing tail bytes reading `0xff`. A checksum warning does not by itself establish a corrupted or compatible image.
 
-If the game requires color hardware, select Automatic or Game Boy Color in Settings and retry. Hardware changes apply on reset/open. Automatic selection can choose color hardware for some monochrome cartridges; use an explicit model for comparisons.
+If the game requires color hardware, select Automatic or Game Boy Color in Settings and retry. A `--model` launch override fixes the hardware selector for that session; restart without it to use saved settings, or use `--model auto` for automatic selection. Hardware changes apply on reset/open. Automatic selection can choose color hardware for some monochrome cartridges; use an explicit model for comparisons.
 
 A configured boot directory makes the model's boot file mandatory. Clear the field to use approximate post-boot startup, or supply the correct filename and byte length listed in the [boot table](user-guide.md#boot-behavior). A correct size alone does not validate binary provenance or behavior.
 
@@ -36,7 +36,7 @@ Run the native frontend with `--smoke-test --audio-check` from a working desktop
 
 On Linux, confirm that the desktop audio service is reachable from the same session that launches CupidGB. Under WSLg, an installed Qt package alone does not establish that the forwarded audio service is ready. Keep a report from the actual audio-enabled run.
 
-For stutter, collect a [bounded frontend report](testing.md#desktop-runtime-reports) with normal audio and default speed. Include guest-clock progress, queue information, backend idle/error counts, and whether the interval included startup. Do not classify widget paint counts as presentation FPS. Host scheduling and hardware audio accuracy require separate investigation.
+For stutter, collect a [bounded frontend report](testing.md#desktop-runtime-reports) with normal audio and default speed. Record `requested_model`, `hardware_model`, and `base_clock_hz`: SGB NTSC uses 4,295,454 Hz while the other current profiles use 4,194,304 Hz. Include guest-clock progress, queue information, backend idle/error counts, and whether the interval included startup. Do not classify widget paint counts as presentation FPS. Host scheduling and hardware audio accuracy require separate investigation.
 
 ## Saves are not written or a session will not close
 
@@ -67,6 +67,14 @@ Point `CMAKE_PREFIX_PATH` at the matching Qt installation when configuring. Matc
 On Windows, check launch with Qt's `bin` directory in the process environment during development. For deployment, use the matching `windeployqt` and test the staged folder without development paths. On Linux, install the matching runtime/platform dependencies and use a graphical session. `QT_DEBUG_PLUGINS=1` can reveal plugin loading failures; keep that diagnostic separate from normal test output.
 
 An offscreen smoke check is useful for isolating logic from a native platform problem, but it does not qualify the native window or audio backend. Follow [the build guide](building.md) before interpreting a launch failure as a core defect.
+
+## Serial diagnostic text is missing
+
+The core does not send serial bytes to stdout. The ROM runner still counts bytes and detects an explicitly selected serial success protocol without printing them. Add `--serial-output` when you need raw text. Locate the `CUPIDGB_RESULT` prefix when parsing output, because diagnostic bytes can precede the JSON record. This observer is not an external serial cable.
+
+## Optimized and ordinary builds differ
+
+Use `-DCUPIDGB_ENABLE_IPO=OFF` in a separate build directory to compare ordinary compilation with Release IPO. Record compiler/linker versions, effective flags, and the failing input. GCC C++ IPO builds require the project's `-fno-strict-aliasing` setting for shared C records; do not remove it from a manual build. Sanitizer builds disable IPO and therefore do not reproduce the same optimization path. Preserve a failure even when disabling optimization avoids it.
 
 ## Report a reproducible problem
 

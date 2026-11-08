@@ -10,10 +10,12 @@ CupidGB implements Game Boy and Game Boy Color execution in the same C core, wit
 | Game Boy (DMG0) | `CUPID_GB_MODEL_DMG0` | Early monochrome startup profile |
 | Game Boy Pocket / Light | `CUPID_GB_MODEL_MGB` | Pocket-family profile |
 | Game Boy Color | `CUPID_GB_MODEL_CGB` | One color profile with monochrome compatibility mode |
-| Super Game Boy | `CUPID_GB_MODEL_SGB` | SGB command, palette, attribute, mask, and border behavior |
+| Super Game Boy | `CUPID_GB_MODEL_SGB` | SGB NTSC clock, command, palette, attribute, mask, and border behavior |
 | Super Game Boy 2 | `CUPID_GB_MODEL_SGB2` | Separate SGB2 startup profile |
 
 These are the six current profile tags. Individual CGB hardware revisions, separate SGB regional/host variants, and every model-specific startup or bus difference have not been qualified. Keep the physical hardware model separate from the cartridge's color capability: a header must not turn selected monochrome hardware into color hardware.
+
+The SGB profile uses a 4,295,454 Hz base clock. The other five profiles, including SGB2, use 4,194,304 Hz. A regular LCD frame still spans 70,224 base T-cycles; converting those cycles to wall time must use the selected clock. CPU, display, audio sample scheduling, and host pacing share that model choice. SGB PAL and separate SGB host-integration profiles remain unimplemented.
 
 Automatic desktop selection is a convenience policy, not a new hardware profile. Reproducible comparisons should select the model explicitly and record whether startup used a boot binary or the approximate post-boot profile.
 
@@ -48,7 +50,7 @@ The CPU executes SM83 instructions with instruction-specific bus phases, interru
 
 The memory map includes cartridge windows, VRAM, banked WRAM, echo RAM, OAM, I/O, high RAM, and interrupt enable. Device access restrictions depend on LCD and DMA state. Open-bus decay, fine bus conflicts, interrupt races, and revision differences remain incomplete. Passing ordinary instruction tests cannot establish those behaviors.
 
-The timer derives edges from divider phase and models delayed TIMA reloads and register-write windows. Serial supports an internal slow clock and the color fast clock with disconnected incoming data. External serial transport, infrared, and attached devices remain pending.
+The timer derives edges from divider phase and models delayed TIMA reloads and register-write windows. Serial supports an internal slow clock and the color fast clock with disconnected incoming data. Completed transfers can notify a host callback without changing hardware execution or writing to a host stream. External serial transport, infrared, and attached devices remain pending.
 
 OAM DMA and CGB general/HBlank DMA are implemented. Bus contention, restarts, collision timing, and double-speed combinations need broader acceptance coverage.
 
@@ -56,7 +58,7 @@ OAM DMA and CGB general/HBlank DMA are implemented. Bus contention, restarts, co
 
 The pixel pipeline keeps background and object fetch queues across LCD dots. It handles scroll, window activation, object selection and priority, color attributes, palettes, and a latched color object-priority choice. The PPU owns scanline progression, access modes, LCD startup, STAT signaling, and DMA coordination.
 
-SGB behavior includes packet reception, palette/attribute commands, screen masking, and a border framebuffer. A border image does not establish complete SGB host emulation, four-player input, audio extensions, or regional timing.
+SGB behavior includes packet reception, palette/attribute commands, screen masking, and a border framebuffer. A border image and the NTSC clock do not establish complete SGB host emulation, four-player input, audio extensions, or PAL timing.
 
 Complete fetcher timing, mid-scanline conflicts, broad pixel comparisons, model-specific startup, and hardware color response remain active accuracy work. Host scaling, optional blending, and palette presentation do not change those requirements.
 
