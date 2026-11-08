@@ -574,6 +574,15 @@ void MainWindow::applyDisplaySettings() {
     const int scale = std::clamp(settings_.value("video/defaultScale", 2).toInt(), 1, 8);
     for (size_t i = 0; i < windowSizeActions_.size(); ++i)
         windowSizeActions_[i]->setChecked(int(i) + 1 == scale);
+    auto custom = monochromeColors(MonochromePalette::Lime, {});
+    for (size_t i = 0; i < custom.size(); ++i) {
+        const QColor value(
+            settings_.value(QString("video/customPalette/%1").arg(i), QColor(custom[i]).name())
+                .toString());
+        if (value.isValid())
+            custom[i] = value.rgb();
+    }
+    displayPalette_ = monochromeColors(MonochromePalette(palette), custom);
     blendingAction_->setChecked(settings_.value("video/blending", false).toBool());
     borderAction_->setChecked(settings_.value("video/sgbBorder", true).toBool());
     previousDisplayFrame_ = {};
@@ -1536,33 +1545,26 @@ void MainWindow::present(bool completedFrame) {
         image_ = QImage(CUPID_SGB_SCREEN_WIDTH, CUPID_SGB_SCREEN_HEIGHT, QImage::Format_ARGB32);
         cupid_gb_sgb_render_argb(&gb, reinterpret_cast<uint32_t *>(image_.bits()),
                                  size_t(image_.width() * image_.height()));
-        if (!settings_.value("video/sgbBorder", true).toBool())
+        if (!borderAction_->isChecked())
             image_ = image_.copy(CUPID_SGB_VIEWPORT_X, CUPID_SGB_VIEWPORT_Y, 160, 144);
     } else {
         image_ = QImage(160, 144, QImage::Format_RGB32);
-        auto custom = monochromeColors(MonochromePalette::Lime, {});
-        for (size_t i = 0; i < custom.size(); ++i) {
-            const QColor value(
-                settings_.value(QString("video/customPalette/%1").arg(i), QColor(custom[i]).name())
-                    .toString());
-            if (value.isValid())
-                custom[i] = value.rgb();
-        }
-        const auto palette = monochromeColors(
-            MonochromePalette(std::clamp(settings_.value("video/palette", 0).toInt(), 0, 4)),
-            custom);
         auto *pixels = reinterpret_cast<QRgb *>(image_.bits());
-        for (size_t i = 0; i < 160 * 144; ++i)
-            pixels[i] = (gb.cgb_mode || cupid_cgb_compat_active(&gb))
-                            ? rgb555(gb.frame_buffer_color[i])
-                            : palette[gb.frame_buffer[i] & 3];
+        // Hardware mode stays fixed while this framebuffer is converted.
+        if (gb.cgb_mode || cupid_cgb_compat_active(&gb)) {
+            for (size_t i = 0; i < 160 * 144; ++i)
+                pixels[i] = rgb555(gb.frame_buffer_color[i]);
+        } else {
+            for (size_t i = 0; i < 160 * 144; ++i)
+                pixels[i] = displayPalette_[gb.frame_buffer[i] & 3];
+        }
     }
     // Repaints and settings dialogs must not turn one guest frame into repeated
     // blend inputs. Only completed LCD frames advance temporal presentation.
     if (completedFrame)
         previousDisplayFrame_ = currentDisplayFrame_;
     currentDisplayFrame_ = image_;
-    display_->image = settings_.value("video/blending", false).toBool()
+    display_->image = blendingAction_->isChecked()
                           ? blendDisplayFrames(currentDisplayFrame_, previousDisplayFrame_)
                           : currentDisplayFrame_;
     display_->setMinimumSize(image_.size());

@@ -1,6 +1,6 @@
 # Core API
 
-`cupidgb_core` is a C11 static library with no Qt dependency. Public declarations live under `include/cupid`. The core owns emulated hardware; callers own host files, windows, device queues, pacing, and lifecycle coordination.
+`cupidgb_core` is a C11 static library with no Qt dependency. Public declarations live under `include/cupid`. Link through the CMake target to retain its platform dependencies: Windows system cryptography or optional OpenSSL 3 Crypto on Linux when native hashing is enabled. No external Crypto library is required for a portable-hash build. The core owns emulated hardware; callers own host files, windows, device queues, pacing, and lifecycle coordination.
 
 ## Instance lifetime
 

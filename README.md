@@ -33,6 +33,8 @@ Controllers, advanced debugger commands/watchpoints, connected devices, cheats, 
 
 Requirements: CMake 3.21 or newer, C11/C++17 compilers, Qt 6.4 or newer with Widgets and Multimedia, and Python 3.9 or newer for tests.
 
+On Linux, optional OpenSSL 3 development files enable faster large state hashes. Windows uses its system hashing API. Both retain portable hashing as a fallback.
+
 On Debian or Ubuntu:
 
 ```sh

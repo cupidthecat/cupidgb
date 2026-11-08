@@ -12,7 +12,7 @@ CupidGB uses CMake for the hardware core, command-line ROM runner, Qt desktop ap
 | Python | 3.9 or newer when tests are enabled |
 | Build tool | Ninja, Make, or the matching Visual Studio generator |
 
-CMake enables both C and C++ languages even in a core-only configuration. Qt is required only when `CUPIDGB_BUILD_QT` is enabled. ROMs and boot ROMs are local inputs and are not distributed with the application.
+CMake enables both C and C++ languages even in a core-only configuration. Qt is required only when `CUPIDGB_BUILD_QT` is enabled. Windows uses its system hashing API for large one-shot hashes. On Linux, CMake enables the optional OpenSSL 3 Crypto backend when its development files are found; otherwise the portable SHA-256 implementation remains available. ROMs and boot ROMs are local inputs and are not distributed with the application.
 
 ## Linux
 
@@ -30,6 +30,8 @@ cmake --build build --parallel 4
 ctest --test-dir build --output-on-failure
 ./build/cupidgb /path/to/cartridge.gb
 ```
+
+Install `libssl-dev` as well to enable the optional native hashing path on Debian/Ubuntu. A build without it remains supported and uses the same hash format.
 
 If Qt is outside the system search paths, add `-DCMAKE_PREFIX_PATH=/path/to/Qt/6.x/gcc_64` when configuring. Use the actual installation path.
 
@@ -91,6 +93,7 @@ This still builds `cupidgb_core` and `cupidgb_rom_runner`. It does not test the 
 | --- | --- | --- |
 | `CUPIDGB_BUILD_QT` | `ON` | Build the desktop executable and frontend checks |
 | `CUPIDGB_ENABLE_TESTS` | `ON` | Build and register regression checks; requires Python |
+| `CUPIDGB_ENABLE_NATIVE_HASH` | `ON` | Use Windows system hashing or detected OpenSSL 3 Crypto on Linux for large hashes; `OFF` selects the portable path |
 | `CUPIDGB_ENABLE_WARNINGS` | `ON` | Enable the core's compiler warning flags |
 | `CUPIDGB_ENABLE_SANITIZERS` | `OFF` | Enable AddressSanitizer and UndefinedBehaviorSanitizer with GCC or compatible Clang command-line options |
 

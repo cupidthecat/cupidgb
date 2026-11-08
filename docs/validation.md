@@ -204,3 +204,28 @@ The post-warmup window starts at an actual sample taken near five seconds. Frame
 Complete process user-plus-system CPU times were 12.66 and 13.05 seconds over lifetimes of 60.22 and 60.83 seconds. Rewind capture consumed 5.96 and 6.17 seconds inside the telemetry windows. These figures describe this host and these runs; earlier samples under different host conditions are not a controlled optimization comparison.
 
 The README and fourteen guides cover the application and core, including debugger controls, memory scopes, state compatibility, build/install steps, testing, and remaining parity work. Local links and the C11/C++17 embedding examples are checked separately. Individual hardware revisions, finer fetch/bus timing, the second interrupt stack write targeting LCDC, contact settling, uncommon controllers/peripherals, device controls, advanced debugger commands, cheats, state interchange, advanced filters, and long-term gameplay/audio/save qualification remain open.
+
+## Snapshot and display performance follow-up
+
+The next change reduces host work while retaining every captured frame and all state validation. Large one-shot hashes use Windows system SHA-256 or optional OpenSSL 3 Crypto on Linux. Small hashes and incremental hashing retain the portable path; a failed native operation retries the complete portable calculation. Native output is staged before it can overwrite an input. The fixed version 2 size query no longer walks the schema repeatedly, while encoding/loading still require the exact final byte offset.
+
+### Component measurements
+
+A Linux GCC Release comparison used the same two captured commercial states, compiler flags, 1,000 iterations per variant, and Qt 6.4.2 compression at level 1. The baseline is commit `fe303db7b829f140574884b3ee0e70397797d7b7`. Candidate and baseline produced identical complete encoded states and compressed bytes.
+
+| Captured state | Cached capture before / after | Capture plus compression before / after | Combined reduction |
+| --- | --- | --- | --- |
+| Tetris | 1,010.2 / 283.6 microseconds | 1,577.8 / 840.4 microseconds | 46.7% |
+| Mario Deluxe | 1,015.7 / 233.9 microseconds | 1,663.6 / 833.4 microseconds | 49.9% |
+
+These are component costs, not gameplay FPS. Separate native digest probes measured about 119 versus 806 microseconds on Linux and 128 versus 817 microseconds on Windows for the sampled Tetris state. Provider initialization and full application lifetimes are different measurements.
+
+Display conversion now resolves the four host palette colors when preferences change and chooses the hardware color path once per frame. Thirty synthetic comparisons across DMG, CGB compatibility, CGB, five palettes, and blending on/off produced identical images. The prototype saved about 2-37 microseconds per converted frame, depending on mode. This small conversion saving does not establish a whole-game speedup.
+
+### Correctness checks
+
+Windows and Linux each pass all 22 desktop/core CTest checks. Linux passes all 15 core/tool checks with ASan/UBSan and leak detection, and the expanded Qt workflow smoke also passes under sanitizers. Forced portable hashing passes the snapshot and hash checks on Windows and sanitized Linux. Private fault-injection checks force native allocation/provider, initialization/create, update, and finalization failures on both backends, including a finalization that writes incorrect bytes before failing; digest/input alias tests still pass.
+
+All four Windows/Linux and accelerated/portable fixture files are 300,518 bytes with SHA-256 `6106c038f80d9ef4ca4417f31305dc05bb714d9252e6caff3eec0205ea4ec0eb`. Installed native audio-enabled workflows pass on Windows and Linux/Xcb. The selected equivalent-input corpora still produce 126 explicit passes and three bounded results in each build. Both acid2 and six commercial final images still match exactly. The three commercial checkpoint replays still reproduce their state, framebuffer, PCM/sample-count, and cycle observations.
+
+Timed native gameplay qualification for this optimization is recorded separately from these component results. The remaining hardware/frontend checklist stays open; these changes do not establish compatibility or correct speed for every cartridge.

@@ -144,6 +144,7 @@ class MainWindow final : public QMainWindow {
     QByteArray savedRam_;
     uint64_t observedBatteryGeneration_ = 0;
     bool batteryDirty_ = false;
+    std::array<QRgb, 4> displayPalette_{};
     QImage image_;
     QImage previousDisplayFrame_;
     QImage currentDisplayFrame_;

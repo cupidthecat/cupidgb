@@ -16,6 +16,8 @@ ctest --test-dir build --output-on-failure
 
 For a Visual Studio build, use `ctest --test-dir build -C Release --output-on-failure`. Run Windows and Linux configurations separately. Core-only checks do not cover the desktop frontend.
 
+Hash regressions cover known vectors, span partitions, large inputs, unaligned bytes, and digest/input aliasing. Test the portable path separately with `-DCUPIDGB_ENABLE_NATIVE_HASH=OFF`; compare its native-state fixture bytes with the enabled build.
+
 Core tests exercise lifecycle, CPU/memory behavior, serial, timer/bus phases, graphics, audio, cartridge persistence, native snapshots, older-state battery recovery, and SGB behavior. Frontend checks cover sample conversion, WAVE file output, display processing, and integrated desktop workflows as those targets are present in the current build. Query the exact list with `ctest --test-dir build -N`; avoid carrying test counts from an older revision into a new result.
 
 Release tests explicitly keep their assertions enabled. Run the GCC/Clang sanitizer configuration as a separate check, with leak detection where available. Preserve the failing command and complete diagnostic when a sanitizer reports a defect.
