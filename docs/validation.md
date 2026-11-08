@@ -229,3 +229,32 @@ Windows and Linux each pass all 22 desktop/core CTest checks. Linux passes all 1
 All four Windows/Linux and accelerated/portable fixture files are 300,518 bytes with SHA-256 `6106c038f80d9ef4ca4417f31305dc05bb714d9252e6caff3eec0205ea4ec0eb`. Installed native audio-enabled workflows pass on Windows and Linux/Xcb. The selected equivalent-input corpora still produce 126 explicit passes and three bounded results in each build. Both acid2 and six commercial final images still match exactly. The three commercial checkpoint replays still reproduce their state, framebuffer, PCM/sample-count, and cycle observations.
 
 Timed native gameplay qualification for this optimization is recorded separately from these component results. The remaining hardware/frontend checklist stays open; these changes do not establish compatibility or correct speed for every cartridge.
+
+### Expanded native runtime samples
+
+The optimized installed build ran seven private titles on each platform, for fourteen successful processes. Tetris and Mario Deluxe ran for 60 seconds each; the other five ran for 30 seconds each. Normal audio and every-frame rewind capture remained enabled. Each platform used fresh cartridge copies, matching per-game traces and boot input, and an unchanged source manifest. All reports confirmed a real audio sink, successful screenshot/save flushing, and no execution or rewind failure.
+
+Automatic selection chose color hardware for these inputs. Monochrome titles used compatibility mode; these commercial samples do not separately qualify the physical DMG profile. Captures show active Tetris, Mario Deluxe, and Kirby gameplay; paused Super Mario Land gameplay; Crystal introduction text; Mario Tennis character selection; and a Tomb Raider load menu. The shorter runs qualify those scenes rather than complete gameplay.
+
+| Platform | Title | Seconds | Post-warmup guest-clock progress | Post-warmup paint interval p95 / maximum | Peak process memory |
+| --- | --- | --- | --- | --- | --- |
+| Windows | Tetris | 60 | 100.0190% | 17.65 / 33.94 ms | 73.80 MiB working set |
+| Windows | Mario Deluxe | 60 | 100.0120% | 17.67 / 40.23 ms | 84.34 MiB working set |
+| Windows | Kirby | 30 | 99.9732% | 17.62 / 27.66 ms | 62.77 MiB working set |
+| Windows | Super Mario Land | 30 | 100.0098% | 17.66 / 20.96 ms | 51.66 MiB working set |
+| Windows | Crystal | 30 | 99.9821% | 17.70 / 25.72 ms | 51.76 MiB working set |
+| Windows | Mario Tennis | 30 | 99.9755% | 17.69 / 22.23 ms | 67.66 MiB working set |
+| Windows | Tomb Raider | 30 | 99.9712% | 17.66 / 38.56 ms | 81.06 MiB working set |
+| WSLg/Xcb | Tetris | 60 | 99.9943% | 17.28 / 20.01 ms | 90.88 MiB resident |
+| WSLg/Xcb | Mario Deluxe | 60 | 100.0136% | 17.47 / 21.72 ms | 98.63 MiB resident |
+| WSLg/Xcb | Kirby | 30 | 99.9798% | 17.51 / 19.48 ms | 75.38 MiB resident |
+| WSLg/Xcb | Super Mario Land | 30 | 100.0023% | 17.25 / 18.13 ms | 68.02 MiB resident |
+| WSLg/Xcb | Crystal | 30 | 99.9853% | 17.37 / 19.30 ms | 65.95 MiB resident |
+| WSLg/Xcb | Mario Tennis | 30 | 99.9717% | 17.63 / 24.03 ms | 85.13 MiB resident |
+| WSLg/Xcb | Tomb Raider | 30 | 99.9759% | 17.51 / 18.89 ms | 93.42 MiB resident |
+
+All fourteen whole-run and post-warmup windows report zero backend audio idle/error events. Windows whole-run guest-clock progress ranges from 99.4289% to 99.7944%, including startup; Linux ranges from 100.0189% to 100.0566%. The post-warmup values above use actual sample times near five seconds, so frame-sized endpoint quantization remains visible. They do not imply overclocking or establish physical presentation FPS. Windows output uses 48 kHz stereo float and Linux uses 44.1 kHz stereo signed samples. Zero reported events is not an audible comparison.
+
+Complete Linux process user-plus-system times for the two 60-second titles were 9.82 and 10.33 seconds. Their rewind capture totals were 3.16 and 3.50 seconds, compared with 5.96 and 6.17 seconds in the preceding paced samples. Those separate process runs are observations; the component comparison above isolates the capture/compression change more directly. Windows sampled CPU counters remain private and excluded from utilization claims. Working set and resident memory are different host metrics and should not be treated as equivalent cross-platform measurements.
+
+The README and fourteen documentation files resolve all 67 local links, and the C11/C++17 embedding examples pass syntax checks. These results cover the stated scenes, hardware choices, builds, and durations. Full-game correctness, audible equivalence, long-term saving, uncommon cartridges, and complete hardware/frontend parity remain unqualified.
