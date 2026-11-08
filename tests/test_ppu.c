@@ -365,8 +365,10 @@ static void test_stat_unused_bit_reads_high_after_power_on(void) {
         assert(gb.io_registers[CUPID_GB_IO_STAT] == 0);
         assert(cupid_gb_read_u8(&gb, 0xff41) == 0x80);
         cupid_gb_write_u8(&gb, 0xff40, 0x80);
+        assert(cupid_gb_read_u8(&gb, 0xff41) == 0x80);
+        cupid_gb_tick_ppu_dots(&gb, 2);
         assert(cupid_gb_read_u8(&gb, 0xff41) == 0x84);
-        cupid_gb_tick_ppu_dots(&gb, 90);
+        cupid_gb_tick_ppu_dots(&gb, 88);
         assert(cupid_gb_read_u8(&gb, 0xff41) == 0x87);
         cupid_gb_write_u8(&gb, 0xff40, 0);
         assert(cupid_gb_read_u8(&gb, 0xff41) == 0x84);
@@ -390,6 +392,131 @@ static void test_double_speed_hblank_mode_and_irq_edge(void) {
     cupid_gb_tick_ppu_dots(&gb, 1);
     assert((cupid_gb_read_u8(&gb, 0xff41) & 3) == CUPID_GB_PPU_MODE_HBLANK);
     assert(gb.stat_irq_delay == 0 && (gb.interrupt_flags & 2));
+}
+
+static void prepare_pending_hblank(CupidGb *gb, bool double_speed) {
+    prepare(gb, true, 0);
+    gb->double_speed = double_speed;
+    cupid_gb_write_u8(gb, 0xff40, 0);
+    cupid_gb_write_u8(gb, 0xff41, 0);
+    cupid_gb_write_u8(gb, 0xff45, 0);
+    cupid_gb_write_u8(gb, 0xff40, 0x91);
+    gb->interrupt_flags = 0;
+    while (gb->pixels.active || gb->pixels.x != CUPID_GB_SCREEN_WIDTH) {
+        assert(gb->pixels.dot < 300);
+        cupid_gb_tick_ppu_dots(gb, 1);
+    }
+    assert(gb->stat_irq_delay == 1 && !(gb->interrupt_flags & 2));
+}
+
+static void test_coincidence_edge_preserves_pending_hblank(void) {
+    for (unsigned double_speed = 0; double_speed < 2; ++double_speed) {
+        for (unsigned write_lyc = 0; write_lyc < 2; ++write_lyc) {
+            CupidGb gb;
+            prepare_pending_hblank(&gb, double_speed != 0);
+            const uint8_t pending_mode =
+                double_speed ? CUPID_GB_PPU_MODE_TRANSFER : CUPID_GB_PPU_MODE_HBLANK;
+            assert((cupid_gb_read_u8(&gb, 0xff41) & 3) == pending_mode);
+            if (write_lyc) {
+                cupid_gb_write_u8(&gb, 0xff45, 1);
+                cupid_gb_write_u8(&gb, 0xff41, 0x48);
+                assert(!(gb.interrupt_flags & 2));
+                cupid_gb_write_u8(&gb, 0xff45, 0);
+            } else {
+                cupid_gb_write_u8(&gb, 0xff41, 0x48);
+            }
+            assert(gb.interrupt_flags & 2); /* Coincidence rises immediately. */
+            assert(gb.stat_irq_delay == 1);
+            assert((cupid_gb_read_u8(&gb, 0xff41) & 3) == pending_mode);
+            gb.interrupt_flags = 0;
+            cupid_gb_tick_ppu_dots(&gb, 1);
+            assert(gb.stat_irq_delay == 0);
+            assert((cupid_gb_read_u8(&gb, 0xff41) & 3) == CUPID_GB_PPU_MODE_HBLANK);
+            /* The already-high coincidence source blocks another combined edge. */
+            assert(!(gb.interrupt_flags & 2));
+            cupid_gb_tick_ppu_dots(&gb, 8);
+            assert((cupid_gb_read_u8(&gb, 0xff41) & 3) == CUPID_GB_PPU_MODE_HBLANK);
+        }
+    }
+}
+
+static void test_pending_hblank_is_canceled_by_lcd_restart(void) {
+    for (unsigned double_speed = 0; double_speed < 2; ++double_speed) {
+        CupidGb gb;
+        prepare_pending_hblank(&gb, double_speed != 0);
+        cupid_gb_write_u8(&gb, 0xff40, 0);
+        assert(gb.stat_irq_delay == 0);
+        cupid_gb_write_u8(&gb, 0xff40, 0x91);
+        assert(gb.stat_irq_delay == 0 && gb.pixels.x == 0);
+        cupid_gb_tick_ppu_dots(&gb, 1);
+        assert(gb.stat_irq_delay == 0 && !(gb.interrupt_flags & 2));
+
+        prepare_pending_hblank(&gb, double_speed != 0);
+        cupid_gb_reset_ppu(&gb);
+        assert(gb.stat_irq_delay == 0 && gb.pixels.x == 0);
+        cupid_gb_tick_ppu_dots(&gb, 1);
+        assert(gb.stat_irq_delay == 0 && !(gb.interrupt_flags & 2));
+    }
+}
+
+static void test_lcd_enable_comparison_refresh(void) {
+    const CupidGbModel models[] = {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_MGB, CUPID_GB_MODEL_SGB,
+                                   CUPID_GB_MODEL_SGB2,    CUPID_GB_MODEL_CGB, CUPID_GB_MODEL_CGB};
+    for (unsigned model = 0; model < sizeof(models) / sizeof(models[0]); ++model) {
+        for (unsigned old_match = 0; old_match < 2; ++old_match) {
+            for (unsigned old_line = 0; old_line < 2; ++old_line) {
+                for (unsigned target = 0; target < 2; ++target) {
+                    for (unsigned explicit_write = 0; explicit_write < 3; ++explicit_write) {
+                        CupidGb gb;
+                        prepare(&gb, model >= 4, 0);
+                        gb.model = models[model];
+                        gb.double_speed = model == 5;
+                        cupid_gb_write_u8(&gb, 0xff40, 0);
+                        gb.io_registers[CUPID_GB_IO_STAT] = (uint8_t)(0xc0 | old_match * 4);
+                        gb.pixels.lyc_irq = old_match != 0;
+                        gb.stat_irq_line = old_line != 0;
+                        gb.interrupt_flags = 0;
+                        cupid_gb_tick_ppu_dots(&gb, 8);
+                        cupid_gb_write_u8(&gb, 0xff45, (uint8_t)target);
+                        cupid_gb_write_u8(&gb, 0xff41, 0x40);
+                        assert(gb.pixels.lyc_irq == (old_match != 0));
+                        assert(gb.stat_irq_line == (old_line != 0));
+                        cupid_gb_write_u8(&gb, 0xff40, 0x91);
+                        const uint8_t frozen_stat = (uint8_t)(0xc0 | old_match * 4);
+                        assert(cupid_gb_read_u8(&gb, 0xff41) == frozen_stat);
+                        assert(!(gb.interrupt_flags & 2));
+                        assert(gb.pixels.lyc_irq == (old_match != 0));
+                        assert(gb.stat_irq_line == (old_line != 0));
+                        if (explicit_write == 1)
+                            cupid_gb_write_u8(&gb, 0xff45, (uint8_t)target);
+                        else if (explicit_write == 2)
+                            cupid_gb_write_u8(&gb, 0xff41, 0x40);
+                        else if (gb.double_speed) {
+                            /* The interrupt-entry scheduler exposes the advancing
+                             * CGB half-dot without advancing the pixel pipeline. */
+                            cupid_gb_sync_lcd_startup(&gb);
+                            assert(gb.pixels.dot == 0 && gb.elapsed_cycles == 0);
+                        } else {
+                            cupid_gb_tick_ppu_dots(&gb, 1);
+                            if (model < 4) {
+                                assert(cupid_gb_read_u8(&gb, 0xff41) == frozen_stat);
+                                assert(!(gb.interrupt_flags & 2));
+                                cupid_gb_tick_ppu_dots(&gb, 1);
+                            }
+                        }
+                        assert(cupid_gb_read_u8(&gb, 0xff41) == (target ? 0xc0 : 0xc4));
+                        assert((gb.interrupt_flags & 2) == ((!target && !old_line) ? 2 : 0));
+                        assert(gb.pixels.lyc_irq == (target == 0));
+                        assert(gb.stat_irq_line == (target == 0));
+                        gb.interrupt_flags = 0;
+                        cupid_gb_sync_lcd_startup(&gb);
+                        cupid_gb_tick_ppu_dots(&gb, 2);
+                        assert(!(gb.interrupt_flags & 2));
+                    }
+                }
+            }
+        }
+    }
 }
 
 static void test_dot_chunks_preserve_pipeline_state(void) {
@@ -433,6 +560,9 @@ int main(void) {
     test_oam_read_lock_precedes_visible_scan_mode();
     test_stat_unused_bit_reads_high_after_power_on();
     test_double_speed_hblank_mode_and_irq_edge();
+    test_coincidence_edge_preserves_pending_hblank();
+    test_pending_hblank_is_canceled_by_lcd_restart();
+    test_lcd_enable_comparison_refresh();
     test_dot_chunks_preserve_pipeline_state();
     puts("PPU priority checks passed.");
     return 0;

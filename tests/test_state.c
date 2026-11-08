@@ -1,6 +1,7 @@
 #include "cupid/common/sha256.h"
 #include "cupid/gb/apu.h"
 #include "cupid/gb/gb.h"
+#include "cupid/gb/ppu.h"
 #include "cupid/gb/state.h"
 #include "cupid/gb/timer.h"
 
@@ -753,6 +754,76 @@ static void test_restored_rtc_extreme_timestamps(void) {
     free(gb);
 }
 
+static void test_lcd_interrupt_edge_resume(void) {
+    CupidGb *a = calloc(1, sizeof(*a)), *b = calloc(1, sizeof(*b));
+    assert(a && b);
+    const CupidGbModel models[] = {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_DMG0, CUPID_GB_MODEL_MGB,
+                                   CUPID_GB_MODEL_SGB,     CUPID_GB_MODEL_SGB2, CUPID_GB_MODEL_CGB,
+                                   CUPID_GB_MODEL_CGB};
+    for (unsigned model = 0; model < sizeof(models) / sizeof(models[0]); ++model) {
+        for (unsigned before = 0; before < 2; ++before) {
+            prepare(a, models[model], false);
+            prepare(b, models[model], false);
+            a->double_speed = model == 6;
+            cupid_gb_write_u8(a, 0xff41, 0);
+            cupid_gb_write_u8(a, 0xff45, 1);
+            cupid_gb_write_u8(a, 0xff40, 0);
+            cupid_gb_write_u8(a, 0xff45, 0);
+            cupid_gb_write_u8(a, 0xff41, 0x40);
+            a->interrupt_flags = 0;
+            cupid_gb_write_u8(a, 0xff40, 0x91);
+            cupid_gb_tick_ppu_dots(a, (uint16_t)before);
+            size_t length;
+            uint8_t *state = encode(a, &length);
+            assert(cupid_gb_load_state(b, state, length) == CUPID_GB_STATE_OK);
+            assert_encoded_equal(a, b);
+            free(state);
+            if (a->double_speed && before == 0) {
+                cupid_gb_sync_lcd_startup(a);
+                cupid_gb_sync_lcd_startup(b);
+                assert(a->pixels.dot == 0 && a->elapsed_cycles == 0);
+                assert(a->interrupt_flags & 2);
+            }
+            for (unsigned dot = 1; dot <= 4; ++dot) {
+                cupid_gb_tick_ppu_dots(a, 1);
+                cupid_gb_tick_ppu_dots(b, 1);
+                const unsigned edge = models[model] == CUPID_GB_MODEL_CGB ? 1 : 2;
+                assert((a->interrupt_flags & 2) == (before + dot >= edge ? 2 : 0));
+                assert_encoded_equal(a, b);
+            }
+        }
+    }
+    for (unsigned double_speed = 0; double_speed < 2; ++double_speed) {
+        prepare(a, CUPID_GB_MODEL_CGB, false);
+        prepare(b, CUPID_GB_MODEL_CGB, false);
+        a->double_speed = double_speed != 0;
+        cupid_gb_write_u8(a, 0xff41, 0);
+        cupid_gb_write_u8(a, 0xff40, 0);
+        cupid_gb_write_u8(a, 0xff45, 0);
+        cupid_gb_write_u8(a, 0xff40, 0x91);
+        while (a->pixels.active || a->pixels.x != CUPID_GB_SCREEN_WIDTH) {
+            assert(a->pixels.dot < 400);
+            cupid_gb_tick_ppu_dots(a, 1);
+        }
+        cupid_gb_write_u8(a, 0xff41, 0x48);
+        assert(a->stat_irq_delay == 1 && (a->interrupt_flags & 2));
+        size_t length;
+        uint8_t *state = encode(a, &length);
+        assert(cupid_gb_load_state(b, state, length) == CUPID_GB_STATE_OK);
+        free(state);
+        a->interrupt_flags = b->interrupt_flags = 0;
+        cupid_gb_tick_ppu_dots(a, 1);
+        cupid_gb_tick_ppu_dots(b, 1);
+        assert(a->stat_irq_delay == 0 && (a->io_registers[CUPID_GB_IO_STAT] & 3) == 0);
+        assert(!(a->interrupt_flags & 2));
+        assert_encoded_equal(a, b);
+    }
+    cupid_gb_cleanup(a);
+    cupid_gb_cleanup(b);
+    free(a);
+    free(b);
+}
+
 static void test_pixel_pipeline_resume(void) {
     CupidGb *a = calloc(1, sizeof(*a)), *b = calloc(1, sizeof(*b));
     assert(a && b);
@@ -859,6 +930,7 @@ int main(int argc, char **argv) {
     test_trusted_context();
     test_restored_rtc_extreme_timestamps();
     test_mapper_snapshots();
+    test_lcd_interrupt_edge_resume();
     test_pixel_pipeline_resume();
     test_first_halt_poll_resume();
     test_sgb_sample_phase_and_legacy_filter();

@@ -123,7 +123,7 @@ cmake --install build --prefix /path/to/install
 
 For a multi-configuration generator, add `--config Release`. The install rules do not assemble all Qt libraries, plugins, platform dependencies, or an installer. Linux desktop registration files make CupidGB available as an opener; they do not set the system's default association automatically.
 
-For a Windows folder deployment, copy the Release executable into a separate staging folder, then run the matching Qt `windeployqt` on that copy:
+For a Windows folder deployment, use a Visual Studio x64 developer shell so `windeployqt` can locate the compiler runtime. Copy the Release executable into a separate staging folder, then run the matching Qt deployment tool on that copy:
 
 ```powershell
 New-Item -ItemType Directory -Force package
@@ -134,6 +134,8 @@ Copy-Item LICENSE package/LICENSE
 ```
 
 Include the notices and license material required by the libraries actually shipped. Test the staged folder with development Qt paths removed from its environment. Check launch, dialogs, images, audio, and clean shutdown; dependency copying alone does not qualify deployment.
+
+Review deployment warnings before distributing the folder. The local deployment check resolves the Windows SDK's x64 Direct3D compiler directory through `PATH` and the compiler runtime through the developer shell. A successful launch on a development machine does not establish that a clean installation has every required runtime.
 
 On Linux, the executable can use distribution-provided Qt and runtime packages. For a per-user installation:
 

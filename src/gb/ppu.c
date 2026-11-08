@@ -69,7 +69,9 @@ void cupid_gb_update_stat_irq(CupidGb *gb) {
         irq_signal = gb->pixels.lyc_irq && (stat & 0x40u) != 0u;
 
     if (irq_signal && !gb->stat_irq_line) {
-        gb->stat_irq_delay = 0u;
+        /* A coincidence edge is independent of the pending HBlank transition.
+         * Clearing its delay here can leave double-speed mode 3 latched after
+         * the last pixel, with no future transition available to release it. */
         cupid_gb_request_interrupt(gb, CUPID_GB_INTERRUPT_LCD_STAT);
     }
 
@@ -97,10 +99,15 @@ void cupid_gb_reset_ppu(CupidGb *gb) {
         return;
     }
 
+    /* Power cycling the LCD resets the fetch pipeline, but the comparison and
+     * combined STAT latches stay frozen until startup reaches its refresh edge. */
+    const bool previous_lyc_irq = gb->pixels.lyc_irq;
     memset(&gb->pixels, 0, sizeof(gb->pixels));
+    gb->pixels.lyc_irq = previous_lyc_irq;
     gb->pixels.initialized = true;
     cupid_gb_pixels_begin_line(gb);
     gb->ppu_counter = 0u;
+    gb->stat_irq_delay = 0u;
     gb->frame_ready = false;
     gb->ppu_lcd_warmup_lines = 2u;
     gb->ppu_lcd_startup = true;
@@ -108,7 +115,12 @@ void cupid_gb_reset_ppu(CupidGb *gb) {
     gb->window_line_counter = 0u;
     gb->io_registers[CUPID_GB_IO_LY] = 0u;
     cupid_gb_set_ppu_mode(gb, CUPID_GB_PPU_MODE_HBLANK);
-    cupid_gb_update_stat_irq(gb);
+}
+
+void cupid_gb_sync_lcd_startup(CupidGb *gb) {
+    if (gb && gb->model == CUPID_GB_MODEL_CGB && cupid_gb_lcd_enabled(gb) && gb->ppu_lcd_startup &&
+        gb->pixels.dot == 0)
+        cupid_gb_update_stat_irq(gb);
 }
 
 /**
@@ -208,7 +220,9 @@ static void tick_ppu(CupidGb *gb, uint32_t dots, uint8_t *midpoint) {
         return;
     CupidGbPixels *p = &gb->pixels;
     if (!cupid_gb_lcd_enabled(gb)) {
+        const bool previous_lyc_irq = p->lyc_irq;
         memset(p, 0, sizeof(*p));
+        p->lyc_irq = previous_lyc_irq;
         gb->ppu_counter = 0;
         gb->frame_ready = false;
         gb->ppu_lcd_warmup_lines = 0;
@@ -238,6 +252,7 @@ static void tick_ppu(CupidGb *gb, uint32_t dots, uint8_t *midpoint) {
     }
     while (dots) {
         for (unsigned subcycle = 0; subcycle < 4 && dots; ++subcycle, --dots) {
+            cupid_gb_sync_lcd_startup(gb);
             if (gb->stat_irq_delay) {
                 --gb->stat_irq_delay;
                 /* Double-speed hardware keeps mode 3 visible for the final
@@ -313,7 +328,10 @@ static void tick_ppu(CupidGb *gb, uint32_t dots, uint8_t *midpoint) {
                 cupid_gb_update_stat_irq(gb);
             }
             gb->ppu_counter = p->dot / 4;
-            cupid_gb_update_stat_irq(gb);
+            /* Monochrome startup holds the frozen comparison through the first
+             * dot. CGB starts refreshing on its first advancing clock edge. */
+            if (!gb->ppu_lcd_startup || gb->model == CUPID_GB_MODEL_CGB || p->dot != 1)
+                cupid_gb_update_stat_irq(gb);
             if (midpoint && subcycle == 1) {
                 *midpoint = gb->interrupt_enable & gb->interrupt_flags & 0x1f;
             }

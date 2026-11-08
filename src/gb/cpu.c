@@ -385,25 +385,7 @@ bool cupid_gb_service_interrupt(CupidGb *gb) {
     gb->cpu.ime_delay = 0;
     cupid_gb_tick(gb, 2);
     cupid_gb_trigger_oam_bug_write(gb, gb->cpu.sp);
-    /* The stack bus is active at T12 and T16, rather than T8 and T12. */
-    cupid_gb_write_stack_byte(gb, (uint8_t)(return_address >> 8));
-    const uint8_t enabled = gb->interrupt_enable;
-    cupid_gb_tick(gb, 1);
-    const uint8_t requested = gb->interrupt_flags;
-    --gb->cpu.sp;
-    cupid_gb_write_u8(gb, gb->cpu.sp, (uint8_t)return_address);
-
-    const uint8_t pending = (uint8_t)(enabled & requested & 0x1fu);
-    const uint8_t selected = (uint8_t)(pending & (uint8_t)(0u - pending));
-    gb->cpu.pc = 0;
-    for (unsigned bit = 0; bit < 5; ++bit) {
-        if (selected == (1u << bit)) {
-            gb->cpu.pc = (uint16_t)(0x40u + 8u * bit);
-        }
-    }
-    /* The low stack byte can itself target IF. Clear the acknowledged request
-     * in the replacement value while preserving unrelated newly written bits. */
-    cupid_gb_acknowledge_interrupt(gb, selected);
+    cupid_gb_interrupt_tail(gb, return_address);
     return true;
 }
 
