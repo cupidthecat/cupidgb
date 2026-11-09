@@ -648,8 +648,8 @@ void cupid_cgb_init_state(CupidGb *gb) {
 /**
  * @brief Computes the linear VRAM array offset for a given VRAM address.
  *
- * In CGB mode, bit 0 of the VRAM bank register (0xFF4F) selects which
- * 8 KiB bank to access; in DMG mode bank 0 is always used.
+ * Physical CGB hardware retains its selected 8 KiB bank when KEY0 changes
+ * cartridge compatibility mode. Other hardware always uses bank 0.
  *
  * @param gb      Pointer to the Game Boy state.
  * @param address VRAM address in the range 0x8000–0x9FFF.
@@ -659,7 +659,7 @@ void cupid_cgb_init_state(CupidGb *gb) {
 size_t cupid_cgb_vram_offset(const CupidGb *gb, uint16_t address) {
     size_t bank = 0u;
 
-    if (gb != 0 && gb->cgb_mode) {
+    if (gb != 0 && gb->model == CUPID_GB_MODEL_CGB) {
         bank = (size_t)(gb->cgb_vram_bank & 0x01u);
     }
 
@@ -669,10 +669,10 @@ size_t cupid_cgb_vram_offset(const CupidGb *gb, uint16_t address) {
 /**
  * @brief Computes the linear WRAM array offset for a given WRAM address.
  *
- * The fixed bank at 0xC000–0xCFFF always maps to bank 0. In CGB mode
- * the switchable bank at 0xD000–0xDFFF is mapped according to the WRAM
- * bank register (0xFF70, values 1–7; 0 is treated as 1). In DMG mode
- * bank 1 is always used.
+ * The fixed bank at 0xC000–0xCFFF always maps to bank 0. Physical CGB hardware
+ * maps 0xD000–0xDFFF through the retained WRAM bank latch (0 selects bank 1),
+ * including after KEY0 changes mode or FF50 closes the boot overlay. Other
+ * hardware always uses bank 1.
  *
  * @param gb      Pointer to the Game Boy state.
  * @param address WRAM address in the range 0xC000–0xDFFF.
@@ -684,7 +684,7 @@ size_t cupid_cgb_wram_offset(const CupidGb *gb, uint16_t address) {
         return (size_t)(address - 0xc000u);
     }
 
-    if (gb != 0 && gb->cgb_mode) {
+    if (gb != 0 && gb->model == CUPID_GB_MODEL_CGB) {
         uint8_t bank = gb->cgb_wram_bank & 0x07u;
 
         if (bank == 0u) {

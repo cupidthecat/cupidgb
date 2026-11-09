@@ -1354,6 +1354,68 @@ static void test_color_boot_mode_selection_and_storage(void) {
     }
 }
 
+static void test_color_boot_preserves_selected_memory_banks(void) {
+    const uint8_t flags[] = {0, 0x80, 0xc0};
+    const uint8_t keys[] = {0, 4, 8, 12};
+    uint8_t rom[32768];
+    for (unsigned physical = 0; physical < 2; ++physical) {
+        for (unsigned flag = 0; flag < sizeof(flags); ++flag) {
+            for (unsigned key = 0; key < sizeof(keys); ++key) {
+                CupidGb gb = {0};
+                build_test_rom(rom, sizeof(rom));
+                rom[0x143] = flags[flag];
+                rom[0x14d] = compute_header_checksum(rom);
+                cupid_gb_set_model(&gb, physical ? CUPID_GB_MODEL_CGB : CUPID_GB_MODEL_DMG_ABC);
+                assert(cupid_gb_load_rom(&gb, rom, sizeof(rom)));
+                gb.boot_rom_size = physical ? 0x900 : 0x100;
+                cupid_gb_enter_boot_rom(&gb);
+                cupid_gb_write_u8(&gb, 0xff4f, 1);
+                cupid_gb_write_u8(&gb, 0xff70, 3);
+                cupid_gb_write_u8(&gb, 0xff4c, keys[key]);
+                const bool color = physical && !(keys[key] & 12);
+
+                /* KEY0 changes which registers can be written, without changing
+                 * the bank latches that already drive the memory address pins. */
+                cupid_gb_write_u8(&gb, 0x8000, 0x66);
+                cupid_gb_write_u8(&gb, 0xd000, 0x77);
+                cupid_gb_write_u8(&gb, 0xf123, 0x78);
+                assert(gb.video_ram[physical ? 0x2000 : 0] == 0x66);
+                assert(gb.work_ram[(physical ? 3 : 1) * 0x1000] == 0x77);
+                assert(gb.work_ram[(physical ? 3 : 1) * 0x1000 + 0x123] == 0x78);
+
+                cupid_gb_write_u8(&gb, 0xff4f, 0);
+                cupid_gb_write_u8(&gb, 0xff70, 5);
+                unsigned vram = physical && !color ? 0x2000 : 0;
+                unsigned wram = (physical ? 5 : 1) * 0x1000;
+                cupid_gb_write_u8(&gb, 0x8000, 0x99);
+                cupid_gb_write_u8(&gb, 0xd000, 0x88);
+                cupid_gb_write_u8(&gb, 0xf123, 0x89);
+                assert(gb.video_ram[vram] == 0x99);
+                assert(gb.work_ram[wram] == 0x88 && gb.work_ram[wram + 0x123] == 0x89);
+
+                cupid_gb_write_u8(&gb, 0xff50, 1);
+                cupid_gb_write_u8(&gb, 0xff4f, 1);
+                cupid_gb_write_u8(&gb, 0xff70, 7);
+                vram = physical ? 0x2000 : 0;
+                wram = (physical ? (color ? 7 : 5) : 1) * 0x1000;
+                cupid_gb_write_u8(&gb, 0x8000, 0xaa);
+                cupid_gb_write_u8(&gb, 0xd000, 0xbb);
+                cupid_gb_write_u8(&gb, 0xf123, 0xbc);
+                assert(cupid_gb_read_u8(&gb, 0x8000) == 0xaa);
+                assert(cupid_gb_read_u8(&gb, 0xd000) == 0xbb);
+                assert(cupid_gb_read_u8(&gb, 0xf123) == 0xbc);
+                assert(gb.video_ram[vram] == 0xaa);
+                assert(gb.work_ram[wram] == 0xbb && gb.work_ram[wram + 0x123] == 0xbc);
+                if (physical) {
+                    assert(gb.video_ram[vram ^ 0x2000] == (color ? 0x99 : 0));
+                    assert(gb.work_ram[0x1000] == 0 && gb.work_ram[0x1123] == 0);
+                }
+                cupid_gb_cleanup(&gb);
+            }
+        }
+    }
+}
+
 static void test_cgb_dmg_compatibility_palette_for_pokemon_red(void) {
     uint8_t rom[32u * 1024u];
     CupidGb gb = {0};
@@ -2601,6 +2663,7 @@ int main(void) {
     test_cgb_palette_registers_and_gdma();
     test_model_specific_register_read_routing();
     test_color_boot_mode_selection_and_storage();
+    test_color_boot_preserves_selected_memory_banks();
     test_cgb_dmg_compatibility_palette_for_pokemon_red();
     test_cgb_dmg_compatibility_palette_requires_nintendo_licensee();
     test_sgb_uses_cgb_compatibility_palette_as_initial_colors();
