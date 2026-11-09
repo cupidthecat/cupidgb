@@ -118,7 +118,9 @@ An input trace is repeatable host input, not evidence that a game reached active
     --input-trace /private/start.trace /private/cartridge.gbc
 ```
 
-Use `--model dmg`, `--model cgb`, or another supported Qt profile to avoid automatic hardware selection in comparable runs. Explicit `--model auto` deliberately requests automatic selection. The frontend isolates its settings, opens a normal audio device, and exits after the requested duration. A report path and cartridge are required. Supported durations are greater than zero and no more than 86,400 seconds. The report has a companion PNG.
+Use `--model dmg`, `--model cgb`, or another supported Qt profile to avoid automatic hardware selection in comparable runs. Explicit `--model auto` deliberately requests automatic selection. The frontend isolates its settings, opens a normal audio device, and exits after the requested duration. A report path and cartridge are required. Supported durations are greater than zero and no more than 86,400 seconds. The report has a companion core-image PNG and a `.window.png` capture of the Qt interface.
+
+`window_visible`, `window_capture_saved`, and the capture dimensions describe the Qt widget and its saved interface image. Inspect that image to verify menus and presentation as well as the game pixels. A visible widget under the `offscreen` platform remains a component test; require the native `windows` or `xcb` backend for the corresponding runtime scope. In-process capture avoids blank external readbacks from compositors, but does not measure physical display presentation.
 
 `requested_model` is null when the option is absent, `"auto"` for explicit automatic selection, or the canonical selected profile name for a fixed request. The `dmg` alias reports `"dmgabc"`. `hardware_model` records the actual hardware chosen for the cartridge. `base_clock_hz` records that model's physical clock, and the whole-run and post-warmup speed calculations use it. This distinction matters when comparing automatic, fixed DMG, and SGB runs.
 

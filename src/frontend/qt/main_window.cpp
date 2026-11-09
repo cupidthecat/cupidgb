@@ -4138,6 +4138,14 @@ void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
                 const QString screenshotPath = reportPath + ".png";
                 report.insert("screenshot_saved", image_.save(screenshotPath, "PNG"));
             }
+            // Capture the interface in-process: external compositor readback can
+            // return an empty surface even while a native Qt window is visible.
+            const QPixmap windowCapture = grab();
+            report.insert("window_visible", isVisible());
+            report.insert("window_capture_width", windowCapture.width());
+            report.insert("window_capture_height", windowCapture.height());
+            report.insert("window_capture_saved",
+                          windowCapture.save(reportPath + ".window.png", "PNG"));
             report.insert("battery_flushed", flushBattery());
             QSaveFile file(reportPath);
             const QByteArray bytes = QJsonDocument(report).toJson();

@@ -52,6 +52,11 @@ def main():
             assert not result["execution_failed"] and result["screenshot_saved"]
             assert result["elapsed_seconds"] > 0
             assert Path(str(report) + ".png").exists()
+            assert result["window_visible"] and result["window_capture_saved"]
+            window = Path(str(report) + ".window.png").read_bytes()
+            assert window.startswith(b"\x89PNG\r\n\x1a\n")
+            assert int.from_bytes(window[16:20], "big") == result["window_capture_width"] > 0
+            assert int.from_bytes(window[20:24], "big") == result["window_capture_height"] > 0
             return result
 
         for requested, actual in (("dmg", "dmgabc"), ("dmgabc", "dmgabc"),
