@@ -2717,6 +2717,29 @@ bool MainWindow::smokeTest() {
         return smokeFailure(__LINE__);
     setPaused(true);
     const QByteArray checkpoint = captureState();
+    // Version 2 retains the frozen payload prefix but has no new timing latches.
+    // Loading its file must preserve that file and let the core initialize missing history.
+    QByteArray version2 = checkpoint.first(300518);
+    auto putState32 = [](QByteArray &bytes, qsizetype offset, uint32_t value) {
+        for (unsigned i = 0; i < 4; ++i)
+            bytes[offset + i] = char(value >> (i * 8));
+    };
+    putState32(version2, 8, 2);
+    putState32(version2, 12, uint32_t(version2.size()));
+    const QByteArray version2Digest = QCryptographicHash::hash(
+        version2.first(96) + version2.mid(128), QCryptographicHash::Sha256);
+    std::memcpy(version2.data() + 96, version2Digest.constData(), 32);
+    QFile version2File(directory.filePath("version2.s3"));
+    if (checkpoint.size() <= version2.size() || !version2File.open(QIODevice::WriteOnly) ||
+        version2File.write(version2) != version2.size())
+        return smokeFailure(__LINE__);
+    version2File.close();
+    if (!loadStateFile(version2File.fileName()) || !paused_ ||
+        captureState().mid(128, 300518 - 128) != version2.mid(128) ||
+        !version2File.open(QIODevice::ReadOnly) || version2File.readAll() != version2 ||
+        !restoreState(checkpoint, false) || captureState() != checkpoint)
+        return smokeFailure(__LINE__);
+    version2File.close();
     // Frozen legacy wire offsets are used only to exercise explicit battery recovery.
     QByteArray olderState(300349, char(0));
     std::memcpy(olderState.data(), "CUPIDGB", 8);

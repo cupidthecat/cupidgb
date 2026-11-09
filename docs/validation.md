@@ -431,3 +431,61 @@ Windows memory is the per-process PeakWorkingSet64 sampled every 500 ms; Linux m
 All whole-run and post-warmup windows report zero backend idle/error events. Installed Windows and Linux/Xcb workflow smoke checks also pass with real audio required.
 
 Captures on both platforms show active Tetris under DMG, SGB, and SGB2; Mario Deluxe; Kirby; and Super Mario Land gameplay. Crystal shows introduction text, Mario Tennis character selection, and Tomb Raider a load menu. These scene qualifications do not establish complete gameplay for those titles, long-term saving, or audible equivalence.
+
+## CGB acceptance, STOP timing and native-v3 component checks
+
+The 2026-11-08 component run repairs the expanded-batch failures recorded above. Comparisons use the same pinned source revision, corresponding hardware profiles, and verified ROM and boot inputs. Private receipts retain every outcome, input and executable hash, and the preserved CupidGB baseline.
+
+| Environment | Current component result |
+| --- | --- |
+| Windows Release desktop/core | 25/25 CTest checks pass |
+| Linux Release desktop/core | 25/25 CTest checks pass |
+| Linux ASan/UBSan core/tool build | 17/17 CTest checks pass |
+
+The desktop runs include the Qt workflow and command-line checks. These are automated component results; native playback measurements belong to their separately identified builds and sessions.
+
+### External cases and explicit verdicts
+
+| Batch | CupidGB | Pinned comparison |
+| --- | --- | --- |
+| Selected 129 cases: 101 main cases and 28 cartridge cases | 126 pass, 3 bounded | 126 pass, 3 bounded |
+| Expanded 80 cases | 79 pass, 1 bounded | 79 pass, 1 bounded |
+
+The expanded batch improves 64 cases against the preserved `2dddf47` build, which produced 15 passes, 62 failures, and three bounded results under the same adapters. The improvements cover 59 APU cases, three color-DMA cases, and two hardware-I/O cases. There are no verdict regressions in that batch.
+
+The remaining `boot_div-cgbABCDE` row is bounded under the original register adapter. A separate completed-binary-serial check reports FAIL in both CupidGB and the pinned comparison with the same CGB boot binary. CupidGB completes six serial bytes and exits with failure. This is a shared boot-dependent test failure, not a CupidGB-only regression or an implicit pass. The two hardware-I/O cases now pass; their current success marker can appear before serial transfer completes.
+
+All eight bounded final-image comparisons have zero differing pixels. All 59 previously failing APU ROMs also pass, with every byte of their authored RAM result tables matching the expected data and pinned comparison. Those tables cover mapped digital audio taps, pulse alignment and held duty output, live envelope writes, delayed sweep calculation, and noise-divider and retrigger behavior. Final-image equality alone does not qualify complete gameplay or audible output.
+
+### Timing, boot and continuation regressions
+
+The three color-DMA acceptance ROMs reproduce their expected RAM tables and tested clock counts. Sixteen start-boundary traces match, including fetched-opcode retention when execution begins in VRAM. Passing regressions cover deferred HBlank blocks, LCD-off requests, cancellation status, and HALT/STOP wake permissions. Boot checks cover physical-CGB register visibility, read masks, palette access during boot, and compatibility-mode selection.
+
+STOP tests cover the timed speed-switch wait, toggle and freeze phases, natural expiry versus an IME0 interrupt wake, DIV-reset hold, effective IME after EI, selected held input, and padding-byte execution. The paired EI probe matches all 28 records. The debugger regression verifies that Next and Finish continue through a wake-only idle event before tracking the following call or return.
+
+Native version 3 stores the added audio, DMA and speed-switch history. The current CGB fixture is 300,568 bytes with SHA-256 `e4fdd3d7ebfdd04aec94ce7b85f0f2d7d83de1416242fa89f26ccf5dfaf71eb2`, matching the Windows, Linux and sanitized core runs. Continuation checks include 128 audio phases, ten combined DMA/audio captures at normal and double speed, and pending speed-switch waits. They compare complete encoded states after restoration and subsequent execution. Noise counter carry and wrap, delayed sweep overflow, queued PCM, partial integration and capacitor history have targeted regressions.
+
+Version 2 remains readable. Import checks exercise DMG, CGB and SGB with and without a boot overlay, through ordinary and trusted-context loads. Existing PCM, partial integration and filter history survive; fields missing from the old format receive deterministic defaults derived from known legacy state. The loader does not borrow the target instance's unrelated timing history. Exact pre-import oscillator, DMA or STOP phase cannot be recovered from fields that version 2 never stored. See the [save-state guide](save-states.md) for the format and migration contract.
+
+### Isolated audio integration measurements
+
+A controlled comparison changes only integration of a locally constant mixer value within one APU call. Oscillator events retain their base-clock order. Each run covers 2,400 nominal frames, about 40.18 guest seconds, with normal graphics, audio generation and audio hashing. The table gives medians from two timed runs per variant in ABBA order; separate runs compare complete PCM and image files.
+
+| Platform and input | Before | Batched integration | Interpretation |
+| --- | --- | --- | --- |
+| Linux, Tetris/DMG | 3.4151 s | 3.1691 s | 7.20% lower host time in this comparison |
+| Linux, Mario Deluxe/CGB | 4.3362 s | 4.3065 s | Difference is inconclusive |
+| Windows, Tetris/DMG | 4.4589 s | 4.4100 s | Difference is inconclusive |
+| Windows, Mario Deluxe/CGB | 5.2352 s | 5.2224 s | Difference is inconclusive |
+
+Complete PCM and image files match across variants and platforms. Another 2,400 encoded-state/PCM checkpoints match across chunk splits, six models, five sample rates, and varied channel, power, filter and queue states. These timings isolate the integration change; they do not measure the whole milestone or Qt presentation speed.
+
+A separate STAT shortcut passed 1,376,256 whole-state comparisons and the paired output checks, but increased CGB host time by 6.08% while reducing DMG host time by 3.56%. It was rejected and remains outside the product.
+
+### Remaining accuracy work
+
+The wider 192-case DMA memory matrix still has 160 full-VRAM mismatches. All 192 reported clock, PC and status records match, while only 32 complete VRAM results match. Shared main-bus data and decay, undriven-source behavior, and mode-3 PPU destination-address conflicts remain unresolved.
+
+The STOP probes retain JOYP propagation and interrupt differences. Some interrupt-abort rows also differ in elapsed clocks and DIV phase. The API-started OAM-DMA fixture retains its startup byte offset and STAT differences; it does not establish the behavior of an ordinary CPU-bus start. At 44,100 and 192,000 Hz, a fully frozen comparison poll can defer a host audio callback that CupidGB has already delivered. The following PCM read brings the tested frame totals and digital tap value into agreement, but that delivery-order difference remains open.
+
+Phantom pulse-trigger cases, high-selector noise corruption, wider non-CGB audio behavior, model revisions, PPU bus conflicts, link/accessory workflows, and long-term commercial audio/input/save qualification remain in the [parity checklist](parity.md). The passing scopes above do not establish complete hardware or frontend parity.

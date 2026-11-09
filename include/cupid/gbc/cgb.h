@@ -20,5 +20,12 @@ bool cupid_cgb_handle_read_register(const struct CupidGb *gb, uint16_t address, 
 bool cupid_cgb_handle_write_register(struct CupidGb *gb, uint16_t address, uint8_t value);
 void cupid_cgb_render_scanline(struct CupidGb *gb, uint8_t lcdc, uint8_t ly, size_t base_index);
 void cupid_cgb_tick_hdma(struct CupidGb *gb);
+void cupid_cgb_advance_hdma(struct CupidGb *gb);
+void cupid_cgb_hdma_lcd_off(struct CupidGb *gb, uint8_t previous_mode);
+void cupid_cgb_hdma_sleep(struct CupidGb *gb);
+void cupid_cgb_hdma_wake(struct CupidGb *gb);
+/* The opcode has already been fetched. DMA may replace its backing memory,
+ * but execution must retain that latched byte while all other clocks run. */
+void cupid_cgb_run_pending_dma(struct CupidGb *gb, uint8_t opcode);
 
 #endif

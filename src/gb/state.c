@@ -7,7 +7,13 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum { STATE_HEADER_SIZE = 128, STATE_VERSION = 2, STATE_WIRE_SIZE_V2 = 300518 };
+enum {
+    STATE_HEADER_SIZE = 128,
+    STATE_VERSION = 3,
+    STATE_VERSION_V2 = 2,
+    STATE_WIRE_SIZE_V2 = 300518,
+    STATE_WIRE_SIZE_V3 = STATE_WIRE_SIZE_V2 + 50
+};
 
 static const uint8_t state_magic[8] = {'C', 'U', 'P', 'I', 'D', 'G', 'B', 0};
 
@@ -391,6 +397,52 @@ static void state_fields(StateIo *io, CupidGb *gb) {
 #undef WORDS
 }
 
+/* The complete v2 payload remains a prefix. New physical latches have their own
+ * explicit extension, independent of C structure padding and host ABI changes. */
+static void state_extension_v3(StateIo *io, CupidGb *gb) {
+    boolean(io, &gb->hdma_pending);
+    byte(io, &gb->hdma_hblank_delay);
+    boolean(io, &gb->hdma_allow_on_wake);
+    byte(io, &gb->apu.clock_phase);
+    byte(io, &gb->apu.envelope_delay);
+    for (unsigned channel = 0; channel < 2; ++channel) {
+        CupidGbPulseTiming *timing = &gb->apu.pulse_timing[channel];
+        byte(io, &timing->start_delay);
+        byte(io, &timing->edge_age);
+        boolean(io, &timing->clock_started);
+        boolean(io, &timing->output_high);
+        boolean(io, &timing->output_blocked);
+        boolean(io, &timing->envelope_clock);
+        boolean(io, &timing->envelope_locked);
+        boolean(io, &timing->envelope_lock_pending);
+    }
+    CupidGbSweepTiming *sweep = &gb->apu.sweep_timing;
+    byte(io, &sweep->startup_ticks);
+    byte(io, &sweep->shift_ticks);
+    byte(io, &sweep->restart_hold);
+    word(io, &sweep->delta);
+    word(io, &sweep->completed_delta);
+    boolean(io, &sweep->zero_shift_pending);
+    boolean(io, &sweep->zero_shift_armed);
+    CupidGbNoiseTiming *noise = &gb->apu.noise_timing;
+    word(io, &noise->divider_counter);
+    byte(io, &noise->clock_phase);
+    byte(io, &noise->remaining);
+    boolean(io, &noise->foreground);
+    boolean(io, &noise->background);
+    boolean(io, &noise->started_dac_off);
+    boolean(io, &noise->reload_edge);
+    boolean(io, &noise->counter_stepped);
+    boolean(io, &noise->output_high);
+    boolean(io, &noise->last_shift_narrow);
+    boolean(io, &noise->pre_shift_bit7);
+    double_word(io, &gb->speed_switch_halt_cycles);
+    byte(io, &gb->speed_switch_toggle_cycles);
+    byte(io, &gb->speed_switch_freeze_cycles);
+    byte(io, &gb->stop_divider_hold_cycles);
+    byte(io, &gb->speed_switch_alignment);
+}
+
 static bool valid_model(CupidGbModel model) {
     return model >= CUPID_GB_MODEL_DMG_ABC && model <= CUPID_GB_MODEL_SGB2;
 }
@@ -400,7 +452,7 @@ static bool ready(const CupidGb *gb) {
            gb->cartridge_ram_size <= CUPID_GB_MAX_RAM_SIZE;
 }
 
-static bool valid_hardware(const CupidGb *gb) {
+static bool valid_hardware_prefix(const CupidGb *gb) {
     const CupidGbApu *a = &gb->apu;
     const CupidGbPixels *p = &gb->pixels;
     const int64_t area_limit = INT64_C(16320) * a->sample_acc;
@@ -470,13 +522,38 @@ static bool valid_hardware(const CupidGb *gb) {
     return true;
 }
 
+static bool valid_hardware_extension(const CupidGb *gb) {
+    if (gb->hdma_blocks_remaining > 128 || gb->hdma_hblank_delay > 3 || gb->apu.clock_phase > 3 ||
+        gb->apu.envelope_delay > 2 || gb->apu.sweep_timing.startup_ticks > 3 ||
+        gb->apu.sweep_timing.shift_ticks > 7 || gb->apu.sweep_timing.restart_hold > 8 ||
+        gb->apu.sweep_timing.delta > 2047 || gb->apu.sweep_timing.completed_delta > 2047 ||
+        gb->apu.noise_timing.clock_phase > 7 || gb->apu.noise_timing.remaining > 34 ||
+        gb->speed_switch_halt_cycles > 131080 || gb->speed_switch_toggle_cycles > 6 ||
+        gb->speed_switch_freeze_cycles > 5 || gb->stop_divider_hold_cycles > 4 ||
+        gb->speed_switch_alignment > 7 || (gb->hdma_hblank_delay && !gb->hdma_active) ||
+        ((gb->hdma_pending || gb->hdma_active) && !gb->hdma_blocks_remaining)) {
+        return false;
+    }
+    for (unsigned channel = 0; channel < 2; ++channel) {
+        const CupidGbPulseTiming *timing = &gb->apu.pulse_timing[channel];
+        if (timing->start_delay > 12 || timing->edge_age > 4) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool valid_hardware(const CupidGb *gb) {
+    return valid_hardware_prefix(gb) && valid_hardware_extension(gb);
+}
+
 size_t cupid_gb_state_size(const CupidGb *gb) {
     if (!ready(gb)) {
         return 0;
     }
-    /* Version 2 stores every model's fixed-capacity fields. Encoding and loading
+    /* Every version stores fixed-capacity fields. Encoding and loading
      * still check their final offset against this size, so schema drift fails closed. */
-    return STATE_WIRE_SIZE_V2;
+    return STATE_WIRE_SIZE_V3;
 }
 
 static void put_u32(uint8_t *data, uint32_t value) {
@@ -533,6 +610,7 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
     }
     StateIo io = {NULL, data, STATE_HEADER_SIZE, size, false};
     state_fields(&io, (CupidGb *)gb);
+    state_extension_v3(&io, (CupidGb *)gb);
     if (io.invalid || io.offset != size) {
         return CUPID_GB_STATE_INVALID;
     }
@@ -551,10 +629,12 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
     if (!data || length < STATE_HEADER_SIZE || memcmp(data, state_magic, sizeof(state_magic))) {
         return CUPID_GB_STATE_INVALID;
     }
-    if (get_u32(data + 8) != STATE_VERSION) {
+    const uint32_t version = get_u32(data + 8);
+    if (version != STATE_VERSION && version != STATE_VERSION_V2) {
         return CUPID_GB_STATE_UNSUPPORTED_VERSION;
     }
-    if (length != get_u32(data + 12) || length != cupid_gb_state_size(gb)) {
+    const size_t wire_size = version == STATE_VERSION_V2 ? STATE_WIRE_SIZE_V2 : STATE_WIRE_SIZE_V3;
+    if (length != get_u32(data + 12) || length != wire_size) {
         return CUPID_GB_STATE_INVALID;
     }
     uint8_t digest[32];
@@ -604,8 +684,29 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
     *candidate = *gb;
     StateIo io = {data, NULL, STATE_HEADER_SIZE, length, false};
     state_fields(&io, candidate);
+    if (version == STATE_VERSION) {
+        state_extension_v3(&io, candidate);
+    }
     if (io.invalid || io.offset != length || candidate->boot_rom_enabled != (flags != 0) ||
-        !valid_hardware(candidate)) {
+        !valid_hardware_prefix(candidate)) {
+        free(candidate);
+        return CUPID_GB_STATE_INVALID;
+    }
+    if (version == STATE_VERSION_V2) {
+        /* Earlier states have no pending-DMA or power-relative audio history.
+         * Initialize only the new latches after validating every legacy index;
+         * never inherit their values from the target's unrelated live timeline. */
+        candidate->hdma_pending = false;
+        candidate->hdma_hblank_delay = 0;
+        candidate->hdma_allow_on_wake = false;
+        candidate->speed_switch_halt_cycles = 0;
+        candidate->speed_switch_toggle_cycles = 0;
+        candidate->speed_switch_freeze_cycles = 0;
+        candidate->stop_divider_hold_cycles = 0;
+        candidate->speed_switch_alignment = 0;
+        cupid_gb_apu_import_legacy(candidate);
+    }
+    if (!valid_hardware_extension(candidate)) {
         free(candidate);
         return CUPID_GB_STATE_INVALID;
     }

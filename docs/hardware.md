@@ -54,7 +54,7 @@ The memory map includes cartridge windows, VRAM, banked WRAM, echo RAM, OAM, I/O
 
 The timer derives edges from divider phase and models delayed TIMA reloads and register-write windows. Serial supports an internal slow clock and the color fast clock with disconnected incoming data. Completed transfers can notify a host callback without changing hardware execution or writing to a host stream. External serial transport, infrared, and attached devices remain pending.
 
-OAM DMA and CGB general/HBlank DMA are implemented. Bus contention, restarts, collision timing, and double-speed combinations need broader acceptance coverage.
+OAM DMA and CGB general/HBlank DMA are implemented. CGB transfers retain the fetched opcode, schedule sixteen-byte blocks through two-dot slots, and preserve pending HBlank work across state capture. Shared-bus decay for undriven source ranges and PPU fetch-address conflicts with mode-3 destinations remain incomplete. See [DMA timing](timing.md#dma-and-serial-consequences) for scheduling and sleep behavior. Bus contention, OAM restarts, collisions, and revision combinations still need broader coverage.
 
 ## Graphics
 
@@ -77,3 +77,7 @@ Sweep, envelope, wave, interference, and revision-specific quirks need wider tes
 The eight buttons use an active-low mask: Right, Left, Up, Down, A, B, Select, Start. JOYP selects the direction and action rows. Input interrupts and STOP wake behavior must follow selected register lines rather than host key events alone. Contact bouncing, row-switch settling, controllers, motion, and multiple player input remain separate requirements.
 
 An optional local boot binary overlays the startup address range. Without it, CupidGB initializes an approximate model profile. Boot binaries, model choices, and startup conditions must match in comparative tests. The accepted desktop filenames and sizes are listed in the [user guide](user-guide.md#boot-behavior).
+
+Physical CGB hardware enters an actual boot overlay with color registers available even for a monochrome cartridge. Boot code can select compatibility through KEY0 before removing the overlay through FF50. Palette initialization and WRAM selection remain available during the boot sequence; post-boot compatibility gates apply after overlay removal. The no-boot convenience profile selects its initial mode from the cartridge header instead. These two startup methods are distinct comparison inputs.
+
+CGB register dispatch includes DMA status, palette indexes, infrared storage, undocumented storage/masks, and read-only PCM amplitude registers. A physical color model and color execution mode are separate gates. Disconnected infrared register behavior does not establish external infrared transport, and PCM register access does not establish complete audio accuracy.

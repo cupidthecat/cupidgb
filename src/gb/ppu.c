@@ -176,7 +176,7 @@ void cupid_gb_run_dma_transfer(CupidGb *gb, uint8_t source_high) {
  * @note Does nothing if @p gb is NULL.
  */
 void cupid_gb_tick_dma(CupidGb *gb) {
-    if (gb == 0) {
+    if (gb == 0 || gb->cpu.halted || gb->cpu.stopped) {
         return;
     }
 
@@ -234,6 +234,8 @@ static void tick_ppu(CupidGb *gb, uint32_t dots, uint8_t *midpoint) {
         cupid_gb_update_stat_irq(gb);
         return;
     }
+    if (gb->cpu.stopped && gb->model != CUPID_GB_MODEL_CGB)
+        return;
     if (!p->initialized) {
         p->initialized = true;
         p->line = gb->io_registers[CUPID_GB_IO_LY];
@@ -252,6 +254,7 @@ static void tick_ppu(CupidGb *gb, uint32_t dots, uint8_t *midpoint) {
     }
     while (dots) {
         for (unsigned subcycle = 0; subcycle < 4 && dots; ++subcycle, --dots) {
+            cupid_cgb_advance_hdma(gb);
             cupid_gb_sync_lcd_startup(gb);
             if (gb->stat_irq_delay) {
                 --gb->stat_irq_delay;

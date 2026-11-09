@@ -456,7 +456,7 @@ static void test_stop_clock_and_selected_input(void) {
     gb.joypad = 0xfe;
     step_cycles(&gb, 12);
     assert(!gb.cpu.stopped && gb.cpu.pc == 0x102);
-    assert(gb.div_counter == 2 && gb.io_registers[5] == 0x42);
+    assert(gb.div_counter == 1 && gb.io_registers[5] == 0x42);
     step_cycles(&gb, 20);
     assert(gb.cpu.pc == 0x50);
 
@@ -490,6 +490,70 @@ static void test_stop_key_prevents_speed_switch(void) {
     cupid_gb_cleanup(&gb);
 }
 
+static void test_color_speed_switch_wait_and_irq_abort(void) {
+    CupidGb gb = {0};
+    for (unsigned fast = 0; fast < 2; ++fast) {
+        for (unsigned ime = 0; ime < 2; ++ime) {
+            prepare(&gb, 0x10, 0);
+            gb.rom[0x101] = 4;
+            gb.rom[0x102] = 0;
+            gb.model = CUPID_GB_MODEL_CGB;
+            gb.cgb_mode = true;
+            gb.double_speed = fast != 0;
+            gb.cpu.ime = ime != 0;
+            cupid_gb_write_u8(&gb, 0xff40, 0);
+            cupid_gb_write_u8(&gb, 0xff00, 0x10);
+            cupid_gb_write_u8(&gb, 0xff04, 0);
+            cupid_gb_write_u8(&gb, 0xff4d, 1);
+            step_cycles(&gb, fast ? 4 : 8);
+            assert(gb.cpu.halted && !gb.cpu.stopped && gb.cpu.pc == 0x102);
+            assert(!gb.double_speed && !gb.speed_switch_armed);
+            assert(gb.speed_switch_halt_cycles == 0x20008u);
+            assert(gb.speed_switch_toggle_cycles == (fast ? 0 : 6));
+            assert(gb.speed_switch_freeze_cycles == 5);
+            step_cycles(&gb, 0);
+            assert(gb.cpu.halted && gb.speed_switch_halt_cycles == 0x20004u);
+            assert(gb.speed_switch_freeze_cycles == 1);
+            assert(gb.div_counter == ime);
+            step_cycles(&gb, fast ? 3 : 2);
+            assert(gb.double_speed == !fast);
+            assert(gb.speed_switch_toggle_cycles == 0 && gb.speed_switch_freeze_cycles == 0);
+            unsigned polls = 0;
+            while (gb.speed_switch_halt_cycles) {
+                assert(polls++ < 32769);
+                assert(cupid_gb_step(&gb));
+            }
+            assert(!gb.cpu.halted && gb.cpu.pc == 0x103);
+            assert(gb.elapsed_cycles == (fast ? 131083u : 65548u));
+        }
+    }
+
+    prepare(&gb, 0x10, 0);
+    gb.rom[0x101] = 4;
+    gb.rom[0x102] = 0;
+    gb.model = CUPID_GB_MODEL_CGB;
+    gb.cgb_mode = true;
+    gb.cpu.ime_delay = 1;
+    cupid_gb_write_u8(&gb, 0xff4d, 1);
+    step_cycles(&gb, 8);
+    assert(gb.cpu.ime && gb.stop_divider_hold_cycles == 0);
+
+    prepare(&gb, 0x10, 0);
+    gb.rom[0x101] = 4;
+    gb.rom[0x102] = 0;
+    gb.model = CUPID_GB_MODEL_CGB;
+    gb.cgb_mode = true;
+    cupid_gb_write_u8(&gb, 0xff4d, 1);
+    step_cycles(&gb, 8);
+    gb.interrupt_enable = gb.interrupt_flags = 1;
+    step_cycles(&gb, 0);
+    assert(!gb.cpu.halted && gb.cpu.pc == 0x102 && gb.speed_switch_halt_cycles == 0);
+    assert(gb.speed_switch_toggle_cycles == 2 && gb.speed_switch_freeze_cycles == 1);
+    step_cycles(&gb, 2);
+    assert(gb.double_speed && gb.cpu.pc == 0x103);
+    cupid_gb_cleanup(&gb);
+}
+
 static void test_halt_wake_clock_cycle(void) {
     CupidGb gb = {0};
     for (unsigned color = 0; color < 2; ++color) {
@@ -505,17 +569,21 @@ static void test_halt_wake_clock_cycle(void) {
                 gb.tima_overflow_delay = (uint8_t)delayed;
                 /* A pending request needs the wake cycle plus five entry
                  * cycles. A request arriving after the polling point first
-                 * needs one idle cycle. IME clear also executes the next NOP. */
+                 * needs one idle cycle. An IME0 wake leaves the next opcode for
+                 * the following hardware step. */
                 if (delayed) {
                     step_cycles(&gb, 4);
                     assert(gb.cpu.halted && gb.cpu.pc == 0x100);
                 }
-                step_cycles(&gb, enabled ? 24u : 8u);
-                assert(!gb.cpu.halted && gb.cpu.pc == (enabled ? 0x50 : 0x101));
+                step_cycles(&gb, enabled ? 24u : 4u);
+                assert(!gb.cpu.halted && gb.cpu.pc == (enabled ? 0x50 : 0x100));
                 assert((gb.interrupt_flags & 4u) == (enabled ? 0u : 4u));
                 assert(gb.cpu.sp == (enabled ? 0xc0fe : 0xc100));
                 if (enabled) {
                     assert(gb.work_ram[0xfe] == 0 && gb.work_ram[0xff] == 1);
+                } else {
+                    step_cycles(&gb, 4u);
+                    assert(gb.cpu.pc == 0x101);
                 }
             }
         }
@@ -841,6 +909,7 @@ int main(void) {
     test_halt_pending_enable_and_fetch_phase();
     test_stop_clock_and_selected_input();
     test_stop_key_prevents_speed_switch();
+    test_color_speed_switch_wait_and_irq_abort();
     test_halt_wake_clock_cycle();
     test_first_halt_poll_precedes_midpoint();
     test_timer_periods_and_register_edges();

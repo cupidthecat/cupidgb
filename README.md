@@ -27,7 +27,7 @@ Use `--model dmg`, `--model cgb`, or another supported profile to fix hardware f
 
 Emulation > Settings controls hardware, the optional boot-ROM directory, input, display, volume, and rewind limits. Model and boot choices apply on the next reset or open. Without a boot binary, startup uses an approximate post-boot profile. Boot binaries and game inputs are not distributed.
 
-Battery data uses `.sav` beside the cartridge. State slots use `.s0` through `.s9`; the zero key selects slot 10. States use CupidGB native version 2. Older version 1 states can export supported battery data through File > Recover Battery from Older State, but cannot resume execution in the changed core. Keep backups of saves you need to preserve.
+Battery data uses `.sav` beside the cartridge. State slots use `.s0` through `.s9`; the zero key selects slot 10. New states use CupidGB native version 3. Version 2 states remain loadable, with defaults for timing history absent from those files. Older version 1 states can export supported battery data through File > Recover Battery from Older State, but cannot resume execution in the changed core. Keep backups of saves you need to preserve.
 
 Controllers, advanced debugger commands/watchpoints, connected devices, cheats, state interchange, individual hardware revisions, uncommon cartridge behavior, and advanced display/audio features remain incomplete. [The parity checklist](docs/parity.md) records the full scope.
 

@@ -443,7 +443,10 @@ CupidGbDebugStop cupid_gb_debugger_step(CupidGbDebugger *debugger, CupidGb *gb) 
     }
     if (debugger->mode == CUPID_GB_DEBUG_STEP)
         return stopped(debugger, CUPID_GB_DEBUG_STOP_STEP);
-    if ((debugger->mode == CUPID_GB_DEBUG_NEXT && debugger->call_depth <= 0 && !gb->cpu.halted) ||
+    /* A wake-only HALT poll is not the instruction Next is waiting for. Keep
+     * running until the following fetch, while preserving one-event Step. */
+    if ((debugger->mode == CUPID_GB_DEBUG_NEXT && executed_opcode && debugger->call_depth <= 0 &&
+         !gb->cpu.halted) ||
         (debugger->mode == CUPID_GB_DEBUG_FINISH && debugger->call_depth < 0))
         return stopped(debugger, CUPID_GB_DEBUG_STOP_TARGET);
     return CUPID_GB_DEBUG_STOP_NONE;

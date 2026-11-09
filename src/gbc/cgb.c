@@ -18,8 +18,10 @@
 
 #include <string.h>
 
+#include "cupid/gb/apu.h"
 #include "cupid/gb/gb.h"
 #include "cupid/gb/ppu.h"
+#include "cupid/gb/timer.h"
 
 typedef struct CupidCgbCompatPaletteSet {
     uint16_t bg[4];
@@ -630,6 +632,9 @@ void cupid_cgb_init_state(CupidGb *gb) {
     gb->hdma_destination = 0x8000u;
     gb->hdma_blocks_remaining = 0u;
     gb->hdma_active = false;
+    gb->hdma_pending = false;
+    gb->hdma_hblank_delay = 0;
+    gb->hdma_allow_on_wake = false;
     gb->io_registers[0x4fu] = 0xfeu;
     gb->io_registers[0x4cu] = 0u;
     gb->io_registers[0x68u] = 0x00u;
@@ -830,7 +835,7 @@ uint16_t cupid_cgb_compat_obj_color(const CupidGb *gb, unsigned int palette, uin
 static bool cupid_cgb_palette_blocked(const CupidGb *gb) {
     uint8_t mode;
 
-    if (gb == 0 || !gb->cgb_mode || !cupid_gb_lcd_enabled(gb) ||
+    if (gb == 0 || gb->model != CUPID_GB_MODEL_CGB || !cupid_gb_lcd_enabled(gb) ||
         gb->io_registers[CUPID_GB_IO_LY] >= CUPID_GB_PPU_VISIBLE_SCANLINES) {
         return false;
     }
@@ -843,8 +848,8 @@ static bool cupid_cgb_palette_blocked(const CupidGb *gb) {
  * @brief Reads one byte from CGB BG or OBJ palette RAM via the index register.
  *
  * The index is taken from 0xFF68 (BG) or 0xFF6A (OBJ), bits 5–0.
- * Returns 0xFF if CGB mode is not active, @p gb is NULL, or the
- * palette RAM is blocked by the PPU.
+ * Color boot firmware can access palette data after selecting compatibility
+ * mode. After boot, data ports require color mode; index ports remain visible.
  *
  * @param gb             Pointer to the Game Boy state.
  * @param object_palette `true` to read from OBJ palette RAM, `false` for BG.
@@ -855,7 +860,8 @@ static uint8_t cupid_cgb_palette_read(const CupidGb *gb, bool object_palette) {
     const uint8_t *palette_ram;
     uint8_t index;
 
-    if (gb == 0 || !gb->cgb_mode || cupid_cgb_palette_blocked(gb)) {
+    if (gb == 0 || gb->model != CUPID_GB_MODEL_CGB || (!gb->cgb_mode && !gb->boot_rom_enabled) ||
+        cupid_cgb_palette_blocked(gb)) {
         return 0xffu;
     }
 
@@ -877,7 +883,7 @@ static uint8_t cupid_cgb_palette_read(const CupidGb *gb, bool object_palette) {
  * @param object_palette `true` to write to OBJ palette RAM, `false` for BG.
  * @param value          The byte to write.
  *
- * @note Does nothing if @p gb is NULL or CGB mode is not active.
+ * @note Compatibility mode closes the data ports only after boot completes.
  */
 static void cupid_cgb_palette_write(CupidGb *gb, bool object_palette, uint8_t value) {
     uint8_t *palette_ram;
@@ -885,7 +891,7 @@ static void cupid_cgb_palette_write(CupidGb *gb, bool object_palette, uint8_t va
     uint8_t index;
     bool auto_increment;
 
-    if (gb == 0 || !gb->cgb_mode) {
+    if (gb == 0 || gb->model != CUPID_GB_MODEL_CGB || (!gb->cgb_mode && !gb->boot_rom_enabled)) {
         return;
     }
 
@@ -906,51 +912,53 @@ static void cupid_cgb_palette_write(CupidGb *gb, bool object_palette, uint8_t va
     gb->io_registers[object_palette ? 0x6bu : 0x69u] = value;
 }
 
-/**
- * @brief Copies one 16-byte HDMA block from the source address to VRAM.
- *
- * Reads 16 bytes beginning at `gb->hdma_source` via @ref cupid_gb_read_u8
- * and writes them to `gb->hdma_destination` (which must be in the VRAM
- * range 0x8000–0x9FFF). After the copy, both pointers are advanced by
- * 16 bytes. The I/O shadow registers (0xFF51–0xFF55) are updated and
- * `hdma_blocks_remaining` is decremented; when it reaches zero,
- * `hdma_active` is cleared and 0xFF55 is set to 0xFF.
- *
- * @param gb Pointer to the Game Boy state.
- *
- * @note Does nothing if @p gb is NULL, CGB mode is inactive, or there
- *       are no remaining blocks.
- */
-static void cupid_cgb_hdma_copy_block(CupidGb *gb) {
-    uint8_t byte_index;
+/* Zero remaining blocks encodes the completed value FF. Cancellation keeps the
+ * newly written count but releases the active request, producing an idle count. */
+static uint8_t cupid_cgb_dma_status(const CupidGb *gb) {
+    return (uint8_t)((gb->hdma_active || gb->hdma_pending ? 0 : 0x80u) |
+                     ((gb->hdma_blocks_remaining - 1u) & 0x7fu));
+}
 
-    if (gb == 0 || !gb->cgb_mode || gb->hdma_blocks_remaining == 0u) {
+void cupid_cgb_run_pending_dma(CupidGb *gb, uint8_t opcode) {
+    if (!gb || gb->model != CUPID_GB_MODEL_CGB || !gb->hdma_pending)
         return;
-    }
 
-    for (byte_index = 0u; byte_index < 0x10u; ++byte_index) {
-        uint16_t source = (uint16_t)(gb->hdma_source + byte_index);
-        uint16_t destination = (uint16_t)(gb->hdma_destination + byte_index);
+    const size_t bank = gb->cgb_vram_bank ? 0x2000u : 0;
+    unsigned slot = 0;
+    uint8_t bus_value = opcode;
+    /* Every byte uses two LCD dots. Normal speed adds a final two-dot slot so
+     * the complete stall ends on a CPU machine-cycle boundary in either speed. */
+    cupid_gb_tick_color_dma_slot(gb, true);
+    ++slot;
+    while (gb->hdma_pending && gb->hdma_blocks_remaining) {
+        const uint16_t source = gb->hdma_source++;
+        /* Invalid DMA sources do not use the CPU's WRAM echo mapping. This
+         * local bus value is an approximation until shared bus decay is modeled. */
+        if (source < 0x8000u || (source >= 0xa000u && source < 0xe000u))
+            bus_value = cupid_gb_read_u8(gb, source);
+        cupid_gb_tick_color_dma_slot(gb, gb->double_speed || !(slot & 1u));
+        ++slot;
+        const size_t destination = gb->hdma_destination & 0x1fffu;
+        ++gb->hdma_destination;
+        gb->video_ram[bank + destination] = bus_value;
+        if (cupid_gb_lcd_enabled(gb) && gb->pixels.line < 144 &&
+            (gb->io_registers[CUPID_GB_IO_STAT] & 3u) == CUPID_GB_PPU_MODE_TRANSFER)
+            gb->video_ram[(bank ^ 0x2000u) + destination] = bus_value;
 
-        if (destination >= 0x8000u && destination <= 0x9fffu) {
-            gb->video_ram[cupid_cgb_vram_offset(gb, destination)] = cupid_gb_read_u8(gb, source);
+        if (!(gb->hdma_destination & 15u)) {
+            --gb->hdma_blocks_remaining;
+            if (!gb->hdma_blocks_remaining || !gb->hdma_destination) {
+                gb->hdma_active = false;
+                gb->hdma_pending = false;
+                gb->hdma_hblank_delay = 0;
+            } else if (gb->hdma_active) {
+                gb->hdma_pending = false;
+            }
         }
     }
-
-    gb->hdma_source = (uint16_t)(gb->hdma_source + 0x10u);
-    gb->hdma_destination = (uint16_t)(gb->hdma_destination + 0x10u);
-    gb->io_registers[0x51u] = (uint8_t)(gb->hdma_source >> 8u);
-    gb->io_registers[0x52u] = (uint8_t)(gb->hdma_source & 0xf0u);
-    gb->io_registers[0x53u] = (uint8_t)((gb->hdma_destination >> 8u) & 0x1fu);
-    gb->io_registers[0x54u] = (uint8_t)(gb->hdma_destination & 0xf0u);
-    gb->hdma_blocks_remaining = (uint8_t)(gb->hdma_blocks_remaining - 1u);
-    if (gb->hdma_blocks_remaining == 0u) {
-        gb->hdma_active = false;
-        gb->io_registers[0x55u] = 0xffu;
-    } else {
-        gb->io_registers[0x55u] =
-            gb->hdma_active ? (uint8_t)((gb->hdma_blocks_remaining - 1u) & 0x7fu) : 0xffu;
-    }
+    if (!gb->double_speed)
+        cupid_gb_tick_color_dma_slot(gb, !(slot & 1u));
+    gb->io_registers[0x55u] = cupid_cgb_dma_status(gb);
 }
 
 /**
@@ -982,35 +990,45 @@ bool cupid_cgb_handle_read_register(const CupidGb *gb, uint16_t address, uint8_t
 
     switch (address) {
         case 0xff4cu:
+        case 0xff51u:
+        case 0xff52u:
+        case 0xff53u:
+        case 0xff54u:
+            /* Control and DMA address registers are write-only on the bus. */
+            *value = 0xffu;
+            return true;
         case 0xff56u:
-            *value = gb != 0 && gb->cgb_mode ? gb->io_registers[address - 0xff00u] : 0xffu;
+            *value = gb != 0 && gb->cgb_mode ? (uint8_t)(0x2eu | (gb->io_registers[0x56u] & 0xc1u))
+                                             : 0xffu;
             return true;
         case 0xff4du:
             if (gb == 0 || !gb->cgb_mode) {
                 *value = 0xffu;
             } else {
-                *value = (uint8_t)(0x7eu | (gb->io_registers[0x4du] & 0x81u));
+                *value = (uint8_t)(0x7eu | (gb->io_registers[0x4du] & 1u) |
+                                   (gb->double_speed ? 0x80u : 0));
             }
             return true;
         case 0xff4fu:
-            *value =
-                gb != 0 && gb->cgb_mode ? (uint8_t)(0xfeu | (gb->cgb_vram_bank & 0x01u)) : 0xffu;
+            *value = gb != 0 && gb->model == CUPID_GB_MODEL_CGB
+                         ? (uint8_t)(0xfeu | (gb->cgb_vram_bank & 0x01u))
+                         : 0xffu;
             return true;
-        case 0xff51u:
-        case 0xff52u:
-        case 0xff53u:
-        case 0xff54u:
         case 0xff55u:
-            *value = gb != 0 && gb->cgb_mode ? gb->io_registers[address - 0xff00u] : 0xffu;
+            *value = gb != 0 && gb->cgb_mode ? cupid_cgb_dma_status(gb) : 0xffu;
             return true;
         case 0xff68u:
-            *value = gb != 0 && gb->cgb_mode ? (uint8_t)(0x40u | gb->io_registers[0x68u]) : 0xffu;
+            *value = gb != 0 && gb->model == CUPID_GB_MODEL_CGB
+                         ? (uint8_t)(0x40u | gb->io_registers[0x68u])
+                         : 0xffu;
             return true;
         case 0xff69u:
             *value = cupid_cgb_palette_read(gb, false);
             return true;
         case 0xff6au:
-            *value = gb != 0 && gb->cgb_mode ? (uint8_t)(0x40u | gb->io_registers[0x6au]) : 0xffu;
+            *value = gb != 0 && gb->model == CUPID_GB_MODEL_CGB
+                         ? (uint8_t)(0x40u | gb->io_registers[0x6au])
+                         : 0xffu;
             return true;
         case 0xff6bu:
             *value = cupid_cgb_palette_read(gb, true);
@@ -1023,6 +1041,26 @@ bool cupid_cgb_handle_read_register(const CupidGb *gb, uint16_t address, uint8_t
         case 0xff70u:
             *value =
                 gb != 0 && gb->cgb_mode ? (uint8_t)(0xf8u | (gb->cgb_wram_bank & 0x07u)) : 0xffu;
+            return true;
+        case 0xff72u:
+        case 0xff73u:
+            *value = gb != 0 && gb->model == CUPID_GB_MODEL_CGB
+                         ? gb->io_registers[address - 0xff00u]
+                         : 0xffu;
+            return true;
+        case 0xff74u:
+            *value = gb != 0 && gb->cgb_mode ? gb->io_registers[0x74u] : 0xffu;
+            return true;
+        case 0xff75u:
+            *value = gb != 0 && gb->model == CUPID_GB_MODEL_CGB
+                         ? (uint8_t)(0x8fu | gb->io_registers[0x75u])
+                         : 0xffu;
+            return true;
+        case 0xff76u:
+            *value = cupid_gb_apu_read_pcm12(gb);
+            return true;
+        case 0xff77u:
+            *value = cupid_gb_apu_read_pcm34(gb);
             return true;
         default:
             return false;
@@ -1063,6 +1101,7 @@ bool cupid_cgb_handle_write_register(CupidGb *gb, uint16_t address, uint8_t valu
         case 0xff4cu:
             if (gb->model == CUPID_GB_MODEL_CGB && gb->boot_rom_enabled) {
                 gb->io_registers[0x4cu] = value;
+                gb->cgb_mode = (value & 0x0cu) == 0;
             }
             return true;
         case 0xff56u:
@@ -1084,45 +1123,46 @@ bool cupid_cgb_handle_write_register(CupidGb *gb, uint16_t address, uint8_t valu
             }
             return true;
         case 0xff51u:
+            if (gb->cgb_mode) {
+                gb->hdma_source = (uint16_t)((gb->hdma_source & 0xf0u) | (value << 8u));
+                if (gb->hdma_source >= 0xe000u)
+                    gb->hdma_source |= 0xf000u;
+            }
+            return true;
         case 0xff52u:
+            if (gb->cgb_mode)
+                gb->hdma_source = (uint16_t)((gb->hdma_source & 0xff00u) | (value & 0xf0u));
+            return true;
         case 0xff53u:
+            if (gb->cgb_mode)
+                gb->hdma_destination = (uint16_t)((gb->hdma_destination & 0xf0u) | (value << 8u));
+            return true;
         case 0xff54u:
             if (gb->cgb_mode) {
-                gb->io_registers[address - 0xff00u] = value;
-                gb->hdma_source = (uint16_t)(((uint16_t)gb->io_registers[0x51u] << 8u) |
-                                             (uint16_t)(gb->io_registers[0x52u] & 0xf0u));
                 gb->hdma_destination =
-                    (uint16_t)(0x8000u | (((uint16_t)gb->io_registers[0x53u] & 0x1fu) << 8u) |
-                               (uint16_t)(gb->io_registers[0x54u] & 0xf0u));
+                    (uint16_t)((gb->hdma_destination & 0xff00u) | (value & 0xf0u));
             }
             return true;
         case 0xff55u:
             if (gb->cgb_mode) {
+                gb->hdma_blocks_remaining = (uint8_t)((value & 0x7fu) + 1u);
+                gb->hdma_hblank_delay = 0;
                 if (gb->hdma_active && (value & 0x80u) == 0u) {
                     gb->hdma_active = false;
-                    gb->io_registers[0x55u] =
-                        (uint8_t)(0x80u | ((gb->hdma_blocks_remaining - 1u) & 0x7fu));
+                    gb->hdma_pending = false;
                 } else {
-                    gb->hdma_source = (uint16_t)(((uint16_t)gb->io_registers[0x51u] << 8u) |
-                                                 (uint16_t)(gb->io_registers[0x52u] & 0xf0u));
-                    gb->hdma_destination =
-                        (uint16_t)(0x8000u | (((uint16_t)gb->io_registers[0x53u] & 0x1fu) << 8u) |
-                                   (uint16_t)(gb->io_registers[0x54u] & 0xf0u));
-                    gb->hdma_blocks_remaining = (uint8_t)((value & 0x7fu) + 1u);
                     gb->hdma_active = (value & 0x80u) != 0u;
-                    gb->io_registers[0x55u] =
-                        gb->hdma_active ? (uint8_t)((gb->hdma_blocks_remaining - 1u) & 0x7fu)
-                                        : 0xffu;
-                    if (!gb->hdma_active) {
-                        while (gb->hdma_blocks_remaining > 0u) {
-                            cupid_cgb_hdma_copy_block(gb);
-                        }
-                    }
+                    const bool oam_edge = gb->pixels.initialized && !gb->ppu_lcd_startup &&
+                                          gb->pixels.line < 144 && gb->pixels.dot == 0;
+                    gb->hdma_pending =
+                        !gb->hdma_active ||
+                        (((gb->io_registers[CUPID_GB_IO_STAT] & 3u) == 0) && !oam_edge);
                 }
+                gb->io_registers[0x55u] = cupid_cgb_dma_status(gb);
             }
             return true;
         case 0xff68u:
-            if (gb->cgb_mode) {
+            if (gb->model == CUPID_GB_MODEL_CGB) {
                 gb->io_registers[0x68u] = (uint8_t)(value & 0xbfu);
             }
             return true;
@@ -1130,7 +1170,7 @@ bool cupid_cgb_handle_write_register(CupidGb *gb, uint16_t address, uint8_t valu
             cupid_cgb_palette_write(gb, false, value);
             return true;
         case 0xff6au:
-            if (gb->cgb_mode) {
+            if (gb->model == CUPID_GB_MODEL_CGB) {
                 gb->io_registers[0x6au] = (uint8_t)(value & 0xbfu);
             }
             return true;
@@ -1151,7 +1191,7 @@ bool cupid_cgb_handle_write_register(CupidGb *gb, uint16_t address, uint8_t valu
             }
             return true;
         case 0xff70u:
-            if (gb->cgb_mode) {
+            if (gb->cgb_mode || (gb->model == CUPID_GB_MODEL_CGB && gb->boot_rom_enabled)) {
                 gb->cgb_wram_bank = (uint8_t)(value & 0x07u);
                 if (gb->cgb_wram_bank == 0u) {
                     gb->cgb_wram_bank = 1u;
@@ -1389,22 +1429,34 @@ void cupid_cgb_render_scanline(CupidGb *gb, uint8_t lcdc, uint8_t ly, size_t bas
     }
 }
 
-/**
- * @brief Advances H-Blank DMA by one 16-byte block.
- *
- * Called once per H-Blank period (from the PPU tick) while an H-Blank
- * DMA transfer is active. Delegates to @ref cupid_cgb_hdma_copy_block
- * to transfer the next 16-byte block.
- *
- * @param gb Pointer to the Game Boy state.
- *
- * @note Does nothing if @p gb is NULL, HDMA is not active, or there are
- *       no remaining blocks.
- */
 void cupid_cgb_tick_hdma(CupidGb *gb) {
-    if (gb == 0 || !gb->hdma_active || gb->hdma_blocks_remaining == 0u) {
-        return;
-    }
+    if (gb && gb->hdma_active && gb->hdma_blocks_remaining)
+        /* The request settles three dots after the final pixel, independently
+         * of the readable STAT mode and its interrupt delay. */
+        gb->hdma_hblank_delay = 3;
+}
 
-    cupid_cgb_hdma_copy_block(gb);
+void cupid_cgb_advance_hdma(CupidGb *gb) {
+    if (gb && gb->hdma_hblank_delay && !--gb->hdma_hblank_delay && gb->hdma_active &&
+        !gb->cpu.halted && !gb->cpu.stopped)
+        gb->hdma_pending = true;
+}
+
+void cupid_cgb_hdma_lcd_off(CupidGb *gb, uint8_t previous_mode) {
+    if (!gb)
+        return;
+    gb->hdma_hblank_delay = 0;
+    if (gb->hdma_active && previous_mode)
+        gb->hdma_pending = true;
+}
+
+void cupid_cgb_hdma_sleep(CupidGb *gb) {
+    if (gb)
+        gb->hdma_allow_on_wake = (gb->io_registers[CUPID_GB_IO_STAT] & 3u) != 0;
+}
+
+void cupid_cgb_hdma_wake(CupidGb *gb) {
+    if (gb && gb->hdma_active && gb->hdma_allow_on_wake &&
+        !(gb->io_registers[CUPID_GB_IO_STAT] & 3u))
+        gb->hdma_pending = true;
 }

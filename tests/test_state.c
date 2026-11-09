@@ -4,6 +4,7 @@
 #include "cupid/gb/ppu.h"
 #include "cupid/gb/state.h"
 #include "cupid/gb/timer.h"
+#include "cupid/gbc/cgb.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -221,8 +222,9 @@ static void test_resume(void) {
                 prepare_phase(a, phase);
                 size_t length;
                 uint8_t *state = encode(a, &length);
-                /* Every version 2 model and power phase has the same portable wire shape. */
-                assert(length == 300518);
+                /* Model and power phase do not change the current portable wire shape. */
+                assert(length == cupid_gb_state_size(b) && length > 300518);
+                assert(state[8] == 3);
                 uint8_t *rom_pointer = b->rom;
                 strcpy(b->save_path, "host-session-save.sav");
                 assert(cupid_gb_load_state(b, state, length) == CUPID_GB_STATE_OK);
@@ -276,6 +278,334 @@ static void update_integrity(uint8_t *bytes, size_t length) {
     cupid_sha256_update(&hash, bytes, 96);
     cupid_sha256_update(&hash, bytes + 128, length - 128);
     cupid_sha256_final(&hash, bytes + 96);
+}
+
+static void put_u32(uint8_t *bytes, uint32_t value) {
+    for (unsigned i = 0; i < 4; ++i) {
+        bytes[i] = (uint8_t)(value >> (i * 8));
+    }
+}
+
+static void test_v2_import(void) {
+    const size_t legacy_length = 300518;
+    CupidGb *source = calloc(1, sizeof(*source));
+    CupidGb *target = calloc(1, sizeof(*target));
+    CupidGb *expected = malloc(sizeof(*expected));
+    assert(source && target && expected);
+    const CupidGbModel models[] = {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_CGB, CUPID_GB_MODEL_SGB};
+    for (unsigned model = 0; model < sizeof(models) / sizeof(models[0]); ++model) {
+        for (unsigned boot = 0; boot < 2; ++boot) {
+            prepare(source, models[model], boot != 0);
+            prepare(target, models[model], boot != 0);
+            cupid_gb_write_u8(source, 0xff21, 0xf2);
+            cupid_gb_write_u8(source, 0xff22, 0x09);
+            cupid_gb_write_u8(source, 0xff23, 0x80);
+            prepare_phase(source, 2);
+            size_t length;
+            uint8_t *bytes = encode(source, &length);
+            assert(length > legacy_length);
+            /* The v2 payload is frozen. Remove only the new extension and rebuild
+             * its original header and digest, without running the current encoder again. */
+            put_u32(bytes + 8, 2);
+            put_u32(bytes + 12, (uint32_t)legacy_length);
+            update_integrity(bytes, legacy_length);
+            *expected = *source;
+            expected->hdma_pending = false;
+            expected->hdma_hblank_delay = 0;
+            expected->hdma_allow_on_wake = false;
+            expected->speed_switch_halt_cycles = 0;
+            expected->speed_switch_toggle_cycles = 0;
+            expected->speed_switch_freeze_cycles = 0;
+            expected->stop_divider_hold_cycles = 0;
+            expected->speed_switch_alignment = 0;
+            cupid_gb_apu_import_legacy(expected);
+            for (unsigned trusted = 0; trusted < 2; ++trusted) {
+                /* A live target's unrelated oscillator and DMA history must never
+                 * supply fields absent from the old file. */
+                target->hdma_pending = true;
+                target->hdma_blocks_remaining = 2;
+                target->hdma_hblank_delay = 3;
+                target->hdma_allow_on_wake = true;
+                target->apu.clock_phase = 3;
+                target->apu.envelope_delay = 2;
+                target->apu.pulse_timing[0].start_delay = 12;
+                target->apu.pulse_timing[1].output_blocked = true;
+                target->apu.sweep_timing.delta = 2047;
+                target->apu.noise_timing.divider_counter = 0x3fff;
+                target->apu.noise_timing.started_dac_off = true;
+                target->speed_switch_halt_cycles = 131080;
+                target->speed_switch_toggle_cycles = 6;
+                target->speed_switch_freeze_cycles = 5;
+                target->stop_divider_hold_cycles = 4;
+                target->speed_switch_alignment = 7;
+                CupidGbStateContext context = {0};
+                assert(cupid_gb_state_context_init(&context, target) == CUPID_GB_STATE_OK);
+                CupidGbStateResult result =
+                    trusted
+                        ? cupid_gb_load_state_with_context(target, bytes, legacy_length, &context)
+                        : cupid_gb_load_state(target, bytes, legacy_length);
+                assert(result == CUPID_GB_STATE_OK);
+                assert(!target->hdma_pending && !target->hdma_hblank_delay &&
+                       !target->hdma_allow_on_wake);
+                assert(!target->speed_switch_halt_cycles && !target->speed_switch_toggle_cycles &&
+                       !target->speed_switch_freeze_cycles && !target->stop_divider_hold_cycles &&
+                       !target->speed_switch_alignment);
+                assert(target->apu.clock_phase == (source->elapsed_cycles & 3u));
+                assert(target->apu.envelope_delay == 0 && target->apu.sweep_timing.delta == 0);
+                assert(target->apu.noise_timing.foreground ==
+                       (source->apu.ch4_on && source->apu.ch4_dac));
+                assert(!target->apu.noise_timing.started_dac_off &&
+                       target->apu.noise_timing.divider_counter == 0);
+                assert_hardware_equal(expected, target);
+                assert_encoded_equal(expected, target);
+                /* Queued PCM, integration and capacitor history belong to v2,
+                 * and importing missing latches must preserve all three. */
+                assert(target->apu.sample_acc == source->apu.sample_acc);
+                assert(target->apu.mix_left == source->apu.mix_left);
+                assert(target->apu.highpass_left == source->apu.highpass_left);
+            }
+            free(bytes);
+        }
+    }
+    cupid_gb_cleanup(source);
+    cupid_gb_cleanup(target);
+    free(source);
+    free(target);
+    free(expected);
+}
+
+static void test_cgb_dma_audio_resume(void) {
+    CupidGb *source = calloc(1, sizeof(*source)), *target = calloc(1, sizeof(*target));
+    assert(source && target);
+    for (unsigned fast = 0; fast < 2; ++fast) {
+        for (unsigned phase = 0; phase < 5; ++phase) {
+            prepare(source, CUPID_GB_MODEL_CGB, false);
+            prepare(target, CUPID_GB_MODEL_CGB, false);
+            source->double_speed = fast != 0;
+            source->io_registers[0x4d] = fast ? 0x80 : 0;
+            cupid_gb_write_u8(source, 0xff40, 0);
+            cupid_gb_write_u8(source, 0xff51, 0xc0);
+            cupid_gb_write_u8(source, 0xff52, 0);
+            cupid_gb_write_u8(source, 0xff53, 8);
+            cupid_gb_write_u8(source, 0xff54, 0);
+            if (phase) {
+                cupid_gb_write_u8(source, 0xff40, 0x91);
+                for (unsigned dot = 0; !(source->io_registers[0x41] & 3u); ++dot) {
+                    assert(dot < 500);
+                    cupid_gb_tick_ppu_dots(source, 1);
+                }
+                cupid_gb_write_u8(source, 0xff55, 0x81);
+                if (phase >= 3) {
+                    cupid_cgb_hdma_sleep(source);
+                    source->cpu.halted = phase == 3;
+                    source->cpu.stopped = phase == 4;
+                    assert(source->hdma_allow_on_wake);
+                }
+                for (unsigned dot = 0; !source->hdma_hblank_delay; ++dot) {
+                    assert(dot < 1000);
+                    cupid_gb_tick_ppu_dots(source, 1);
+                }
+                if (phase >= 2) {
+                    cupid_gb_tick_ppu_dots(source, 3);
+                    assert(source->hdma_pending == (phase == 2));
+                }
+            } else {
+                cupid_gb_write_u8(source, 0xff55, 1);
+                assert(source->hdma_pending);
+            }
+            /* Trigger immediately before capture: restart delay and held output
+             * must survive together with the independently scheduled DMA edge. */
+            cupid_gb_write_u8(source, 0xff19, 0x87);
+            size_t length;
+            uint8_t *bytes = encode(source, &length);
+            assert(cupid_gb_load_state(target, bytes, length) == CUPID_GB_STATE_OK);
+            free(bytes);
+            assert_encoded_equal(source, target);
+            if (phase >= 3) {
+                source->cpu.halted = target->cpu.halted = false;
+                source->cpu.stopped = target->cpu.stopped = false;
+                cupid_cgb_hdma_wake(source);
+                cupid_cgb_hdma_wake(target);
+                assert(source->hdma_pending && target->hdma_pending);
+            }
+            for (unsigned step = 0; step < 160; ++step) {
+                assert(cupid_gb_step(source) && cupid_gb_step(target));
+                if (step < 4) {
+                    assert_encoded_equal(source, target);
+                } else if (step % 19 == 0) {
+                    assert_hardware_equal(source, target);
+                }
+            }
+            assert_encoded_equal(source, target);
+            assert_hardware_equal(source, target);
+        }
+    }
+    cupid_gb_cleanup(source);
+    cupid_gb_cleanup(target);
+    free(source);
+    free(target);
+}
+
+static void test_audio_pipeline_resume(void) {
+    CupidGb *source = calloc(1, sizeof(*source)), *target = calloc(1, sizeof(*target));
+    assert(source && target);
+    unsigned delayed_pulse = 0, calculating_sweep = 0, advancing_noise = 0;
+    for (unsigned fast = 0; fast < 2; ++fast) {
+        for (unsigned phase = 0; phase < 64; ++phase) {
+            prepare(source, CUPID_GB_MODEL_CGB, false);
+            prepare(target, CUPID_GB_MODEL_CGB, false);
+            source->double_speed = fast != 0;
+            source->io_registers[0x4d] = fast ? 0x80 : 0;
+            cupid_gb_write_u8(source, 0xff40, 0);
+            cupid_gb_write_u8(source, 0xff26, 0);
+            cupid_gb_write_u8(source, 0xff26, 0x80);
+            cupid_gb_write_u8(source, 0xff10, 0x11);
+            cupid_gb_write_u8(source, 0xff11, 0x80);
+            cupid_gb_write_u8(source, 0xff12, 0xf1);
+            cupid_gb_write_u8(source, 0xff13, 0xf0);
+            cupid_gb_write_u8(source, 0xff14, 0x83);
+            cupid_gb_write_u8(source, 0xff21, 0xf2);
+            cupid_gb_write_u8(source, 0xff22, 0x09);
+            cupid_gb_write_u8(source, 0xff23, 0x80);
+            /* Component clocks place snapshots on both sides of base-clock
+             * edges, including phases not aligned to a CPU machine cycle. */
+            cupid_gb_tick_apu(source, (uint16_t)phase);
+            delayed_pulse += source->apu.pulse_timing[0].start_delay != 0;
+            calculating_sweep += source->apu.sweep_timing.startup_ticks != 0 ||
+                                 source->apu.sweep_timing.shift_ticks != 0;
+            advancing_noise += source->apu.noise_timing.divider_counter != 0;
+            size_t length;
+            uint8_t *bytes = encode(source, &length);
+            assert(cupid_gb_load_state(target, bytes, length) == CUPID_GB_STATE_OK);
+            free(bytes);
+            assert_encoded_equal(source, target);
+            for (unsigned step = 0; step < 160; ++step) {
+                if (step == 3) {
+                    /* Frequency and width writes act on restored in-flight
+                     * calculations and held output, rather than fresh oscillators. */
+                    cupid_gb_write_u8(source, 0xff10, 0x19);
+                    cupid_gb_write_u8(target, 0xff10, 0x19);
+                    cupid_gb_write_u8(source, 0xff22, 0x01);
+                    cupid_gb_write_u8(target, 0xff22, 0x01);
+                }
+                assert(cupid_gb_step(source) && cupid_gb_step(target));
+                if (step < 4) {
+                    assert_encoded_equal(source, target);
+                } else if (step % 19 == 0) {
+                    assert_hardware_equal(source, target);
+                }
+            }
+            assert_encoded_equal(source, target);
+            assert_hardware_equal(source, target);
+        }
+    }
+    assert(delayed_pulse && calculating_sweep && advancing_noise);
+    cupid_gb_cleanup(source);
+    cupid_gb_cleanup(target);
+    free(source);
+    free(target);
+}
+
+static void test_noise_counter_wire_domain(void) {
+    CupidGb *source = calloc(1, sizeof(*source)), *target = calloc(1, sizeof(*target));
+    assert(source && target);
+    prepare(source, CUPID_GB_MODEL_CGB, false);
+    prepare(target, CUPID_GB_MODEL_CGB, false);
+    const uint16_t counters[] = {0x3fff, 0x4000, 0x4001, 0x7fff, 0xbfff, 0xffff};
+    for (unsigned i = 0; i < sizeof(counters) / sizeof(counters[0]); ++i) {
+        /* Ordinary clocks mask to fourteen bits, but DAC-off carries can reach
+         * every uint16_t value. The codec must not truncate or reject that state. */
+        source->apu.noise_timing.divider_counter = counters[i];
+        size_t length;
+        uint8_t *bytes = encode(source, &length);
+        assert(bytes[300548] == (uint8_t)counters[i]);
+        assert(bytes[300549] == (uint8_t)(counters[i] >> 8));
+        assert(cupid_gb_load_state(target, bytes, length) == CUPID_GB_STATE_OK);
+        assert(target->apu.noise_timing.divider_counter == counters[i]);
+        assert_encoded_equal(source, target);
+        free(bytes);
+    }
+    cupid_gb_cleanup(source);
+    cupid_gb_cleanup(target);
+    free(source);
+    free(target);
+}
+
+static void prepare_switch(CupidGb *gb, bool fast, bool lcd, unsigned ime) {
+    prepare(gb, CUPID_GB_MODEL_CGB, false);
+    gb->rom[0x100] = 0x10;
+    gb->rom[0x101] = 0;
+    gb->rom[0x102] = 4; /* INC B makes resumed opcode execution observable. */
+    gb->cpu.pc = 0x100;
+    gb->cpu.b = 0;
+    gb->cpu.ime = ime == 1;
+    gb->cpu.ime_delay = ime == 2;
+    gb->joypad = 0xff;
+    gb->double_speed = fast;
+    gb->io_registers[0x4d] = fast ? 0x80 : 0;
+    cupid_gb_write_u8(gb, 0xff00, 0x30);
+    if (!lcd) {
+        cupid_gb_write_u8(gb, 0xff40, 0);
+    }
+    cupid_gb_write_u8(gb, 0xff4d, 1);
+}
+
+static void restore_peer(const CupidGb *source, CupidGb *target) {
+    size_t length;
+    uint8_t *bytes = encode(source, &length);
+    assert(cupid_gb_load_state(target, bytes, length) == CUPID_GB_STATE_OK);
+    free(bytes);
+    assert_encoded_equal(source, target);
+}
+
+static void test_speed_switch_resume(void) {
+    CupidGb *source = calloc(1, sizeof(*source)), *target = calloc(1, sizeof(*target));
+    assert(source && target);
+    for (unsigned fast = 0; fast < 2; ++fast) {
+        for (unsigned lcd = 0; lcd < 2; ++lcd) {
+            for (unsigned ime = 0; ime < 3; ++ime) {
+                prepare_switch(source, fast != 0, lcd != 0, ime);
+                prepare_switch(target, fast != 0, lcd != 0, ime);
+                assert(cupid_gb_step(source));
+                assert(source->cpu.halted && source->speed_switch_halt_cycles == 131080);
+                unsigned polls = 0;
+                while (source->cpu.halted) {
+                    assert(polls < 32780);
+                    if (polls <= 2 || source->speed_switch_halt_cycles <= 8) {
+                        /* Capture before/after the freeze, a pending toggle,
+                         * and expiry. Each loaded peer resumes the complete wait. */
+                        restore_peer(source, target);
+                    }
+                    assert(cupid_gb_step(source) && cupid_gb_step(target));
+                    ++polls;
+                    if (polls <= 3 || !source->cpu.halted || polls % 4096 == 0) {
+                        assert_encoded_equal(source, target);
+                    }
+                }
+                assert(source->double_speed == !fast && source->cpu.b == 1);
+                assert(source->cpu.pc == 0x103 && source->speed_switch_halt_cycles == 0);
+                assert_hardware_equal(source, target);
+            }
+            prepare_switch(source, fast != 0, lcd != 0, 0);
+            prepare_switch(target, fast != 0, lcd != 0, 0);
+            assert(cupid_gb_step(source));
+            restore_peer(source, target);
+            source->interrupt_enable = target->interrupt_enable = 4;
+            source->interrupt_flags = target->interrupt_flags = 4;
+            assert(cupid_gb_step(source) && cupid_gb_step(target));
+            assert(!source->cpu.halted && !source->speed_switch_halt_cycles);
+            assert(source->cpu.pc == 0x102 && source->cpu.b == 0);
+            assert_encoded_equal(source, target);
+            restore_peer(source, target);
+            assert(cupid_gb_step(source) && cupid_gb_step(target));
+            assert(source->double_speed == !fast && source->cpu.b == 1);
+            assert_encoded_equal(source, target);
+        }
+    }
+    cupid_gb_cleanup(source);
+    cupid_gb_cleanup(target);
+    free(source);
+    free(target);
 }
 
 static void test_word_array_wire_encoding(void) {
@@ -392,6 +722,18 @@ static void test_rejection(void) {
         update_integrity(damaged, length);
         rejected_unchanged(gb, damaged, length, CUPID_GB_STATE_INVALID);
     }
+    const uint8_t invalid_extension[][2] = {
+        {0, 2},  {1, 4},  {1, 1},  {2, 2},   {3, 4},  {4, 3},   {5, 13}, {6, 5},  {7, 2},
+        {8, 2},  {9, 2},  {10, 2}, {11, 2},  {12, 2}, {13, 13}, {14, 5}, {15, 2}, {16, 2},
+        {17, 2}, {18, 2}, {19, 2}, {20, 2},  {21, 4}, {22, 8},  {23, 9}, {25, 8}, {27, 8},
+        {28, 2}, {29, 2}, {32, 8}, {33, 35}, {34, 2}, {35, 2},  {36, 2}, {37, 2}, {38, 2},
+        {39, 2}, {40, 2}, {41, 2}, {44, 3},  {46, 7}, {47, 6},  {48, 5}, {49, 8}};
+    for (unsigned i = 0; i < sizeof(invalid_extension) / sizeof(invalid_extension[0]); ++i) {
+        memcpy(damaged, valid, length);
+        damaged[300518 + invalid_extension[i][0]] = invalid_extension[i][1];
+        update_integrity(damaged, length);
+        rejected_unchanged(gb, damaged, length, CUPID_GB_STATE_INVALID);
+    }
     const uint16_t invalid_map_addresses[] = {0, 0x17ff, 0x2000, 0x3000, 0x3fff};
     for (unsigned i = 0; i < sizeof(invalid_map_addresses) / sizeof(invalid_map_addresses[0]);
          ++i) {
@@ -406,7 +748,7 @@ static void test_rejection(void) {
     damaged[length] = 0;
     rejected_unchanged(gb, damaged, length + 1, CUPID_GB_STATE_INVALID);
     memcpy(damaged, valid, length);
-    damaged[8] = 3;
+    damaged[8] = 4;
     update_integrity(damaged, length);
     rejected_unchanged(gb, damaged, length, CUPID_GB_STATE_UNSUPPORTED_VERSION);
     memcpy(damaged, valid, length);
@@ -525,10 +867,10 @@ static void print_fixture(const char *path) {
     digest_hex(bytes, length, sha256);
     printf("CUPIDGB_STATE_FIXTURE size=%zu sha256=%s\n", length, sha256);
     fflush(stdout);
-    /* Native format v2 compatibility fixture: changing its schema or generated
+    /* Native format v3 compatibility fixture: changing its schema or generated
      * machine state requires an intentional update to this portable golden. */
-    assert(length == 300518);
-    assert(strcmp(sha256, "6106c038f80d9ef4ca4417f31305dc05bb714d9252e6caff3eec0205ea4ec0eb") == 0);
+    assert(length == 300568);
+    assert(strcmp(sha256, "e4fdd3d7ebfdd04aec94ce7b85f0f2d7d83de1416242fa89f26ccf5dfaf71eb2") == 0);
     if (path) {
         FILE *file = fopen(path, "wb");
         assert(file && fwrite(bytes, 1, length, file) == length && fclose(file) == 0);
@@ -926,6 +1268,11 @@ int main(int argc, char **argv) {
     test_sha256();
     test_resume();
     test_word_array_wire_encoding();
+    test_v2_import();
+    test_cgb_dma_audio_resume();
+    test_audio_pipeline_resume();
+    test_noise_counter_wire_domain();
+    test_speed_switch_resume();
     test_rejection();
     test_trusted_context();
     test_restored_rtc_extreme_timestamps();

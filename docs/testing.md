@@ -66,10 +66,13 @@ Create the output directory first. Model names are `dmg`, `mgb`, `cgb`, `sgb`, a
 | --- | --- |
 | `serial` | Explicit success or failure text emitted by the cartridge's serial transfer protocol |
 | `register` | The selected debug-marker opcode with the expected success/failure register pattern |
+| `fibonacci` | The register convention above, or six serial bytes `03 05 08 0d 15 22` for success and six `42` bytes for failure |
 | `memory` | The expected memory signature, observed running status, and final result code |
 | `none` | Measurement only; no test-pass verdict |
 
 These protocols are opt-in interpretations for test ROMs. They must not affect ordinary guest execution. A ROM using a different result mechanism needs a suitable observation method; it cannot be called passed because it reached the duration limit.
+
+The `fibonacci` serial form is binary, independent of success/failure text. It requires all six bytes in order and can follow an unrelated serial prefix. A partial signature remains inconclusive. Use it only for a cartridge with that verified reporting convention; the older `register` and `serial` selections keep their separate meanings.
 
 The runner always observes completed serial bytes, reports their count as `serial_bytes`, and evaluates serial verdict text when that protocol is selected. It suppresses raw serial output by default. Add `--serial-output` to emit the transmitted bytes to stdout; the host buffers them and flushes at the report boundary. This diagnostic choice does not change serial clocks or verdict detection. Output errors are reported as `output_error`.
 

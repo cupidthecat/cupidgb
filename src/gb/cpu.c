@@ -21,6 +21,7 @@
 #include "cupid/gb/gb.h"
 #include "cupid/gb/ppu.h"
 #include "cupid/gb/timer.h"
+#include "cupid/gbc/cgb.h"
 
 // Register helpers
 
@@ -1119,6 +1120,7 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode) {
             } else {
                 gb->cpu.halted = true;
                 gb->cpu.just_halted = true;
+                cupid_cgb_hdma_sleep(gb);
             }
             return 0u;
         }
@@ -1304,36 +1306,57 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode) {
         case 0x0fu:
             gb->cpu.a = cupid_gb_rrc(&gb->cpu, gb->cpu.a, false);
             return 1u;
-        case 0x10u:
+        case 0x10u: {
             gb->cpu.just_halted = false;
-            if (gb->cgb_mode && gb->speed_switch_armed &&
-                (cupid_gb_read_u8(gb, 0xff00u) & 0x0fu) == 0x0fu) {
-                (void)cupid_gb_fetch_u8(gb);
-                gb->double_speed = !gb->double_speed;
-                gb->speed_switch_armed = false;
-                gb->speed_phase = false;
-                gb->io_registers[0x4du] = (uint8_t)(gb->double_speed ? 0x80u : 0x00u);
-                gb->cpu.stopped = false;
-                return 1u;
-            }
             cupid_gb_tick(gb, 1u);
-            /* STOP gates the divider after its opcode fetch. A selected key
-             * already held low prevents entry; an IRQ alone does not wake it. */
-            if ((cupid_gb_read_u8(gb, 0xff00u) & 0x0fu) == 0x0fu) {
+            (void)cupid_gb_read_u8(gb, gb->cpu.pc);
+            const bool held = (cupid_gb_read_u8(gb, 0xff00u) & 0x0fu) != 0x0fu;
+            const bool switching =
+                gb->model == CUPID_GB_MODEL_CGB && gb->speed_switch_armed && !held;
+            const bool pending = (gb->interrupt_enable & gb->interrupt_flags & 0x1fu) != 0;
+            if (!held) {
                 cupid_gb_timer_apply_div_reset(gb);
+                /* EI matures for STOP's control signals after IRQ dispatch was
+                 * already decided. It must not acquire the IME0 reset hold. */
+                gb->stop_divider_hold_cycles = gb->cpu.ime || gb->cpu.ime_delay ? 0 : 4;
                 gb->cpu.stopped = true;
+                cupid_cgb_hdma_sleep(gb);
             }
-            if ((gb->interrupt_enable & gb->interrupt_flags & 0x1fu) == 0u) {
+            if (!pending)
                 (void)cupid_gb_fetch_u8(gb);
-                cupid_gb_tick(gb, 1u);
-                /* A selected key held on entry prevents divider gating, but
-                 * the CPU still waits in HALT until an interrupt is pending. */
-                if (!gb->cpu.stopped) {
+            if (switching) {
+                if (!pending)
+                    cupid_gb_tick(gb, 1u);
+                gb->speed_switch_freeze_cycles = 0;
+                if (gb->double_speed) {
+                    if (cupid_gb_lcd_enabled(gb) && gb->speed_switch_alignment)
+                        gb->speed_switch_freeze_cycles = 2;
+                    gb->double_speed = false;
+                } else {
+                    gb->speed_switch_toggle_cycles = 6;
+                    gb->speed_switch_freeze_cycles = 1;
+                }
+                if (!pending) {
+                    gb->speed_switch_halt_cycles = 0x20008u;
+                    gb->speed_switch_freeze_cycles = 5;
+                }
+                gb->speed_switch_armed = false;
+                gb->io_registers[0x4du] = (uint8_t)(gb->double_speed ? 0x80u : 0);
+            }
+            if (switching || held) {
+                gb->cpu.stopped = false;
+                cupid_cgb_hdma_wake(gb);
+                cupid_gb_tick_dma(gb);
+                if (!pending) {
                     gb->cpu.halted = true;
                     gb->cpu.just_halted = true;
+                    cupid_cgb_hdma_sleep(gb);
+                } else {
+                    gb->speed_switch_halt_cycles = 0;
                 }
             }
-            return 0u;
+            return !pending && !switching ? 1u : 0u;
+        }
         case 0x12u:
             cupid_gb_cpu_write(gb, cupid_gb_get_de(&gb->cpu), gb->cpu.a, 1u);
             return 1u;

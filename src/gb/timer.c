@@ -78,6 +78,9 @@ static void divider_change(CupidGb *gb, uint16_t phase) {
     if ((((unsigned)before >> audio_shift) & 1u) && !(((unsigned)phase >> audio_shift) & 1u)) {
         cupid_gb_apu_div_event(gb);
     }
+    if (!(((unsigned)before >> audio_shift) & 1u) && (((unsigned)phase >> audio_shift) & 1u)) {
+        cupid_gb_apu_div_secondary_event(gb);
+    }
 
     gb->io_registers[DIVIDER] = (uint8_t)(phase >> 6u);
     gb->div_counter = phase & 63u;
@@ -85,6 +88,7 @@ static void divider_change(CupidGb *gb, uint16_t phase) {
 
 void cupid_gb_timer_apply_div_reset(CupidGb *gb) {
     if (gb) {
+        gb->stop_divider_hold_cycles = 0;
         divider_change(gb, 0u);
     }
 }
@@ -132,12 +136,76 @@ static void clock_cpu_domain(CupidGb *gb) {
     divider_change(gb, (uint16_t)(divider_phase(gb) + 1u));
 }
 
+static void switch_clock_segment(CupidGb *gb, unsigned cycles, unsigned *half_dot) {
+    const unsigned frozen =
+        cycles < gb->speed_switch_freeze_cycles ? cycles : gb->speed_switch_freeze_cycles;
+    gb->speed_switch_freeze_cycles = (uint8_t)(gb->speed_switch_freeze_cycles - frozen);
+    const unsigned ticks = (cycles - frozen) * (gb->double_speed ? 1u : 2u);
+    if (cupid_gb_lcd_enabled(gb))
+        gb->speed_switch_alignment = (uint8_t)((gb->speed_switch_alignment + ticks) & 7u);
+    const unsigned dots = (*half_dot + ticks) / 2u;
+    *half_dot = (*half_dot + ticks) & 1u;
+    gb->elapsed_cycles += dots;
+    if (dots)
+        cupid_gb_tick_ppu_dots(gb, (uint16_t)dots);
+}
+
+static void tick_switch_cycle(CupidGb *gb) {
+    const bool old_speed = gb->double_speed;
+    const unsigned toggle = gb->speed_switch_toggle_cycles;
+    const bool divider_speed = old_speed != (toggle != 0 && toggle <= 4);
+    const bool hold = !gb->cpu.stopped && gb->stop_divider_hold_cycles != 0;
+    if (hold) {
+        gb->stop_divider_hold_cycles =
+            gb->stop_divider_hold_cycles > 4 ? (uint8_t)(gb->stop_divider_hold_cycles - 4) : 0;
+    } else {
+        gb->double_speed = divider_speed;
+        clock_cpu_domain(gb);
+        gb->double_speed = old_speed;
+    }
+    if (gb->speed_switch_halt_cycles) {
+        if (gb->speed_switch_halt_cycles <= 4) {
+            gb->speed_switch_halt_cycles = 0;
+            gb->cpu.halted = false;
+        } else {
+            gb->speed_switch_halt_cycles -= 4;
+        }
+    }
+    cupid_gb_tick_dma(gb);
+    if (divider_speed)
+        gb->speed_phase = !gb->speed_phase;
+
+    unsigned half_dot = 0;
+    if (toggle && toggle <= 4) {
+        gb->speed_switch_toggle_cycles = 0;
+        if (toggle < 4)
+            switch_clock_segment(gb, toggle, &half_dot);
+        gb->double_speed = !old_speed;
+        switch_clock_segment(gb, toggle < 4 ? 4u - toggle : 4u, &half_dot);
+        gb->io_registers[0x4d] =
+            (uint8_t)((gb->io_registers[0x4d] & 1u) | (gb->double_speed ? 0x80u : 0));
+    } else {
+        if (toggle)
+            gb->speed_switch_toggle_cycles = (uint8_t)(toggle - 4);
+        switch_clock_segment(gb, 4, &half_dot);
+    }
+    /* DIV's reset hold also stops its audio clock. The short oscillator freeze
+     * suppresses LCD time only; an ordinary DIV clock still reaches the APU. */
+    if (!hold)
+        cupid_gb_tick_apu(gb, divider_speed ? 2u : 4u);
+}
+
 void cupid_gb_tick(CupidGb *gb, uint16_t cycles) {
     if (!gb) {
         return;
     }
 
     while (cycles-- != 0u) {
+        if (gb->speed_switch_halt_cycles || gb->speed_switch_toggle_cycles ||
+            gb->speed_switch_freeze_cycles || gb->stop_divider_hold_cycles) {
+            tick_switch_cycle(gb);
+            continue;
+        }
         clock_cpu_domain(gb);
         cupid_gb_tick_dma(gb);
 
@@ -145,6 +213,8 @@ void cupid_gb_tick(CupidGb *gb, uint16_t cycles) {
          * Batching pairs of cycles would move reads and interrupts by two dots. */
         if (gb->double_speed) {
             gb->speed_phase = !gb->speed_phase;
+            if (cupid_gb_lcd_enabled(gb))
+                gb->speed_switch_alignment ^= 4u;
         }
         const uint16_t dots = gb->double_speed ? 2u : 4u;
         gb->elapsed_cycles += dots;
@@ -182,6 +252,21 @@ static void clock_lcd_dot(CupidGb *gb) {
     cupid_gb_tick_apu(gb, 1u);
 }
 
+void cupid_gb_tick_color_dma_slot(CupidGb *gb, bool cpu_boundary) {
+    if (!gb)
+        return;
+    if (cpu_boundary) {
+        clock_cpu_domain(gb);
+        cupid_gb_tick_dma(gb);
+        if (gb->double_speed)
+            gb->speed_phase = !gb->speed_phase;
+    }
+    if (cupid_gb_lcd_enabled(gb))
+        gb->speed_switch_alignment ^= 4u;
+    clock_lcd_dot(gb);
+    clock_lcd_dot(gb);
+}
+
 void cupid_gb_acknowledge_interrupt(CupidGb *gb, uint8_t mask) {
     if (!gb)
         return;
@@ -190,6 +275,8 @@ void cupid_gb_acknowledge_interrupt(CupidGb *gb, uint8_t mask) {
      * Earlier PPU edges are cleared; later edges must remain pending.
      * The divider's third-T-cycle event follows the acknowledge edge. */
     const unsigned half = gb->double_speed ? 1u : 2u;
+    if (gb->double_speed && cupid_gb_lcd_enabled(gb))
+        gb->speed_switch_alignment ^= 4u;
     for (unsigned dot = 0; dot < half; ++dot)
         clock_lcd_dot(gb);
     gb->interrupt_flags &= (uint8_t)~mask;
@@ -277,6 +364,9 @@ void cupid_gb_interrupt_tail(CupidGb *gb, uint16_t return_address) {
     uint8_t enabled = 0, selected = 0, low_old_if = 0;
 
     for (unsigned phase = 9; phase <= 20; ++phase) {
+        if (cupid_gb_lcd_enabled(gb))
+            gb->speed_switch_alignment =
+                (uint8_t)((gb->speed_switch_alignment + (gb->double_speed ? 1u : 2u)) & 7u);
         /* Odd double-speed T-cycles fall between LCD dots. This local phase is
          * fully consumed before returning; native states need no half-dot field. */
         if (!gb->double_speed || !(phase & 1u)) {

@@ -25,6 +25,41 @@
  * buf[]    = int16_t stereo samples, L then R, generated each tick.
  * buf_write = number of stereo frames currently waiting in buf[].
  */
+typedef struct CupidGbPulseTiming {
+    uint8_t start_delay; /* Remaining trigger settling time, 0..12 base T-cycles. */
+    uint8_t edge_age;    /* Base T-cycles since a frequency edge; 4 means older. */
+    bool clock_started;
+    bool output_high;
+    bool output_blocked;
+    bool envelope_clock;
+    bool envelope_locked;
+    bool envelope_lock_pending;
+} CupidGbPulseTiming;
+
+typedef struct CupidGbSweepTiming {
+    uint8_t startup_ticks; /* Remaining 1 MHz setup ticks, 0..3. */
+    uint8_t shift_ticks;   /* Remaining 1 MHz calculation ticks, 0..7. */
+    uint8_t restart_hold;  /* Base clocks holding the sweep input after trigger, 0..8. */
+    uint16_t delta;
+    uint16_t completed_delta;
+    bool zero_shift_pending;
+    bool zero_shift_armed;
+} CupidGbSweepTiming;
+
+typedef struct CupidGbNoiseTiming {
+    uint16_t divider_counter; /* Ordinary edges mask to 14 bits; DAC-off carries retain all 16. */
+    uint8_t clock_phase;      /* Power-relative base-clock phase, 0..7. */
+    uint8_t remaining;        /* Remaining 2 MHz prescaler ticks, 0..34. */
+    bool foreground;
+    bool background;
+    bool started_dac_off;
+    bool reload_edge;
+    bool counter_stepped;
+    bool output_high;
+    bool last_shift_narrow;
+    bool pre_shift_bit7;
+} CupidGbNoiseTiming;
+
 typedef struct CupidGbApu {
     /* Frame sequencer */
     uint8_t fs_step;           /* 0-7 */
@@ -97,6 +132,13 @@ typedef struct CupidGbApu {
     bool ch4_width7;      /* true = 7-bit LFSR */
     uint32_t ch4_timer;
     uint16_t ch4_lfsr; /* 15-bit shift register */
+
+    /* Hardware clock/output latches; native v3 appends these after its v2 prefix. */
+    uint8_t clock_phase;    /* Power-relative base-clock phase, 0..3. */
+    uint8_t envelope_delay; /* Deferred color double-speed envelope edge, 0..2 base clocks. */
+    CupidGbPulseTiming pulse_timing[2];
+    CupidGbSweepTiming sweep_timing;
+    CupidGbNoiseTiming noise_timing;
 
     /* Output */
     uint32_t sample_acc;
@@ -270,9 +312,21 @@ typedef struct CupidGb {
     uint16_t hdma_destination;
     uint8_t hdma_blocks_remaining;
     bool hdma_active;
+    /* Ready CPU work is distinct from an armed HBlank request. A false active
+     * flag with pending work denotes a general transfer. */
+    bool hdma_pending;
+    uint8_t hdma_hblank_delay; /* Remaining LCD dots before a block becomes ready. */
+    bool hdma_allow_on_wake;   /* Sleep began outside mode 0. */
     bool double_speed;
     bool speed_switch_armed;
     bool speed_phase;
+    uint32_t speed_switch_halt_cycles; /* CPU T-cycles remaining in the timed wait. */
+    uint8_t speed_switch_toggle_cycles;
+    uint8_t speed_switch_freeze_cycles;
+    uint8_t stop_divider_hold_cycles;
+    /* LCD clock phase in half-dot units modulo eight, measured from LCD enable.
+     * LCD power transitions reset this origin; frozen CPU clocks do not advance it. */
+    uint8_t speed_switch_alignment;
     uint8_t joypad;              /* button state: bits 0-3 dpad, 4-7 action; 0=pressed */
     uint8_t window_line_counter; /* internal window scanline counter */
     uint8_t ppu_lcd_warmup_lines;

@@ -6,6 +6,9 @@
 #include "cupid/gb/gb.h"
 
 void cupid_gb_tick(CupidGb *gb, uint16_t cycles);
+/* Advance one two-dot DMA bus slot. The caller marks CPU machine-cycle edges;
+ * a complete transfer consumes its local half-cycle phase before returning. */
+void cupid_gb_tick_color_dma_slot(CupidGb *gb, bool cpu_boundary);
 uint8_t cupid_gb_tick_halt(CupidGb *gb);
 void cupid_gb_acknowledge_interrupt(CupidGb *gb, uint8_t mask);
 /* Complete an interrupt after its initial eight CPU T-cycles. Stack register

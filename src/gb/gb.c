@@ -326,6 +326,7 @@ void cupid_gb_init(CupidGb *gb) {
     gb->stat_irq_line = false;
     gb->window_line_counter = 0u;
     cupid_gb_sgb_init(gb);
+    cupid_gb_apu_import_legacy(gb);
 }
 
 // Boot ROM support
@@ -439,6 +440,22 @@ void cupid_gb_enter_boot_rom(CupidGb *gb) {
     gb->cpu.halt_bug = false;
 
     /* Reset IO to power-on defaults */
+    /* Color boot firmware selects cartridge compatibility later through KEY0.
+     * The cartridge header governs the post-boot profile only when no firmware runs. */
+    gb->cgb_mode = gb->model == CUPID_GB_MODEL_CGB;
+    gb->hdma_pending = false;
+    gb->hdma_active = false;
+    gb->hdma_hblank_delay = 0;
+    gb->hdma_allow_on_wake = false;
+    gb->hdma_blocks_remaining = 0;
+    gb->double_speed = false;
+    gb->speed_phase = false;
+    gb->speed_switch_armed = false;
+    gb->speed_switch_halt_cycles = 0;
+    gb->speed_switch_toggle_cycles = 0;
+    gb->speed_switch_freeze_cycles = 0;
+    gb->stop_divider_hold_cycles = 0;
+    gb->speed_switch_alignment = 0;
     memset(gb->io_registers, 0x00u, sizeof(gb->io_registers));
     gb->io_registers[0x00u] = 0xcfu; /* P1: no buttons selected */
     gb->io_registers[0x02u] = 0x7eu; /* SC: disconnected, fast clock not selected. */
@@ -701,6 +718,14 @@ uint8_t cupid_gb_read_u8(const CupidGb *gb, uint16_t address) {
         return (uint8_t)(gb->io_registers[2] | (uint8_t)~writable);
     }
 
+    /* Decode model-specific registers before applying unused-address pull-ups.
+     * Their visibility can depend on physical hardware rather than color mode. */
+    {
+        uint8_t cgb_value;
+        if (cupid_cgb_handle_read_register(gb, address, &cgb_value))
+            return cgb_value;
+    }
+
     if (address == 0xff03u || (address >= 0xff08u && address <= 0xff0eu) || address == 0xff4eu ||
         (address >= 0xff50u && address <= 0xff67u) || (address >= 0xff6du && address <= 0xff6fu) ||
         (address >= 0xff71u && address <= 0xff7fu)) {
@@ -709,14 +734,6 @@ uint8_t cupid_gb_read_u8(const CupidGb *gb, uint16_t address) {
 
     if (address == 0xff07u) {
         return (uint8_t)(0xf8u | (gb->io_registers[0x07u] & 0x07u));
-    }
-
-    {
-        uint8_t cgb_value;
-
-        if (cupid_cgb_handle_read_register(gb, address, &cgb_value)) {
-            return cgb_value;
-        }
     }
 
     if (address >= 0xff10u && address <= 0xff2fu) {
@@ -1090,9 +1107,14 @@ void cupid_gb_write_u8(CupidGb *gb, uint16_t address, uint8_t value) {
             cupid_gb_timer_apply_div_reset(gb);
         } else if (address == 0xff40u) {
             bool lcd_was_enabled = cupid_gb_lcd_enabled(gb);
+            const uint8_t previous_mode = gb->io_registers[CUPID_GB_IO_STAT] & 3u;
+            if (lcd_was_enabled != ((value & 0x80u) != 0))
+                gb->speed_switch_alignment = 0;
 
             gb->io_registers[CUPID_GB_IO_LCDC] = value;
             if ((value & 0x80u) == 0u) {
+                if (lcd_was_enabled)
+                    cupid_cgb_hdma_lcd_off(gb, previous_mode);
                 gb->ppu_counter = 0u;
                 gb->frame_ready = false;
                 gb->ppu_lcd_warmup_lines = 0u;
@@ -1188,6 +1210,8 @@ static bool cupid_gb_step_internal(CupidGb *gb, CupidGbStepTrace *trace) {
         cupid_gb_tick(gb, CUPID_GB_HALT_CYCLES);
         if ((cupid_gb_read_u8(gb, 0xff00u) & 0x0fu) != 0x0fu) {
             gb->cpu.stopped = false;
+            cupid_cgb_hdma_wake(gb);
+            cupid_gb_tick_dma(gb);
             cupid_gb_tick(gb, 2u);
         }
         return true;
@@ -1196,15 +1220,23 @@ static bool cupid_gb_step_internal(CupidGb *gb, CupidGbStepTrace *trace) {
     if (gb->cpu.halted) {
         /* Sample requests at the model's HALT polling point before deciding
          * whether this cycle leaves the CPU asleep or begins interrupt entry. */
-        if (cupid_gb_tick_halt(gb) == 0u) {
-            return true;
+        const uint8_t pending = cupid_gb_tick_halt(gb);
+        const bool asleep = gb->cpu.halted;
+        if (asleep) {
+            if (!pending)
+                return true;
+            gb->cpu.halted = false;
+            gb->speed_switch_halt_cycles = 0;
+            cupid_cgb_hdma_wake(gb);
+            cupid_gb_tick_dma(gb);
         }
-        gb->cpu.halted = false;
-        if (cupid_gb_service_interrupt(gb)) {
+        if (pending && cupid_gb_service_interrupt(gb)) {
             if (trace)
                 trace->event = CUPID_GB_STEP_INTERRUPT;
             return true;
         }
+        if (asleep)
+            return true;
     } else if (cupid_gb_service_interrupt(gb)) {
         if (trace)
             trace->event = CUPID_GB_STEP_INTERRUPT;
@@ -1217,6 +1249,7 @@ static bool cupid_gb_step_internal(CupidGb *gb, CupidGbStepTrace *trace) {
         trace->address = gb->cpu.pc;
     }
     opcode = cupid_gb_fetch_u8(gb);
+    cupid_cgb_run_pending_dma(gb, opcode);
     if (trace)
         trace->opcode = opcode;
 
