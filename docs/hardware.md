@@ -29,7 +29,7 @@ The core decodes ROM-only cartridges and the MBC1, MBC2, MBC3, MBC5, MMM01, MBC6
 | MBC1 | ROM/RAM bank selection, wired bank aliases, and logo-detected multicart layouts; multicart RAM remains in bank 0 |
 | MBC2 | Address-dependent control and built-in 512 by 4-bit RAM |
 | MBC3 | Banked ROM/RAM, optional clock registers, live/latched clock persistence, halt and carry handling; extended MBC30-sized inputs use eight-bit ROM selection and up to eight RAM banks |
-| MBC5 | Nine-bit ROM selection, RAM banking, and exact RAM-enable decoding; host rumble output remains incomplete |
+| MBC5 | Nine-bit ROM selection, RAM banking, exact RAM-enable decoding and a motor latch/host observer for rumble cartridges; physical feedback remains unqualified |
 | MMM01 | Partial mapping; full controller qualification remains pending |
 | MBC6 | Partial mapping; flash behavior remains pending |
 | MBC7 | Partial mapping and sensor state; complete EEPROM, motion input, and persistence qualification remain pending |
@@ -62,7 +62,7 @@ The pixel pipeline keeps background and object fetch queues across LCD dots. It 
 
 Coincidence and mode sources feed one combined STAT interrupt line. A rising coincidence source must preserve a pending HBlank transition; suppressing a second interrupt edge does not cancel the display's mode change. LCD power cycling preserves the comparison and combined-line latches until startup refreshes them. Automatic refresh follows the measured model-specific startup edge, while explicit STAT and LYC writes can update the comparison earlier.
 
-SGB behavior includes packet reception, palette/attribute commands, screen masking, and a border framebuffer. A border image and the NTSC clock do not establish complete SGB host emulation, four-player input, audio extensions, or PAL timing.
+SGB behavior includes packet reception, palette/attribute commands, screen masking, a border framebuffer and four independent input masks selected by the multiplayer protocol. These features do not establish complete SGB host emulation, physical multiplayer qualification, audio extensions or PAL timing.
 
 Complete fetcher timing, mid-scanline conflicts, broad pixel comparisons, model-specific startup, and hardware color response remain active accuracy work. Host scaling, optional blending, and palette presentation do not change those requirements.
 
@@ -74,9 +74,9 @@ Sweep, envelope, wave, interference, and revision-specific quirks need wider tes
 
 ## Input and startup
 
-The eight buttons use an active-low mask: Right, Left, Up, Down, A, B, Select, Start. JOYP selects the direction and action rows. Input interrupts and STOP wake behavior must follow selected register lines rather than host key events alone. Contact bouncing, row-switch settling, controllers, motion, and multiple player input remain separate requirements.
+Each player's eight buttons use an active-low mask: Right, Left, Up, Down, A, B, Select, Start. JOYP selects the direction/action rows and the SGB protocol selects the player. Input interrupts and STOP wake behavior follow selected register lines rather than host events alone. Nonselected players do not create an interrupt merely by changing their physical mask. The Qt frontend supplies keyboard and controller input; [controller workflows](controllers.md) cover mappings and assignments. Contact bouncing, row-switch settling, motion and physical-device qualification remain incomplete.
 
-An optional local boot binary overlays the startup address range. Without it, CupidGB initializes an approximate model profile. Boot binaries, model choices, and startup conditions must match in comparative tests. The accepted desktop filenames and sizes are listed in the [user guide](user-guide.md#boot-behavior).
+An optional local boot binary overlays the startup address range. The divider starts eight CPU T-cycles into its period. FF50 reads `FE` while the overlay is active and `FF` after a write with bit 0 set disables it. At power-on, DMA, OBP0, and OBP1 start at `FF` on the current monochrome profiles and `00` on CGB. Without firmware, CupidGB initializes an approximate post-boot profile. Match the firmware and model in comparative tests. The accepted filenames and sizes are listed in the [user guide](user-guide.md#boot-behavior).
 
 Physical CGB hardware enters an actual boot overlay with color registers available even for a monochrome cartridge. Boot code can select compatibility through KEY0 before removing the overlay through FF50. Palette initialization and WRAM selection remain available during the boot sequence; post-boot compatibility gates apply after overlay removal. The no-boot convenience profile selects its initial mode from the cartridge header instead. These two startup methods are distinct comparison inputs.
 

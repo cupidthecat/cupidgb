@@ -8,12 +8,14 @@ uint8_t cupid_gb_input_read(const CupidGb *gb) {
         return 0xffu;
     }
     const uint8_t rows = gb->io_registers[0] & 0x30u;
+    const unsigned player = cupid_gb_sgb_active(gb) ? gb->sgb.current_player & 3u : 0u;
+    const uint8_t buttons = player ? gb->joypad_extra[player - 1u] : gb->joypad;
     uint8_t lines = 0x0fu;
     if (rows == 0x30u && cupid_gb_sgb_active(gb) && gb->sgb.player_count > 1u) {
         lines = (uint8_t)(0x0fu - (gb->sgb.current_player & 3u));
     } else {
         if (!(rows & 0x10u)) {
-            uint8_t directions = gb->joypad & 0x0fu;
+            uint8_t directions = buttons & 0x0fu;
             if (rows == 0x20u) {
                 /* A digital pad cannot normally close both opposing contacts.
                  * Resolve each axis consistently, but leave the electrical
@@ -28,7 +30,7 @@ uint8_t cupid_gb_input_read(const CupidGb *gb) {
             lines &= directions;
         }
         if (!(rows & 0x20u)) {
-            lines &= gb->joypad >> 4u;
+            lines &= buttons >> 4u;
         }
     }
     return (uint8_t)(0xc0u | rows | lines);
@@ -45,11 +47,21 @@ static void request_line_edges(CupidGb *gb, uint8_t before) {
 }
 
 void cupid_gb_set_buttons(CupidGb *gb, uint8_t released_mask) {
-    if (gb) {
-        const uint8_t before = cupid_gb_input_read(gb);
-        gb->joypad = released_mask;
-        request_line_edges(gb, before);
+    (void)cupid_gb_set_buttons_for_player(gb, 0u, released_mask);
+}
+
+bool cupid_gb_set_buttons_for_player(CupidGb *gb, unsigned player, uint8_t released_mask) {
+    if (!gb || player >= 4u) {
+        return false;
     }
+    const uint8_t before = cupid_gb_input_read(gb);
+    if (player == 0u) {
+        gb->joypad = released_mask;
+    } else {
+        gb->joypad_extra[player - 1u] = released_mask;
+    }
+    request_line_edges(gb, before);
+    return true;
 }
 
 void cupid_gb_input_select(CupidGb *gb, uint8_t value) {

@@ -1,6 +1,7 @@
 #include "cupid/common/sha256.h"
 #include "cupid/gb/apu.h"
 #include "cupid/gb/gb.h"
+#include "cupid/gb/input.h"
 #include "cupid/gb/ppu.h"
 #include "cupid/gb/state.h"
 #include "cupid/gb/timer.h"
@@ -224,7 +225,7 @@ static void test_resume(void) {
                 uint8_t *state = encode(a, &length);
                 /* Model and power phase do not change the current portable wire shape. */
                 assert(length == cupid_gb_state_size(b) && length > 300518);
-                assert(state[8] == 3);
+                assert(state[8] == 4);
                 uint8_t *rom_pointer = b->rom;
                 strcpy(b->save_path, "host-session-save.sav");
                 assert(cupid_gb_load_state(b, state, length) == CUPID_GB_STATE_OK);
@@ -284,6 +285,100 @@ static void put_u32(uint8_t *bytes, uint32_t value) {
     for (unsigned i = 0; i < 4; ++i) {
         bytes[i] = (uint8_t)(value >> (i * 8));
     }
+}
+
+static void state_rumble_callback(const CupidGb *gb, bool enabled, uint64_t cycles, void *data) {
+    unsigned *count = data;
+    assert(enabled == cupid_gb_rumble_enabled(gb) && cycles == gb->elapsed_cycles);
+    ++*count;
+}
+
+static void test_controller_state_versions(void) {
+    CupidGb *source = calloc(1, sizeof(*source)), *target = calloc(1, sizeof(*target));
+    assert(source && target);
+    uint8_t rom[32768] = {0};
+    rom[0x146] = 3;
+    rom[0x147] = 0x1e;
+    rom[0x149] = 3;
+    cupid_gb_set_model(source, CUPID_GB_MODEL_SGB);
+    cupid_gb_set_model(target, CUPID_GB_MODEL_SGB);
+    assert(cupid_gb_load_rom(source, rom, sizeof(rom)));
+    assert(cupid_gb_load_rom(target, rom, sizeof(rom)));
+    source->sgb.player_count = 4;
+    source->sgb.current_player = 2;
+    source->io_registers[0] = 0x10;
+    for (unsigned player = 0; player < 4; ++player) {
+        assert(cupid_gb_set_buttons_for_player(source, player, (uint8_t)~(0x11u << player)));
+    }
+    cupid_gb_write_u8(source, 0x4000, 0x0d);
+    size_t length;
+    uint8_t *bytes = encode(source, &length);
+    assert(length == 300572 && bytes[300568] == source->joypad_extra[0] &&
+           bytes[300569] == source->joypad_extra[1] && bytes[300570] == source->joypad_extra[2] &&
+           bytes[300571] == 1);
+    unsigned callbacks = 0;
+    cupid_gb_set_rumble_callback(target, state_rumble_callback, &callbacks);
+    assert(cupid_gb_load_state(target, bytes, length) == CUPID_GB_STATE_OK);
+    assert_encoded_equal(source, target);
+    assert(cupid_gb_input_read(source) == cupid_gb_input_read(target));
+    assert(cupid_gb_rumble_enabled(target) && callbacks == 0 &&
+           target->rumble_callback == state_rumble_callback &&
+           target->rumble_user_data == &callbacks);
+    /* A stored motor bool has one canonical byte encoding. Failure must retain
+     * both controller state and host registration without generating events. */
+    bytes[300571] = 2;
+    update_integrity(bytes, length);
+    CupidGb *before = malloc(sizeof(*before));
+    assert(before);
+    *before = *target;
+    assert(cupid_gb_load_state(target, bytes, length) == CUPID_GB_STATE_INVALID);
+    assert(memcmp(target, before, sizeof(*target)) == 0 && callbacks == 0);
+    bytes[300571] = 1;
+    for (unsigned version = 2; version <= 3; ++version) {
+        const size_t old_length = version == 2 ? 300518 : 300568;
+        put_u32(bytes + 8, version);
+        put_u32(bytes + 12, (uint32_t)old_length);
+        update_integrity(bytes, old_length);
+        assert(cupid_gb_load_state(target, bytes, old_length) == CUPID_GB_STATE_OK);
+        assert(target->joypad == source->joypad && target->sgb.current_player == 2 &&
+               target->sgb.player_count == 4 && target->current_ram_bank == 5);
+        for (unsigned pad = 0; pad < 3; ++pad) {
+            assert(target->joypad_extra[pad] == 0xff);
+        }
+        assert(!cupid_gb_rumble_enabled(target) && callbacks == 0);
+        /* The bank field is an explicit little-endian u64 in the frozen prefix.
+         * A legacy writer could never encode bit 3 on this cartridge. */
+        const size_t bank_offset = 128 + 17 + 0x4000 + CUPID_GB_MAX_RAM_SIZE + 0x8000 + 0xa0 +
+                                   0x80 + 0x7f + 160 * 144 * 3 + 2 + 8;
+        assert(bytes[bank_offset] == 5);
+        bytes[bank_offset] = 13;
+        update_integrity(bytes, old_length);
+        *before = *target;
+        assert(cupid_gb_load_state(target, bytes, old_length) == CUPID_GB_STATE_INVALID);
+        assert(memcmp(target, before, sizeof(*target)) == 0 && callbacks == 0);
+        bytes[bank_offset] = 5;
+    }
+    free(bytes);
+    source->sgb.player_count = 3;
+    bytes = encode(source, &length);
+    assert(cupid_gb_load_state(target, bytes, length) == CUPID_GB_STATE_OK);
+    assert_encoded_equal(source, target);
+    assert(target->sgb.player_count == 3 && target->sgb.current_player == 2 && callbacks == 0);
+    *before = *target;
+    for (unsigned version = 2; version <= 3; ++version) {
+        const size_t old_length = version == 2 ? 300518 : 300568;
+        put_u32(bytes + 8, version);
+        put_u32(bytes + 12, (uint32_t)old_length);
+        update_integrity(bytes, old_length);
+        assert(cupid_gb_load_state(target, bytes, old_length) == CUPID_GB_STATE_INVALID);
+        assert(memcmp(target, before, sizeof(*target)) == 0 && callbacks == 0);
+    }
+    free(before);
+    free(bytes);
+    cupid_gb_cleanup(source);
+    cupid_gb_cleanup(target);
+    free(source);
+    free(target);
 }
 
 static void test_v2_import(void) {
@@ -705,6 +800,11 @@ static void test_rejection(void) {
     memcpy(damaged, valid, length);
     damaged[length - 1] ^= 1;
     rejected_unchanged(gb, damaged, length, CUPID_GB_STATE_INVALID);
+    memcpy(damaged, valid, length);
+    damaged[length - 1] = 1;
+    update_integrity(damaged, length);
+    /* A cartridge without this motor cannot restore an asserted motor latch. */
+    rejected_unchanged(gb, damaged, length, CUPID_GB_STATE_INVALID);
     const size_t invalid_payload_offsets[] = {
         129,    141,    180784, 300352, 300388, 300389, 300391, 300392, 300393, 300394, 300402,
         300410, 300418, 300419, 300420, 300425, 300426, 300427, 300429, 300430, 300460, 300462,
@@ -748,7 +848,7 @@ static void test_rejection(void) {
     damaged[length] = 0;
     rejected_unchanged(gb, damaged, length + 1, CUPID_GB_STATE_INVALID);
     memcpy(damaged, valid, length);
-    damaged[8] = 4;
+    damaged[8] = 5;
     update_integrity(damaged, length);
     rejected_unchanged(gb, damaged, length, CUPID_GB_STATE_UNSUPPORTED_VERSION);
     memcpy(damaged, valid, length);
@@ -858,6 +958,8 @@ static void print_fixture(const char *path) {
     CupidGb *gb = calloc(1, sizeof(*gb));
     assert(gb);
     prepare(gb, CUPID_GB_MODEL_CGB, true);
+    /* Preserve the original divider phase of this compatibility fixture. */
+    gb->div_counter = 0;
     gb->double_speed = true;
     cupid_gb_write_u8(gb, 0xff40, 0);
     prepare_phase(gb, 2);
@@ -867,10 +969,20 @@ static void print_fixture(const char *path) {
     digest_hex(bytes, length, sha256);
     printf("CUPIDGB_STATE_FIXTURE size=%zu sha256=%s\n", length, sha256);
     fflush(stdout);
-    /* Native format v3 compatibility fixture: changing its schema or generated
-     * machine state requires an intentional update to this portable golden. */
-    assert(length == 300568);
-    assert(strcmp(sha256, "e4fdd3d7ebfdd04aec94ce7b85f0f2d7d83de1416242fa89f26ccf5dfaf71eb2") == 0);
+    assert(length == 300572);
+    assert(strcmp(sha256, "652af4f40504c86dd59eff09f0997f5b60b654816a0908d7802704f981b43be5") == 0);
+    /* The previous wire payload remains byte-for-byte compatible when wrapped
+     * in its original header. New controller fields cannot shift that prefix. */
+    put_u32(bytes + 8, 3);
+    put_u32(bytes + 12, 300568);
+    update_integrity(bytes, 300568);
+    char legacy_sha256[65];
+    digest_hex(bytes, 300568, legacy_sha256);
+    assert(strcmp(legacy_sha256,
+                  "e4fdd3d7ebfdd04aec94ce7b85f0f2d7d83de1416242fa89f26ccf5dfaf71eb2") == 0);
+    put_u32(bytes + 8, 4);
+    put_u32(bytes + 12, (uint32_t)length);
+    update_integrity(bytes, length);
     if (path) {
         FILE *file = fopen(path, "wb");
         assert(file && fwrite(bytes, 1, length, file) == length && fclose(file) == 0);
@@ -1269,6 +1381,7 @@ int main(int argc, char **argv) {
     test_resume();
     test_word_array_wire_encoding();
     test_v2_import();
+    test_controller_state_versions();
     test_cgb_dma_audio_resume();
     test_audio_pipeline_resume();
     test_noise_counter_wire_domain();

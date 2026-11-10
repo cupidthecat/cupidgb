@@ -230,7 +230,7 @@ static void cupid_gb_apply_boot_profile(CupidGb *gb) {
  * @param gb Pointer to the Game Boy state to initialize.
  *
  * @note The instance must be zero-initialized before its first initialization.
- * @note The `model`, `rom`, and serial observer registration survive a re-init.
+ * @note The `model`, `rom`, and host observer registrations survive a re-init.
  * @note Does nothing if @p gb is NULL.
  */
 void cupid_gb_init(CupidGb *gb) {
@@ -238,6 +238,8 @@ void cupid_gb_init(CupidGb *gb) {
     uint8_t *rom;
     CupidGbSerialOutputCallback serial_output_callback;
     void *serial_output_user_data;
+    CupidGbRumbleCallback rumble_callback;
+    void *rumble_user_data;
 
     if (gb == 0) {
         return;
@@ -247,11 +249,15 @@ void cupid_gb_init(CupidGb *gb) {
     rom = gb->rom;
     serial_output_callback = gb->serial_output_callback;
     serial_output_user_data = gb->serial_output_user_data;
+    rumble_callback = gb->rumble_callback;
+    rumble_user_data = gb->rumble_user_data;
     memset(gb, 0, sizeof(*gb));
     gb->model = model;
     gb->rom = rom;
     gb->serial_output_callback = serial_output_callback;
     gb->serial_output_user_data = serial_output_user_data;
+    gb->rumble_callback = rumble_callback;
+    gb->rumble_user_data = rumble_user_data;
 
     if (gb->rom == 0) {
         gb->rom = malloc(CUPID_GB_MAX_ROM_SIZE);
@@ -318,6 +324,7 @@ void cupid_gb_init(CupidGb *gb) {
                                   ? 0xffu
                                   : 0xcfu; /* P1 */
     gb->joypad = 0xffu;                    /* all buttons released (0=pressed) */
+    memset(gb->joypad_extra, 0xff, sizeof(gb->joypad_extra));
     gb->frame_ready = false;
     gb->stat_irq_delay = 0u;
     gb->ppu_lcd_warmup_lines = 0u;
@@ -468,13 +475,16 @@ void cupid_gb_enter_boot_rom(CupidGb *gb) {
     gb->io_registers[CUPID_GB_IO_LY] = 0x00u;
     gb->io_registers[CUPID_GB_IO_LYC] = 0x00u;
     gb->io_registers[CUPID_GB_IO_BGP] = 0x00u;
-    gb->io_registers[CUPID_GB_IO_OBP0] = 0x00u;
-    gb->io_registers[CUPID_GB_IO_OBP1] = 0x00u;
+    /* DMA and both object palette registers have model-specific power-on values. */
+    const uint8_t reset_value = gb->cgb_mode ? 0x00u : 0xffu;
+    gb->io_registers[CUPID_GB_IO_DMA] = reset_value;
+    gb->io_registers[CUPID_GB_IO_OBP0] = reset_value;
+    gb->io_registers[CUPID_GB_IO_OBP1] = reset_value;
     gb->io_registers[CUPID_GB_IO_WY] = 0x00u;
     gb->io_registers[CUPID_GB_IO_WX] = 0x00u;
 
-    /* Reset DIV, timers, serial */
-    gb->div_counter = 0u;
+    /* Firmware begins eight T-cycles into the divider phase, stored in M-cycles. */
+    gb->div_counter = 2u;
     gb->ppu_counter = 0u;
     gb->serial_master_clock = false;
     gb->interrupt_flags = 0x00u;
@@ -512,6 +522,9 @@ void cupid_gb_cleanup(CupidGb *gb) {
     gb->rom = 0;
     gb->serial_output_callback = NULL;
     gb->serial_output_user_data = NULL;
+    gb->rumble_callback = NULL;
+    gb->rumble_user_data = NULL;
+    gb->mbc5_rumble_on = false;
 }
 
 void cupid_gb_set_serial_output_callback(CupidGb *gb, CupidGbSerialOutputCallback callback,
@@ -521,6 +534,19 @@ void cupid_gb_set_serial_output_callback(CupidGb *gb, CupidGbSerialOutputCallbac
     }
     gb->serial_output_callback = callback;
     gb->serial_output_user_data = callback ? user_data : NULL;
+}
+
+void cupid_gb_set_rumble_callback(CupidGb *gb, CupidGbRumbleCallback callback, void *user_data) {
+    if (!gb) {
+        return;
+    }
+    gb->rumble_callback = callback;
+    gb->rumble_user_data = callback ? user_data : NULL;
+}
+
+bool cupid_gb_rumble_enabled(const CupidGb *gb) {
+    return gb && gb->header.mbc_type == CUPID_GB_MBC5 && gb->header.has_rumble &&
+           gb->mbc5_rumble_on;
 }
 
 // Memory map: read
@@ -718,6 +744,10 @@ uint8_t cupid_gb_read_u8(const CupidGb *gb, uint16_t address) {
         return (uint8_t)(gb->io_registers[2] | (uint8_t)~writable);
     }
 
+    if (address == 0xff50u) {
+        return gb->boot_rom_enabled ? 0xfeu : 0xffu;
+    }
+
     /* Decode model-specific registers before applying unused-address pull-ups.
      * Their visibility can depend on physical hardware rather than color mode. */
     {
@@ -727,7 +757,7 @@ uint8_t cupid_gb_read_u8(const CupidGb *gb, uint16_t address) {
     }
 
     if (address == 0xff03u || (address >= 0xff08u && address <= 0xff0eu) || address == 0xff4eu ||
-        (address >= 0xff50u && address <= 0xff67u) || (address >= 0xff6du && address <= 0xff6fu) ||
+        (address >= 0xff51u && address <= 0xff67u) || (address >= 0xff6du && address <= 0xff6fu) ||
         (address >= 0xff71u && address <= 0xff7fu)) {
         return 0xffu;
     }
@@ -823,7 +853,7 @@ static void cupid_gb_rtc_latch(CupidGb *gb) {
  *
  * @note Does nothing if @p gb is NULL or the write is blocked by DMA.
  */
-void cupid_gb_write_u8(CupidGb *gb, uint16_t address, uint8_t value) {
+void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool half_dot) {
     if (gb == 0) {
         return;
     }
@@ -939,7 +969,14 @@ void cupid_gb_write_u8(CupidGb *gb, uint16_t address, uint8_t value) {
             case CUPID_GB_MBC5:
                 if (gb->header.has_rumble) {
                     gb->current_ram_bank = (size_t)(value & 0x07u);
-                    /* bit 3 = rumble motor (ignored in emulation) */
+                    const bool enabled = (value & 0x08u) != 0u;
+                    if (enabled != gb->mbc5_rumble_on) {
+                        gb->mbc5_rumble_on = enabled;
+                        if (gb->rumble_callback) {
+                            gb->rumble_callback(gb, enabled, gb->elapsed_cycles,
+                                                gb->rumble_user_data);
+                        }
+                    }
                 } else {
                     gb->current_ram_bank = (size_t)(value & 0x0fu);
                 }
@@ -1130,7 +1167,7 @@ void cupid_gb_write_u8(CupidGb *gb, uint16_t address, uint8_t value) {
         } else if (address == 0xff41u) {
             gb->io_registers[CUPID_GB_IO_STAT] =
                 (uint8_t)(0x80u | (value & 0x78u) | (gb->io_registers[CUPID_GB_IO_STAT] & 0x07u));
-            cupid_gb_update_stat_irq(gb);
+            cupid_gb_update_stat_write(gb, half_dot, true);
         } else if (address == 0xff44u) {
             gb->ppu_counter = 0u;
             gb->io_registers[CUPID_GB_IO_LY] = 0u;
@@ -1142,7 +1179,7 @@ void cupid_gb_write_u8(CupidGb *gb, uint16_t address, uint8_t value) {
             cupid_gb_update_stat_irq(gb);
         } else if (address == 0xff45u) {
             gb->io_registers[CUPID_GB_IO_LYC] = value;
-            cupid_gb_update_stat_irq(gb);
+            cupid_gb_update_stat_write(gb, half_dot, false);
         } else if (address == 0xff46u) {
             gb->io_registers[CUPID_GB_IO_DMA] = value;
             cupid_gb_run_dma_transfer(gb, value);
@@ -1175,6 +1212,10 @@ void cupid_gb_write_u8(CupidGb *gb, uint16_t address, uint8_t value) {
     }
 }
 
+void cupid_gb_write_u8(CupidGb *gb, uint16_t address, uint8_t value) {
+    cupid_gb_write_u8_phase(gb, address, value, false);
+}
+
 // Step
 
 /**
@@ -1196,6 +1237,7 @@ static bool cupid_gb_step_internal(CupidGb *gb, CupidGbStepTrace *trace) {
     uint8_t cycles;
     uint8_t opcode;
     bool ime_enable_pending;
+    CupidGbCpuBus bus = {0};
 
     if (trace) {
         trace->event = CUPID_GB_STEP_IDLE;
@@ -1264,14 +1306,14 @@ static bool cupid_gb_step_internal(CupidGb *gb, CupidGbStepTrace *trace) {
     } else if (opcode == 0xe0u) {
         uint8_t n = cupid_gb_fetch_u8(gb);
 
-        cupid_gb_cpu_write(gb, (uint16_t)(0xff00u + n), gb->cpu.a, 2u);
+        cupid_gb_cpu_write(gb, (uint16_t)(0xff00u + n), gb->cpu.a, 2u, &bus);
         cycles = 1u;
     } else {
-        cycles = cupid_gb_execute_unprefixed(gb, opcode);
+        cycles = cupid_gb_execute_unprefixed(gb, opcode, &bus);
     }
 
     if (cycles > 0u) {
-        cupid_gb_tick(gb, cycles);
+        cupid_gb_cpu_finish(gb, cycles, &bus);
     }
 
     if (cycles > 0u || opcode == 0x10u || opcode == 0x76u || opcode == 0xf0u || opcode == 0xe0u ||

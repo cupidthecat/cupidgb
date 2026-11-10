@@ -755,6 +755,7 @@ bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size) {
     gb->ram_bank_count = gb->header.ram_bank_count;
     gb->current_rom_bank = gb->rom_bank_count > 1u ? 1u : 0u;
     gb->current_ram_bank = 0u;
+    gb->mbc5_rumble_on = false;
     gb->mbc1_bank_low5 = 1u;
     gb->mbc1_bank_high2 = 0u;
     gb->mbc1_multicart = cupid_gb_detect_mbc1_multicart(rom_data, rom_size, &gb->header);

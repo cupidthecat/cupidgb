@@ -2,7 +2,7 @@
 
 CupidGB is a Game Boy and Game Boy Color emulator with a C11 hardware core and a Qt 6 desktop interface for Windows and Linux. Development is ongoing. Complete hardware accuracy, feature parity, and compatibility with every cartridge have not been established.
 
-The desktop supports cartridge open/recent files and drag/drop, configurable keyboard controls and shortcuts, pause/reset/frame advance, fullscreen and display settings, audio playback and WAVE recording, battery RAM/clock persistence, ten native state slots, and bounded rewind history. CPU debugging and memory/graphics inspectors help examine a running cartridge. The hardware core remains separate from Qt.
+The desktop supports cartridge open/recent files and drag/drop, configurable keyboard and controller input, shortcuts, pause/reset/frame advance, fullscreen and display settings, audio playback and WAVE recording, battery RAM/clock persistence, ten native state slots, and bounded rewind history. CPU debugging and memory/graphics inspectors help examine a running cartridge. The hardware core remains separate from Qt and the SDL2 device backend.
 
 ## Start playing
 
@@ -27,20 +27,22 @@ Use `--model dmg`, `--model cgb`, or another supported profile to fix hardware f
 
 Emulation > Settings controls hardware, the optional boot-ROM directory, input, display, volume, and rewind limits. Model and boot choices apply on the next reset or open. Without a boot binary, startup uses an approximate post-boot profile. Boot binaries and game inputs are not distributed.
 
-Battery data uses `.sav` beside the cartridge. State slots use `.s0` through `.s9`; the zero key selects slot 10. New states use CupidGB native version 3. Version 2 states remain loadable, with defaults for timing history absent from those files. Older version 1 states can export supported battery data through File > Recover Battery from Older State, but cannot resume execution in the changed core. Keep backups of saves you need to preserve.
+Emulation > Controllers selects devices and configures buttons, axes, hats, player assignments, dead zones, hold controls, shortcuts and cartridge rumble. Recognized controllers have a default layout; generic joysticks need layout verification. See [the controller guide](docs/controllers.md) for capture, focus, menus, reconnects and SGB input. Physical devices and motion input remain unqualified.
 
-Controllers, advanced debugger commands/watchpoints, connected devices, cheats, state interchange, individual hardware revisions, uncommon cartridge behavior, and advanced display/audio features remain incomplete. [The parity checklist](docs/parity.md) records the full scope.
+Battery data uses `.sav` beside the cartridge. State slots use `.s0` through `.s9`; the zero key selects slot 10. New states use CupidGB native version 4. Version 2 and 3 states remain loadable, with deterministic defaults for fields absent from those files. Older version 1 states can export supported battery data through File > Recover Battery from Older State, but cannot resume execution in the changed core. Keep backups of saves you need to preserve.
+
+Physical controller/motion qualification, advanced debugger commands/watchpoints, cable-connected devices, cheats, state interchange, individual hardware revisions, uncommon cartridge behavior, and advanced display/audio features remain incomplete. [The parity checklist](docs/parity.md) records the full scope.
 
 ## Build
 
-Requirements: CMake 3.21 or newer, C11/C++17 compilers, Qt 6.4 or newer with Widgets and Multimedia, and Python 3.9 or newer for tests.
+Requirements: CMake 3.21 or newer, C11/C++17 compilers, Qt 6.4 or newer with Widgets and Multimedia, SDL2 2.24 or newer, and Python 3.9 or newer for tests. Core-only builds need neither Qt nor SDL2.
 
 Release builds enable interprocedural optimization when the compiler and linker support it. Other configurations and sanitizer builds retain ordinary compilation. Use `-DCUPIDGB_ENABLE_IPO=OFF` to disable it. On Linux, optional OpenSSL 3 development files enable faster large state hashes. Windows uses its system hashing API. Both retain portable hashing as a fallback.
 
 On Debian or Ubuntu:
 
 ```sh
-sudo apt-get install build-essential cmake ninja-build python3 qt6-base-dev qt6-multimedia-dev
+sudo apt-get install build-essential cmake ninja-build python3 qt6-base-dev qt6-multimedia-dev libsdl2-dev
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel 4
 ctest --test-dir build --output-on-failure
@@ -51,7 +53,7 @@ On Windows, use Visual Studio 2022 x64 and a matching MSVC Qt package. Replace t
 
 ```powershell
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
-    -DCMAKE_PREFIX_PATH=C:/Qt/6.8.3/msvc2022_64
+    "-DCMAKE_PREFIX_PATH=C:/Qt/6.8.3/msvc2022_64;C:/Libraries/SDL2-2.28.5"
 cmake --build build --config Release --parallel 4
 $env:PATH = "C:/Qt/6.8.3/msvc2022_64/bin;$env:PATH"
 ctest --test-dir build -C Release --output-on-failure
@@ -65,6 +67,7 @@ See [build and installation](docs/building.md) for Ninja, core-only builds, sani
 [The documentation index](docs/index.md) covers the whole application and core:
 
 - [User guide](docs/user-guide.md): controls, settings, display/audio, boot, capture, and save workflows.
+- [Controllers](docs/controllers.md): layouts, capture, devices, player routing, native menus, feedback and qualification limits.
 - [Hardware support](docs/hardware.md): current models/controllers and their limits.
 - [Debugger and inspectors](docs/debugging.md): execution controls, breakpoints, symbols, memory editing, and hardware views.
 - [Battery saves](docs/battery-saves.md) and [save states/rewind](docs/save-states.md): locations, encodings, continuation, and recovery.

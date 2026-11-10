@@ -229,6 +229,69 @@ static void test_huc1_banks_and_ir(void) {
     cupid_gb_cleanup(&gb);
 }
 
+typedef struct RumbleEvents {
+    unsigned count;
+    bool enabled;
+    uint64_t cycles;
+} RumbleEvents;
+
+static void observe_rumble(const CupidGb *gb, bool enabled, uint64_t cycles, void *user_data) {
+    RumbleEvents *events = user_data;
+    assert(cupid_gb_rumble_enabled(gb) == enabled);
+    ++events->count;
+    events->enabled = enabled;
+    events->cycles = cycles;
+}
+
+static void test_mbc5_motor_and_ram(void) {
+    CupidGb gb = {0};
+    RumbleEvents events = {0};
+    cupid_gb_set_rumble_callback(&gb, observe_rumble, &events);
+    uint8_t *rom = make_rom(0x8000, 0x1e, 0, 4);
+    assert(cupid_gb_load_rom(&gb, rom, 0x8000));
+    assert(!cupid_gb_rumble_enabled(&gb) && !events.count);
+    cupid_gb_write_u8(&gb, 0, 0x0a);
+    for (unsigned bank = 0; bank < 8; ++bank) {
+        cupid_gb_write_u8(&gb, 0x4000, (uint8_t)bank);
+        cupid_gb_write_u8(&gb, 0xa000, (uint8_t)(bank + 0x40));
+    }
+    for (unsigned motor = 0; motor < 2; ++motor) {
+        for (unsigned bank = 0; bank < 8; ++bank) {
+            gb.elapsed_cycles = 100 + motor * 8 + bank;
+            cupid_gb_write_u8(&gb, 0x5fff, (uint8_t)(0xf0 | motor * 8 | bank));
+            assert(gb.current_ram_bank == bank && cupid_gb_rumble_enabled(&gb) == (motor != 0));
+            assert(cupid_gb_read_u8(&gb, 0xa000) == 0x40 + bank);
+        }
+    }
+    assert(events.count == 1 && events.enabled && events.cycles == 108);
+    const size_t length = cupid_gb_state_size(&gb);
+    uint8_t *state = malloc(length);
+    assert(state && cupid_gb_save_state(&gb, state, length, NULL) == CUPID_GB_STATE_OK);
+    cupid_gb_write_u8(&gb, 0x4000, 3);
+    assert(events.count == 2 && !events.enabled && !cupid_gb_rumble_enabled(&gb));
+    assert(cupid_gb_load_state(&gb, state, length) == CUPID_GB_STATE_OK);
+    assert(events.count == 2 && cupid_gb_rumble_enabled(&gb) && gb.current_ram_bank == 7);
+    cupid_gb_write_u8(&gb, 0x4000, 0);
+    assert(events.count == 3 && !events.enabled);
+    cupid_gb_write_u8(&gb, 0x4000, 0);
+    assert(events.count == 3);
+    cupid_gb_write_u8(&gb, 0, 0);
+    cupid_gb_write_u8(&gb, 0x4000, 8);
+    assert(events.count == 4 && events.enabled && cupid_gb_read_u8(&gb, 0xa000) == 0xff);
+    rom[0x147] = 0x1b;
+    assert(cupid_gb_load_rom(&gb, rom, 0x8000));
+    cupid_gb_write_u8(&gb, 0x4000, 15);
+    assert(gb.current_ram_bank == 15 && !cupid_gb_rumble_enabled(&gb) && events.count == 4);
+    cupid_gb_set_rumble_callback(&gb, NULL, &events);
+    assert(!gb.rumble_callback && !gb.rumble_user_data);
+    free(state);
+    free(rom);
+    cupid_gb_cleanup(&gb);
+    assert(!gb.rumble_callback && !gb.rumble_user_data);
+    assert(!cupid_gb_rumble_enabled(NULL));
+    cupid_gb_set_rumble_callback(NULL, observe_rumble, &events);
+}
+
 int main(void) {
     test_physical_rom_address_lines();
     test_multicart_wiring();
@@ -237,6 +300,7 @@ int main(void) {
     test_ordinary_mbc3_ram_aliases();
     test_mbc5_ram_enable();
     test_huc1_banks_and_ir();
+    test_mbc5_motor_and_ram();
     puts("Cartridge regressions passed.");
     return 0;
 }

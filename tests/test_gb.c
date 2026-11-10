@@ -597,43 +597,66 @@ static void test_load_rom_file(void) {
 }
 
 static void test_boot_rom_file_maps_until_ff50_disable(void) {
+    const CupidGbModel models[] = {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_CGB};
+    uint8_t boot_rom[0x900] = {0};
+    boot_rom[0xffu] = 0xaau;
+    boot_rom[0x200u] = 0xbbu;
+    boot_rom[0x8ffu] = 0xccu;
+
     uint8_t rom[32u * 1024u];
-    CupidGb gb = {0};
-
-    /* Build a minimal DMG boot ROM (256 bytes) with a known pattern */
-    uint8_t boot_rom[0x100];
-    memset(boot_rom, 0x00u, sizeof(boot_rom));
-    boot_rom[0x00u] = 0x31u; /* LD SP, 0xFFFE */
-    boot_rom[0x01u] = 0xfeu;
-    boot_rom[0x02u] = 0xffu;
-    boot_rom[0xffu] = 0xAAu; /* known sentinel at end of boot ROM */
-
     build_test_rom(rom, sizeof(rom));
-    /* Put a different byte at address 0x00 in the game ROM for comparison */
-    rom[0x00u] = 0xFFu;
+    rom[0x00u] = 0xffu;
 
-    cupid_gb_load_rom(&gb, rom, sizeof(rom));
+    for (size_t i = 0; i < sizeof(models) / sizeof(models[0]); ++i) {
+        CupidGb gb = {0};
+        const bool color_hardware = models[i] == CUPID_GB_MODEL_CGB;
+        const size_t boot_size = color_hardware ? 0x900u : 0x100u;
+        char path[1024];
+        FILE *file = open_test_file(path, sizeof(path));
+        assert(fwrite(boot_rom, 1, boot_size, file) == boot_size);
+        assert(fclose(file) == 0);
 
-    /* Manually load boot ROM into the struct */
-    memcpy(gb.boot_rom, boot_rom, sizeof(boot_rom));
-    gb.boot_rom_size = sizeof(boot_rom);
-    cupid_gb_enter_boot_rom(&gb);
+        cupid_gb_set_model(&gb, models[i]);
+        assert(cupid_gb_load_rom(&gb, rom, sizeof(rom)));
+        assert(cupid_gb_read_u8(&gb, 0xff50u) == 0xffu);
+        assert(cupid_gb_load_boot_rom_file(&gb, path));
+        assert(remove(path) == 0);
+        cupid_gb_enter_boot_rom(&gb);
 
-    /* Boot ROM should be mapped: reads from 0x0000 should return boot ROM data */
-    assert(cupid_gb_read_u8(&gb, 0x0000u) == 0x31u);
-    assert(cupid_gb_read_u8(&gb, 0x00ffu) == 0xAAu);
+        assert(gb.cpu.pc == 0);
+        assert(cupid_gb_read_u8(&gb, 0x0000u) == boot_rom[0]);
+        assert(cupid_gb_read_u8(&gb, 0x00ffu) == boot_rom[0xffu]);
+        assert(cupid_gb_read_u8(&gb, 0x0100u) == rom[0x0100u]);
+        assert(cupid_gb_read_u8(&gb, 0x01ffu) == rom[0x01ffu]);
+        assert(cupid_gb_read_u8(&gb, 0x0200u) == (color_hardware ? boot_rom[0x200u] : rom[0x200u]));
+        assert(cupid_gb_read_u8(&gb, 0x08ffu) == (color_hardware ? boot_rom[0x8ffu] : rom[0x8ffu]));
+        assert(cupid_gb_read_u8(&gb, 0x0900u) == rom[0x0900u]);
 
-    /* Address above boot ROM range should still come from game ROM */
-    assert(cupid_gb_read_u8(&gb, 0x0100u) == rom[0x0100u]);
+        const uint8_t reset_value = color_hardware ? 0x00u : 0xffu;
+        assert(cupid_gb_read_u8(&gb, 0xff46u) == reset_value);
+        assert(cupid_gb_read_u8(&gb, 0xff48u) == reset_value);
+        assert(cupid_gb_read_u8(&gb, 0xff49u) == reset_value);
 
-    /* Write to FF50 with bit 0 set: disables boot ROM */
-    cupid_gb_write_u8(&gb, 0xff50u, 0x01u);
-    assert(!gb.boot_rom_enabled);
+        /* The first DIV increment is visible 248 T-cycles into firmware execution. */
+        for (unsigned step = 0; step < 62; ++step) {
+            assert(cupid_gb_read_u8(&gb, 0xff04u) == 0);
+            assert(cupid_gb_step(&gb));
+        }
+        assert(gb.elapsed_cycles == 248);
+        assert(cupid_gb_read_u8(&gb, 0xff04u) == 1);
 
-    /* Now address 0x0000 should come from game ROM */
-    assert(cupid_gb_read_u8(&gb, 0x0000u) == 0xFFu);
+        assert(cupid_gb_read_u8(&gb, 0xff50u) == 0xfeu);
+        cupid_gb_write_u8(&gb, 0xff50u, 0xfeu);
+        assert(cupid_gb_read_u8(&gb, 0xff50u) == 0xfeu);
+        cupid_gb_write_u8(&gb, 0xff50u, 0x01u);
+        cupid_gb_write_u8(&gb, 0xff50u, 0x00u);
+        assert(!gb.boot_rom_enabled);
+        assert(cupid_gb_read_u8(&gb, 0xff50u) == 0xffu);
+        assert(cupid_gb_read_u8(&gb, 0x0000u) == rom[0x0000u]);
+        assert(cupid_gb_read_u8(&gb, 0x0200u) == rom[0x0200u]);
 
-    cupid_gb_cleanup(&gb);
+        cupid_gb_cleanup(&gb);
+    }
 }
 
 static void test_save_path_does_not_overwrite_rom(void) {

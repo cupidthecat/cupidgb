@@ -20,6 +20,19 @@ Hash regressions cover known vectors, span partitions, large inputs, unaligned b
 
 Core tests exercise lifecycle, CPU/memory behavior, serial, timer/bus phases, graphics, audio, cartridge persistence, native snapshots, older-state battery recovery, and SGB behavior. Frontend checks cover sample conversion, WAVE file output, display processing, and integrated desktop workflows as those targets are present in the current build. Query the exact list with `ctest --test-dir build -N`; avoid carrying test counts from an older revision into a new result.
 
+Controller checks run only in a desktop build with SDL2:
+
+```sh
+ctest --test-dir build --output-on-failure \
+    -R 'cupidgb_(controller_backend|controller_workflows|qt_workflows)$'
+```
+
+The backend check attaches two identical standardized virtual controllers and one raw joystick. It verifies device identity/capabilities, axes/buttons/hats, transient raw and normalized edges, hotplug/reconnect, focus/background/master blocking, remapping, unrelated SDL events, rumble callbacks, subsystem ownership and teardown through a Qt event loop. It checks that SDL video and audio remain uninitialized.
+
+The workflow check uses actual native Qt controls for capture, wrong-device rejection, Cancel/OK, player/dead-zone changes, settings-file reload and detach during capture. The application smoke adds generated guest programs for immediate SGB player-count transitions in both directions, held/disabled/preferred device policy, keyboard/controller contribution merging, per-player rapid controls, selected-player reads, shortcuts, paused-tool input, state reconciliation and MBC5 feedback boundaries. Menu/settings tests process timers while checking cycle invariance and restoration of the running or paused state.
+
+Virtual devices are detached before exit. These tests do not qualify a physical USB/Bluetooth device, motor force/duration, actual sensor output, real window-system focus behavior, input latency or commercial play. Run native Windows/Linux smoke and real-device gameplay separately. A WSL environment without exposed input devices cannot establish physical Linux controller support. Do not infer those results from a virtual rumble callback or an offscreen dialog.
+
 C++/C integration checks exercise shared hardware records, initialization/reset, serial observers, and native-state restoration. Run them with Release IPO enabled as well as any fallback configuration being qualified. IPO comparisons must record the effective setting and, for GCC C++, the `-fno-strict-aliasing` flag. The build disables IPO with sanitizers.
 
 Release tests explicitly keep their assertions enabled. Run the GCC/Clang sanitizer configuration as a separate check, with leak detection where available. Preserve the failing command and complete diagnostic when a sanitizer reports a defect.
@@ -38,6 +51,8 @@ The second command requires an actual output device and exercises playback aroun
 Generated inputs protect normal user data and allow repeatable failure cases. Commercial-game checks still need real cartridge execution, visual inspection, input, sound, and saving.
 
 Set `CUPIDGB_UI_CAPTURE_DIR` when running the smoke check to retain private images of the generated-cartridge debugger and all five inspector tabs. The optional hook creates the supplied directory and writes fixed `debugger.png`, `memory.png`, `tiles.png`, `maps.png`, `objects.png`, and `palettes.png` files. Capture failures fail the check. Use the native platform to inspect actual Qt layout and fonts; a widget capture does not measure physical display presentation.
+
+The separate `cupidgb_controller_workflows` executable uses the same variable to save `controllers.png` from its native dialog and generated SDL devices. Run it without an offscreen platform override when reviewing the platform's layout and fonts. This capture contains test device state and does not need a game or physical controller.
 
 For example, from a Linux desktop session:
 

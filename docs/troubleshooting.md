@@ -26,7 +26,17 @@ When the core reports that CPU execution stopped, CupidGB pauses with the cartri
 
 Click the game area and make sure emulation is not paused. Check button and special-key bindings in Settings. Empty bindings disable an action. Buttons accept individual keys; command shortcuts can use modifiers. Duplicate or conflicting mappings are rejected on acceptance.
 
-CupidGB releases inputs on ordinary pause or application deactivation. Paused [debugger inspection](debugging.md) preserves the guest latch while releasing physical bindings; resuming playback reconciles the two. Test a reported stuck key by pressing/releasing it while the game has focus, then switching away and back. Include the modifier sequence and keyboard layout in a bug report. Controllers and four-player mapping remain pending.
+CupidGB releases keyboard inputs on ordinary pause or application deactivation. Paused [debugger inspection](debugging.md) preserves the guest latch while releasing physical bindings; resuming playback reconciles the two. Test a reported stuck key by pressing/releasing it while the game has focus, then switching away and back. Include the modifier sequence and keyboard layout in a bug report.
+
+## Controller input or feedback is missing
+
+Open Emulation > Controllers and check Gameplay devices, the selected profile's enable checkbox and its player assignment. A generic joystick's raw button numbers can differ from standardized controller labels; use the live preview and capture the intended controls. Check axis press/release thresholds if a stick drifts or fails to engage. Single-player folds eligible devices into player 1; SGB multiplayer uses their assigned slots.
+
+Background controller input is an explicit preference. Settings/capture and menus suppress gameplay delivery even when background play is enabled. A paused debugger can retain its stopped guest mask while the physical preview changes; resume or an explicit state load reconciles it. Disconnect/reconnect changes the live connection ID. Identical devices without a serial/path share their saved profile, so verify preferred-device selection and per-connection player overrides after reconnecting.
+
+If Windows reports a missing SDL2 entry point or DLL, use the runtime copied from the SDL2 SDK selected by CMake. A different SDL2.dll found on a development PATH can be too old. Stage the application with the matching DLL and notices, then test with SDK paths removed. SDL3 cannot replace SDL2.dll. On Linux, verify that the session can access the actual device and driver; this is separate from installing development headers. Virtual tests can pass without any physical input device exposed.
+
+Rumble requires a supported device, enabled cartridge feedback, a nonzero strength and application focus. Only supported MBC5 motor cartridges drive ordinary feedback. Test rumble checks the request path without changing guest input. A successful software request does not prove physical motor behavior, and a device already disconnected may reject a stop command. Motion/tilt and synthesized feedback remain incomplete. See [controllers](controllers.md).
 
 ## Sound is missing or unstable
 

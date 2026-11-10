@@ -33,6 +33,9 @@ enum {
 bool cupid_gb_lcd_enabled(const CupidGb *gb);
 void cupid_gb_set_ppu_mode(CupidGb *gb, uint8_t mode);
 void cupid_gb_update_stat_irq(CupidGb *gb);
+void cupid_gb_update_stat_write(CupidGb *gb, bool half_dot, bool stat_write);
+void cupid_gb_sync_stat_half(CupidGb *gb);
+bool cupid_gb_stat_boundary(const CupidGb *gb);
 void cupid_gb_reset_ppu(CupidGb *gb);
 /* Refresh CGB LCD-startup STAT latches at an advancing half-dot boundary without
  * advancing the pixel pipeline. Repeated calls at the same edge are harmless. */

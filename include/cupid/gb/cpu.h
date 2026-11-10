@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "cupid/gb/gb.h"
+#include "cupid/gb/timer.h"
 
 enum {
     CUPID_GB_FLAG_Z = 0x80,
@@ -23,7 +24,7 @@ enum {
 void cupid_gb_request_interrupt(CupidGb *gb, uint8_t mask);
 bool cupid_gb_service_interrupt(CupidGb *gb);
 void cupid_gb_trigger_oam_bug_write_access(CupidGb *gb, uint16_t address);
-uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode);
+uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode, CupidGbCpuBus *bus);
 uint8_t cupid_gb_fetch_u8(CupidGb *gb);
 
 #endif

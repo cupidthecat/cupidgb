@@ -9,10 +9,12 @@
 
 enum {
     STATE_HEADER_SIZE = 128,
-    STATE_VERSION = 3,
+    STATE_VERSION = 4,
+    STATE_VERSION_V3 = 3,
     STATE_VERSION_V2 = 2,
     STATE_WIRE_SIZE_V2 = 300518,
-    STATE_WIRE_SIZE_V3 = STATE_WIRE_SIZE_V2 + 50
+    STATE_WIRE_SIZE_V3 = STATE_WIRE_SIZE_V2 + 50,
+    STATE_WIRE_SIZE_V4 = STATE_WIRE_SIZE_V3 + 4
 };
 
 static const uint8_t state_magic[8] = {'C', 'U', 'P', 'I', 'D', 'G', 'B', 0};
@@ -447,12 +449,17 @@ static bool valid_model(CupidGbModel model) {
     return model >= CUPID_GB_MODEL_DMG_ABC && model <= CUPID_GB_MODEL_SGB2;
 }
 
+static void state_extension_v4(StateIo *io, CupidGb *gb) {
+    bytes(io, gb->joypad_extra, sizeof(gb->joypad_extra));
+    boolean(io, &gb->mbc5_rumble_on);
+}
+
 static bool ready(const CupidGb *gb) {
     return gb && gb->loaded && gb->rom && gb->rom_size >= 0x150 && gb->rom_size <= UINT32_MAX &&
            gb->cartridge_ram_size <= CUPID_GB_MAX_RAM_SIZE;
 }
 
-static bool valid_hardware_prefix(const CupidGb *gb) {
+static bool valid_hardware_prefix(const CupidGb *gb, unsigned version) {
     const CupidGbApu *a = &gb->apu;
     const CupidGbPixels *p = &gb->pixels;
     const int64_t area_limit = INT64_C(16320) * a->sample_acc;
@@ -504,7 +511,8 @@ static bool valid_hardware_prefix(const CupidGb *gb) {
         a->ch3_wave_pos > 31 || a->ch3_current_byte > 15 || a->ch3_wave_access_ticks > 1 ||
         a->ch3_sample > 15 || a->ch4_div_code > 7 || a->ch4_shift > 15 || a->ch4_lfsr > 0x7fff ||
         a->sample_acc >= cupid_gb_base_clock_hz(gb) || a->buf_write > CUPID_GB_APU_BUF_FRAMES ||
-        (gb->sgb.player_count != 1 && gb->sgb.player_count != 2 && gb->sgb.player_count != 4) ||
+        !gb->sgb.player_count || gb->sgb.player_count > 4 ||
+        (gb->sgb.player_count == 3 && (version < STATE_VERSION || (gb->sgb.current_player & 1u))) ||
         gb->sgb.current_player >= gb->sgb.player_count || gb->sgb.mask_mode > 3 ||
         gb->sgb.command_write_index > sizeof(gb->sgb.command) * 8) {
         return false;
@@ -523,6 +531,11 @@ static bool valid_hardware_prefix(const CupidGb *gb) {
 }
 
 static bool valid_hardware_extension(const CupidGb *gb) {
+    const bool rumble_cartridge = gb->header.mbc_type == CUPID_GB_MBC5 && gb->header.has_rumble;
+    if ((rumble_cartridge && gb->current_ram_bank > 7u) ||
+        (gb->mbc5_rumble_on && !rumble_cartridge)) {
+        return false;
+    }
     if (gb->hdma_blocks_remaining > 128 || gb->hdma_hblank_delay > 3 || gb->apu.clock_phase > 3 ||
         gb->apu.envelope_delay > 2 || gb->apu.sweep_timing.startup_ticks > 3 ||
         gb->apu.sweep_timing.shift_ticks > 7 || gb->apu.sweep_timing.restart_hold > 8 ||
@@ -544,7 +557,7 @@ static bool valid_hardware_extension(const CupidGb *gb) {
 }
 
 static bool valid_hardware(const CupidGb *gb) {
-    return valid_hardware_prefix(gb) && valid_hardware_extension(gb);
+    return valid_hardware_prefix(gb, STATE_VERSION) && valid_hardware_extension(gb);
 }
 
 size_t cupid_gb_state_size(const CupidGb *gb) {
@@ -553,7 +566,7 @@ size_t cupid_gb_state_size(const CupidGb *gb) {
     }
     /* Every version stores fixed-capacity fields. Encoding and loading
      * still check their final offset against this size, so schema drift fails closed. */
-    return STATE_WIRE_SIZE_V3;
+    return STATE_WIRE_SIZE_V4;
 }
 
 static void put_u32(uint8_t *data, uint32_t value) {
@@ -611,6 +624,7 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
     StateIo io = {NULL, data, STATE_HEADER_SIZE, size, false};
     state_fields(&io, (CupidGb *)gb);
     state_extension_v3(&io, (CupidGb *)gb);
+    state_extension_v4(&io, (CupidGb *)gb);
     if (io.invalid || io.offset != size) {
         return CUPID_GB_STATE_INVALID;
     }
@@ -630,10 +644,12 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
         return CUPID_GB_STATE_INVALID;
     }
     const uint32_t version = get_u32(data + 8);
-    if (version != STATE_VERSION && version != STATE_VERSION_V2) {
+    if (version != STATE_VERSION && version != STATE_VERSION_V3 && version != STATE_VERSION_V2) {
         return CUPID_GB_STATE_UNSUPPORTED_VERSION;
     }
-    const size_t wire_size = version == STATE_VERSION_V2 ? STATE_WIRE_SIZE_V2 : STATE_WIRE_SIZE_V3;
+    const size_t wire_size = version == STATE_VERSION_V2   ? STATE_WIRE_SIZE_V2
+                             : version == STATE_VERSION_V3 ? STATE_WIRE_SIZE_V3
+                                                           : STATE_WIRE_SIZE_V4;
     if (length != get_u32(data + 12) || length != wire_size) {
         return CUPID_GB_STATE_INVALID;
     }
@@ -684,11 +700,19 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
     *candidate = *gb;
     StateIo io = {data, NULL, STATE_HEADER_SIZE, length, false};
     state_fields(&io, candidate);
-    if (version == STATE_VERSION) {
+    if (version >= STATE_VERSION_V3) {
         state_extension_v3(&io, candidate);
     }
+    if (version == STATE_VERSION) {
+        state_extension_v4(&io, candidate);
+    } else {
+        /* Legacy writers discarded the motor bit instead of storing its history.
+         * Missing controllers start released; missing motor history starts off. */
+        memset(candidate->joypad_extra, 0xff, sizeof(candidate->joypad_extra));
+        candidate->mbc5_rumble_on = false;
+    }
     if (io.invalid || io.offset != length || candidate->boot_rom_enabled != (flags != 0) ||
-        !valid_hardware_prefix(candidate)) {
+        !valid_hardware_prefix(candidate, version)) {
         free(candidate);
         return CUPID_GB_STATE_INVALID;
     }

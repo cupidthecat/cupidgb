@@ -1467,18 +1467,47 @@ void cupid_gb_tick_apu(CupidGb *gb, uint16_t cycles) {
     if (!apu->highpass_rate) {
         apu->highpass_rate = cupid_gb_apu_filter_rate(gb, sample_rate);
     }
+    const bool color = gb->model == CUPID_GB_MODEL_CGB;
+    const bool oscillator_running = !gb->cpu.stopped || color;
+    if (!cycles) {
+        return;
+    }
+
+    /* With no oscillator edge, all dots contribute the same DAC level. The
+     * wave-RAM access window still expires while the oscillator clock runs. */
+    if (!apu->apu_on || !oscillator_running ||
+        (!color && apu->ch1_timer > cycles && apu->ch2_timer > cycles &&
+         (!apu->ch3_on || apu->ch3_timer > cycles) &&
+         (apu->ch4_timer > cycles || apu->ch4_shift >= 14u))) {
+        if (oscillator_running) {
+            apu->ch3_wave_access_ticks = apu->ch3_wave_access_ticks > cycles
+                                             ? (uint8_t)(apu->ch3_wave_access_ticks - cycles)
+                                             : 0;
+            if (apu->apu_on) {
+                apu->clock_phase = (uint8_t)((apu->clock_phase + cycles) & 3u);
+                apu->ch1_timer = (uint16_t)(apu->ch1_timer - cycles);
+                apu->ch2_timer = (uint16_t)(apu->ch2_timer - cycles);
+                if (apu->ch3_on) {
+                    apu->ch3_timer = (uint16_t)(apu->ch3_timer - cycles);
+                }
+                apu->ch4_timer = apu->ch4_timer > cycles ? apu->ch4_timer - cycles : 0;
+            }
+        }
+        cupid_gb_apu_mix(gb, &left, &right);
+        cupid_gb_apu_integrate(gb, sample_rate, clock_hz, left, right, cycles);
+        return;
+    }
 
     uint16_t pending = 0;
     for (c = 0u; c < cycles; ++c) {
         bool mix_changed = c == 0;
-        bool oscillator_running = !gb->cpu.stopped || gb->model == CUPID_GB_MODEL_CGB;
         if (oscillator_running && apu->ch3_wave_access_ticks > 0u) {
             apu->ch3_wave_access_ticks = (uint8_t)(apu->ch3_wave_access_ticks - 1u);
         }
 
         if (apu->apu_on && oscillator_running) {
             apu->clock_phase = (uint8_t)((apu->clock_phase + 1u) & 3u);
-            if (gb->model == CUPID_GB_MODEL_CGB) {
+            if (color) {
                 mix_changed |= color_sweep_tick(gb);
                 mix_changed |= color_pulse_tick(apu, 0);
                 mix_changed |= color_pulse_tick(apu, 1);
@@ -1546,7 +1575,7 @@ void cupid_gb_tick_apu(CupidGb *gb, uint16_t cycles) {
             }
 
             // CH4 LFSR timer
-            if (gb->model == CUPID_GB_MODEL_CGB) {
+            if (color) {
                 mix_changed |= color_noise_tick(apu);
             } else {
                 if (apu->ch4_timer > 0u) {

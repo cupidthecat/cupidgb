@@ -77,6 +77,33 @@ add_executable(cupidgb_rom_runner tools/rom_runner.c)
 target_link_libraries(cupidgb_rom_runner PRIVATE cupidgb_core)
 if(CUPIDGB_BUILD_QT)
     find_package(Qt6 6.4 REQUIRED COMPONENTS Widgets Multimedia)
+    find_package(SDL2 2.24 REQUIRED CONFIG)
+    if(MSVC)
+        get_target_property(cupidgb_sdl_target SDL2::SDL2 ALIASED_TARGET)
+        if(NOT cupidgb_sdl_target)
+            set(cupidgb_sdl_target SDL2::SDL2)
+        endif()
+        get_target_property(cupidgb_sdl_includes ${cupidgb_sdl_target} INTERFACE_INCLUDE_DIRECTORIES)
+        foreach(cupidgb_sdl_include IN LISTS cupidgb_sdl_includes)
+            # Keep the input SDK headers, without shadowing the compiler's C runtime headers.
+            if(EXISTS "${cupidgb_sdl_include}/_mingw.h" AND
+               EXISTS "${cupidgb_sdl_include}/SDL2/SDL.h")
+                list(REMOVE_ITEM cupidgb_sdl_includes "${cupidgb_sdl_include}")
+            endif()
+        endforeach()
+        set_property(TARGET ${cupidgb_sdl_target} PROPERTY
+            INTERFACE_INCLUDE_DIRECTORIES "${cupidgb_sdl_includes}")
+    endif()
+    add_library(cupidgb_controllers STATIC
+        src/frontend/qt/controller_backend.cpp
+        src/frontend/qt/controller_manager.cpp
+        src/frontend/qt/controller_dialog.cpp)
+    target_include_directories(cupidgb_controllers PUBLIC src/frontend/qt)
+    target_link_libraries(cupidgb_controllers PUBLIC Qt6::Widgets SDL2::SDL2)
+    if(CUPIDGB_ENABLE_SANITIZERS)
+        target_compile_options(cupidgb_controllers PUBLIC -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_options(cupidgb_controllers PUBLIC -fsanitize=address,undefined)
+    endif()
     add_executable(cupidgb
         src/frontend/qt/main.cpp
         src/frontend/qt/main_window.cpp
@@ -89,9 +116,19 @@ if(CUPIDGB_BUILD_QT)
         src/frontend/qt/inspector_renderer.cpp
         src/frontend/qt/inspectors_window.cpp
     )
-    target_link_libraries(cupidgb PRIVATE cupidgb_core Qt6::Widgets Qt6::Multimedia)
+    target_link_libraries(cupidgb PRIVATE cupidgb_core cupidgb_controllers Qt6::Widgets Qt6::Multimedia)
+    if(WIN32)
+        add_custom_command(TARGET cupidgb POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:SDL2::SDL2> $<TARGET_FILE_DIR:cupidgb>)
+    endif()
     install(TARGETS cupidgb RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
     install(FILES LICENSE DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/cupidgb)
+    install(FILES third_party/SDL2-LICENSE.txt DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/cupidgb)
+    install(FILES third_party/SDL2-COPYING.txt DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/cupidgb)
+    if(WIN32)
+        install(FILES $<TARGET_FILE:SDL2::SDL2> DESTINATION ${CMAKE_INSTALL_BINDIR})
+    endif()
     if(UNIX AND NOT APPLE)
         install(FILES packaging/linux/io.github.cupidthecat.CupidGB.desktop
             DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
@@ -103,7 +140,7 @@ if(CUPIDGB_BUILD_QT)
 endif()
 if(CUPIDGB_ENABLE_TESTS)
     enable_testing()
-    foreach(test_name IN ITEMS smoke gb serial ppu apu cpu_timing dma state battery native_v1_recovery sgb input cartridge debugger sha256)
+    foreach(test_name IN ITEMS smoke gb serial ppu stat apu cpu_timing dma state battery native_v1_recovery sgb input cartridge debugger sha256)
         add_executable(cupidgb_${test_name} tests/test_${test_name}.c)
         target_link_libraries(cupidgb_${test_name} PRIVATE cupidgb_core)
         # Tests use assert for setup and checks, including in Release builds.
@@ -134,6 +171,22 @@ if(CUPIDGB_ENABLE_TESTS)
         set_tests_properties(cupidgb_runner PROPERTIES TIMEOUT 120)
     endif()
     if(TARGET cupidgb)
+        add_executable(cupidgb_controller_backend tests/frontend/test_controller_backend.cpp)
+        target_link_libraries(cupidgb_controller_backend PRIVATE cupidgb_controllers)
+        add_test(NAME cupidgb_controller_backend COMMAND cupidgb_controller_backend)
+        set_tests_properties(cupidgb_controller_backend PROPERTIES TIMEOUT 30)
+        add_executable(cupidgb_controller_workflows tests/frontend/test_controller_workflows.cpp)
+        target_link_libraries(cupidgb_controller_workflows PRIVATE cupidgb_controllers)
+        add_test(NAME cupidgb_controller_workflows COMMAND cupidgb_controller_workflows)
+        set_tests_properties(cupidgb_controller_workflows PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+        if(WIN32)
+            foreach(controller_test IN ITEMS cupidgb_controller_backend cupidgb_controller_workflows)
+                add_custom_command(TARGET ${controller_test} POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        $<TARGET_FILE:SDL2::SDL2> $<TARGET_FILE_DIR:${controller_test}>)
+            endforeach()
+        endif()
         add_executable(cupidgb_guest_clock_pacer
             tests/frontend/test_guest_clock_pacer.cpp src/frontend/qt/guest_clock_pacer.cpp)
         target_include_directories(cupidgb_guest_clock_pacer PRIVATE src/frontend/qt)

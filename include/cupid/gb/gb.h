@@ -242,6 +242,8 @@ typedef struct CupidGbPixels {
 struct CupidGb;
 typedef void (*CupidGbSerialOutputCallback)(const struct CupidGb *gb, uint8_t transmitted,
                                             void *user_data);
+typedef void (*CupidGbRumbleCallback)(const struct CupidGb *gb, bool enabled, uint64_t base_cycles,
+                                      void *user_data);
 
 typedef struct CupidGb {
     CupidGbCpu cpu;
@@ -274,6 +276,7 @@ typedef struct CupidGb {
     uint8_t rtc_register; /* 0 = normal RAM; 0x08-0x0C = RTC reg */
     /* MBC5 9-bit ROM bank */
     uint16_t mbc5_rom_bank;
+    bool mbc5_rumble_on;
     /* MBC7 accelerometer */
     uint16_t mbc7_sensor_x;
     uint16_t mbc7_sensor_y;
@@ -328,6 +331,7 @@ typedef struct CupidGb {
      * LCD power transitions reset this origin; frozen CPU clocks do not advance it. */
     uint8_t speed_switch_alignment;
     uint8_t joypad;              /* button state: bits 0-3 dpad, 4-7 action; 0=pressed */
+    uint8_t joypad_extra[3];     /* SGB players 2..4, with the same active-low layout. */
     uint8_t window_line_counter; /* internal window scanline counter */
     uint8_t ppu_lcd_warmup_lines;
     uint8_t stat_irq_delay;
@@ -348,6 +352,8 @@ typedef struct CupidGb {
     /* Host observation only; never encoded in hardware snapshots. */
     CupidGbSerialOutputCallback serial_output_callback;
     void *serial_output_user_data;
+    CupidGbRumbleCallback rumble_callback;
+    void *rumble_user_data;
 } CupidGb;
 
 /* Optional host observation for one hardware step. This output is not stored
@@ -376,6 +382,12 @@ void cupid_gb_cleanup(CupidGb *gb);
  * writes serial bytes to a host stream. */
 void cupid_gb_set_serial_output_callback(CupidGb *gb, CupidGbSerialOutputCallback callback,
                                          void *user_data);
+/* MBC5 motor transitions are observed at the current base-cycle timestamp.
+ * Callbacks must not mutate or reenter the core. Registration survives resets
+ * and state loading; state loading emits no callback. Resynchronize host output
+ * with the getter after loading a state, resetting, or changing cartridges. */
+void cupid_gb_set_rumble_callback(CupidGb *gb, CupidGbRumbleCallback callback, void *user_data);
+bool cupid_gb_rumble_enabled(const CupidGb *gb);
 void cupid_gb_set_model(CupidGb *gb, CupidGbModel model);
 /* Physical base-speed T-cycles per second, independent of CGB double speed.
  * SGB uses its NTSC host-derived clock; other current models use 4194304 Hz.

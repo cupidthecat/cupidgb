@@ -7,6 +7,9 @@
  * Use this entry point instead of writing joypad directly so selected-line
  * transitions also request the hardware interrupt. */
 void cupid_gb_set_buttons(CupidGb *gb, uint8_t released_mask);
+/* Players are numbered 0..3. Additional pads are selected by the SGB protocol;
+ * changing an unselected pad does not produce a selected-line interrupt. */
+bool cupid_gb_set_buttons_for_player(CupidGb *gb, unsigned player, uint8_t released_mask);
 
 /* Memory-map helpers. Physical contact bounce and monochrome row settling are
  * not modeled here; the selected rows are evaluated immediately. */

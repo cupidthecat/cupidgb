@@ -69,7 +69,9 @@ The initial two M-cycles account for the first eight CPU T-cycles. The tail cloc
 
 At double speed, an odd CPU T-cycle event can fall between two LCD dots. The tail keeps that position in a local cursor while advancing `elapsed_cycles`, the pixel pipeline, and APU clocks only on base-clock dots. It can synchronize the CGB startup comparison between those dots without advancing a pixel or oscillator. It consumes the complete sequence before returning, so no half-dot cursor becomes persistent guest state. This narrow synchronization does not establish general half-cycle accuracy for every device.
 
-The STAT transient enables the temporary write conditions for the current model. Within this helper, non-CGB STAT writes temporarily enable all four interrupt sources. CGB normal speed retains the old coincidence-enable bit for one CPU T-cycle, while double speed retains the old HBlank-enable bit. These are register-control phases, not extra whole instructions or additional elapsed clocks.
+Ordinary STAT stores use the same one-CPU-T-cycle transient and late commit as interrupt stack traffic. `CupidGbCpuBus` tracks the borrowed T-cycle within one instruction. A following stack or word-store byte consumes the remaining three T-cycles of its leading M-cycle; the final instruction tail repays the same credit. This cursor is local to execution and is never part of `CupidGb` or a native snapshot. LDH, indirect and absolute stores, memory read-modify-write instructions, PUSH, CALL, RST, and both bytes of `LD (a16),SP` use that schedule.
+
+Non-CGB STAT writes temporarily enable all four interrupt sources, except at the LY boundary when an already enabled HBlank source blocks the transient OAM enable. The other temporary enables still take effect. CGB normal speed retains the old coincidence-enable bit for one CPU T-cycle, while double speed retains the old HBlank-enable bit. The CPU selects this control before the final write M-cycle. A pending KEY1 transition within that cycle changes the clock rate without changing the control already selected for the access. These register phases consume the instruction's existing clocks.
 
 Peripheral requests arriving before and after acknowledgment are distinct cases. A request already present at the acknowledge edge can be cleared; a later edge must remain pending. Divider/timer work after the clear can raise IF again within the same entry cycle. Interrupt tests therefore need phase sweeps around the edge, not only one initial IF value and one final vector.
 
@@ -99,7 +101,9 @@ The divider also drives serial timing and the APU frame sequencer. A DIV write i
 
 Keep three observations distinct: the readable STAT mode bits, the interrupt condition presented by the PPU, and the request already latched in IF. A visible mode change does not by itself establish a new STAT interrupt. Mode and coincidence sources share the `stat_irq_line` edge latch. An interrupt request occurs when the combined line rises. Clearing IF while that line stays high does not create another rising edge.
 
-The LY=LYC comparison also has retained state. During comparison-invalid boundary phases, a readable coincidence bit and the retained coincidence interrupt input need not be interchangeable. Preserve the existing comparison-validity rules at scanline boundaries, the transition to VBlank, and line 153. A single comparison performed only after a complete instruction cannot establish these phases.
+The line-tail OAM interrupt input becomes available to explicit STAT/LYC writes before the readable mode changes. Automatic latch edges remain separate: recomputing the combined line from readable HBlank mode on every intervening dot would create an extra interrupt after some mask changes. OAM mode also does not imply a continuously asserted OAM interrupt input. The automatic line-start update presents that source and then removes it while mode 2 stays readable. CGB double speed has an additional explicit STAT-write edge at the first OAM-search position.
+
+The LY=LYC interrupt input retains its previous value while the comparison is invalid. During that phase, monochrome profiles clear the readable coincidence bit and CGB retains it. These boundaries occur during line changes, the transition to VBlank, and line 153. During a STAT write that spans a speed switch, the divider's speed selection determines the audio clocks, even if the LCD consumes part of the cycle at each rate.
 
 At the final pixel, `stat_irq_delay` records a pending one-dot HBlank transition. Normal speed exposes mode 0 before that delayed interrupt input. Double speed keeps mode 3 visible until the delay is consumed, then exposes mode 0. A STAT or LYC write can raise the coincidence source during this interval. That independent edge must not cancel the pending HBlank transition or leave mode 3 latched after the transfer has finished.
 
@@ -167,7 +171,7 @@ Run the focused native targets before broader suites:
 
 ```sh
 ctest --test-dir build --output-on-failure \
-    -R 'cupidgb_(cpu_timing|ppu|apu|serial|state|core_interop|guest_clock_pacer)$'
+    -R 'cupidgb_(cpu_timing|ppu|stat|apu|serial|state|core_interop|guest_clock_pacer)$'
 ```
 
 For a Visual Studio build, add `-C Release`. Also run the Qt workflow smoke for deadline, state, audio, and session integration. Sanitizers and Release IPO exercise different host-code paths; neither replaces the other.

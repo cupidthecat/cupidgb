@@ -921,7 +921,7 @@ static void test_audio_chunk_splitting(void) {
     const uint16_t chunks[] = {1, 2, 4, 31, 257, UINT16_MAX};
     for (unsigned model = 0; model < sizeof(models) / sizeof(models[0]); ++model) {
         for (unsigned rate = 0; rate < sizeof(rates) / sizeof(rates[0]); ++rate) {
-            for (unsigned scenario = 0; scenario < 4; ++scenario) {
+            for (unsigned scenario = 0; scenario < 6; ++scenario) {
                 CupidGb batch = {0};
                 batch.model = models[model];
                 assert(cupid_gb_apu_set_sample_rate(&batch, rates[rate]));
@@ -940,6 +940,15 @@ static void test_audio_chunk_splitting(void) {
                     cupid_gb_write_u8(&batch, 0xff26, 0);
                 } else if (scenario == 3) {
                     batch.apu.buf_write = CUPID_GB_APU_BUF_FRAMES;
+                } else if (scenario == 4) {
+                    batch.cpu.stopped = true;
+                    batch.apu.ch3_wave_access_ticks = 3;
+                } else if (scenario == 5) {
+                    batch.apu.ch1_timer = 500;
+                    batch.apu.ch2_timer = 500;
+                    batch.apu.ch3_wave_access_ticks = 3;
+                    batch.apu.ch4_timer = 2;
+                    batch.apu.ch4_shift = 14;
                 }
                 for (unsigned chunk = 0; chunk < sizeof(chunks) / sizeof(chunks[0]); ++chunk) {
                     CupidGb split = batch;

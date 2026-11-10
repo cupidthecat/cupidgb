@@ -15,7 +15,19 @@ void cupid_gb_acknowledge_interrupt(CupidGb *gb, uint8_t mask);
  * writes, request selection, vector assignment, and T18 acknowledgment share
  * one local timeline; no partial entry state escapes a hardware step. */
 void cupid_gb_interrupt_tail(CupidGb *gb, uint16_t return_address);
-void cupid_gb_cpu_write(CupidGb *gb, uint16_t address, uint8_t value, uint16_t leading_mcycles);
+
+/* A write may settle one CPU T-cycle into the caller's following cycle. The
+ * instruction owns this local credit until its next access or final tail. */
+typedef struct CupidGbCpuBus {
+    uint8_t credit;
+} CupidGbCpuBus;
+
+void cupid_gb_cpu_write(CupidGb *gb, uint16_t address, uint8_t value, uint16_t leading_mcycles,
+                        CupidGbCpuBus *bus);
+void cupid_gb_cpu_finish(CupidGb *gb, uint16_t mcycles, CupidGbCpuBus *bus);
+/* Internal bus access. half_dot distinguishes the intervening CGB double-speed
+ * edge; direct host writes use cupid_gb_write_u8 at a whole-dot boundary. */
+void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool half_dot);
 void cupid_gb_timer_apply_div_reset(CupidGb *gb);
 void cupid_gb_timer_apply_tac_write(CupidGb *gb, uint8_t value);
 void cupid_gb_timer_apply_tima_write(CupidGb *gb, uint8_t value);

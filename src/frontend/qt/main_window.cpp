@@ -1,5 +1,6 @@
 #include "main_window.h"
 #include "audio_converter.h"
+#include "controller_dialog.h"
 #include "cupid/compat/native_v1.h"
 #include "cupid/gb/battery.h"
 #include "debugger_window.h"
@@ -7,6 +8,7 @@
 #include "inspectors_window.h"
 #include "wave_recorder.h"
 
+#include <QAbstractButton>
 #include <QAction>
 #include <QActionGroup>
 #include <QApplication>
@@ -44,6 +46,7 @@
 #include <QMutexLocker>
 #include <QPainter>
 #include <QPlainTextEdit>
+#include <QPointer>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QSaveFile>
@@ -52,6 +55,7 @@
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QSlider>
+#include <QSpinBox>
 #include <QStatusBar>
 #include <QTemporaryDir>
 #include <QVBoxLayout>
@@ -318,10 +322,76 @@ MainWindow::MainWindow(bool isolated, bool automated, bool audioCheck,
     clock_.start();
     debuggerTimer_.setInterval(0);
     connect(&debuggerTimer_, &QTimer::timeout, this, [this] { debuggerSlice(); });
+    controllers_ = std::make_unique<cupid::input::ControllerManager>();
+    bool validControllers = false;
+    controllers_->configure(cupid::input::ControllerConfiguration::load(
+        settings_.value("controllers/configuration").toByteArray(), &validControllers));
+    controllers_->outputChanged = [this](const cupid::input::ControllerOutput &output) {
+        controllerOutput_ = output;
+        reconcileControllerInput();
+    };
+    controllers_->shortcutPressed = [this](const QString &id) {
+        QTimer::singleShot(0, this, [this, id] {
+            if (!controllers_->deliveryEnabled() || stateOperation_ ||
+                QApplication::activeModalWidget())
+                return;
+            if (id == "menu") {
+                auto *menu = menuBar()->actions().value(1)->menu();
+                menu->popup(menuBar()->mapToGlobal(
+                    menuBar()->actionGeometry(menu->menuAction()).bottomLeft()));
+                return;
+            }
+            for (auto *action : shortcutActions_)
+                if (action->objectName() == id && action->isEnabled()) {
+                    action->trigger();
+                    return;
+                }
+        });
+    };
+    controllers_->navigationPressed = [this](const QString &action, SDL_JoystickID instance) {
+        navigateControllerMenu(action, instance);
+    };
+    QString controllerError;
+    if (!controllers_->backend().start(&controllerError))
+        statusBar()->showMessage("Controllers unavailable: " + controllerError);
+    else if (!validControllers)
+        statusBar()->showMessage(
+            "Invalid controller settings; using defaults until settings are saved.");
+    refreshControllerGate();
+    for (auto *menu : findChildren<QMenu *>()) {
+        connect(menu, &QMenu::aboutToShow, this, [this] {
+            if (menuDepth_++ == 0) {
+                releaseKeys();
+                clearAudio();
+                resetControllerRumble();
+                resetPacing();
+            }
+            controllers_->setDeliveryEnabled(false);
+        });
+        connect(menu, &QMenu::aboutToHide, this, [this] {
+            if (menuDepth_)
+                --menuDepth_;
+            if (!menuDepth_)
+                QTimer::singleShot(0, this, [this] {
+                    if (!menuDepth_) {
+                        refreshControllerGate();
+                        clearAudio();
+                        resetPacing();
+                    }
+                });
+        });
+    }
     refreshActions();
 }
 
 MainWindow::~MainWindow() {
+    if (controllers_) {
+        controllers_->outputChanged = {};
+        controllers_->shortcutPressed = {};
+        controllers_->physicalEvent = {};
+        controllers_->navigationPressed = {};
+        controllers_->backend().stop();
+    }
     timer_.stop();
     saveTimer_.stop();
     audioRefreshTimer_.stop();
@@ -534,6 +604,9 @@ void MainWindow::buildMenus() {
     auto *settings = emulation->addAction("&Settings…", QKeySequence("Ctrl+,"));
     registerShortcut(settings, "settings");
     connect(settings, &QAction::triggered, this, [this] { configure(); });
+    auto *controllers = emulation->addAction("&Controllers…");
+    registerShortcut(controllers, "controllers");
+    connect(controllers, &QAction::triggered, this, [this] { configureControllers(); });
     auto *tools = menuBar()->addMenu("&Tools");
     debuggerAction_ = tools->addAction("&Debugger", QKeySequence("Ctrl+C"));
     registerShortcut(debuggerAction_, "debugger");
@@ -761,6 +834,19 @@ bool MainWindow::openRom(const QString &path) {
     if (emulator_)
         cupid_emulator_shutdown(emulator_.get());
     emulator_ = std::move(candidate);
+    cupid_gb_set_rumble_callback(
+        &emulator_->gb,
+        [](const CupidGb *gb, bool enabled, uint64_t cycles, void *user) {
+            auto *window = static_cast<MainWindow *>(user);
+            if (!window->emulator_ || &window->emulator_->gb != gb)
+                return;
+            if (cycles >= window->rumbleLastCycles_ && window->rumbleMotor_)
+                window->rumbleOnCycles_ += cycles - window->rumbleLastCycles_;
+            window->rumbleLastCycles_ = cycles;
+            window->rumbleMotor_ = enabled;
+        },
+        this);
+    resetControllerRumble();
     previousDisplayFrame_ = {};
     currentDisplayFrame_ = {};
     resetRewind();
@@ -847,6 +933,7 @@ bool MainWindow::closeRom() {
     if (!flushBattery() || !stopRecording())
         return false;
     ++sessionId_;
+    resetControllerRumble();
     resetDebuggerTimeline(true);
     saveTimer_.stop();
     batteryDirty_ = false;
@@ -1056,6 +1143,7 @@ void MainWindow::setPaused(bool value) {
         }
     }
     paused_ = value;
+    resetControllerRumble();
     releaseKeys();
     QSignalBlocker blocker(pauseAction_);
     pauseAction_->setChecked(value);
@@ -1067,6 +1155,7 @@ void MainWindow::setPaused(bool value) {
 }
 
 void MainWindow::releaseKeys() {
+    keyboardSpecialHeld_.fill(false);
     turbo_ = false;
     rewind_ = false;
     slowHeld_ = false;
@@ -1077,8 +1166,7 @@ void MainWindow::releaseKeys() {
     rapidHeld_.fill(false);
     rapidPhase_.fill(0);
     physicalJoypad_ = 0xff;
-    if (emulator_ && !(paused_ && debuggerInputPaused_))
-        emulator_->gb.joypad = 0xff;
+    reconcileControllerInput();
 }
 
 void MainWindow::registerShortcut(QAction *action, const QString &id) {
@@ -1097,17 +1185,182 @@ void MainWindow::setJoypad(uint8_t mask) {
 void MainWindow::applyHeldButtons() {
     if (!emulator_)
         return;
-    uint8_t mask = physicalJoypad_;
+    applyPlayerButtons(livePlayerButtons());
+}
+
+std::array<uint8_t, 4> MainWindow::livePlayerButtons() const {
+    std::array<uint8_t, 4> buttons{0xff, 0xff, 0xff, 0xff};
+    if (paused_)
+        return buttons;
+    buttons = controllerOutput_.buttons;
+    buttons[0] &= physicalJoypad_;
     for (size_t action = 0; action < rapidHeld_.size(); ++action) {
         if (!rapidHeld_[action])
             continue;
         const uint8_t button = uint8_t(1u << (action + 4));
         if (rapidPhase_[action] < 2)
-            mask &= uint8_t(~button);
-        else
-            mask |= button;
+            buttons[0] &= uint8_t(~button);
     }
-    setJoypad(mask);
+    for (size_t player = 0; player < 4; ++player)
+        for (size_t action = 0; action < 2; ++action)
+            if (controllerRapidHeld_[player][action] && controllerRapidPhase_[player][action] < 2)
+                buttons[player] &= uint8_t(~(1u << (action + 4)));
+    return buttons;
+}
+
+void MainWindow::applyPlayerButtons(const std::array<uint8_t, 4> &buttons) {
+    controllerPlayerCount_ =
+        cupid_gb_sgb_active(&emulator_->gb) ? emulator_->gb.sgb.player_count : 1;
+    uint8_t first = buttons[0];
+    if (controllerPlayerCount_ == 1)
+        for (unsigned player = 1; player < 4; ++player)
+            first &= buttons[player];
+    setJoypad(first);
+    for (unsigned player = 1; player < 4; ++player)
+        cupid_gb_set_buttons_for_player(&emulator_->gb, player, buttons[player]);
+}
+
+void MainWindow::refreshControllerPlayerCount() {
+    if (!emulator_)
+        return;
+    const unsigned count = cupid_gb_sgb_active(&emulator_->gb) ? emulator_->gb.sgb.player_count : 1;
+    if (count == controllerPlayerCount_)
+        return;
+    // An SGB command can change routing inside one guest frame. Update before the next opcode.
+    applyPlayerButtons(paused_ && debuggerInputPaused_ ? debuggerPlayerButtons_
+                                                       : livePlayerButtons());
+}
+
+void MainWindow::reconcileControllerInput() {
+    const bool oldTurbo = turbo_, oldRewind = rewind_;
+    const auto held = [this](size_t action) {
+        return !paused_ && (keyboardSpecialHeld_[action] || controllerOutput_.held[action]);
+    };
+    turbo_ = held(0);
+    rewind_ = held(1);
+    slowHeld_ = held(2);
+    for (size_t i = 0; i < rapidHeld_.size(); ++i) {
+        const bool next = !paused_ && keyboardSpecialHeld_[i + 3];
+        if (rapidHeld_[i] != next)
+            rapidPhase_[i] = 0;
+        rapidHeld_[i] = next;
+    }
+    for (size_t player = 0; player < 4; ++player)
+        for (size_t action = 0; action < 2; ++action) {
+            const bool next = !paused_ && controllerOutput_.rapid[player][action];
+            if (controllerRapidHeld_[player][action] != next)
+                controllerRapidPhase_[player][action] = 0;
+            controllerRapidHeld_[player][action] = next;
+        }
+    if (oldTurbo != turbo_ || oldRewind != rewind_) {
+        clearAudio();
+        resetPacing();
+    }
+    if (!(paused_ && debuggerInputPaused_) && !stateOperation_)
+        applyHeldButtons();
+}
+
+void MainWindow::refreshControllerGate() {
+    if (!controllers_)
+        return;
+    const bool focused = QApplication::applicationState() == Qt::ApplicationActive;
+    controllers_->setFocused(focused || (isolated_ && !isVisible()));
+    const auto *active = QApplication::activeWindow();
+    const bool otherWindow = active && active != this;
+    const bool blocked = (isolated_ && !controllerSmokeActive_) || menuDepth_ || stateOperation_ ||
+                         QApplication::activeModalWidget() || QApplication::activePopupWidget() ||
+                         otherWindow || !inputTrace_.empty();
+    controllers_->setDeliveryEnabled(!blocked);
+}
+
+void MainWindow::navigateControllerMenu(const QString &action, SDL_JoystickID instance) {
+    (void)instance;
+    QWidget *target = QApplication::activePopupWidget();
+    if (!target)
+        target = QApplication::activeModalWidget();
+    if (!target || QApplication::applicationState() != Qt::ApplicationActive ||
+        target->property("controllerCaptureActive").toBool() ||
+        target->property("controllerCaptureConsumed").toBool())
+        return;
+    const QStringList actions{"right", "left", "up", "down", "a", "b", "menu", "turbo", "rewind"};
+    const std::array<int, 9> keys{Qt::Key_Right,  Qt::Key_Left,   Qt::Key_Up,
+                                  Qt::Key_Down,   Qt::Key_Return, Qt::Key_Escape,
+                                  Qt::Key_Escape, Qt::Key_Tab,    Qt::Key_Backtab};
+    int value = 0;
+    for (int i = 0; i < actions.size(); ++i)
+        if (action == actions[i]) {
+            value = keys[size_t(i)];
+            break;
+        }
+    if (!value)
+        return;
+    QPointer<QWidget> guarded(target);
+    QTimer::singleShot(0, this, [this, guarded, value] {
+        if (!guarded || (QApplication::activePopupWidget() != guarded &&
+                         QApplication::activeModalWidget() != guarded))
+            return;
+        QPointer<QWidget> receiver = guarded->focusWidget();
+        // Menus receive keys directly; dialogs use their current visible focus child.
+        if (qobject_cast<QMenu *>(guarded.data()) || !receiver || !receiver->isVisible() ||
+            receiver->window() != guarded->window())
+            receiver = guarded;
+        int nativeKey = value;
+        if (value == Qt::Key_Return && !qobject_cast<QMenu *>(guarded.data()) &&
+            (qobject_cast<QAbstractButton *>(receiver.data()) ||
+             qobject_cast<QComboBox *>(receiver.data())))
+            nativeKey = Qt::Key_Space;
+        QKeyEvent press(QEvent::KeyPress, nativeKey, Qt::NoModifier);
+        QKeyEvent release(QEvent::KeyRelease, nativeKey, Qt::NoModifier);
+        QApplication::sendEvent(receiver, &press);
+        if (guarded && receiver)
+            QApplication::sendEvent(receiver, &release);
+    });
+}
+
+void MainWindow::resetControllerRumble() {
+    if (controllers_)
+        controllers_->stopRumble();
+    rumbleOnCycles_ = 0;
+    rumbleWindowCycles_ = rumbleLastCycles_ = emulator_ ? emulator_->gb.elapsed_cycles : 0;
+    rumbleMotor_ = emulator_ && cupid_gb_rumble_enabled(&emulator_->gb);
+}
+
+void MainWindow::finishControllerRumble() {
+    if (!emulator_ || !controllers_)
+        return;
+    const uint64_t now = emulator_->gb.elapsed_cycles;
+    if (now < rumbleLastCycles_ || now <= rumbleWindowCycles_) {
+        resetControllerRumble();
+        return;
+    }
+    if (rumbleMotor_)
+        rumbleOnCycles_ += now - rumbleLastCycles_;
+    controllers_->setRumble(!paused_ && !rewind_ && !stateOperation_
+                                ? double(rumbleOnCycles_) / double(now - rumbleWindowCycles_)
+                                : 0.0,
+                            controllerPlayerCount_ == 1);
+    rumbleWindowCycles_ = rumbleLastCycles_ = now;
+    rumbleOnCycles_ = 0;
+}
+
+void MainWindow::configureControllers() {
+    const bool wasPaused = paused_;
+    setPaused(true);
+    controllers_->setDeliveryEnabled(false);
+    QList<QPair<QString, QString>> commands;
+    for (auto *action : shortcutActions_)
+        commands.append({action->objectName(), action->text()});
+    {
+        ControllerDialog dialog(*controllers_, commands, this);
+        if (dialog.exec() == QDialog::Accepted) {
+            const auto configuration = dialog.configuration();
+            controllers_->configure(configuration, dialog.playerOverrides());
+            controllers_->setPreferredInstance(dialog.preferredInstance());
+            settings_.setValue("controllers/configuration", configuration.save());
+        }
+    }
+    refreshControllerGate();
+    setPaused(wasPaused);
 }
 
 void MainWindow::advanceControls() {
@@ -1118,6 +1371,11 @@ void MainWindow::advanceControls() {
     for (size_t action = 0; action < rapidHeld_.size(); ++action)
         if (rapidHeld_[action])
             rapidPhase_[action] = (rapidPhase_[action] + 1) % 4;
+    for (size_t player = 0; player < 4; ++player)
+        for (size_t action = 0; action < 2; ++action)
+            if (controllerRapidHeld_[player][action])
+                controllerRapidPhase_[player][action] =
+                    (controllerRapidPhase_[player][action] + 1) % 4;
     applyHeldButtons();
     if (audioConverter_)
         audioConverter_->setInputRate(double(cupid_gb_apu_get_sample_rate(&emulator_->gb)) *
@@ -1130,7 +1388,8 @@ void MainWindow::resetPacing() {
 }
 
 void MainWindow::tick() {
-    if (!emulator_ || paused_ || stateOperation_)
+    refreshControllerGate();
+    if (!emulator_ || paused_ || stateOperation_ || menuDepth_)
         return;
     const qint64 now = clock_.nsecsElapsed();
     if (rewind_) {
@@ -1211,6 +1470,8 @@ bool MainWindow::runFrame() {
             reportError("CPU execution stopped. The cartridge remains open for inspection.");
             return false;
         }
+        if (gb.sgb.player_count != controllerPlayerCount_)
+            refreshControllerPlayerCount();
         if (gb.frame_ready || gb.elapsed_cycles - startCycles >= 70224)
             break;
     }
@@ -1228,6 +1489,7 @@ bool MainWindow::runFrame() {
         pumpAudio();
     }
     present(gb.frame_ready);
+    finishControllerRumble();
     advanceControls();
     watchBattery();
     rememberFrame();
@@ -1287,6 +1549,9 @@ bool MainWindow::restoreState(const QByteArray &bytes, bool reportFailure, bool 
         return false;
     }
     ++timelineId_;
+    resetControllerRumble();
+    controllerPlayerCount_ =
+        cupid_gb_sgb_active(&emulator_->gb) ? emulator_->gb.sgb.player_count : 1;
     return true;
 }
 
@@ -1369,6 +1634,8 @@ bool MainWindow::loadStateFile(const QString &path) {
     cupid_gb_apu_drain(&emulator_->gb, discarded, CUPID_GB_APU_BUF_FRAMES);
     // Host input remains current even when the saved guest frame held another button.
     applyHeldButtons();
+    if (paused_ && debuggerInputPaused_)
+        debuggerPlayerButtons_ = livePlayerButtons();
     batteryDirty_ = true;
     saveTimer_.start();
     rewind_ = false;
@@ -1582,6 +1849,14 @@ bool MainWindow::eventFilter(QObject *object, QEvent *event) {
     if (event->type() == QEvent::ApplicationDeactivate ||
         (event->type() == QEvent::WindowDeactivate && object == this))
         releaseKeys();
+    if (event->type() == QEvent::ApplicationDeactivate && controllers_) {
+        controllers_->setFocused(false);
+        resetControllerRumble();
+    }
+    if (event->type() == QEvent::ApplicationActivate && controllers_) {
+        controllers_->setFocused(true);
+        resetControllerRumble();
+    }
     if ((object == display_ || object == this) && emulator_ &&
         (event->type() == QEvent::KeyPress || event->type() == QEvent::KeyRelease)) {
         auto *key = static_cast<QKeyEvent *>(event);
@@ -1597,28 +1872,10 @@ bool MainWindow::eventFilter(QObject *object, QEvent *event) {
             if (!specialKeys_[action] || specialKeys_[action] != value)
                 continue;
             const bool held = pressed && !paused_;
-            switch (action) {
-                case 0:
-                    turbo_ = held;
-                    clearAudio();
-                    break;
-                case 1:
-                    rewind_ = held;
-                    clearAudio();
-                    if (held && rewindStates_.size() < 2)
-                        statusBar()->showMessage("No earlier rewind history");
-                    break;
-                case 2:
-                    slowHeld_ = held;
-                    break;
-                case 3:
-                case 4:
-                    rapidHeld_[action - 3] = held;
-                    rapidPhase_[action - 3] = 0;
-                    if (!(paused_ && debuggerInputPaused_))
-                        applyHeldButtons();
-                    break;
-            }
+            keyboardSpecialHeld_[action] = held;
+            reconcileControllerInput();
+            if (action == 1 && held && rewindStates_.size() < 2)
+                statusBar()->showMessage("No earlier rewind history");
             resetPacing();
             return true;
         }
@@ -1717,6 +1974,7 @@ void MainWindow::openInspectors() {
 }
 
 void MainWindow::resetDebuggerTimeline(bool clearSession) {
+    resetControllerRumble();
     debuggerTimer_.stop();
     debuggerHistory_.clear();
     debuggerHistoryBytes_ = 0;
@@ -1733,6 +1991,8 @@ void MainWindow::resetDebuggerTimeline(bool clearSession) {
 }
 
 void MainWindow::pauseDebugger() {
+    if (!debuggerInputPaused_)
+        debuggerPlayerButtons_ = livePlayerButtons();
     debuggerInputPaused_ = true;
     debuggerTimer_.stop();
     const auto previousStop = debugger_ ? debugger_->last_stop : CUPID_GB_DEBUG_STOP_NONE;
@@ -1901,7 +2161,7 @@ void MainWindow::debuggerSlice() {
         refreshDebugger();
         return;
     }
-    if (stateOperation_)
+    if (stateOperation_ || menuDepth_)
         return;
     QScopedValueRollback<bool> operation(stateOperation_, true);
     QElapsedTimer slice;
@@ -1912,6 +2172,8 @@ void MainWindow::debuggerSlice() {
             return;
         }
         const auto result = cupid_gb_debugger_step(debugger_.get(), &emulator_->gb);
+        if (emulator_->gb.sgb.player_count != controllerPlayerCount_)
+            refreshControllerPlayerCount();
         if (result == CUPID_GB_DEBUG_STOP_BREAKPOINT || result == CUPID_GB_DEBUG_STOP_NO_ROM) {
             // A breakpoint stops before execution. Do not offer a fictitious
             // backstep for an instruction that did not run.
@@ -1950,6 +2212,9 @@ bool MainWindow::debuggerBackstep() {
         return false;
     }
     ++timelineId_;
+    resetControllerRumble();
+    controllerPlayerCount_ =
+        cupid_gb_sgb_active(&emulator_->gb) ? emulator_->gb.sgb.player_count : 1;
     debuggerHistoryBytes_ -= debuggerHistory_.back().capacity() + qsizetype(sizeof(QByteArray));
     debuggerHistory_.pop_back();
     if (inspectorsWindow_)
@@ -3407,11 +3672,481 @@ bool MainWindow::smokeTest() {
     if (!debuggerSmokeTest(directory.path()))
         return smokeFailure(__LINE__);
     if (!pacingSmokeTest(path) || !modelSmokeTest(directory.path()) ||
-        display_->collectPaintIntervals || !display_->paintIntervals.empty() ||
-        display_->lastPaintAt)
+        !controllerSmokeTest(directory.path()) || display_->collectPaintIntervals ||
+        !display_->paintIntervals.empty() || display_->lastPaintAt)
         return smokeFailure(__LINE__);
     qInfo("CupidGB Qt workflow smoke test passed");
     return !failed_;
+}
+
+bool MainWindow::controllerSmokeTest(const QString &directory) {
+    using namespace cupid::input;
+    controllerSmokeActive_ = true;
+
+    struct VirtualPad {
+        SDL_JoystickID id = -1;
+        SDL_Joystick *handle = nullptr;
+        bool attached = false;
+        uint16_t amplitude = 0;
+
+        static int SDLCALL feedback(void *user, Uint16 low, Uint16 high) {
+            static_cast<VirtualPad *>(user)->amplitude = std::max(low, high);
+            return 0;
+        }
+
+        bool attach(uint16_t product) {
+            SDL_VirtualJoystickDesc desc{};
+            desc.version = SDL_VIRTUAL_JOYSTICK_DESC_VERSION;
+            desc.type = SDL_JOYSTICK_TYPE_UNKNOWN;
+            desc.naxes = 2;
+            desc.nbuttons = 8;
+            desc.nhats = 1;
+            desc.vendor_id = 0xcafe;
+            desc.product_id = product;
+            desc.name = "CupidGB workflow virtual pad";
+            desc.userdata = this;
+            desc.Rumble = feedback;
+            const int index = SDL_JoystickAttachVirtualEx(&desc);
+            if (index < 0)
+                return false;
+            attached = true;
+            id = SDL_JoystickGetDeviceInstanceID(index);
+            handle = SDL_JoystickOpen(index);
+            return handle != nullptr;
+        }
+
+        void detach() {
+            if (!attached)
+                return;
+            for (int i = 0; i < SDL_NumJoysticks(); ++i)
+                if (SDL_JoystickGetDeviceInstanceID(i) == id) {
+                    SDL_JoystickDetachVirtual(i);
+                    break;
+                }
+            attached = false;
+        }
+
+        ~VirtualPad() {
+            detach();
+            if (handle)
+                SDL_JoystickClose(handle);
+        }
+    };
+
+    const auto wait = [](const std::function<bool()> &condition) {
+        if (condition())
+            return true;
+        QEventLoop loop;
+        QTimer poll, deadline;
+        poll.setInterval(1);
+        deadline.setSingleShot(true);
+        connect(&poll, &QTimer::timeout, &loop, [&] {
+            if (condition())
+                loop.quit();
+        });
+        connect(&deadline, &QTimer::timeout, &loop, &QEventLoop::quit);
+        poll.start();
+        deadline.start(1500);
+        loop.exec();
+        return condition();
+    };
+    const auto original = controllers_->configuration();
+    const QVariant originalSettings = settings_.value("controllers/configuration");
+    settings_.setValue("emulation/model", int(CUPID_GB_MODEL_SGB));
+    settings_.setValue("emulation/bootDirectory", QString());
+    bootDirectoryOverride_ = {};
+    QByteArray rom(32768, char(0));
+    rom[0x100] = char(0xc3);
+    rom[0x101] = char(0x50);
+    rom[0x102] = char(0x01);
+    rom[0x150] = char(0x18);
+    rom[0x151] = char(0xfe);
+    rom[0x146] = 3;
+    rom[0x147] = char(0x1c); // MBC5 motor, with no RAM needed by this generated cartridge.
+    QFile file(QDir(directory).filePath("controller-workflow.gb"));
+    if (!file.open(QIODevice::WriteOnly) || file.write(rom) != rom.size())
+        return smokeFailure(__LINE__);
+    file.close();
+    if (!openRom(file.fileName()))
+        return smokeFailure(__LINE__);
+    timer_.stop();
+    const int baseline = SDL_NumJoysticks();
+    VirtualPad first, second;
+    if (!first.attach(0x81) || !second.attach(0x82))
+        return smokeFailure(__LINE__);
+    DeviceState a, b;
+    if (!wait([&] {
+            return controllers_->backend().state(first.id, &a) &&
+                   controllers_->backend().state(second.id, &b);
+        }))
+        return smokeFailure(__LINE__);
+    auto configuration = ControllerConfiguration{};
+    for (const auto &device : controllers_->backend().devices())
+        if (device.info.instance != first.id && device.info.instance != second.id) {
+            auto profile = ControllerManager::defaults(device.info);
+            profile.enabled = false;
+            configuration.profiles[device.info.persistentKey] = profile;
+        }
+    configuration.profiles[a.info.persistentKey] = ControllerManager::defaults(a.info);
+    configuration.profiles[b.info.persistentKey] = ControllerManager::defaults(b.info);
+    configuration.profiles[b.info.persistentKey].player = 1;
+    configuration.profiles[b.info.persistentKey].bindings["rapidB"] = {{Binding::Button, 2, 1}};
+    configuration.profiles[a.info.persistentKey].bindings["rapidA"] = {{Binding::Button, 2, 1}};
+    configuration.profiles[a.info.persistentKey].bindings["shortcut/mute"] = {
+        {Binding::Button, 3, 1}};
+    controllers_->configure(configuration);
+    controllers_->setDeliveryEnabled(true);
+    controllers_->setFocused(true);
+    SDL_JoystickSetVirtualButton(first.handle, 0, 1);
+    SDL_JoystickSetVirtualButton(second.handle, 1, 1);
+    if (!wait(
+            [&] { return emulator_->gb.joypad == 0xcf && emulator_->gb.joypad_extra[0] == 0xdf; }))
+        return smokeFailure(__LINE__);
+    const auto packetProgram = [](unsigned players) {
+        QByteArray code;
+        const auto write = [&](uint8_t value) {
+            code.append(char(0x3e)); // LD A, value
+            code.append(char(value));
+            code.append(char(0xe0)); // LDH (JOYP), A
+            code.append(char(0));
+        };
+        const std::array<uint8_t, 16> packet{0x89, uint8_t(players - 1)};
+        write(0x30);
+        write(0);
+        for (unsigned bit = 0; bit < 128; ++bit) {
+            write(0x30);
+            write(packet[bit / 8] & (1u << (bit % 8)) ? 0x10 : 0x20);
+        }
+        write(0x30);
+        write(0x20);
+        write(0x30);
+        return code;
+    };
+    const auto readButtons = [](unsigned index) {
+        QByteArray code = QByteArray::fromHex("3e10e000f000ea00d0");
+        code[7] = char(index);
+        return code;
+    };
+    QByteArray transition = packetProgram(4) + readButtons(0);
+    transition += QByteArray::fromHex("3e20e0003e30e000");
+    transition += readButtons(1) + packetProgram(1) + readButtons(2);
+    transition += QByteArray::fromHex("18fe");
+    for (qsizetype i = 0; i < transition.size(); ++i)
+        cupid_gb_write_u8(&emulator_->gb, uint16_t(0xc000 + i), uint8_t(transition[i]));
+    emulator_->gb.cpu.pc = 0xc000;
+    emulator_->gb.cpu.ime = false;
+    emulator_->gb.interrupt_enable = 0;
+    if (!runFrame() || emulator_->gb.sgb.player_count != 1 || emulator_->gb.joypad != 0xcf ||
+        cupid_gb_read_u8(&emulator_->gb, 0xd000) != 0xde ||
+        cupid_gb_read_u8(&emulator_->gb, 0xd001) != 0xdd ||
+        cupid_gb_read_u8(&emulator_->gb, 0xd002) != 0xdc)
+        return smokeFailure(__LINE__); // Guest reads immediately after both player-count changes.
+    auto preferred = configuration;
+    preferred.preferredDevice = a.info.persistentKey;
+    controllers_->configure(preferred);
+    controllers_->setPreferredInstance(first.id);
+    if (emulator_->gb.joypad != 0xef || emulator_->gb.joypad_extra[0] != 0xff)
+        return smokeFailure(__LINE__);
+    auto disabled = configuration;
+    disabled.profiles[b.info.persistentKey].enabled = false;
+    controllers_->configure(disabled);
+    if (emulator_->gb.joypad != 0xef)
+        return smokeFailure(__LINE__);
+    controllers_->configure(configuration);
+    transition = packetProgram(4) + QByteArray::fromHex("18fe");
+    for (qsizetype i = 0; i < transition.size(); ++i)
+        cupid_gb_write_u8(&emulator_->gb, uint16_t(0xc000 + i), uint8_t(transition[i]));
+    emulator_->gb.cpu.pc = 0xc000;
+    if (!runFrame() || emulator_->gb.sgb.player_count != 4 || emulator_->gb.joypad != 0xef)
+        return smokeFailure(__LINE__);
+    emulator_->gb.sgb.current_player = 1;
+    emulator_->gb.io_registers[0] = 0x10;
+    if ((cupid_gb_read_u8(&emulator_->gb, 0xff00) & 0xf) != 0xd)
+        return smokeFailure(__LINE__);
+    QKeyEvent press(QEvent::KeyPress, keys_[4], Qt::NoModifier);
+    QKeyEvent release(QEvent::KeyRelease, keys_[4], Qt::NoModifier);
+    QApplication::sendEvent(this, &press);
+    SDL_JoystickSetVirtualButton(first.handle, 0, 0);
+    if (!wait([&] { return controllers_->output().buttons[0] == 0xff; }) ||
+        emulator_->gb.joypad != 0xef)
+        return smokeFailure(__LINE__);
+    QApplication::sendEvent(this, &release);
+    if (emulator_->gb.joypad != 0xff)
+        return smokeFailure(__LINE__);
+    SDL_JoystickSetVirtualButton(first.handle, 0, 1);
+    SDL_JoystickSetVirtualButton(first.handle, 2, 1);
+    if (!wait([&] { return controllerRapidHeld_[0][0] && emulator_->gb.joypad == 0xef; }))
+        return smokeFailure(__LINE__);
+    for (unsigned phase = 0; phase < 8; ++phase) {
+        advanceControls();
+        if (emulator_->gb.joypad != 0xef)
+            return smokeFailure(__LINE__); // Rapid release cannot release a separately held A.
+    }
+    SDL_JoystickSetVirtualButton(first.handle, 2, 0);
+    if (!wait([&] { return !controllerRapidHeld_[0][0]; }))
+        return smokeFailure(__LINE__);
+    SDL_JoystickSetVirtualButton(second.handle, 2, 1);
+    if (!wait([&] { return controllerRapidHeld_[1][1]; }))
+        return smokeFailure(__LINE__);
+    for (unsigned phase = 0; phase < 8; ++phase) {
+        advanceControls();
+        if (emulator_->gb.joypad != 0xef || emulator_->gb.joypad_extra[0] != 0xdf)
+            return smokeFailure(__LINE__);
+    }
+    SDL_JoystickSetVirtualButton(second.handle, 2, 0);
+    if (!wait([&] { return !controllerRapidHeld_[1][1]; }))
+        return smokeFailure(__LINE__);
+    const bool oldMute = muteAction_->isChecked();
+    SDL_JoystickSetVirtualButton(first.handle, 3, 1);
+    SDL_JoystickUpdate();
+    SDL_JoystickSetVirtualButton(first.handle, 3, 0);
+    SDL_JoystickUpdate();
+    if (!wait([&] { return muteAction_->isChecked() != oldMute; }))
+        return smokeFailure(__LINE__);
+    muteAction_->setChecked(oldMute);
+    pauseDebugger();
+    const QByteArray stopped = captureState();
+    SDL_JoystickSetVirtualButton(first.handle, 0, 0);
+    SDL_JoystickSetVirtualButton(second.handle, 1, 0);
+    if (!wait([&] { return controllers_->output().buttons == ControllerOutput{}.buttons; }) ||
+        captureState() != stopped)
+        return smokeFailure(__LINE__);
+    setPaused(false);
+    if (emulator_->gb.joypad != 0xff || emulator_->gb.joypad_extra[0] != 0xff)
+        return smokeFailure(__LINE__);
+    controllers_->setFocused(true);
+    SDL_JoystickSetVirtualButton(first.handle, 0, 1);
+    if (!wait([&] { return emulator_->gb.joypad == 0xef; }))
+        return smokeFailure(__LINE__);
+    const QByteArray held = captureState();
+    SDL_JoystickSetVirtualButton(first.handle, 0, 0);
+    if (!wait([&] { return emulator_->gb.joypad == 0xff; }) || !restoreState(held, false))
+        return smokeFailure(__LINE__);
+    applyHeldButtons();
+    if (emulator_->gb.joypad != 0xff)
+        return smokeFailure(__LINE__);
+    for (const bool initialPaused : {false, true}) {
+        for (const bool accept : {false, true}) {
+            setPaused(initialPaused);
+            timer_.start();
+            const uint64_t beforeCycles = emulator_->gb.elapsed_cycles;
+            const auto before = controllers_->configuration().save();
+            bool checked = false;
+            bool injected = false;
+            unsigned activationStage = 0;
+            bool backgroundBefore = false;
+            QElapsedTimer dialogClock;
+            dialogClock.start();
+            QTimer command;
+            command.setInterval(1);
+            connect(&command, &QTimer::timeout, this, [&] {
+                auto *dialog = QApplication::activeModalWidget();
+                if (!dialog || dialog->objectName() != "controllerSettings")
+                    return;
+                if (!injected) {
+                    SDL_JoystickSetVirtualButton(first.handle, 6, 1);
+                    injected = true;
+                }
+                if (dialogClock.elapsed() < 40)
+                    return;
+                auto *background = dialog->findChild<QCheckBox *>("controllerBackground");
+                if (!activationStage) {
+                    backgroundBefore = background->isChecked();
+                    background->setFocus();
+                    SDL_JoystickSetVirtualButton(first.handle, 0, 1);
+                    activationStage = 1;
+                    return;
+                }
+                if (activationStage == 1) {
+                    if (background->isChecked() == backgroundBefore)
+                        return;
+                    SDL_JoystickSetVirtualButton(first.handle, 0, 0);
+                    controllers_->backend().pollNow();
+                    activationStage = 2;
+                    return;
+                }
+                command.stop();
+                checked = controllers_->output().buttons == ControllerOutput{}.buttons &&
+                          emulator_->gb.elapsed_cycles == beforeCycles &&
+                          background->isChecked() != backgroundBefore;
+                auto *device = dialog->findChild<QComboBox *>("controllerDevice");
+                device->setCurrentIndex(device->findData(first.id));
+                dialog->findChild<QSpinBox *>("controllerPressThreshold")->setValue(19000);
+                if (accept) {
+                    dialog->findChild<QDialogButtonBox *>("controllerDialogButtons")
+                        ->button(QDialogButtonBox::Ok)
+                        ->setFocus();
+                    SDL_JoystickSetVirtualButton(first.handle, 0, 1);
+                } else {
+                    SDL_JoystickSetVirtualButton(first.handle, 1, 1);
+                }
+            });
+            command.start();
+            QTimer dialogDeadline;
+            dialogDeadline.setSingleShot(true);
+            connect(&dialogDeadline, &QTimer::timeout, this, [&] {
+                checked = false;
+                auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+                if (dialog && dialog->objectName() == "controllerSettings") {
+                    qCritical("Controller navigation did not dismiss its settings dialog.");
+                    dialog->reject();
+                }
+            });
+            dialogDeadline.start(2000);
+            configureControllers();
+            dialogDeadline.stop();
+            timer_.stop();
+            if (!checked || paused_ != initialPaused ||
+                (initialPaused && emulator_->gb.elapsed_cycles != beforeCycles) ||
+                (!accept && controllers_->configuration().save() != before) ||
+                (accept &&
+                 controllers_->configuration().profiles[a.info.persistentKey].pressThreshold !=
+                     19000))
+                return smokeFailure(__LINE__);
+            SDL_JoystickSetVirtualButton(first.handle, 0, 0);
+            SDL_JoystickSetVirtualButton(first.handle, 1, 0);
+            SDL_JoystickSetVirtualButton(first.handle, 6, 0);
+            if (!wait([&] { return controllers_->output().buttons[0] == 0xff; }))
+                return smokeFailure(__LINE__);
+        }
+    }
+    setPaused(false);
+    timer_.start();
+    auto *emulationMenu = menuBar()->actions().value(1)->menu();
+    emulationMenu->popup(mapToGlobal(QPoint(20, 20)));
+    const uint64_t menuCycles = emulator_->gb.elapsed_cycles;
+    QElapsedTimer menuClock;
+    menuClock.start();
+    if (!wait([&] { return menuClock.elapsed() >= 40; }) || !menuDepth_ || paused_ ||
+        emulator_->gb.elapsed_cycles != menuCycles)
+        return smokeFailure(__LINE__);
+    QMenu *nested = nullptr;
+    for (auto *action : emulationMenu->actions())
+        if (action->menu()) {
+            nested = action->menu();
+            break;
+        }
+    if (!nested)
+        return smokeFailure(__LINE__);
+    const auto selectMenuAction = [&](QAction *target) {
+        SDL_JoystickSetVirtualAxis(first.handle, 1, 0);
+        controllers_->backend().pollNow();
+        QApplication::processEvents();
+        if (emulationMenu->activeAction() == target) {
+            SDL_JoystickSetVirtualAxis(first.handle, 1, -24000);
+            if (!wait([&] {
+                    return emulationMenu->activeAction() && emulationMenu->activeAction() != target;
+                }))
+                return false;
+        }
+        for (qsizetype movement = 0; movement <= emulationMenu->actions().size(); ++movement) {
+            SDL_JoystickSetVirtualAxis(first.handle, 1, 0);
+            controllers_->backend().pollNow();
+            QApplication::processEvents();
+            QAction *previous = emulationMenu->activeAction();
+            const auto items = emulationMenu->actions();
+            const int direction = items.indexOf(previous) > items.indexOf(target) ? -1 : 1;
+            SDL_JoystickSetVirtualAxis(first.handle, 1, int16_t(24000 * direction));
+            if (!wait([&] {
+                    return emulationMenu->activeAction() &&
+                           emulationMenu->activeAction() != previous;
+                }))
+                return false;
+            if (emulationMenu->activeAction() == target)
+                return true;
+        }
+        return false;
+    };
+    controllers_->setFocused(true);
+    if (!selectMenuAction(nested->menuAction()))
+        return smokeFailure(__LINE__);
+    SDL_JoystickSetVirtualAxis(first.handle, 0, 24000);
+    if (!wait([&] { return nested->isVisible() && menuDepth_ >= 2; }))
+        return smokeFailure(__LINE__);
+    SDL_JoystickSetVirtualAxis(first.handle, 0, 0);
+    controllers_->backend().pollNow();
+    SDL_JoystickSetVirtualButton(first.handle, 1, 1);
+    if (!wait(
+            [&] { return !nested->isVisible() && emulationMenu->isVisible() && menuDepth_ == 1; }))
+        return smokeFailure(__LINE__);
+    SDL_JoystickSetVirtualButton(first.handle, 1, 0);
+    controllers_->backend().pollNow();
+    menuClock.restart();
+    if (!wait([&] { return menuClock.elapsed() >= 30; }) || !menuDepth_ ||
+        emulator_->gb.elapsed_cycles != menuCycles)
+        return smokeFailure(__LINE__);
+    controllers_->setFocused(true);
+    if (!selectMenuAction(pauseAction_)) {
+        controllers_->backend().state(first.id, &a);
+        qCritical("Controller menu selection failed: action=%s popup=%s appState=%d menuActive=%d "
+                  "depth=%u axis=%d press=%d",
+                  emulationMenu->activeAction() ? qPrintable(emulationMenu->activeAction()->text())
+                                                : "none",
+                  QApplication::activePopupWidget()
+                      ? QApplication::activePopupWidget()->metaObject()->className()
+                      : "none",
+                  int(QApplication::applicationState()), int(emulationMenu->isActiveWindow()),
+                  menuDepth_, a.physical.axes.size() > 1 ? int(a.physical.axes[1]) : 0,
+                  controllers_->profile(a.info).pressThreshold);
+        return smokeFailure(__LINE__);
+    }
+    const int menuDirection = SDL_JoystickGetAxis(first.handle, 1) < 0 ? -1 : 1;
+    SDL_JoystickSetVirtualAxis(first.handle, 1, int16_t(24500 * menuDirection));
+    controllers_->backend().pollNow();
+    QApplication::processEvents();
+    if (emulationMenu->activeAction() != pauseAction_)
+        return smokeFailure(__LINE__); // Axis jitter cannot repeat one navigation press.
+    SDL_JoystickSetVirtualButton(first.handle, 0, 1);
+    if (!wait([&] { return paused_ && !menuDepth_; }) || emulator_->gb.elapsed_cycles != menuCycles)
+        return smokeFailure(__LINE__);
+    SDL_JoystickSetVirtualButton(first.handle, 0, 0);
+    SDL_JoystickSetVirtualAxis(first.handle, 1, 0);
+    controllers_->backend().pollNow();
+    emulationMenu->popup(mapToGlobal(QPoint(20, 20)));
+    controllers_->setFocused(true);
+    if (!selectMenuAction(pauseAction_))
+        return smokeFailure(__LINE__);
+    SDL_JoystickSetVirtualButton(first.handle, 0, 1);
+    if (!wait([&] { return !paused_ && !menuDepth_ && emulator_->gb.elapsed_cycles > menuCycles; }))
+        return smokeFailure(__LINE__);
+    timer_.stop();
+    SDL_JoystickSetVirtualButton(first.handle, 0, 0);
+    controllers_->backend().pollNow();
+    controllers_->setFocused(true);
+    controllers_->setDeliveryEnabled(true);
+    cupid_gb_write_u8(&emulator_->gb, 0x4000, 8);
+    resetControllerRumble();
+    if (!runFrame() || !first.amplitude)
+        return smokeFailure(__LINE__);
+    setPaused(true);
+    if (first.amplitude)
+        return smokeFailure(__LINE__);
+    setPaused(false);
+    controllers_->setFocused(true);
+    if (!runFrame() || !first.amplitude)
+        return smokeFailure(__LINE__);
+    const QByteArray motor = captureState();
+    cupid_gb_write_u8(&emulator_->gb, 0x4000, 0);
+    if (!restoreState(motor, false) || first.amplitude || !cupid_gb_rumble_enabled(&emulator_->gb))
+        return smokeFailure(__LINE__);
+    if (!closeRom() || first.amplitude)
+        return smokeFailure(__LINE__);
+    first.detach();
+    second.detach();
+    if (!wait([&] {
+            return !controllers_->backend().state(first.id, &a) &&
+                   !controllers_->backend().state(second.id, &b);
+        }) ||
+        SDL_NumJoysticks() != baseline)
+        return smokeFailure(__LINE__);
+    controllers_->configure(original);
+    controllerSmokeActive_ = false;
+    if (originalSettings.isValid())
+        settings_.setValue("controllers/configuration", originalSettings);
+    else
+        settings_.remove("controllers/configuration");
+    timer_.start();
+    return true;
 }
 
 bool MainWindow::debuggerSmokeTest(const QString &directory) {

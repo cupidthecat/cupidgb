@@ -60,8 +60,8 @@ static uint16_t cupid_gb_sgb_read_le16(const uint8_t *data) {
 /**
  * @brief Converts a 15-bit RGB555 color to a 32-bit ARGB8888 value.
  *
- * Each 5-bit channel is scaled to the full 8-bit range using the
- * formula `(c * 255 + 15) / 31`. Alpha is always set to 0xFF.
+ * The upper channel bits are replicated into the low bits of the
+ * output byte. Alpha is always set to 0xFF.
  *
  * @param color The 15-bit RGB555 color (bits 14–0 = 0BBBBBGGGGGRRRRR).
  *
@@ -72,9 +72,9 @@ static uint32_t cupid_gb_sgb_rgb15_to_argb(uint16_t color) {
     uint32_t g = (uint32_t)((color >> 5u) & 0x1fu);
     uint32_t b = (uint32_t)((color >> 10u) & 0x1fu);
 
-    r = (r * 255u + 15u) / 31u;
-    g = (g * 255u + 15u) / 31u;
-    b = (b * 255u + 15u) / 31u;
+    r = (r << 3u) | (r >> 2u);
+    g = (g << 3u) | (g >> 2u);
+    b = (b << 3u) | (b >> 2u);
 
     return 0xff000000u | (r << 16u) | (g << 8u) | b;
 }
@@ -410,14 +410,19 @@ static void cupid_gb_sgb_handle_command(CupidGb *gb) {
             break;
         case CUPID_SGB_CMD_DATA_SND:
             break;
-        case CUPID_SGB_CMD_MLT_REQ:
-            gb->sgb.player_count = (uint8_t)((gb->sgb.command[1] & 0x03u) + 1u);
-            if (gb->sgb.player_count == 3u) {
-                gb->sgb.player_count = 4u;
+        case CUPID_SGB_CMD_MLT_REQ: {
+            const unsigned selection = gb->sgb.command[1] & 3u;
+            const unsigned active = gb->sgb.current_player;
+            gb->sgb.player_count = (uint8_t)(selection + 1u);
+            if (selection == 2u) {
+                /* The irregular three-pad request selects pad 1 or 3 and
+                 * disables subsequent rotation on the P15 rising edge. */
+                gb->sgb.current_player = (active == 1u || active == 2u) ? 2u : 0u;
+            } else {
+                gb->sgb.current_player = (uint8_t)(active & selection);
             }
-            gb->sgb.current_player =
-                (uint8_t)(gb->sgb.current_player & (gb->sgb.player_count - 1u));
             break;
+        }
         case CUPID_SGB_CMD_CHR_TRN:
             cupid_gb_sgb_apply_chr_trn(gb, (gb->sgb.command[1] & 0x01u) != 0u);
             break;
@@ -594,8 +599,12 @@ void cupid_gb_sgb_write_joyp(CupidGb *gb, uint8_t value) {
  * The Game Boy viewport is placed at (@ref CUPID_SGB_VIEWPORT_X,
  * @ref CUPID_SGB_VIEWPORT_Y) within the output buffer. Border tiles
  * that overlap the viewport with color index 0 are left transparent
- * (the screen pixels show through). The active mask mode is respected:
- *   - @ref CUPID_SGB_MASK_DISABLED / FREEZE: normal screen rendering
+ * (the screen pixels show through). Outside the viewport, valid tiles
+ * use the shared screen backdrop for color index 0. Unavailable tile
+ * entries leave the viewport intact and use black in the surrounding area.
+ * The active mask mode is respected:
+ *   - @ref CUPID_SGB_MASK_DISABLED: show the current screen
+ *   - @ref CUPID_SGB_MASK_FREEZE: show the saved screen
  *   - @ref CUPID_SGB_MASK_BLACK: viewport filled with black
  *   - @ref CUPID_SGB_MASK_COLOR0: viewport filled with palette color 0
  *
@@ -603,101 +612,87 @@ void cupid_gb_sgb_write_joyp(CupidGb *gb, uint8_t value) {
  * @param pixels      Output buffer of at least
  *                    `CUPID_SGB_SCREEN_WIDTH * CUPID_SGB_SCREEN_HEIGHT`
  *                    `uint32_t` elements.
- * @param pixel_count Total number of elements in @p pixels; must be≥
+ * @param pixel_count Total number of elements in @p pixels; must be at least
  *                    `CUPID_SGB_SCREEN_WIDTH * CUPID_SGB_SCREEN_HEIGHT`.
  *
  * @note Does nothing if @p gb or @p pixels is NULL, or @p pixel_count
  *       is too small.
  */
 void cupid_gb_sgb_render_argb(const CupidGb *gb, uint32_t *pixels, size_t pixel_count) {
-    uint32_t border_colors[8u * 16u];
-    const uint8_t *screen_source;
-    unsigned i;
-    unsigned y;
-    unsigned x;
-
-    if (gb == NULL || pixels == NULL ||
-        pixel_count < CUPID_SGB_SCREEN_WIDTH * CUPID_SGB_SCREEN_HEIGHT) {
+    if (!gb || !pixels || pixel_count < CUPID_SGB_SCREEN_WIDTH * CUPID_SGB_SCREEN_HEIGHT) {
         return;
     }
 
-    for (i = 0u; i < 8u * 16u; ++i) {
-        border_colors[i] = cupid_gb_sgb_rgb15_to_argb(gb->sgb.border_palettes[i]);
-    }
-
-    if (gb->sgb.mask_mode == CUPID_SGB_MASK_FREEZE) {
-        screen_source = gb->sgb.freeze_buffer;
-    } else {
-        screen_source = gb->frame_buffer;
-    }
-
-    for (i = 0u; i < CUPID_SGB_SCREEN_WIDTH * CUPID_SGB_SCREEN_HEIGHT; ++i) {
-        pixels[i] = 0xff000000u;
-    }
-
-    for (y = 0u; y < CUPID_GB_SCREEN_HEIGHT; ++y) {
-        for (x = 0u; x < CUPID_GB_SCREEN_WIDTH; ++x) {
-            uint32_t color;
-            size_t out_index =
-                (CUPID_SGB_VIEWPORT_Y + y) * CUPID_SGB_SCREEN_WIDTH + CUPID_SGB_VIEWPORT_X + x;
-
-            switch (gb->sgb.mask_mode) {
-                case CUPID_SGB_MASK_BLACK:
-                    color = 0xff000000u;
-                    break;
-                case CUPID_SGB_MASK_COLOR0:
-                    color = cupid_gb_sgb_rgb15_to_argb(gb->sgb.screen_palettes[0]);
-                    break;
-                case CUPID_SGB_MASK_FREEZE:
-                case CUPID_SGB_MASK_DISABLED:
-                default: {
-                    uint8_t shade = (uint8_t)(screen_source[y * CUPID_GB_SCREEN_WIDTH + x] & 0x03u);
-                    uint8_t palette =
-                        gb->sgb.attribute_map[(y >> 3u) * CUPID_SGB_ATTR_WIDTH + (x >> 3u)];
-                    color =
-                        cupid_gb_sgb_rgb15_to_argb(gb->sgb.screen_palettes[palette * 4u + shade]);
-                    break;
-                }
+    const CupidGbSgb *sgb = &gb->sgb;
+    const uint32_t backdrop = cupid_gb_sgb_rgb15_to_argb(sgb->screen_palettes[0]);
+    const uint8_t *screen =
+        sgb->mask_mode == CUPID_SGB_MASK_FREEZE ? sgb->freeze_buffer : gb->frame_buffer;
+    uint32_t screen_colors[4][4];
+    uint32_t border_colors[4][16];
+    for (unsigned palette = 0; palette < 4; ++palette) {
+        for (unsigned color = 0; color < 4; ++color) {
+            if (sgb->mask_mode == CUPID_SGB_MASK_BLACK) {
+                screen_colors[palette][color] = 0xff000000u;
+            } else if (sgb->mask_mode == CUPID_SGB_MASK_COLOR0 || color == 0) {
+                screen_colors[palette][color] = backdrop;
+            } else {
+                screen_colors[palette][color] =
+                    cupid_gb_sgb_rgb15_to_argb(sgb->screen_palettes[palette * 4u + color]);
             }
-
-            pixels[out_index] = color;
+        }
+        for (unsigned color = 1; color < 16; ++color) {
+            border_colors[palette][color] =
+                cupid_gb_sgb_rgb15_to_argb(sgb->border_palettes[palette * 16u + color]);
         }
     }
 
-    for (y = 0u; y < CUPID_SGB_TILE_HEIGHT; ++y) {
-        for (x = 0u; x < CUPID_SGB_TILE_WIDTH; ++x) {
-            uint16_t tile = gb->sgb.border_map[x + y * CUPID_SGB_TILE_WIDTH];
-            uint8_t tile_index = (uint8_t)(tile & 0xffu);
-            uint8_t palette = (uint8_t)((tile >> 10u) & 0x07u);
-            uint8_t flip_x = (tile & 0x4000u) != 0u ? 0u : 7u;
-            uint8_t flip_y = (tile & 0x8000u) != 0u ? 7u : 0u;
-            unsigned py;
+    const unsigned view_tile_x = CUPID_SGB_VIEWPORT_X / 8u;
+    const unsigned view_tile_y = CUPID_SGB_VIEWPORT_Y / 8u;
+    for (unsigned tile_y = 0; tile_y < CUPID_SGB_TILE_HEIGHT; ++tile_y) {
+        for (unsigned tile_x = 0; tile_x < CUPID_SGB_TILE_WIDTH; ++tile_x) {
+            const bool in_viewport =
+                tile_x >= view_tile_x && tile_x < view_tile_x + CUPID_SGB_ATTR_WIDTH &&
+                tile_y >= view_tile_y && tile_y < view_tile_y + CUPID_SGB_ATTR_HEIGHT;
+            const uint8_t *source = NULL;
+            const uint32_t *lcd_palette = NULL;
+            if (in_viewport) {
+                const unsigned lcd_x = tile_x - view_tile_x;
+                const unsigned lcd_y = tile_y - view_tile_y;
+                source = screen + 8u * (lcd_y * CUPID_GB_SCREEN_WIDTH + lcd_x);
+                lcd_palette =
+                    screen_colors[sgb->attribute_map[lcd_y * CUPID_SGB_ATTR_WIDTH + lcd_x] & 3u];
+            }
 
-            for (py = 0u; py < 8u; ++py) {
-                unsigned px;
-                unsigned screen_y = y * 8u + py;
-                size_t base = (size_t)tile_index * 32u + (size_t)((py ^ flip_y) * 2u);
+            const uint16_t entry = sgb->border_map[tile_y * CUPID_SGB_TILE_WIDTH + tile_x];
+            /* The map has a ten-bit tile index, but the adapter uploads only
+             * 256 tiles. Entries outside that range do not draw an overlay. */
+            const bool tile_available = (entry & 0x0300u) == 0;
+            const uint8_t *tile = sgb->border_tiles + 32u * (entry & 0xffu);
+            const uint32_t *palette = border_colors[(entry >> 10u) & 3u];
+            const unsigned x_flip = (entry & 0x4000u) ? 7u : 0u;
+            const unsigned y_flip = (entry & 0x8000u) ? 7u : 0u;
+            uint32_t *output = pixels + tile_y * 8u * CUPID_SGB_SCREEN_WIDTH + tile_x * 8u;
 
-                for (px = 0u; px < 8u; ++px) {
-                    uint8_t bit = (uint8_t)(1u << (px ^ flip_x));
-                    uint8_t color_index = 0u;
-                    unsigned screen_x = x * 8u + px;
-                    bool in_viewport = screen_x >= CUPID_SGB_VIEWPORT_X &&
-                                       screen_x < CUPID_SGB_VIEWPORT_X + CUPID_GB_SCREEN_WIDTH &&
-                                       screen_y >= CUPID_SGB_VIEWPORT_Y &&
-                                       screen_y < CUPID_SGB_VIEWPORT_Y + CUPID_GB_SCREEN_HEIGHT;
-
-                    color_index |= (gb->sgb.border_tiles[base] & bit) != 0u ? 1u : 0u;
-                    color_index |= (gb->sgb.border_tiles[base + 1u] & bit) != 0u ? 2u : 0u;
-                    color_index |= (gb->sgb.border_tiles[base + 16u] & bit) != 0u ? 4u : 0u;
-                    color_index |= (gb->sgb.border_tiles[base + 17u] & bit) != 0u ? 8u : 0u;
-
-                    if (in_viewport && color_index == 0u) {
-                        continue;
+            for (unsigned y = 0; y < 8; ++y) {
+                uint32_t *output_row = output + y * CUPID_SGB_SCREEN_WIDTH;
+                const uint8_t *lcd_row = source ? source + y * CUPID_GB_SCREEN_WIDTH : NULL;
+                const unsigned row = 2u * (y ^ y_flip);
+                for (unsigned x = 0; x < 8; ++x) {
+                    unsigned color = 0;
+                    if (tile_available) {
+                        const unsigned shift = 7u - (x ^ x_flip);
+                        color = (((unsigned)tile[row] >> shift) & 1u) |
+                                ((((unsigned)tile[row + 1] >> shift) & 1u) << 1u) |
+                                ((((unsigned)tile[row + 16] >> shift) & 1u) << 2u) |
+                                ((((unsigned)tile[row + 17] >> shift) & 1u) << 3u);
                     }
-
-                    pixels[screen_y * CUPID_SGB_SCREEN_WIDTH + screen_x] =
-                        border_colors[palette * 16u + color_index];
+                    if (color) {
+                        output_row[x] = palette[color];
+                    } else if (lcd_row) {
+                        output_row[x] = lcd_palette[lcd_row[x] & 3u];
+                    } else {
+                        output_row[x] = tile_available ? backdrop : 0xff000000u;
+                    }
                 }
             }
         }
