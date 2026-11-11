@@ -9,6 +9,7 @@ CupidGB emulates Game Boy and Game Boy Color hardware with a C core and a Qt des
 | [Controllers](controllers.md) | Device selection, capture, mappings, dead zones, player routing, focus, native menus and cartridge feedback |
 | [Hardware support](hardware.md) | Models, startup, cartridge controllers, hardware subsystems, and known limits |
 | [Debugger and inspectors](debugging.md) | CPU execution controls, breakpoints, symbols, memory editing, and graphics views |
+| [Cheats and memory search](cheats.md) | Codes, banked rules, persistence, physical memory searches, and host integration |
 | [Battery saves](battery-saves.md) | Save locations, clock behavior, file encoding, and recovery |
 | [Save states and rewind](save-states.md) | Numbered slots, validation, rewind limits, and the native state format |
 | [Troubleshooting](troubleshooting.md) | Loading, input, display, sound, saving, and build problems |

@@ -2,7 +2,7 @@
 
 CupidGB is a Game Boy and Game Boy Color emulator with a C11 hardware core and a Qt 6 desktop interface for Windows and Linux. Development is ongoing. Complete hardware accuracy, feature parity, and compatibility with every cartridge have not been established.
 
-The desktop supports cartridge open/recent files and drag/drop, configurable keyboard and controller input, shortcuts, pause/reset/frame advance, fullscreen and display settings, audio playback and WAVE recording, battery RAM/clock persistence, ten native state slots, and bounded rewind history. It can load cartridge archives through 7-Zip and display, save, or print Game Boy Printer output. CPU debugging and memory/graphics inspectors help examine a running cartridge. The hardware core remains separate from Qt and the SDL2 device backend.
+The desktop supports cartridge open/recent files and drag/drop, configurable keyboard and controller input, shortcuts, pause/reset/frame advance, fullscreen and display settings, audio playback and WAVE recording, battery RAM/clock persistence, ten native state slots, and bounded rewind history. It can load cartridge archives through 7-Zip and display, save, or print Game Boy Printer output. Cheat controls support Game Genie and GameShark codes, banked rules, and memory searches. CPU debugging and memory/graphics inspectors help examine a running cartridge. The hardware core remains separate from Qt and the SDL2 device backend.
 
 ## Start playing
 
@@ -29,9 +29,9 @@ Emulation > Settings controls hardware, the optional boot-ROM directory, input, 
 
 Emulation > Controllers selects devices and configures buttons, axes, hats, player assignments, dead zones, hold controls, shortcuts and cartridge rumble. Recognized controllers have a default layout; generic joysticks need layout verification. See [the controller guide](docs/controllers.md) for capture, focus, menus, reconnects and SGB input. Physical devices and motion input remain unqualified.
 
-Battery data uses `.sav` beside the cartridge. State slots use `.s0` through `.s9`, with the zero key selecting slot 10. Archive storage names include the archive extension, such as `game.zip.sav`. New states use CupidGB native version 6. Versions 2 through 5 remain loadable with defaults for fields those versions did not record. File > Recover Battery from Older State can export supported battery data from version 1. Keep backups of saves you need to preserve.
+Battery data uses `.sav` beside the cartridge. State slots use `.s0` through `.s9`, with the zero key selecting slot 10. Archive storage names include the archive extension, such as `game.zip.sav`. New states use CupidGB native version 7. Versions 2 through 6 remain loadable with defaults for fields those versions did not record. File > Recover Battery from Older State can export supported battery data from version 1. Keep backups of saves you need to preserve.
 
-Physical controller/motion qualification, advanced debugger commands/watchpoints, paired cable sessions and other accessories, cheats, state interchange, individual hardware revisions, uncommon cartridge behavior, and advanced display/audio features remain incomplete. [The parity checklist](docs/parity.md) records the full scope.
+Physical controller/motion qualification, advanced debugger commands/watchpoints, paired cable sessions and other accessories, custom cheat expressions, state interchange, individual hardware revisions, uncommon cartridge behavior, and advanced display/audio features remain incomplete. [The parity checklist](docs/parity.md) records the full scope.
 
 ## Build
 
@@ -70,6 +70,7 @@ See [build and installation](docs/building.md) for Ninja, core-only builds, sani
 - [Controllers](docs/controllers.md): layouts, capture, devices, player routing, native menus, feedback and qualification limits.
 - [Hardware support](docs/hardware.md): current models/controllers and their limits.
 - [Debugger and inspectors](docs/debugging.md): execution controls, breakpoints, symbols, memory editing, and hardware views.
+- [Cheats and memory search](docs/cheats.md) covers codes, banked rules, persistence, RAM searches, and freeze controls.
 - [Battery saves](docs/battery-saves.md) and [save states/rewind](docs/save-states.md): locations, encodings, continuation, and recovery.
 - [Troubleshooting](docs/troubleshooting.md): loading, input, sound, saves, and Qt problems.
 - [Architecture](docs/architecture.md) and [core API](docs/core-api.md): subsystem boundaries and embedding contracts.

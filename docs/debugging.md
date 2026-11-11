@@ -88,7 +88,7 @@ Tiles shows the 384 tiles in either physical VRAM bank or both banks. Maps selec
 
 OAM lists all 40 entries, including entries outside visible lines. The table shows screen-relative X/Y positions, tile/flags, bank/palette, and 8-by-8 or 8-by-16 previews; tooltips include raw coordinates. A line-limit indication means the entry loses selection on at least one visible line after ten earlier objects; it does not mean that the whole object is necessarily invisible. Palettes exposes register values and raw color entries.
 
-Inspector images use raw grayscale or uncorrected RGB555 colors. They are distinct from the main display's host palette/blending settings and do not reproduce its color response. Object previews retain a visible distinction for otherwise uniform monochrome object palettes.
+Inspector raw grayscale mode bypasses color correction. Palette-selected previews and color swatches use the active CGB/SGB correction and ambient temperature. Numeric entries retain their RGB555 values. Object previews retain a visible distinction for otherwise uniform monochrome object palettes.
 
 ## Remaining debugger scope
 

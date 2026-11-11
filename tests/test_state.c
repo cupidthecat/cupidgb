@@ -198,12 +198,12 @@ static void prepare_phase(CupidGb *gb, unsigned phase) {
     } else if (phase == 1) {
         cupid_gb_write_u8(gb, 0xff46, 0xc0);
         cupid_gb_tick(gb, 1);
-        assert(gb->dma_start_delay == 1);
+        assert(gb->dma_start_delay == 0 && gb->dma_active && gb->dma_index == 0);
     } else if (phase == 2) {
         cupid_gb_write_u8(gb, 0xff46, 0xc0);
         cupid_gb_tick(gb, 23);
         cupid_gb_write_u8(gb, 0xff46, 0xd0);
-        assert(gb->dma_active && gb->dma_restart_pending);
+        assert(!gb->dma_active && gb->dma_start_delay == 1 && gb->dma_restart_pending);
     } else {
         cupid_gb_write_u8(gb, 0xff01, 0x69);
         cupid_gb_write_u8(gb, 0xff02, gb->cgb_mode ? 0x83 : 0x81);
@@ -231,7 +231,7 @@ static void test_resume(void) {
                 size_t length;
                 uint8_t *state = encode(a, &length);
                 assert(length == cupid_gb_state_size(b) && length > 300518);
-                assert(state[8] == 6);
+                assert(state[8] == 7);
                 uint8_t *rom_pointer = b->rom;
                 strcpy(b->save_path, "host-session-save.sav");
                 assert(cupid_gb_load_state(b, state, length) == CUPID_GB_STATE_OK);
@@ -319,7 +319,7 @@ static void test_controller_state_versions(void) {
     cupid_gb_write_u8(source, 0x4000, 0x0d);
     size_t length;
     uint8_t *bytes = encode(source, &length);
-    assert(length == 310695 && bytes[300568] == source->joypad_extra[0] &&
+    assert(length == 310696 && bytes[300568] == source->joypad_extra[0] &&
            bytes[300569] == source->joypad_extra[1] && bytes[300570] == source->joypad_extra[2] &&
            bytes[300571] == 1);
     unsigned callbacks = 0;
@@ -814,6 +814,10 @@ static void test_rejection(void) {
     damaged[length - 1] ^= 1;
     rejected_unchanged(gb, damaged, length, CUPID_GB_STATE_INVALID);
     memcpy(damaged, valid, length);
+    damaged[length - 1] = 4;
+    update_integrity(damaged, length);
+    rejected_unchanged(gb, damaged, length, CUPID_GB_STATE_INVALID);
+    memcpy(damaged, valid, length);
     damaged[300571] = 1;
     update_integrity(damaged, length);
     /* A cartridge without this motor cannot restore an asserted motor latch. */
@@ -861,7 +865,7 @@ static void test_rejection(void) {
     damaged[length] = 0;
     rejected_unchanged(gb, damaged, length + 1, CUPID_GB_STATE_INVALID);
     memcpy(damaged, valid, length);
-    damaged[8] = 7;
+    damaged[8] = 8;
     update_integrity(damaged, length);
     rejected_unchanged(gb, damaged, length, CUPID_GB_STATE_UNSUPPORTED_VERSION);
     memcpy(damaged, valid, length);
@@ -930,10 +934,10 @@ static void test_sgb_transfer_resume(void) {
 
     size_t length;
     uint8_t *bytes = encode(source, &length);
-    assert(length == 310695 && bytes[8] == 6);
+    assert(length == 310696 && bytes[8] == 7);
     assert(bytes[v4_length + 7 + 4096] == 0xa5);
     assert(bytes[v4_length + 7 + 8192] == 0x80 && bytes[v4_length + 7 + 8193] == 0x0c);
-    assert(bytes[length - 6] == 0x34 && bytes[length - 5] == 0x12);
+    assert(bytes[length - 7] == 0x34 && bytes[length - 6] == 0x12);
     assert(cupid_gb_load_state(target, bytes, length) == CUPID_GB_STATE_OK);
     assert_hardware_equal(source, target);
     cupid_gb_tick_ppu_dots(source, 1);
@@ -1000,7 +1004,7 @@ static void test_lcd_frame_phase_resume(void) {
         assert(source->lcd_first_frame == cgb);
         size_t length;
         uint8_t *state = encode(source, &length);
-        const size_t phase_offset = length - 4;
+        const size_t phase_offset = length - 5;
         assert(state[phase_offset] == handheld && state[phase_offset + 1] == cgb);
         assert(cupid_gb_load_state(target, state, length) == CUPID_GB_STATE_OK);
         assert(target->lcd_frame_odd == handheld && target->lcd_first_frame == cgb);
@@ -1109,12 +1113,12 @@ static void test_v5_sgb_mapper_sections(void) {
         }
         size_t length;
         uint8_t *bytes = encode(source, &length);
-        assert(length == mapper_offset + mapper_length + 4 && bytes[8] == 6 &&
+        assert(length == mapper_offset + mapper_length + 5 && bytes[8] == 7 &&
                bytes[mapper_offset - 2] == 0x34 && bytes[mapper_offset - 1] == 0x12);
         assert(memcmp(bytes + mapper_offset, wire, mapper_length) == 0);
         assert(cupid_gb_load_state(target, bytes, length) == CUPID_GB_STATE_OK);
         assert_encoded_equal(source, target);
-        const size_t v5_length = length - 4;
+        const size_t v5_length = length - 5;
         put_u32(bytes + 8, 5);
         put_u32(bytes + 12, (uint32_t)v5_length);
         update_integrity(bytes, v5_length);
@@ -1196,10 +1200,18 @@ static void print_fixture(const char *path) {
     gb->double_speed = true;
     cupid_gb_write_u8(gb, 0xff40, 0);
     prepare_phase(gb, 2);
+    /* Keep the historical in-flight OAM prefix of this compatibility fixture.
+     * The current scheduler completes its last source read one M-cycle earlier. */
+    gb->object_attribute_memory[21] = 0;
+    gb->dma_source_base = 0xc000;
+    gb->dma_index = 21;
+    gb->dma_start_delay = 0;
+    gb->dma_restart_delay = 2;
+    gb->dma_active = true;
     size_t length;
     uint8_t *bytes = encode(gb, &length);
-    assert(length == 300576 && bytes[8] == 6 && !bytes[length - 4] && !bytes[length - 3]);
-    length -= 4;
+    assert(length == 300577 && bytes[8] == 7 && !bytes[length - 5] && !bytes[length - 4]);
+    length -= 5;
     put_u32(bytes + 8, 4);
     put_u32(bytes + 12, (uint32_t)length);
     update_integrity(bytes, length);

@@ -29,7 +29,9 @@ The CPU decoder in [cpu.c](../src/gb/cpu.c) schedules bus accesses around calls 
 
 That ordering is part of the implementation contract. A register write between two PPU dots must not advance the divider twice or omit audio integration. Conversely, moving every device update to the end of an instruction can make a CPU read observe a future LCD mode or miss an interrupt that arrived before its sampling point.
 
-`cupid_gb_read_u8` and `cupid_gb_write_u8` apply memory mapping, access restrictions, and register effects at the current phase. They do not supply an instruction's bus schedule. Debugger raw inspection is another interface: it can observe storage that the CPU cannot currently read. Drive CPU execution when testing a CPU-visible bus result.
+`cupid_gb_read_bus_u8` drives the guest cartridge bus. The passive `cupid_gb_read_u8` observes mapping and restrictions without extending bus hold. `cupid_gb_write_u8` applies register and memory effects at the current phase. The decoder supplies the access schedule. Debugger raw inspection can observe storage that the CPU cannot currently read. Drive CPU execution when testing a CPU-visible bus result.
+
+Immediate operands, stores, relative jumps, and CB memory operations use their actual machine-cycle boundaries. CB memory operations fetch the sub-opcode in M2, read `(HL)` in M3, and perform a modifying write in M4. BIT operations finish after the read. OAM DMA retains a CPU-T-cycle phase across split clock spans. Warmup ends at T2, the first byte arrives at T6, the last at T642, and the final active tail releases the bus at T646. CGB double speed halves the corresponding base-dot distances.
 
 Timing helpers must preserve these totals independently:
 

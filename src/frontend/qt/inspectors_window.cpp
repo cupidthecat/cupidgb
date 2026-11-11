@@ -429,19 +429,23 @@ void InspectorsWindow::refreshMemory(const CupidGb &gb) {
     memory_->setVerticalHeaderLabels(rows);
 }
 
+void InspectorsWindow::setColorTable(const ColorTable *colors) {
+    colorTable_ = colors;
+    refresh();
+}
+
 void InspectorsWindow::refreshTiles(const CupidGb &gb) {
-    tilesImage_->image =
-        inspectorTiles(gb, tileBank_->currentData().toInt(), paletteSelection(tilePalette_));
+    tilesImage_->image = inspectorTiles(gb, tileBank_->currentData().toInt(),
+                                        paletteSelection(tilePalette_), colorTable_);
     tilesImage_->update();
 }
 
 void InspectorsWindow::refreshMap(const CupidGb &gb) {
     mapImage_->image = inspectorMap(gb, InspectorMap(mapKind_->currentIndex()),
                                     InspectorTileAddressing(mapAddressing_->currentIndex()),
-                                    paletteSelection(mapPalette_));
+                                    paletteSelection(mapPalette_), colorTable_);
     mapImage_->update();
-    mapInfo_->setText(QString("SCX %1  SCY %2  WX %3  WY %4. Hover for tile attributes; RGB555 "
-                              "colors are uncorrected.")
+    mapInfo_->setText(QString("SCX %1  SCY %2  WX %3  WY %4. Hover for tile attributes.")
                           .arg(gb.io_registers[0x43])
                           .arg(gb.io_registers[0x42])
                           .arg(gb.io_registers[0x4b])
@@ -450,7 +454,7 @@ void InspectorsWindow::refreshMap(const CupidGb &gb) {
 
 void InspectorsWindow::refreshObjects(const CupidGb &gb) {
     for (unsigned index = 0; index < 40; ++index) {
-        const auto object = inspectorObject(gb, index);
+        const auto object = inspectorObject(gb, index, colorTable_);
         const QStringList values = {
             "$" + hex(object.address, 4),        QString::number(object.x),
             QString::number(object.y),           "$" + hex(object.tile, 2),
@@ -475,7 +479,8 @@ void InspectorsWindow::showObject() {
     const auto *gb = state();
     if (!gb)
         return;
-    const auto object = inspectorObject(*gb, unsigned(std::max(0, objects_->currentRow())));
+    const auto object =
+        inspectorObject(*gb, unsigned(std::max(0, objects_->currentRow())), colorTable_);
     objectImage_->image = object.image;
     objectImage_->update();
     objectInfo_->setText(QString("OAM %1 ($%2)\nX %3, Y %4\nBank %5, palette %6\nX flip %7, Y flip "
@@ -503,7 +508,7 @@ void InspectorsWindow::refreshPalettes(const CupidGb &gb) {
         for (unsigned entry = 0; entry < 4; ++entry) {
             const unsigned shade = (gb.io_registers[0x47u + row] >> (entry * 2u)) & 3u;
             const QRgb color =
-                cgb ? inspectorRgb555(values[entry])
+                cgb ? inspectorRgb555(values[entry], colorTable_)
                     : qRgb(255 - int(shade) * 85, 255 - int(shade) * 85, 255 - int(shade) * 85);
             auto *item =
                 new QTableWidgetItem(cgb ? "$" + hex(values[entry], 4) : QString::number(shade));

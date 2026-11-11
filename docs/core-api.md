@@ -123,9 +123,11 @@ Normal disk-state APIs recompute cartridge identity. A rejected load leaves the 
 
 `CupidGbStateContext` caches cartridge identity for trusted in-memory rewind. It binds to one owner, ROM pointer, ROM size, and model. Discard it after cartridge/model changes or any in-place ROM patch. Binding checks cannot detect a patch that preserves the pointer and size. Never use the cached context to validate an untrusted disk file.
 
-The codec checks a complete word-array range before reading or writing its little-endian elements. It accepts unaligned state buffers. New snapshots use version 6. Versions 2 through 5 remain loadable with deterministic defaults for absent fields. Query the size for each loaded cartridge and model. Identity, integrity, final-offset, and hardware-domain checks apply to every accepted version.
+The codec checks a complete word-array range before reading or writing its little-endian elements. It accepts unaligned state buffers. New snapshots use version 7. Versions 2 through 6 remain loadable with deterministic defaults for absent fields. Query the size for each loaded cartridge and model. Identity, integrity, final-offset, and hardware-domain checks apply to every accepted version.
 
 `cupid_gb_set_serial_link` registers bit-launch and sample callbacks for an internal-clock transfer. A host can read an external-clock peer with `cupid_gb_serial_external_bit`, then deliver the sender's bit with `cupid_gb_serial_external_clock`. Both cores need a shared host schedule. Serial attachments survive reset and state loading, and the host owns any wire state outside the cores. `cupid/gb/printer.h` provides a printer endpoint. Detach the link before destroying the printer and call `cupid_gb_printer_update` after execution slices to deliver completion while the wire is idle.
+
+`cupid/gb/cheats.h` supplies host-owned rule collections, Game Genie/GameShark imports, duplicate-priority-preserving cloning, and a portable `.cht` codec. Attach with `cupid_gb_set_cheats`, mutate only at instruction boundaries, and detach before destruction. Rules intercept reads after bank selection and leave storage bytes intact. Collections remain outside native snapshots. [Cheat integration](cheats.md) describes the matching and file contracts.
 
 The core supplies snapshot bytes. The host supplies compression, history limits, storage, and UI. Convert rewind age from base T-cycles using the selected model clock, not a fixed rate. The complete wire-format and continuation contract is in [save states and rewind](save-states.md).
 

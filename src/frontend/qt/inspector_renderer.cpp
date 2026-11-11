@@ -32,7 +32,7 @@ unsigned tilePixel(const CupidGb &gb, unsigned tile, unsigned bank, unsigned x, 
 }
 
 QRgb color(const CupidGb &gb, unsigned pixel, InspectorColors selection, uint8_t attributes,
-           bool mapPreview = false) {
+           const ColorTable *colorTable, bool mapPreview = false) {
     if (selection.type == InspectorPalette::Raw)
         return gray(pixel);
     const bool objects = selection.type == InspectorPalette::Object;
@@ -41,7 +41,7 @@ QRgb color(const CupidGb &gb, unsigned pixel, InspectorColors selection, uint8_t
                                : selection.index & 7u;
     if (gb.cgb_mode) {
         const auto values = inspectorPaletteValues(gb, objects, index);
-        return inspectorRgb555(values[pixel]);
+        return inspectorRgb555(values[pixel], colorTable);
     }
     const unsigned registerIndex = objects ? (index ? 0x49u : 0x48u) : 0x47u;
     const unsigned shade = (gb.io_registers[registerIndex] >> (pixel * 2u)) & 3u;
@@ -49,12 +49,14 @@ QRgb color(const CupidGb &gb, unsigned pixel, InspectorColors selection, uint8_t
     // Tile and object previews instead apply the selected OBP register mapping.
     const unsigned displayed = mapPreview && objects ? pixel : shade;
     if (colorHardware(gb))
-        return inspectorRgb555(inspectorPaletteValues(gb, objects, index)[displayed]);
+        return inspectorRgb555(inspectorPaletteValues(gb, objects, index)[displayed], colorTable);
     return gray(displayed);
 }
 } // namespace
 
-QRgb inspectorRgb555(uint16_t color) {
+QRgb inspectorRgb555(uint16_t color, const ColorTable *colors) {
+    if (colors)
+        return (*colors)[color & 0x7fffu];
     const auto expand = [](unsigned value) { return int((value << 3u) | (value >> 2u)); };
     return qRgb(expand(color & 31u), expand((color >> 5u) & 31u), expand((color >> 10u) & 31u));
 }
@@ -69,7 +71,8 @@ std::array<uint16_t, 4> inspectorPaletteValues(const CupidGb &gb, bool objects, 
     return result;
 }
 
-QImage inspectorTiles(const CupidGb &gb, int bank, InspectorColors colors) {
+QImage inspectorTiles(const CupidGb &gb, int bank, InspectorColors colors,
+                      const ColorTable *colorTable) {
     if (bank < -1 || bank > 1)
         return {};
     const unsigned banks = bank == -1 ? 2u : 1u;
@@ -83,7 +86,8 @@ QImage inspectorTiles(const CupidGb &gb, int bank, InspectorColors colors) {
                     const unsigned pixel =
                         selected && !colorHardware(gb) ? 0u : tilePixel(gb, tile, selected, x, y);
                     row[panel * 128u + tile % 16u * 8u + x] =
-                        selected && !colorHardware(gb) ? gray(0) : color(gb, pixel, colors, 0);
+                        selected && !colorHardware(gb) ? gray(0)
+                                                       : color(gb, pixel, colors, 0, colorTable);
                 }
             }
         }
@@ -92,7 +96,7 @@ QImage inspectorTiles(const CupidGb &gb, int bank, InspectorColors colors) {
 }
 
 QImage inspectorMap(const CupidGb &gb, InspectorMap map, InspectorTileAddressing addressing,
-                    InspectorColors colors) {
+                    InspectorColors colors, const ColorTable *colorTable) {
     QImage image(256, 256, QImage::Format_RGB32);
     const unsigned base = mapOffset(gb, map);
     const bool unsignedTiles =
@@ -111,14 +115,14 @@ QImage inspectorMap(const CupidGb &gb, InspectorMap map, InspectorTileAddressing
             for (unsigned x = 0; x < 8; ++x) {
                 const unsigned pixel = tilePixel(gb, tile, bank, x ^ (attributes & 0x20u ? 7u : 0u),
                                                  y ^ (attributes & 0x40u ? 7u : 0u));
-                row[cell % 32u * 8u + x] = color(gb, pixel, colors, attributes, true);
+                row[cell % 32u * 8u + x] = color(gb, pixel, colors, attributes, colorTable, true);
             }
         }
     }
     return image;
 }
 
-InspectorObject inspectorObject(const CupidGb &gb, unsigned index) {
+InspectorObject inspectorObject(const CupidGb &gb, unsigned index, const ColorTable *colorTable) {
     InspectorObject result;
     if (index >= 40)
         return result;
@@ -162,10 +166,12 @@ InspectorObject inspectorObject(const CupidGb &gb, unsigned index) {
                 shade = (registerValue >> (pixel * 2u)) & 3u;
                 row[x] = cupid_cgb_compat_active(paletteGb)
                              ? inspectorRgb555(cupid_cgb_compat_obj_color(paletteGb, result.palette,
-                                                                          uint8_t(shade)))
+                                                                          uint8_t(shade)),
+                                               colorTable)
                              : gray(shade);
             } else {
-                row[x] = color(gb, pixel, {InspectorPalette::Object, result.palette}, 0);
+                row[x] =
+                    color(gb, pixel, {InspectorPalette::Object, result.palette}, 0, colorTable);
             }
         }
     }

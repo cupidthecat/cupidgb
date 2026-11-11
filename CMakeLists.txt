@@ -42,6 +42,7 @@ add_library(cupidgb_core STATIC
     src/gb/timer.c src/gb/cartridge.c src/gb/camera.c src/gb/mbc7.c src/gb/input.c src/gb/debugger.c src/gb/sgb.c
     src/gbc/cgb.c
     src/gb/printer.c
+    src/gb/cheats.c
     src/gb/tpp1.c
     src/gb/huc3.c
 )
@@ -111,8 +112,23 @@ if(CUPIDGB_BUILD_QT)
     add_executable(cupidgb
         src/frontend/qt/main.cpp
         src/frontend/qt/cartridge_file.cpp
+        src/frontend/qt/cheat_search.cpp
+        src/frontend/qt/cheats_window.cpp
+        src/frontend/qt/color_pipeline.cpp
         src/frontend/qt/main_window.cpp
         src/frontend/qt/main_window.h
+        src/frontend/qt/main_window_cheats.cpp
+        src/frontend/qt/main_window_cheat_tests.cpp
+        src/frontend/qt/main_window_audio.cpp
+        src/frontend/qt/main_window_input.cpp
+        src/frontend/qt/main_window_session.cpp
+        src/frontend/qt/main_window_display.cpp
+        src/frontend/qt/main_window_debugger.cpp
+        src/frontend/qt/main_window_workflow_tests.cpp
+        src/frontend/qt/main_window_controller_tests.cpp
+        src/frontend/qt/main_window_debugger_tests.cpp
+        src/frontend/qt/main_window_session_tests.cpp
+        src/frontend/qt/main_window_telemetry.cpp
         src/frontend/qt/main_window_printer.cpp
         src/frontend/qt/printer_window.cpp
         src/frontend/qt/guest_clock_pacer.cpp
@@ -148,7 +164,7 @@ if(CUPIDGB_BUILD_QT)
 endif()
 if(CUPIDGB_ENABLE_TESTS)
     enable_testing()
-    foreach(test_name IN ITEMS smoke gb serial printer ppu stat apu cpu_timing dma state battery native_v1_recovery sgb input cartridge camera mbc7 tpp1 huc3 debugger sha256)
+    foreach(test_name IN ITEMS smoke gb serial printer ppu stat apu cpu_timing dma state battery native_v1_recovery sgb input cartridge camera mbc7 tpp1 huc3 cheats debugger sha256)
         add_executable(cupidgb_${test_name} tests/test_${test_name}.c)
         target_link_libraries(cupidgb_${test_name} PRIVATE cupidgb_core)
         # Tests use assert for setup and checks, including in Release builds.
@@ -239,6 +255,26 @@ if(CUPIDGB_ENABLE_TESTS)
             target_compile_options(cupidgb_display_pipeline PRIVATE -UNDEBUG)
         endif()
         add_test(NAME cupidgb_display_pipeline COMMAND cupidgb_display_pipeline)
+        add_executable(cupidgb_color_pipeline
+            tests/frontend/test_color_pipeline.cpp src/frontend/qt/color_pipeline.cpp)
+        target_include_directories(cupidgb_color_pipeline PRIVATE src/frontend/qt)
+        target_link_libraries(cupidgb_color_pipeline PRIVATE Qt6::Gui)
+        if(MSVC)
+            target_compile_options(cupidgb_color_pipeline PRIVATE /UNDEBUG)
+        else()
+            target_compile_options(cupidgb_color_pipeline PRIVATE -UNDEBUG)
+        endif()
+        add_test(NAME cupidgb_color_pipeline COMMAND cupidgb_color_pipeline)
+        add_executable(cupidgb_cheat_search
+            tests/frontend/test_cheat_search.cpp src/frontend/qt/cheat_search.cpp)
+        target_include_directories(cupidgb_cheat_search PRIVATE src/frontend/qt)
+        target_link_libraries(cupidgb_cheat_search PRIVATE cupidgb_core)
+        if(MSVC)
+            target_compile_options(cupidgb_cheat_search PRIVATE /UNDEBUG)
+        else()
+            target_compile_options(cupidgb_cheat_search PRIVATE -UNDEBUG)
+        endif()
+        add_test(NAME cupidgb_cheat_search COMMAND cupidgb_cheat_search)
         add_executable(cupidgb_audio_converter
             tests/frontend/test_audio_converter.cpp src/frontend/qt/audio_converter.cpp)
         target_include_directories(cupidgb_audio_converter PRIVATE src/frontend/qt)

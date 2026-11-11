@@ -2297,18 +2297,18 @@ static void test_ppu_dma_transfer(void) {
     cupid_gb_write_u8(&gb, 0xff46u, 0xc0u);
 
     cupid_gb_tick(&gb, 1u);
-    assert(!gb.dma_active);
-    assert(gb.dma_start_delay == 1u);
+    assert(gb.dma_active);
+    assert(gb.dma_start_delay == 0u && gb.dma_index == 0u);
 
     cupid_gb_tick(&gb, 1u);
     assert(gb.dma_active);
     assert(gb.dma_start_delay == 0u);
-    assert(gb.dma_index == 0u);
+    assert(gb.dma_index == 1u);
     assert(cupid_gb_read_u8(&gb, 0xfe00u) == 0xffu);
 
     cupid_gb_tick(&gb, 1u);
     assert(gb.dma_active);
-    assert(gb.dma_index == 1u);
+    assert(gb.dma_index == 2u);
     assert(cupid_gb_read_u8(&gb, 0xfe00u) == 0xffu);
 
     cupid_gb_tick(&gb, 159u);

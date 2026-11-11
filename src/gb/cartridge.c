@@ -388,7 +388,7 @@ void cupid_gb_huc3_write(CupidGb *gb, uint16_t address, uint8_t value) {
 // MBC bank helpers (used by memory map in gb.c)
 
 /**
- * @brief Returns the effective ROM bank number for a given address region.
+ * @brief Returns the controller-selected ROM bank for a given address region.
  *
  * Computes the physical 16 KiB ROM bank that should be mapped into the
  * requested address region, accounting for MBC type, banking mode, and
@@ -399,9 +399,9 @@ void cupid_gb_huc3_write(CupidGb *gb, uint16_t address, uint8_t value) {
  * @param lower_region `true` for the fixed lower region (0x0000–0x3FFF),
  *                     `false` for the switchable upper region (0x4000–0x7FFF).
  *
- * @return The effective ROM bank index, or 0 if no banks are present.
+ * @return The bank latch before physical ROM address-line aliasing.
  */
-size_t cupid_gb_effective_rom_bank(const CupidGb *gb, bool lower_region) {
+size_t cupid_gb_selected_rom_bank(const CupidGb *gb, bool lower_region) {
     size_t bank;
 
     switch (gb->header.mbc_type) {
@@ -457,7 +457,7 @@ size_t cupid_gb_effective_rom_bank(const CupidGb *gb, bool lower_region) {
             if (!count)
                 return 0;
             if (!gb->mmm01_locked) {
-                bank = count - (lower_region ? 2u : 1u);
+                bank = lower_region ? 0xfffeu : 0xffffu;
             } else {
                 const unsigned selected = gb->mmm01_rom_select;
                 const unsigned extension = gb->mmm01_bank_select;
@@ -470,9 +470,6 @@ size_t cupid_gb_effective_rom_bank(const CupidGb *gb, bool lower_region) {
                 const unsigned switched = upper_bits | (middle << 5u) | (selected & 31u);
                 bank = lower_region ? fixed : switched + (fixed == switched);
             }
-            /* Some dumps put the two menu banks first. Translate bus bank
-             * numbers without rotating the original bytes or their identity. */
-            bank += gb->mmm01_menu_first ? 2u : 0u;
             break;
         }
         case CUPID_GB_MBC_NONE:
@@ -484,36 +481,36 @@ size_t cupid_gb_effective_rom_bank(const CupidGb *gb, bool lower_region) {
             break;
     }
 
-    if (gb->rom_bank_count == 0u) {
-        return 0u;
-    }
+    return bank;
+}
 
-    return bank % gb->rom_bank_count;
+size_t cupid_gb_effective_rom_bank(const CupidGb *gb, bool lower_region) {
+    size_t bank = cupid_gb_selected_rom_bank(gb, lower_region);
+    /* Some dumps put the two menu banks first. Translate bus bank numbers
+     * without rotating the original bytes or their identity. */
+    if (gb->header.mbc_type == CUPID_GB_MMM01 && gb->mmm01_menu_first)
+        bank += 2u;
+    return gb->rom_bank_count ? bank % gb->rom_bank_count : 0;
 }
 
 /**
- * @brief Returns the effective cartridge RAM bank number.
+ * @brief Returns the controller-selected cartridge RAM bank.
  *
  * Computes the physical 8 KiB RAM bank that should be mapped into the
  * cartridge RAM window (0xA000–0xBFFF), accounting for MBC type and
- * banking mode. The result is always wrapped modulo the available bank
- * count.
+ * banking mode, before physical RAM address-line aliasing.
  *
  * @param gb Pointer to the Game Boy state.
  *
- * @return The effective RAM bank index, or 0 if no RAM banks are present.
+ * @return The bank latch, including cartridges with no connected RAM.
  */
-size_t cupid_gb_effective_ram_bank(const CupidGb *gb) {
-    if (gb->ram_bank_count == 0u) {
-        return 0u;
-    }
-
+size_t cupid_gb_selected_ram_bank(const CupidGb *gb) {
     if (gb->header.mbc_type == CUPID_GB_TPP1)
-        return gb->tpp1.ram_bank % gb->ram_bank_count;
+        return gb->tpp1.ram_bank;
 
     if (gb->header.mbc_type == CUPID_GB_MBC1) {
         if (gb->mbc1_ram_banking_mode && !gb->mbc1_multicart) {
-            return (size_t)(gb->mbc1_bank_high2 & 0x03u) % gb->ram_bank_count;
+            return gb->mbc1_bank_high2 & 0x03u;
         }
 
         return 0u;
@@ -525,6 +522,13 @@ size_t cupid_gb_effective_ram_bank(const CupidGb *gb) {
             gb->mmm01_mode & 0x40u ? gb->mmm01_rom_select >> 5u : gb->mmm01_bank_select & 3u;
         bank = (gb->mmm01_bank_select & 0x0cu) | low;
     }
+    return bank;
+}
+
+size_t cupid_gb_effective_ram_bank(const CupidGb *gb) {
+    if (!gb->ram_bank_count)
+        return 0;
+    size_t bank = cupid_gb_selected_ram_bank(gb);
     if (gb->header.mbc_type == CUPID_GB_MBC3 && !cupid_gb_has_extended_mbc3(gb))
         bank &= 3u;
     return bank % gb->ram_bank_count;

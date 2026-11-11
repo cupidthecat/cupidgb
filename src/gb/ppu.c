@@ -192,94 +192,72 @@ void cupid_gb_sync_lcd_startup(CupidGb *gb) {
         cupid_gb_update_stat_irq(gb);
 }
 
-/**
- * @brief Arms an OAM DMA transfer from `source_high << 8`.
- *
- * A 2-T-cycle start delay is applied before the DMA becomes active.
- * If a DMA is already running, the new request is queued as a restart
- * and takes effect 2 T-cycles later via @ref cupid_gb_tick_dma.
- *
- * @param gb          Pointer to the Game Boy state.
- * @param source_high The high byte of the source address (written to FF46).
- *                    Values 0xE0–0xFF are remapped to 0xC0–0xDF.
- *
- * @note Does nothing if @p gb is NULL.
- */
+/* FF46 restarts the source sequencer immediately. Its first edge follows two CPU
+ * T-cycles, then each byte occupies four T-cycles. A restart keeps OAM blocked
+ * through the otherwise readable initial destination slot. */
 void cupid_gb_run_dma_transfer(CupidGb *gb, uint8_t source_high) {
-    uint16_t source_base;
-
-    if (gb == 0) {
+    if (!gb)
         return;
-    }
-
-    if (source_high >= 0xe0u) {
+    const bool restarting =
+        (gb->dma_active && gb->dma_index < sizeof(gb->object_attribute_memory)) ||
+        gb->dma_start_delay;
+    if (source_high >= 0xe0u && gb->model != CUPID_GB_MODEL_CGB)
         source_high = (uint8_t)(source_high - 0x20u);
-    }
-
-    source_base = (uint16_t)((uint16_t)source_high << 8u);
-
-    if (gb->dma_active) {
-        gb->dma_restart_source_base = source_base;
-        gb->dma_restart_delay = 2u;
-        gb->dma_restart_pending = true;
-        return;
-    }
-
-    gb->dma_source_base = source_base;
-    gb->dma_index = 0u;
-    gb->dma_start_delay = 2u;
-    gb->dma_restart_delay = 0u;
-    gb->dma_restart_pending = false;
+    gb->dma_source_base = (uint16_t)((unsigned)source_high << 8u);
+    gb->dma_restart_source_base = gb->dma_source_base;
+    gb->dma_index = 0;
+    gb->dma_start_delay = 1;
+    gb->dma_phase = 2;
     gb->dma_active = false;
+    gb->dma_restart_pending = restarting;
+    gb->dma_restart_delay = 0;
 }
 
-/**
- * @brief Advances the OAM DMA state machine by one M-cycle.
- *
- * Each call handles at most one byte of DMA data. Manages the start
- * delay, restart delay, active transfer, and completion. Must be called
- * once per M-cycle from the main tick path.
- *
- * @param gb Pointer to the Game Boy state.
- *
- * @note Does nothing if @p gb is NULL.
- */
-void cupid_gb_tick_dma(CupidGb *gb) {
-    if (gb == 0 || gb->cpu.halted || gb->cpu.stopped) {
-        return;
-    }
+bool cupid_gb_oam_dma_blocks_bus(const CupidGb *gb) {
+    return gb->dma_start_delay || (gb->dma_active && (gb->dma_index || gb->dma_restart_pending));
+}
 
-    if (gb->dma_restart_pending && gb->dma_restart_delay > 0u) {
-        gb->dma_restart_delay = (uint8_t)(gb->dma_restart_delay - 1u);
-        if (gb->dma_restart_delay == 0u) {
-            gb->dma_source_base = gb->dma_restart_source_base;
-            gb->dma_index = 0u;
-            gb->dma_restart_pending = false;
-            return;
-        }
-    } else if (gb->dma_start_delay > 0u) {
-        gb->dma_start_delay = (uint8_t)(gb->dma_start_delay - 1u);
-        if (gb->dma_start_delay == 0u) {
+void cupid_gb_tick_dma_tcycles(CupidGb *gb, unsigned cycles) {
+    if (!gb || gb->cpu.halted || gb->cpu.stopped || (!gb->dma_active && !gb->dma_start_delay))
+        return;
+
+    unsigned phase = gb->dma_phase + cycles;
+    while (phase >= 4u) {
+        phase -= 4u;
+        if (gb->dma_start_delay) {
+            gb->dma_start_delay = 0;
             gb->dma_active = true;
-            return;
-        } else {
-            return;
+            continue;
         }
+        /* The bus remains owned for one final slot after the last byte. */
+        if (gb->dma_index == sizeof(gb->object_attribute_memory)) {
+            gb->dma_active = false;
+            gb->dma_restart_pending = false;
+            phase &= 3u;
+            break;
+        }
+        /* Color DMA borrows the source bus without stopping OAM's address counter.
+         * The last byte of its final block releases the ordinary OAM source read. */
+        const bool color_owns_bus = gb->hdma_running && (gb->hdma_blocks_remaining > 1u ||
+                                                         (gb->hdma_destination & 15u) != 15u);
+        if (!color_owns_bus) {
+            const uint16_t source = (uint16_t)(gb->dma_source_base + gb->dma_index);
+            uint8_t value;
+            if (source >= 0xe000u && gb->model == CUPID_GB_MODEL_CGB)
+                value = 0xffu;
+            else if (source >= 0x8000u && source < 0xa000u)
+                value = gb->video_ram[cupid_cgb_vram_offset(gb, source)];
+            else
+                value = cupid_gb_read_bus_u8(gb, source);
+            gb->object_attribute_memory[gb->dma_index] = value;
+        }
+        ++gb->dma_index;
     }
+    gb->dma_phase = (uint8_t)phase;
+}
 
-    if (!gb->dma_active) {
-        return;
-    }
-
-    if (gb->dma_index < sizeof(gb->object_attribute_memory)) {
-        gb->object_attribute_memory[gb->dma_index] =
-            cupid_gb_read_bus_u8(gb, (uint16_t)(gb->dma_source_base + gb->dma_index));
-        gb->dma_index = (uint8_t)(gb->dma_index + 1u);
-    }
-
-    if (gb->dma_index >= sizeof(gb->object_attribute_memory)) {
-        gb->dma_active = false;
-    }
+void cupid_gb_tick_dma(CupidGb *gb) {
+    cupid_gb_tick_dma_tcycles(gb, 4u);
 }
 
 /* LCD dots use the base clock; the caller converts double-speed CPU time.

@@ -110,6 +110,114 @@ static void test_general_transfer_clocks_and_blocks(void) {
     }
 }
 
+static void test_oam_dma_subcycle_and_tail(void) {
+    const CupidGbModel models[] = {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_CGB};
+    for (unsigned model = 0; model < sizeof(models) / sizeof(models[0]); ++model) {
+        CupidGb *gb = hardware(models[model], true, false, 0);
+        memset(gb->object_attribute_memory, 0, sizeof(gb->object_attribute_memory));
+        cupid_gb_write_u8(gb, 0xff46, 0xc0);
+        assert(cupid_gb_read_u8(gb, 0xfe00) == 0xff);
+        cupid_gb_tick_dma_tcycles(gb, 1);
+        assert(gb->dma_start_delay && !gb->dma_active);
+        cupid_gb_tick_dma_tcycles(gb, 1);
+        assert(!gb->dma_start_delay && gb->dma_active && !gb->dma_index);
+        assert(cupid_gb_read_u8(gb, 0xfe00) == 0);
+        cupid_gb_tick_dma_tcycles(gb, 3);
+        assert(!gb->dma_index);
+        cupid_gb_tick_dma_tcycles(gb, 1);
+        assert(gb->dma_index == 1 && gb->object_attribute_memory[0] == 4);
+        for (unsigned i = 1; i < 160; ++i)
+            cupid_gb_tick_dma_tcycles(gb, 4);
+        assert(gb->dma_index == 160 && gb->dma_active);
+        cupid_gb_tick_dma_tcycles(gb, 3);
+        assert(gb->dma_active);
+        cupid_gb_tick_dma_tcycles(gb, 1);
+        assert(!gb->dma_active && !gb->dma_start_delay);
+        release(gb);
+    }
+}
+
+static void test_oam_dma_restart_at_completion(void) {
+    const CupidGbModel models[] = {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_CGB};
+    for (unsigned model = 0; model < sizeof(models) / sizeof(models[0]); ++model) {
+        for (unsigned copied = 159; copied <= 160; ++copied) {
+            CupidGb *gb = hardware(models[model], true, false, 0);
+            cupid_gb_write_u8(gb, 0xff46, 0xc0);
+            cupid_gb_tick(gb, (uint16_t)(copied + 1));
+            assert(gb->dma_active && gb->dma_index == copied);
+            assert(gb->object_attribute_memory[0] == 4);
+
+            cupid_gb_write_u8(gb, 0xff46, 0xd0);
+            cupid_gb_tick_dma_tcycles(gb, 2);
+            assert(gb->dma_active && !gb->dma_index);
+            /* A completed transfer's final ownership slot starts a fresh request.
+             * Restarting before the last byte keeps OAM inaccessible at destination zero. */
+            assert(cupid_gb_read_u8(gb, 0xfe00) == (copied == 160 ? 4 : 0xff));
+            cupid_gb_tick_dma_tcycles(gb, 4);
+            assert(gb->dma_index == 1 && gb->object_attribute_memory[0] == 0);
+            release(gb);
+        }
+    }
+}
+
+static void test_overlapping_dma_bus_arbitration(void) {
+    for (unsigned fast = 0; fast < 2; ++fast) {
+        for (unsigned blocks = 1; blocks <= 2; ++blocks) {
+            CupidGb *gb = hardware(CUPID_GB_MODEL_CGB, true, fast != 0, 0);
+            for (unsigned i = 0; i < 0x2000; ++i)
+                gb->work_ram[i] = (uint8_t)(i * 13 + 7);
+            memset(gb->object_attribute_memory, 0, sizeof(gb->object_attribute_memory));
+            cupid_gb_write_u8(gb, 0xff80, 0);
+            gb->cpu.pc = 0xff80;
+            addresses(gb);
+            cupid_gb_write_u8(gb, 0xff46, 0xc1);
+            cupid_gb_tick(gb, 1);
+            cupid_gb_write_u8(gb, 0xff55, (uint8_t)(blocks - 1));
+            assert(cupid_gb_step(gb));
+            const unsigned length = blocks * 16;
+            const unsigned progressed = fast ? length : length / 2;
+            const unsigned cycles = fast ? 6 + length * 2 : 12 + length * 2;
+            assert(gb->elapsed_cycles == cycles && gb->dma_index == progressed + 2);
+            assert(gb->dma_phase == 2 && gb->dma_active);
+            assert(memcmp(gb->video_ram + 0x800, gb->work_ram, length) == 0);
+            /* Color DMA drives OAM through its source low address. Normal speed exposes
+             * alternate bytes, while double speed exposes every byte. The final source
+             * slots and following CPU cycle return ownership to the ordinary OAM transfer. */
+            for (unsigned i = 0; i < 160; ++i) {
+                bool color_write = i < length && (fast || (i & 1u));
+                bool oam_write = i == progressed || i == progressed + 1;
+                uint8_t expected = color_write || oam_write ? (uint8_t)(i * 13 + 7) : 0;
+                assert(gb->object_attribute_memory[i] == expected);
+            }
+            release(gb);
+        }
+    }
+}
+
+static void test_oam_dma_phase_resume(void) {
+    for (unsigned phase = 0; phase < 4; ++phase) {
+        CupidGb *gb = hardware(CUPID_GB_MODEL_CGB, true, false, 0);
+        cupid_gb_write_u8(gb, 0xff46, 0xc0);
+        cupid_gb_tick_dma_tcycles(gb, phase + 2);
+        const size_t length = cupid_gb_state_size(gb);
+        uint8_t *state = malloc(length);
+        assert(state && cupid_gb_save_state(gb, state, length, NULL) == CUPID_GB_STATE_OK);
+        CupidGb *restored = hardware(CUPID_GB_MODEL_CGB, true, false, 0);
+        assert(cupid_gb_load_state(restored, state, length) == CUPID_GB_STATE_OK);
+        assert(restored->dma_phase == gb->dma_phase);
+        for (unsigned tick = 0; tick < 12; ++tick) {
+            cupid_gb_tick_dma_tcycles(gb, 1);
+            cupid_gb_tick_dma_tcycles(restored, 1);
+            assert(restored->dma_phase == gb->dma_phase && restored->dma_index == gb->dma_index);
+            assert(memcmp(restored->object_attribute_memory, gb->object_attribute_memory, 160) ==
+                   0);
+        }
+        free(state);
+        release(restored);
+        release(gb);
+    }
+}
+
 static void test_open_bus_dma_decay(void) {
     for (unsigned fast = 0; fast < 2; ++fast) {
         CupidGb *gb = hardware(CUPID_GB_MODEL_CGB, true, fast != 0, 0);
@@ -331,6 +439,10 @@ int main(void) {
     test_start_boundary_and_latched_opcode();
     test_general_transfer_clocks_and_blocks();
     test_mode_3_destination_conflict();
+    test_oam_dma_subcycle_and_tail();
+    test_oam_dma_restart_at_completion();
+    test_overlapping_dma_bus_arbitration();
+    test_oam_dma_phase_resume();
     test_open_bus_dma_decay();
     test_cartridge_bus_read_and_resume();
     test_hblank_delay_and_next_block();

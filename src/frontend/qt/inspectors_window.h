@@ -1,5 +1,7 @@
 #pragma once
 
+#include "color_pipeline.h"
+
 #include <QMainWindow>
 #include <QTimer>
 #include <functional>
@@ -24,6 +26,7 @@ class InspectorsWindow final : public QMainWindow {
 
     explicit InspectorsWindow(QWidget *parent = nullptr);
     void setSession(Getter getter, Writer writer);
+    void setColorTable(const ColorTable *colors);
     // Cancel uncommitted edits when the host replaces or restores hardware state.
     void sessionChanged();
     void refresh();
@@ -45,6 +48,7 @@ class InspectorsWindow final : public QMainWindow {
 
     Getter getter_;
     Writer writer_;
+    const ColorTable *colorTable_ = nullptr;
     QTimer timer_;
     QTabWidget *tabs_ = nullptr;
     QLabel *context_ = nullptr;

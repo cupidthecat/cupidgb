@@ -1,5 +1,7 @@
 #pragma once
 
+#include "color_pipeline.h"
+
 #include <QImage>
 #include <QString>
 #include <array>
@@ -27,11 +29,14 @@ struct InspectorObject {
     QImage image;
 };
 
-QRgb inspectorRgb555(uint16_t color);
+QRgb inspectorRgb555(uint16_t color, const ColorTable *colors = nullptr);
 std::array<uint16_t, 4> inspectorPaletteValues(const CupidGb &gb, bool objects, unsigned index);
-QImage inspectorTiles(const CupidGb &gb, int bank, InspectorColors colors = {});
+QImage inspectorTiles(const CupidGb &gb, int bank, InspectorColors colors = {},
+                      const ColorTable *colorTable = nullptr);
 QImage inspectorMap(const CupidGb &gb, InspectorMap map,
                     InspectorTileAddressing addressing = InspectorTileAddressing::Automatic,
-                    InspectorColors colors = {InspectorPalette::Automatic, 0});
-InspectorObject inspectorObject(const CupidGb &gb, unsigned index);
+                    InspectorColors colors = {InspectorPalette::Automatic, 0},
+                    const ColorTable *colorTable = nullptr);
+InspectorObject inspectorObject(const CupidGb &gb, unsigned index,
+                                const ColorTable *colorTable = nullptr);
 QString inspectorMapCell(const CupidGb &gb, InspectorMap map, int x, int y);

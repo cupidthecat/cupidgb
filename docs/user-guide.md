@@ -112,6 +112,8 @@ The interface reports unavailable audio devices. A successful file recording pro
 
 ## Screenshots
 
+View > Color Correction offers Disabled, Correct Color Curves, Modern - Balanced, Accurate, Modern - Boost Contrast, Reduce Contrast, and Harsh Reality. Ambient Light Temperature has 21 steps, with a neutral midpoint. New settings use Modern - Balanced. These controls apply to CGB, CGB compatibility palettes, and SGB output. Native monochrome palettes keep their selected colors. Color correction applies to screenshots and selected inspector previews before frame blending. Raw inspector values remain RGB555.
+
 View > Save Screenshot or F12 opens a PNG destination dialog. Screenshots use the unblended native image, with the selected monochrome palette and SGB border visibility. Window scaling, black bars, menus, and decorations are excluded. Verify the selected filename before replacing an existing capture. Screenshot files are ordinary user outputs, separate from battery saves and states.
 
 ## Battery saves, states, and rewind
@@ -126,10 +128,16 @@ Rewind changes emulated battery data and can schedule a later battery save. Make
 
 ## Settings and automation
 
+Tools > Cheats opens the cheat list. Add or edit a rule by hexadecimal address, optional bank, value, and optional original-value comparison. Import Code accepts Game Genie and GameShark codes. The global Enable Cheats control starts disabled. Each rule has its own enabled checkbox. Import File and Export File use `.cht` collections.
+
+Cheat files use the cartridge storage name, such as `game.cht` or `game.zip.cht`. Edits apply immediately and save automatically with atomic file replacement. A failed automatic save keeps the edits active and displays an export warning. An invalid existing cheat file is skipped while the cartridge opens. Reset keeps the current collection, including edits awaiting export. Native states and rewind keep the host's current cheat configuration.
+
+Tools > Cheat Search scans physical work RAM, cartridge RAM, and high RAM. Choose bytes or little-/big-endian words, then narrow by a value or by changes since the previous search. Values are hexadecimal. Add Cheat creates a rule for the selected result, with two banked rules for a word. Write Value changes the actual RAM. Search values come from raw memory. Custom expressions remain pending. [The cheat guide](cheats.md) describes banking, persistence, and API limits.
+
 CupidGB uses Qt's per-user native settings backend with organization and application name `CupidGB`. Settings include window geometry, recent paths, hardware choice, boot directory, bindings, shortcuts, display choices, audio output/volume/mute, and rewind limits. Their physical storage location depends on platform and environment.
 
 `--model` and `--boot-directory` are session overrides for ordinary launches; neither requires a bounded measurement. `--smoke-test` rejects either override so its generated workflows remain controlled.
 
 `--smoke-test` and `--run-seconds` use isolated temporary settings. They do not overwrite normal desktop preferences. For command-line checks, input traces, and bounded runtime reports, see [testing and measurements](testing.md).
 
-Tools > Debugger (Ctrl+C) pauses for CPU stepping, breakpoints, symbols, register/memory commands, and bounded instruction Backstep. Tools > Memory and Graphics opens memory, tile, map, OAM, and palette inspectors. Read [the debugger guide](debugging.md) before editing a session. Advanced debugger commands, cheats, connected link devices, printer support, and music-file playback remain incomplete; absent controls do not imply those features are implemented.
+Tools > Debugger (Ctrl+C) pauses for CPU stepping, breakpoints, symbols, register/memory commands, and bounded instruction Backstep. Tools > Memory and Graphics opens memory, tile, map, OAM, and palette inspectors. Read [the debugger guide](debugging.md) before editing a session. Advanced debugger commands, paired link sessions, keyboard accessories, custom cheat expressions, and music-file playback remain incomplete.
