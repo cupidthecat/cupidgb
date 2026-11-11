@@ -62,9 +62,14 @@ jobs:
                 "$source"
             fi
           done
+          apt_state=$(mktemp -d "$RUNNER_TEMP/cupidgb-apt.XXXXXX")
+          chmod 755 "$apt_state"
+          mkdir -p "$apt_state/lists/partial"
           apt_options=(-o Acquire::Retries=2 -o Acquire::http::Timeout=20
-                       -o Acquire::https::Timeout=20)
+                       -o Acquire::https::Timeout=20 -o Dir::State::lists="$apt_state/lists")
           sudo apt-get "${apt_options[@]}" -o APT::Update::Error-Mode=any update
+          echo "APT native architecture: $(dpkg --print-architecture)"
+          sudo apt-cache "${apt_options[@]}" policy qt6-base-dev qt6-multimedia-dev libsdl2-dev
           sudo apt-get "${apt_options[@]}" install -y qt6-base-dev qt6-multimedia-dev libssl-dev libsdl2-dev 7zip
       - name: Windows controller SDK
         if: runner.os == 'Windows'
@@ -126,9 +131,14 @@ jobs:
                 "$source"
             fi
           done
+          apt_state=$(mktemp -d "$RUNNER_TEMP/cupidgb-apt.XXXXXX")
+          chmod 755 "$apt_state"
+          mkdir -p "$apt_state/lists/partial"
           apt_options=(-o Acquire::Retries=2 -o Acquire::http::Timeout=20
-                       -o Acquire::https::Timeout=20)
+                       -o Acquire::https::Timeout=20 -o Dir::State::lists="$apt_state/lists")
           sudo apt-get "${apt_options[@]}" -o APT::Update::Error-Mode=any update
+          echo "APT native architecture: $(dpkg --print-architecture)"
+          sudo apt-cache "${apt_options[@]}" policy libssl-dev
           sudo apt-get "${apt_options[@]}" install -y libssl-dev
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCUPIDGB_BUILD_QT=OFF -DCUPIDGB_ENABLE_SANITIZERS=ON
