@@ -627,9 +627,9 @@ Final Windows Qt 6.8.3 sessions used local firmware, recorded inputs, fresh stor
 | --- | ---: | ---: | ---: |
 | Tetris, DMG | 100.006% | 17.68 / 36.83 ms | 67.46 MiB |
 | Mario Deluxe, CGB | 99.983% | 17.65 / 20.63 ms | 88.71 MiB |
-| Donkey Kong, SGB2 | 100.006% | 17.82 / 36.61 ms | 121.04 MiB |
+| Donkey Kong, SGB2 | 100.000% | 17.80 / 34.41 ms | 119.61 MiB |
 
-The final GB/GBC images show active play. The 60-second SGB2 image shows the stage introduction after its recorded input sequence. A separate 36-second capture shows active first-stage gameplay with the full border at the corrected default size. All 34,304 corrected border pixels match the pinned color oracle. The viewport is at a different gameplay time and is excluded from that pixel comparison.
+The final GB/GBC images show active play. The 60-second SGB2 image shows the stage introduction after its recorded input sequence. A separate 36-second capture shows active first-stage gameplay with the full border at the corrected default size. That run reached 99.973% post-warmup guest progress, zero audio idle/errors, and paint p95/maximum 17.81/37.38 ms. Both SGB2 captures use the refreshed installed binary after the native window-chrome correction. All 34,304 corrected border pixels match the pinned color oracle. The viewport is at a different gameplay time and is excluded from that pixel comparison.
 
 Default-size workflow checks exercise handheld/border changes, ROM/model transitions, visible centering at 1x/2x/3x, never-shown positioning, custom/fullscreen preservation, and explicit 1x shrinking after close. Layout activation occurs only on a resize operation, so an old minimum cannot clamp the new size and steady frames do not repeat layout work. Close/restore position policies remain unchanged. A packaged native Windows audio workflow caught a one-pixel chrome discrepancy that offscreen tests missed. Window chrome now comes from the complete main-window minimum-size hint, retaining exact size and center assertions. The refreshed Windows bundle passes the native audio workflow with no SDK on PATH. The installed Linux system-Qt build passes the native Xcb UI workflow; that UI-only check does not require host audio.
 
