@@ -1,4 +1,6 @@
 #include "cupid/gb/gb.h"
+#include "cupid/gb/input.h"
+#include "cupid/gb/ppu.h"
 #include "cupid/gb/sgb.h"
 
 #include <assert.h>
@@ -44,6 +46,26 @@ static void uniform(const CupidGb *gb, uint8_t value) {
     for (unsigned i = 0; i < sizeof(gb->sgb.attribute_map); ++i) {
         assert(gb->sgb.attribute_map[i] == value);
     }
+}
+
+static void test_irregular_multiplayer_request(void) {
+    const uint8_t command[16] = {0x89, 2};
+    const uint8_t expected[] = {2, 2, 0, 0};
+    CupidGb *gb = screen();
+    cupid_gb_set_buttons(gb, 0xef);
+    assert(cupid_gb_set_buttons_for_player(gb, 2, 0xdf));
+    for (unsigned start = 0; start < sizeof(expected); ++start) {
+        gb->sgb.player_count = 4;
+        gb->sgb.current_player = (uint8_t)start;
+        send_command(gb, command);
+        assert(gb->sgb.player_count == 3 && gb->sgb.current_player == expected[start]);
+        assert(cupid_gb_input_read(gb) == 0xff - expected[start]);
+        cupid_gb_input_select(gb, 0x10);
+        assert(cupid_gb_input_read(gb) == (expected[start] ? 0xdd : 0xde));
+        cupid_gb_input_select(gb, 0x30);
+        assert(cupid_gb_input_read(gb) == 0xff - expected[start]);
+    }
+    free(gb);
 }
 
 static void test_block_controls(void) {
@@ -225,13 +247,229 @@ static void test_packet_edges_and_reset(void) {
     free(gb);
 }
 
+static void tick_frames(CupidGb *gb, unsigned count) {
+    for (unsigned i = 0; i < count; ++i) {
+        cupid_gb_tick_ppu(gb, CUPID_SGB_FRAME_DOTS / 4u);
+    }
+}
+
+static void show_transfer_tiles(CupidGb *gb, const uint8_t *bytes) {
+    for (unsigned index = 0; index < 256; ++index) {
+        const unsigned tile = 255 - index;
+        memcpy(gb->video_ram + tile * 16u, bytes + index * 16u, 16);
+        const unsigned cell = (index / 20u) * 32u + index % 20u;
+        gb->video_ram[0x1800u + cell] = (uint8_t)tile;
+    }
+}
+
+static void test_transfer_frames_and_mask(void) {
+    const uint8_t palette_upload[16] = {0x59};
+    const uint8_t freeze[16] = {0xb9, 1};
+    const uint8_t unfreeze[16] = {0xb9, 0};
+    CupidGb *gb = screen();
+    uint8_t payload[4096] = {0};
+    gb->model = CUPID_GB_MODEL_SGB2;
+    gb->io_registers[0x40] = 0x91;
+    gb->io_registers[0x47] = 0xe4;
+    tick_frames(gb, 1);
+    memset(gb->frame_buffer, 2, sizeof(gb->frame_buffer));
+
+    send_command(gb, freeze);
+    assert(gb->sgb.freeze_buffer[0] == 0);
+    send_command(gb, palette_upload);
+    assert(gb->sgb.transfer.frames_remaining == 3);
+    tick_frames(gb, 2);
+    assert(gb->sgb.transfer.frames_remaining == 1 && gb->sgb.ram_palettes[0] == 0);
+
+    /* Reverse the tilemap order and invert the LCD palette. Reading raw
+     * VRAM or the held screen would give different data at the capture edge. */
+    for (unsigned i = 0; i < sizeof(payload); ++i) {
+        payload[i] = (uint8_t)(i * 43u + (i >> 4));
+    }
+    show_transfer_tiles(gb, payload);
+    gb->io_registers[0x47] = 0x1b;
+    tick_frames(gb, 1);
+    for (unsigned i = 0; i < 2048; ++i) {
+        const unsigned word = (unsigned)payload[i * 2u] | ((unsigned)payload[i * 2u + 1u] << 8u);
+        assert(gb->sgb.ram_palettes[i] == (uint16_t)(word ^ 0xffffu));
+    }
+    assert(gb->sgb.transfer.frames_remaining == 0 &&
+           gb->sgb.transfer.destination == CUPID_SGB_TRANSFER_NONE &&
+           gb->sgb.freeze_buffer[0] == 0 && gb->frame_buffer[0] == 3);
+    send_command(gb, unfreeze);
+    tick_frames(gb, 1);
+    assert(gb->sgb.freeze_buffer[0] == 3);
+
+    /* A later request replaces a pending one. A stopped or disabled LCD
+     * still produces host frame edges without replacing the complete screen. */
+    const uint8_t attr_upload[16] = {0xa9};
+    send_command(gb, palette_upload);
+    tick_frames(gb, 1);
+    send_command(gb, attr_upload);
+    assert(gb->sgb.transfer.frames_remaining == 3);
+    gb->cpu.stopped = true;
+    tick_frames(gb, 2);
+    assert(gb->sgb.transfer.frames_remaining == 1 && gb->sgb.attribute_files[0] == 0);
+    gb->cpu.stopped = false;
+    gb->io_registers[0x40] = 0;
+    tick_frames(gb, 1);
+    for (unsigned i = 0; i < sizeof(gb->sgb.attribute_files); ++i) {
+        assert(gb->sgb.attribute_files[i] == (uint8_t)(payload[i] ^ 0xffu));
+    }
+    assert(gb->sgb.freeze_buffer[0] == 3);
+    free(gb);
+}
+
+static uint32_t pixel_at(const uint32_t *pixels, unsigned x, unsigned y) {
+    return pixels[y * CUPID_SGB_SCREEN_WIDTH + x];
+}
+
+static void test_staged_border_transition(void) {
+    const uint8_t low_tiles[16] = {0x99};
+    const uint8_t high_tiles[16] = {0x99, 1};
+    const uint8_t border_upload[16] = {0xa1};
+    CupidGb *gb = screen();
+    uint8_t payload[4096] = {0};
+    const size_t count = CUPID_SGB_SCREEN_WIDTH * CUPID_SGB_SCREEN_HEIGHT;
+    uint32_t *pixels = calloc(count, sizeof(*pixels));
+    assert(pixels);
+    gb->model = CUPID_GB_MODEL_SGB;
+    gb->io_registers[0x40] = 0x91;
+    gb->io_registers[0x47] = 0xe4;
+    gb->sgb.border_tiles[0] = 0xff;
+    gb->sgb.border_palettes[1] = 0x001f;
+
+    payload[0] = 0x5a;
+    show_transfer_tiles(gb, payload);
+    send_command(gb, low_tiles);
+    tick_frames(gb, 3);
+    assert(gb->sgb.transfer.tiles[0] == 0x5a && gb->sgb.border_tiles[0] == 0xff);
+    payload[0] = 0xff;
+    show_transfer_tiles(gb, payload);
+    send_command(gb, high_tiles);
+    tick_frames(gb, 3);
+    assert(gb->sgb.transfer.tiles[0] == 0x5a && gb->sgb.transfer.tiles[4096] == 0xff &&
+           gb->sgb.border_tiles[4096] == 0);
+
+    memset(payload, 0, sizeof(payload));
+    payload[0] = 0x80;
+    payload[1] = 0x0c;
+    /* Map words span 0x800 bytes. The fourth palette starts after 3×32 bytes. */
+    payload[0x862] = 0xe0;
+    payload[0x863] = 0x03;
+    payload[0x87e] = 0x34;
+    payload[0x87f] = 0x12;
+    show_transfer_tiles(gb, payload);
+    send_command(gb, border_upload);
+    tick_frames(gb, 3);
+    assert(gb->sgb.transfer.map[0] == 0x0c80 && gb->sgb.transfer.palettes[49] == 0x03e0 &&
+           gb->sgb.transfer.palettes[63] == 0x1234 && gb->sgb.border_map[0] == 0);
+    assert(gb->sgb.transfer.border_transition == 104);
+
+    gb->io_registers[0x40] = 0;
+    tick_frames(gb, 40);
+    cupid_gb_sgb_render_argb(gb, pixels, count);
+    assert(gb->sgb.transfer.border_transition == 64 && pixels[0] == 0xffff0000u);
+    tick_frames(gb, 1);
+    cupid_gb_sgb_render_argb(gb, pixels, count);
+    assert(gb->sgb.transfer.border_transition == 63 && pixels[0] == 0xfff70000u);
+    tick_frames(gb, 31);
+    cupid_gb_sgb_render_argb(gb, pixels, count);
+    assert(gb->sgb.transfer.border_transition == 32 && gb->sgb.border_map[0] == 0x0c80 &&
+           pixels[0] == 0xff000000u);
+    tick_frames(gb, 32);
+    cupid_gb_sgb_render_argb(gb, pixels, count);
+    assert(!gb->sgb.transfer.border_transition && pixels[0] == 0xff00ff00u);
+
+    free(pixels);
+    free(gb);
+}
+
+static void test_border_compositor(void) {
+    CupidGb *gb = screen();
+    const size_t count = CUPID_SGB_SCREEN_WIDTH * CUPID_SGB_SCREEN_HEIGHT;
+    uint32_t *pixels = calloc(count, sizeof(*pixels));
+    assert(pixels);
+
+    const unsigned view_x = CUPID_SGB_VIEWPORT_X;
+    const unsigned view_y = CUPID_SGB_VIEWPORT_Y;
+    const unsigned view_cell = (view_y / 8u) * CUPID_SGB_TILE_WIDTH + view_x / 8u;
+    const unsigned index = 0xa7u;
+    uint8_t *tile = gb->sgb.border_tiles + index * 32u;
+    tile[0] = 0x80;
+    tile[1] = 0x40;
+    tile[16] = 0x20;
+    tile[17] = 0x10;
+    gb->sgb.screen_palettes[0] = 0x0003;
+    gb->sgb.screen_palettes[9] = 0x03e0;
+    gb->sgb.screen_palettes[10] = 0x7c00;
+    gb->sgb.attribute_map[0] = gb->sgb.attribute_map[1] = 2;
+    memset(gb->frame_buffer, 1, sizeof(gb->frame_buffer));
+    cupid_gb_sgb_vblank(gb, 0);
+
+    gb->sgb.border_map[0] = (uint16_t)(0x1c00u | index);
+    gb->sgb.border_map[1] = (uint16_t)(0x5400u | index);
+    gb->sgb.border_map[2] = (uint16_t)(0x9800u | index);
+    gb->sgb.border_map[3] = (uint16_t)(0xd000u | index);
+    gb->sgb.border_map[4] = (uint16_t)(0x0100u | index);
+    gb->sgb.border_map[view_cell] = (uint16_t)(0x1c00u | index);
+    gb->sgb.border_map[view_cell + 1] = (uint16_t)(0x0200u | index);
+    gb->sgb.border_palettes[0] = 0x7fff;
+    gb->sgb.border_palettes[49] = 0x001f;
+    gb->sgb.border_palettes[50] = 0x03e0;
+    gb->sgb.border_palettes[52] = 0x7c00;
+    gb->sgb.border_palettes[56] = 0x7fff;
+    gb->sgb.border_palettes[1] = 0x7fe0;
+    gb->sgb.border_palettes[17] = 0x03ff;
+    gb->sgb.border_palettes[33] = 0x7c1f;
+    gb->sgb.border_palettes[97] = 0x4210;
+
+    cupid_gb_sgb_render_argb(gb, pixels, count - 1u);
+    assert(pixel_at(pixels, 0, 0) == 0);
+    cupid_gb_sgb_render_argb(gb, pixels, count);
+    assert(pixel_at(pixels, 0, 0) == 0xffff0000u);
+    assert(pixel_at(pixels, 1, 0) == 0xff00ff00u);
+    assert(pixel_at(pixels, 2, 0) == 0xff0000ffu);
+    assert(pixel_at(pixels, 3, 0) == 0xffffffffu);
+    assert(pixel_at(pixels, 4, 0) == 0xff180000u);
+    assert(pixel_at(pixels, 15, 0) == 0xffffff00u);
+    assert(pixel_at(pixels, 16, 7) == 0xffff00ffu);
+    assert(pixel_at(pixels, 31, 7) == 0xff00ffffu);
+    assert(pixel_at(pixels, 32, 0) == 0xff000000u);
+    assert(pixel_at(pixels, view_x, view_y) == 0xffff0000u);
+    assert(pixel_at(pixels, view_x + 4, view_y) == 0xff00ff00u);
+    assert(pixel_at(pixels, view_x + 8, view_y) == 0xff00ff00u);
+
+    const uint32_t transparent[] = {0xff00ff00u, 0xff0000ffu, 0xff000000u, 0xff180000u};
+    for (unsigned mask = CUPID_SGB_MASK_DISABLED; mask <= CUPID_SGB_MASK_COLOR0; ++mask) {
+        if (mask == CUPID_SGB_MASK_FREEZE) {
+            memset(gb->frame_buffer, 2, sizeof(gb->frame_buffer));
+            cupid_gb_sgb_vblank(gb, 0);
+        }
+        gb->sgb.mask_mode = (uint8_t)mask;
+        cupid_gb_sgb_render_argb(gb, pixels, count);
+        assert(pixel_at(pixels, view_x, view_y) == 0xffff0000u);
+        assert(pixel_at(pixels, view_x + 4, view_y) == transparent[mask]);
+        assert(pixel_at(pixels, view_x + 8, view_y) == transparent[mask]);
+        assert(pixel_at(pixels, CUPID_SGB_SCREEN_WIDTH - 1, CUPID_SGB_SCREEN_HEIGHT - 1) ==
+               0xff180000u);
+    }
+
+    free(pixels);
+    free(gb);
+}
+
 int main(void) {
+    test_irregular_multiplayer_request();
     test_block_controls();
     test_block_geometry();
     test_block_packet_limits();
     test_character_order();
     test_character_end_and_count();
     test_packet_edges_and_reset();
-    puts("SGB command tests passed");
+    test_transfer_frames_and_mask();
+    test_staged_border_transition();
+    test_border_compositor();
+    puts("SGB command and border tests passed");
     return 0;
 }

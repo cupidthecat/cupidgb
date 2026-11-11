@@ -54,7 +54,11 @@ Ordinary focus loss releases input so returning to the window does not leave a k
 
 Open Emulation > Settings. Each game button and hold mode accepts one key, including a standalone modifier or Tab. Empty bindings disable that input. Command shortcuts may combine a key with modifiers. The dialog rejects duplicate mappings and conflicting unmodified command keys.
 
-Changes apply when you accept the dialog. Hardware and boot settings take effect on the next reset or cartridge open. Cancel keeps the previous settings. Keyboard layouts and platform shortcut handling need broader qualification. Game controllers and multiple player input mapping remain pending.
+Changes apply when you accept the dialog. Hardware and boot settings take effect on the next reset or cartridge open. Cancel keeps the previous settings. Keyboard layouts and platform shortcut handling need broader qualification.
+
+Open Emulation > Controllers for device selection, button/axis/hat capture, dead zones, player assignments, hold controls, command shortcuts, background input and cartridge rumble. Layouts and preferred devices persist separately from cartridge state. Keyboard and controller contributions combine. Single-player sessions accept eligible controllers regardless of their saved SGB player assignment; a multiplayer request switches to the assigned input slots at the next hardware-step boundary. [The controller guide](controllers.md) explains defaults, capture, weak device identities, native menu navigation and remaining physical/motion limits.
+
+Settings and controller dialogs explicitly pause emulation and restore the prior pause choice on close. Open menus temporarily block execution and playback without changing that choice; nested menus retain the block until all menus close. Selecting Pause or resuming from a menu keeps the selected state afterward.
 
 ## Boot behavior
 

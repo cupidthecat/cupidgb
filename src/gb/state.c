@@ -2,12 +2,41 @@
 
 #include "cupid/common/sha256.h"
 #include "cupid/gb/apu.h"
+#include "cupid/gb/camera.h"
+#include "cupid/gb/mbc7.h"
+#include "cupid/gb/tpp1.h"
 
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
-enum { STATE_HEADER_SIZE = 128, STATE_VERSION = 2, STATE_WIRE_SIZE_V2 = 300518 };
+enum {
+    STATE_HEADER_SIZE = 128,
+    STATE_VERSION_V5 = 5,
+    STATE_VERSION_V4 = 4,
+    STATE_VERSION_V3 = 3,
+    STATE_VERSION_V2 = 2,
+    STATE_WIRE_SIZE_V2 = 300518,
+    STATE_WIRE_SIZE_V3 = STATE_WIRE_SIZE_V2 + 50,
+    STATE_WIRE_SIZE_V4 = STATE_WIRE_SIZE_V3 + 4,
+    STATE_MMM01_EXTENSION_SIZE = 4,
+    STATE_MBC7_EXTENSION_SIZE = 8,
+    STATE_CAMERA_EXTENSION_SIZE = 64,
+    STATE_TPP1_EXTENSION_SIZE = 21,
+    STATE_SGB_EXTENSION_SIZE =
+        7 + 8192 +
+        2 * (CUPID_SGB_TILE_WIDTH * CUPID_SGB_TILE_HEIGHT + CUPID_SGB_BORDER_PALETTE_COLORS)
+};
+
+enum {
+    STATE_SECTION_SGB = 1u << 0,
+    STATE_SECTION_MMM01 = 1u << 1,
+    STATE_SECTION_MBC7 = 1u << 2,
+    STATE_SECTION_CAMERA = 1u << 3,
+    STATE_SECTION_TPP1 = 1u << 4,
+    STATE_SECTIONS_ALL = STATE_SECTION_SGB | STATE_SECTION_MMM01 | STATE_SECTION_MBC7 |
+                         STATE_SECTION_CAMERA | STATE_SECTION_TPP1
+};
 
 static const uint8_t state_magic[8] = {'C', 'U', 'P', 'I', 'D', 'G', 'B', 0};
 
@@ -391,8 +420,233 @@ static void state_fields(StateIo *io, CupidGb *gb) {
 #undef WORDS
 }
 
+/* The complete v2 payload remains a prefix. New physical latches have their own
+ * explicit extension, independent of C structure padding and host ABI changes. */
+static void state_extension_v3(StateIo *io, CupidGb *gb) {
+    boolean(io, &gb->hdma_pending);
+    byte(io, &gb->hdma_hblank_delay);
+    boolean(io, &gb->hdma_allow_on_wake);
+    byte(io, &gb->apu.clock_phase);
+    byte(io, &gb->apu.envelope_delay);
+    for (unsigned channel = 0; channel < 2; ++channel) {
+        CupidGbPulseTiming *timing = &gb->apu.pulse_timing[channel];
+        byte(io, &timing->start_delay);
+        byte(io, &timing->edge_age);
+        boolean(io, &timing->clock_started);
+        boolean(io, &timing->output_high);
+        boolean(io, &timing->output_blocked);
+        boolean(io, &timing->envelope_clock);
+        boolean(io, &timing->envelope_locked);
+        boolean(io, &timing->envelope_lock_pending);
+    }
+    CupidGbSweepTiming *sweep = &gb->apu.sweep_timing;
+    byte(io, &sweep->startup_ticks);
+    byte(io, &sweep->shift_ticks);
+    byte(io, &sweep->restart_hold);
+    word(io, &sweep->delta);
+    word(io, &sweep->completed_delta);
+    boolean(io, &sweep->zero_shift_pending);
+    boolean(io, &sweep->zero_shift_armed);
+    CupidGbNoiseTiming *noise = &gb->apu.noise_timing;
+    word(io, &noise->divider_counter);
+    byte(io, &noise->clock_phase);
+    byte(io, &noise->remaining);
+    boolean(io, &noise->foreground);
+    boolean(io, &noise->background);
+    boolean(io, &noise->started_dac_off);
+    boolean(io, &noise->reload_edge);
+    boolean(io, &noise->counter_stepped);
+    boolean(io, &noise->output_high);
+    boolean(io, &noise->last_shift_narrow);
+    boolean(io, &noise->pre_shift_bit7);
+    double_word(io, &gb->speed_switch_halt_cycles);
+    byte(io, &gb->speed_switch_toggle_cycles);
+    byte(io, &gb->speed_switch_freeze_cycles);
+    byte(io, &gb->stop_divider_hold_cycles);
+    byte(io, &gb->speed_switch_alignment);
+}
+
 static bool valid_model(CupidGbModel model) {
     return model >= CUPID_GB_MODEL_DMG_ABC && model <= CUPID_GB_MODEL_SGB2;
+}
+
+static void state_extension_v4(StateIo *io, CupidGb *gb) {
+    bytes(io, gb->joypad_extra, sizeof(gb->joypad_extra));
+    boolean(io, &gb->mbc5_rumble_on);
+}
+
+static bool sgb_model(CupidGbModel model) {
+    return model == CUPID_GB_MODEL_SGB || model == CUPID_GB_MODEL_SGB2;
+}
+
+/* Version 5 sections follow the immutable hardware and cartridge identity. */
+static unsigned state_sections(const CupidGb *gb) {
+    unsigned sections = sgb_model(gb->model) ? STATE_SECTION_SGB : 0;
+    if (gb->header.mbc_type == CUPID_GB_MMM01) {
+        sections |= STATE_SECTION_MMM01;
+    } else if (gb->header.mbc_type == CUPID_GB_MBC7) {
+        sections |= STATE_SECTION_MBC7;
+    } else if (gb->header.mbc_type == CUPID_GB_CAMERA) {
+        sections |= STATE_SECTION_CAMERA;
+    } else if (gb->header.mbc_type == CUPID_GB_TPP1) {
+        sections |= STATE_SECTION_TPP1;
+    }
+    return sections;
+}
+
+static size_t extended_wire_size(unsigned sections) {
+    size_t size = STATE_WIRE_SIZE_V4;
+    if (sections & STATE_SECTION_SGB) {
+        size += STATE_SGB_EXTENSION_SIZE;
+    }
+    if (sections & STATE_SECTION_MMM01) {
+        size += STATE_MMM01_EXTENSION_SIZE;
+    }
+    if (sections & STATE_SECTION_MBC7) {
+        size += STATE_MBC7_EXTENSION_SIZE;
+    }
+    if (sections & STATE_SECTION_CAMERA) {
+        size += STATE_CAMERA_EXTENSION_SIZE;
+    }
+    if (sections & STATE_SECTION_TPP1) {
+        size += STATE_TPP1_EXTENSION_SIZE;
+    }
+    return size;
+}
+
+static void state_extension_sgb(StateIo *io, CupidGb *gb) {
+    CupidGbSgbTransfer *transfer = &gb->sgb.transfer;
+    double_word(io, &transfer->frame_dots);
+    byte(io, &transfer->destination);
+    byte(io, &transfer->frames_remaining);
+    byte(io, &transfer->border_transition);
+    bytes(io, transfer->tiles, sizeof(transfer->tiles));
+    words(io, transfer->map, CUPID_SGB_TILE_WIDTH * CUPID_SGB_TILE_HEIGHT);
+    words(io, transfer->palettes, CUPID_SGB_BORDER_PALETTE_COLORS);
+}
+
+static bool valid_sgb_extension(const CupidGbSgbTransfer *transfer) {
+    return transfer->frame_dots <= CUPID_SGB_FRAME_DOTS &&
+           transfer->destination <= CUPID_SGB_TRANSFER_BORDER &&
+           transfer->frames_remaining <= CUPID_SGB_TRANSFER_FRAMES &&
+           ((transfer->destination == CUPID_SGB_TRANSFER_NONE) ==
+            (transfer->frames_remaining == 0)) &&
+           transfer->border_transition < CUPID_SGB_BORDER_TRANSITION_FRAMES;
+}
+
+static void import_legacy_sgb(CupidGb *gb) {
+    CupidGbSgb *sgb = &gb->sgb;
+    memset(&sgb->transfer, 0, sizeof(sgb->transfer));
+    if (sgb_model(gb->model)) {
+        /* Older states applied transfers immediately. Retain the visible
+         * border as the starting point for subsequent staged uploads. */
+        memcpy(sgb->transfer.tiles, sgb->border_tiles, sizeof(sgb->transfer.tiles));
+        memcpy(sgb->transfer.map, sgb->border_map, sizeof(sgb->transfer.map));
+        memcpy(sgb->transfer.palettes, sgb->border_palettes, sizeof(sgb->transfer.palettes));
+        if (sgb->mask_mode != CUPID_SGB_MASK_FREEZE) {
+            memcpy(sgb->freeze_buffer, gb->frame_buffer, sizeof(sgb->freeze_buffer));
+        }
+    }
+}
+
+static void state_extension_mmm01(StateIo *io, CupidGb *gb) {
+    byte(io, &gb->mmm01_rom_select);
+    byte(io, &gb->mmm01_bank_select);
+    byte(io, &gb->mmm01_mode);
+    byte(io, &gb->mmm01_ram_mask);
+}
+
+static bool valid_mmm01_extension(const CupidGb *gb) {
+    return gb->mmm01_rom_select <= 0x7fu && gb->mmm01_bank_select <= 0x7fu &&
+           (gb->mmm01_mode & 0x82u) == 0 && gb->mmm01_ram_mask <= 3u;
+}
+
+static void import_legacy_mmm01(CupidGb *gb) {
+    /* Legacy writes never left the menu. Their old lock flag cannot
+     * supply the address masks or other latches used after locking. */
+    gb->mmm01_locked = false;
+    gb->mmm01_rom_select = 0;
+    gb->mmm01_bank_select = 0;
+    gb->mmm01_mode = 0;
+    gb->mmm01_ram_mask = 3;
+}
+
+static void state_extension_mbc7(StateIo *io, CupidGbMbc7 *device) {
+    word(io, &device->command);
+    word(io, &device->output);
+    byte(io, &device->data_bits);
+    byte(io, &device->pins);
+    boolean(io, &device->registers_enabled);
+    boolean(io, &device->programming_enabled);
+}
+
+static bool valid_mbc7_extension(const CupidGbMbc7 *device) {
+    if ((device->pins & ~0xc3u) || device->data_bits > 16) {
+        return false;
+    }
+    if (!device->data_bits) {
+        return device->command < 0x400u;
+    }
+    /* The serial interface accepts a payload only after WRITE or WRAL. */
+    return (device->command >= 0x500u && device->command <= 0x5ffu) ||
+           (device->command >= 0x440u && device->command <= 0x47fu);
+}
+
+static void state_extension_camera(StateIo *io, CupidGbCamera *camera) {
+    bytes(io, camera->registers, sizeof(camera->registers));
+    byte(io, &camera->clock_phase);
+    boolean(io, &camera->mapped);
+    double_word(io, &camera->busy_tcycles);
+    double_word(io, &camera->capture_number);
+}
+
+static bool valid_camera_extension(const CupidGb *gb) {
+    const CupidGbCamera *camera = &gb->camera;
+    return gb->current_rom_bank <= 0xffu && gb->current_ram_bank <= 0x0fu &&
+           camera->registers[0] <= 7u && camera->clock_phase <= 7u &&
+           camera->busy_tcycles <= CUPID_GB_CAMERA_MAX_BUSY_T_CYCLES &&
+           ((camera->registers[0] & 1u) != 0) == (camera->busy_tcycles != 0);
+}
+
+static void state_extension_tpp1(StateIo *io, CupidGbTpp1 *device) {
+    word(io, &device->rom_bank);
+    byte(io, &device->ram_bank);
+    byte(io, &device->mode);
+    byte(io, &device->status);
+    bytes(io, device->live, sizeof(device->live));
+    bytes(io, device->latched, sizeof(device->latched));
+    signed_quad_word(io, &device->rtc_base_time);
+}
+
+static bool valid_tpp1_extension(const CupidGbTpp1 *device) {
+    return cupid_gb_tpp1_valid_mode(device->mode) && device->status <= 0x0fu &&
+           device->rtc_base_time >= 0;
+}
+
+static void state_extension_v5(StateIo *io, CupidGb *gb, unsigned sections) {
+    if (sections & STATE_SECTION_SGB) {
+        state_extension_sgb(io, gb);
+    }
+    if (sections & STATE_SECTION_MMM01) {
+        state_extension_mmm01(io, gb);
+    }
+    if (sections & STATE_SECTION_MBC7) {
+        state_extension_mbc7(io, &gb->mbc7);
+    }
+    if (sections & STATE_SECTION_CAMERA) {
+        state_extension_camera(io, &gb->camera);
+    }
+    if (sections & STATE_SECTION_TPP1) {
+        state_extension_tpp1(io, &gb->tpp1);
+    }
+}
+
+static bool valid_v5_sections(const CupidGb *gb, unsigned sections) {
+    return (!(sections & STATE_SECTION_SGB) || valid_sgb_extension(&gb->sgb.transfer)) &&
+           (!(sections & STATE_SECTION_MMM01) || valid_mmm01_extension(gb)) &&
+           (!(sections & STATE_SECTION_MBC7) || valid_mbc7_extension(&gb->mbc7)) &&
+           (!(sections & STATE_SECTION_CAMERA) || valid_camera_extension(gb)) &&
+           (!(sections & STATE_SECTION_TPP1) || valid_tpp1_extension(&gb->tpp1));
 }
 
 static bool ready(const CupidGb *gb) {
@@ -400,7 +654,7 @@ static bool ready(const CupidGb *gb) {
            gb->cartridge_ram_size <= CUPID_GB_MAX_RAM_SIZE;
 }
 
-static bool valid_hardware(const CupidGb *gb) {
+static bool valid_hardware_prefix(const CupidGb *gb, unsigned version) {
     const CupidGbApu *a = &gb->apu;
     const CupidGbPixels *p = &gb->pixels;
     const int64_t area_limit = INT64_C(16320) * a->sample_acc;
@@ -452,7 +706,9 @@ static bool valid_hardware(const CupidGb *gb) {
         a->ch3_wave_pos > 31 || a->ch3_current_byte > 15 || a->ch3_wave_access_ticks > 1 ||
         a->ch3_sample > 15 || a->ch4_div_code > 7 || a->ch4_shift > 15 || a->ch4_lfsr > 0x7fff ||
         a->sample_acc >= cupid_gb_base_clock_hz(gb) || a->buf_write > CUPID_GB_APU_BUF_FRAMES ||
-        (gb->sgb.player_count != 1 && gb->sgb.player_count != 2 && gb->sgb.player_count != 4) ||
+        !gb->sgb.player_count || gb->sgb.player_count > 4 ||
+        (gb->sgb.player_count == 3 &&
+         (version < STATE_VERSION_V4 || (gb->sgb.current_player & 1u))) ||
         gb->sgb.current_player >= gb->sgb.player_count || gb->sgb.mask_mode > 3 ||
         gb->sgb.command_write_index > sizeof(gb->sgb.command) * 8) {
         return false;
@@ -470,13 +726,44 @@ static bool valid_hardware(const CupidGb *gb) {
     return true;
 }
 
+static bool valid_hardware_extension(const CupidGb *gb) {
+    const bool rumble_cartridge = gb->header.mbc_type == CUPID_GB_MBC5 && gb->header.has_rumble;
+    if ((rumble_cartridge && gb->current_ram_bank > 7u) ||
+        (gb->mbc5_rumble_on && !rumble_cartridge)) {
+        return false;
+    }
+    if (gb->hdma_blocks_remaining > 128 || gb->hdma_hblank_delay > 3 || gb->apu.clock_phase > 3 ||
+        gb->apu.envelope_delay > 2 || gb->apu.sweep_timing.startup_ticks > 3 ||
+        gb->apu.sweep_timing.shift_ticks > 7 || gb->apu.sweep_timing.restart_hold > 8 ||
+        gb->apu.sweep_timing.delta > 2047 || gb->apu.sweep_timing.completed_delta > 2047 ||
+        gb->apu.noise_timing.clock_phase > 7 || gb->apu.noise_timing.remaining > 34 ||
+        gb->speed_switch_halt_cycles > 131080 || gb->speed_switch_toggle_cycles > 6 ||
+        gb->speed_switch_freeze_cycles > 5 || gb->stop_divider_hold_cycles > 4 ||
+        gb->speed_switch_alignment > 7 || (gb->hdma_hblank_delay && !gb->hdma_active) ||
+        ((gb->hdma_pending || gb->hdma_active) && !gb->hdma_blocks_remaining)) {
+        return false;
+    }
+    for (unsigned channel = 0; channel < 2; ++channel) {
+        const CupidGbPulseTiming *timing = &gb->apu.pulse_timing[channel];
+        if (timing->start_delay > 12 || timing->edge_age > 4) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool valid_hardware(const CupidGb *gb, unsigned sections) {
+    return valid_hardware_prefix(gb, STATE_VERSION_V4) && valid_hardware_extension(gb) &&
+           valid_v5_sections(gb, sections);
+}
+
 size_t cupid_gb_state_size(const CupidGb *gb) {
     if (!ready(gb)) {
         return 0;
     }
-    /* Version 2 stores every model's fixed-capacity fields. Encoding and loading
-     * still check their final offset against this size, so schema drift fails closed. */
-    return STATE_WIRE_SIZE_V2;
+    /* Ordinary snapshots retain the version 4 byte layout. Version 5
+     * adds only the sections required by this hardware and cartridge. */
+    return extended_wire_size(state_sections(gb));
 }
 
 static void put_u32(uint8_t *data, uint32_t value) {
@@ -507,17 +794,18 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
     if (!ready(gb)) {
         return CUPID_GB_STATE_NO_ROM;
     }
-    size_t size = cupid_gb_state_size(gb);
+    const unsigned sections = state_sections(gb);
+    const size_t size = extended_wire_size(sections);
     if (!data || capacity < size) {
         return CUPID_GB_STATE_BUFFER_TOO_SMALL;
     }
     if (overlaps(data, size, gb, sizeof(*gb)) || overlaps(data, size, gb->rom, gb->rom_size) ||
-        !valid_hardware(gb)) {
+        !valid_hardware(gb, sections)) {
         return CUPID_GB_STATE_INVALID;
     }
     memset(data, 0, STATE_HEADER_SIZE);
     memcpy(data, state_magic, sizeof(state_magic));
-    put_u32(data + 8, STATE_VERSION);
+    put_u32(data + 8, sections ? STATE_VERSION_V5 : STATE_VERSION_V4);
     put_u32(data + 12, (uint32_t)size);
     put_u32(data + 16, (uint32_t)gb->model);
     put_u32(data + 20, (uint32_t)gb->rom_size);
@@ -533,6 +821,9 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
     }
     StateIo io = {NULL, data, STATE_HEADER_SIZE, size, false};
     state_fields(&io, (CupidGb *)gb);
+    state_extension_v3(&io, (CupidGb *)gb);
+    state_extension_v4(&io, (CupidGb *)gb);
+    state_extension_v5(&io, (CupidGb *)gb, sections);
     if (io.invalid || io.offset != size) {
         return CUPID_GB_STATE_INVALID;
     }
@@ -551,10 +842,17 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
     if (!data || length < STATE_HEADER_SIZE || memcmp(data, state_magic, sizeof(state_magic))) {
         return CUPID_GB_STATE_INVALID;
     }
-    if (get_u32(data + 8) != STATE_VERSION) {
+    const uint32_t version = get_u32(data + 8);
+    if (version < STATE_VERSION_V2 || version > STATE_VERSION_V5) {
         return CUPID_GB_STATE_UNSUPPORTED_VERSION;
     }
-    if (length != get_u32(data + 12) || length != cupid_gb_state_size(gb)) {
+    const size_t prefix_size = version == STATE_VERSION_V2   ? STATE_WIRE_SIZE_V2
+                               : version == STATE_VERSION_V3 ? STATE_WIRE_SIZE_V3
+                                                             : STATE_WIRE_SIZE_V4;
+    if (length != get_u32(data + 12) ||
+        (version == STATE_VERSION_V5
+             ? length <= prefix_size || length > extended_wire_size(STATE_SECTIONS_ALL)
+             : length != prefix_size)) {
         return CUPID_GB_STATE_INVALID;
     }
     uint8_t digest[32];
@@ -575,6 +873,10 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
     }
     if (memcmp(digest, data + 32, sizeof(digest))) {
         return CUPID_GB_STATE_WRONG_ROM;
+    }
+    const unsigned sections = version == STATE_VERSION_V5 ? state_sections(gb) : 0;
+    if (version == STATE_VERSION_V5 && (!sections || length != extended_wire_size(sections))) {
+        return CUPID_GB_STATE_INVALID;
     }
     uint32_t boot_length = get_u32(data + 24), flags = get_u32(data + 28);
     if (flags > 1 || (!flags && boot_length)) {
@@ -604,8 +906,57 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
     *candidate = *gb;
     StateIo io = {data, NULL, STATE_HEADER_SIZE, length, false};
     state_fields(&io, candidate);
+    if (version >= STATE_VERSION_V3) {
+        state_extension_v3(&io, candidate);
+    }
+    if (version >= STATE_VERSION_V4) {
+        state_extension_v4(&io, candidate);
+    } else {
+        /* Legacy writers discarded the motor bit instead of storing its history.
+         * Missing controllers start released; missing motor history starts off. */
+        memset(candidate->joypad_extra, 0xff, sizeof(candidate->joypad_extra));
+        candidate->mbc5_rumble_on = false;
+    }
+    state_extension_v5(&io, candidate, sections);
     if (io.invalid || io.offset != length || candidate->boot_rom_enabled != (flags != 0) ||
-        !valid_hardware(candidate)) {
+        !valid_hardware_prefix(candidate, version) || !valid_v5_sections(candidate, sections)) {
+        free(candidate);
+        return CUPID_GB_STATE_INVALID;
+    }
+    if (!(sections & STATE_SECTION_SGB)) {
+        import_legacy_sgb(candidate);
+    }
+    if (candidate->header.mbc_type == CUPID_GB_MMM01 && !(sections & STATE_SECTION_MMM01)) {
+        import_legacy_mmm01(candidate);
+    }
+    if (candidate->header.mbc_type == CUPID_GB_MBC7 && !(sections & STATE_SECTION_MBC7)) {
+        cupid_gb_mbc7_reset_serial(candidate);
+    }
+    if (candidate->header.mbc_type == CUPID_GB_CAMERA && !(sections & STATE_SECTION_CAMERA)) {
+        /* Older builds opened Camera cartridges with ROM-only mapping. */
+        memset(&candidate->camera, 0, sizeof(candidate->camera));
+        candidate->current_rom_bank = 1;
+        candidate->current_ram_bank = 0;
+        candidate->ram_enabled = false;
+    }
+    if (candidate->header.mbc_type == CUPID_GB_TPP1 && !(sections & STATE_SECTION_TPP1)) {
+        candidate->tpp1 = (CupidGbTpp1){.rom_bank = 1};
+    }
+    if (version == STATE_VERSION_V2) {
+        /* Earlier states have no pending-DMA or power-relative audio history.
+         * Initialize only the new latches after validating every legacy index;
+         * never inherit their values from the target's unrelated live timeline. */
+        candidate->hdma_pending = false;
+        candidate->hdma_hblank_delay = 0;
+        candidate->hdma_allow_on_wake = false;
+        candidate->speed_switch_halt_cycles = 0;
+        candidate->speed_switch_toggle_cycles = 0;
+        candidate->speed_switch_freeze_cycles = 0;
+        candidate->stop_divider_hold_cycles = 0;
+        candidate->speed_switch_alignment = 0;
+        cupid_gb_apu_import_legacy(candidate);
+    }
+    if (!valid_hardware_extension(candidate)) {
         free(candidate);
         return CUPID_GB_STATE_INVALID;
     }

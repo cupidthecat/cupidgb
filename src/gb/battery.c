@@ -1,8 +1,14 @@
 #include "cupid/gb/battery.h"
+#include "cupid/gb/cartridge.h"
+#include "cupid/gb/tpp1.h"
 
 #include <limits.h>
 #include <string.h>
 #include <time.h>
+
+enum { TPP1_TRAILER_SIZE = 20 };
+
+static const uint8_t tpp1_trailer_header[] = {'T', 'P', 'P', '1', 1, 0};
 
 static bool clock_present(const CupidGb *gb) {
     return gb->header.has_timer && gb->header.mbc_type == CUPID_GB_MBC3;
@@ -50,6 +56,8 @@ void cupid_gb_rtc_advance(CupidGbRtc *rtc, int64_t host_seconds) {
 size_t cupid_gb_battery_size(const CupidGb *gb) {
     if (!valid_cartridge(gb) || !gb->header.has_battery)
         return 0;
+    if (gb->header.mbc_type == CUPID_GB_TPP1)
+        return gb->cartridge_ram_size + TPP1_TRAILER_SIZE;
     return gb->cartridge_ram_size + (clock_present(gb) ? 48u : 0u);
 }
 
@@ -70,6 +78,42 @@ static uint64_t read_integer(const uint8_t *source, unsigned bytes) {
     for (unsigned i = 0; i < bytes; ++i)
         value |= (uint64_t)source[i] << (i * 8);
     return value;
+}
+
+static void save_tpp1_clock(const CupidGb *gb, uint8_t *trailer, int64_t host_seconds) {
+    CupidGbTpp1 clock = gb->tpp1;
+    cupid_gb_tpp1_advance(&clock, host_seconds);
+    memcpy(trailer, tpp1_trailer_header, sizeof(tpp1_trailer_header));
+    trailer[6] = clock.status;
+    trailer[7] = 0;
+    write_integer(trailer + 8, (uint64_t)clock.rtc_base_time, 8);
+    memcpy(trailer + 16, clock.live, sizeof(clock.live));
+}
+
+static CupidGbBatteryResult load_tpp1_battery(CupidGb *gb, const uint8_t *data, size_t size,
+                                              int64_t host_seconds) {
+    const size_t ram_size = gb->cartridge_ram_size;
+    CupidGbTpp1 clock = gb->tpp1;
+    clock.rtc_base_time = host_seconds > 0 ? host_seconds : 0;
+    if (size == ram_size + TPP1_TRAILER_SIZE) {
+        const uint8_t *trailer = data + ram_size;
+        if (memcmp(trailer, tpp1_trailer_header, sizeof(tpp1_trailer_header)) != 0 ||
+            trailer[6] > 0x0fu)
+            return CUPID_GB_BATTERY_INVALID_RTC;
+        clock.status = trailer[6];
+        memcpy(clock.live, trailer + 16, sizeof(clock.live));
+        const uint64_t saved_time = read_integer(trailer + 8, 8);
+        if (host_seconds >= 0 && saved_time <= (uint64_t)host_seconds) {
+            clock.rtc_base_time = (int64_t)saved_time;
+            cupid_gb_tpp1_advance(&clock, host_seconds);
+        }
+    } else if (size != ram_size) {
+        return CUPID_GB_BATTERY_INVALID_SIZE;
+    }
+    if (ram_size)
+        memmove(gb->cartridge_ram, data, ram_size);
+    gb->tpp1 = clock;
+    return CUPID_GB_BATTERY_OK;
 }
 
 CupidGbBatteryResult cupid_gb_save_battery_at(const CupidGb *gb, uint8_t *data, size_t capacity,
@@ -97,6 +141,8 @@ CupidGbBatteryResult cupid_gb_save_battery_at(const CupidGb *gb, uint8_t *data, 
         for (unsigned i = 0; i < sizeof(registers); ++i)
             write_integer(trailer + i * 4, registers[i], 4);
         write_integer(trailer + 40, (uint64_t)host_seconds, 8);
+    } else if (gb->header.mbc_type == CUPID_GB_TPP1) {
+        save_tpp1_clock(gb, data + gb->cartridge_ram_size, host_seconds);
     }
     if (written)
         *written = size;
@@ -115,9 +161,14 @@ CupidGbBatteryResult cupid_gb_load_battery_at(CupidGb *gb, const uint8_t *data, 
     const size_t expected = cupid_gb_battery_size(gb);
     if (!expected)
         return CUPID_GB_BATTERY_NO_DATA;
+    if (gb->header.mbc_type == CUPID_GB_TPP1)
+        return load_tpp1_battery(gb, data, size, host_seconds);
     const size_t ram_size = gb->cartridge_ram_size;
     const bool has_clock = clock_present(gb);
-    if (size != ram_size && (!has_clock || (size != ram_size + 44 && size != ram_size + 48)))
+    const bool legacy_mbc7 = gb->header.mbc_type == CUPID_GB_MBC7 && size > ram_size &&
+                             size == cupid_gb_ram_size_from_code(gb->header.ram_size_code);
+    if (size != ram_size && !legacy_mbc7 &&
+        (!has_clock || (size != ram_size + 44 && size != ram_size + 48)))
         return CUPID_GB_BATTERY_INVALID_SIZE;
     CupidGbRtc rtc = gb->rtc;
     if (has_clock) {

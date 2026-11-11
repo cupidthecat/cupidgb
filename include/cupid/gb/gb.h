@@ -25,6 +25,41 @@
  * buf[]    = int16_t stereo samples, L then R, generated each tick.
  * buf_write = number of stereo frames currently waiting in buf[].
  */
+typedef struct CupidGbPulseTiming {
+    uint8_t start_delay; /* Remaining trigger settling time, 0..12 base T-cycles. */
+    uint8_t edge_age;    /* Base T-cycles since a frequency edge; 4 means older. */
+    bool clock_started;
+    bool output_high;
+    bool output_blocked;
+    bool envelope_clock;
+    bool envelope_locked;
+    bool envelope_lock_pending;
+} CupidGbPulseTiming;
+
+typedef struct CupidGbSweepTiming {
+    uint8_t startup_ticks; /* Remaining 1 MHz setup ticks, 0..3. */
+    uint8_t shift_ticks;   /* Remaining 1 MHz calculation ticks, 0..7. */
+    uint8_t restart_hold;  /* Base clocks holding the sweep input after trigger, 0..8. */
+    uint16_t delta;
+    uint16_t completed_delta;
+    bool zero_shift_pending;
+    bool zero_shift_armed;
+} CupidGbSweepTiming;
+
+typedef struct CupidGbNoiseTiming {
+    uint16_t divider_counter; /* Ordinary edges mask to 14 bits; DAC-off carries retain all 16. */
+    uint8_t clock_phase;      /* Power-relative base-clock phase, 0..7. */
+    uint8_t remaining;        /* Remaining 2 MHz prescaler ticks, 0..34. */
+    bool foreground;
+    bool background;
+    bool started_dac_off;
+    bool reload_edge;
+    bool counter_stepped;
+    bool output_high;
+    bool last_shift_narrow;
+    bool pre_shift_bit7;
+} CupidGbNoiseTiming;
+
 typedef struct CupidGbApu {
     /* Frame sequencer */
     uint8_t fs_step;           /* 0-7 */
@@ -98,6 +133,13 @@ typedef struct CupidGbApu {
     uint32_t ch4_timer;
     uint16_t ch4_lfsr; /* 15-bit shift register */
 
+    /* Hardware clock/output latches; native v3 appends these after its v2 prefix. */
+    uint8_t clock_phase;    /* Power-relative base-clock phase, 0..3. */
+    uint8_t envelope_delay; /* Deferred color double-speed envelope edge, 0..2 base clocks. */
+    CupidGbPulseTiming pulse_timing[2];
+    CupidGbSweepTiming sweep_timing;
+    CupidGbNoiseTiming noise_timing;
+
     /* Output */
     uint32_t sample_acc;
     int16_t buf[CUPID_GB_APU_BUF_FRAMES * 2u]; /* L/R interleaved */
@@ -120,8 +162,18 @@ typedef enum CupidGbMbcType {
     CUPID_GB_MMM01,
     CUPID_GB_HUC1,
     CUPID_GB_HUC3,
-    CUPID_GB_MBC_UNKNOWN
+    CUPID_GB_MBC_UNKNOWN,
+    CUPID_GB_CAMERA,
+    CUPID_GB_TPP1
 } CupidGbMbcType;
+
+typedef struct CupidGbCamera {
+    uint8_t registers[0x36];
+    uint8_t clock_phase;
+    bool mapped;
+    uint32_t busy_tcycles;
+    uint32_t capture_number;
+} CupidGbCamera;
 
 /* MBC3 real-time clock registers */
 typedef struct CupidGbRtc {
@@ -130,6 +182,16 @@ typedef struct CupidGbRtc {
     uint8_t latch_prev;           /* last value written to latch port */
     int64_t base_time;            /* system clock snapshot for elapsed-time calc */
 } CupidGbRtc;
+
+typedef struct CupidGbTpp1 {
+    uint16_t rom_bank;
+    uint8_t ram_bank;
+    uint8_t mode;
+    uint8_t status;  /* Rumble strength, RTC running, and RTC overflow. */
+    uint8_t live[4]; /* Weeks, packed weekday/hour, minutes, seconds. */
+    uint8_t latched[4];
+    int64_t rtc_base_time;
+} CupidGbTpp1;
 
 typedef struct CupidGbCpu {
     uint8_t a;
@@ -197,9 +259,23 @@ typedef struct CupidGbPixels {
     bool initialized, active, window_armed, window_active, window_used, lyc_irq;
 } CupidGbPixels;
 
+typedef struct CupidGbMbc7 {
+    uint16_t command;
+    uint16_t output;
+    uint8_t data_bits;
+    uint8_t pins;
+    bool registers_enabled;
+    bool programming_enabled;
+    /* Live host input in sensor counts relative to neutral. */
+    int16_t motion_x;
+    int16_t motion_y;
+} CupidGbMbc7;
+
 struct CupidGb;
 typedef void (*CupidGbSerialOutputCallback)(const struct CupidGb *gb, uint8_t transmitted,
                                             void *user_data);
+typedef void (*CupidGbRumbleCallback)(const struct CupidGb *gb, bool enabled, uint64_t base_cycles,
+                                      void *user_data);
 
 typedef struct CupidGb {
     CupidGbCpu cpu;
@@ -229,21 +305,27 @@ typedef struct CupidGb {
     bool mbc1_ram_banking_mode;
     /* MBC3 real-time clock */
     CupidGbRtc rtc;
+    CupidGbTpp1 tpp1;
     uint8_t rtc_register; /* 0 = normal RAM; 0x08-0x0C = RTC reg */
     /* MBC5 9-bit ROM bank */
     uint16_t mbc5_rom_bank;
+    bool mbc5_rumble_on;
     /* MBC7 accelerometer */
     uint16_t mbc7_sensor_x;
     uint16_t mbc7_sensor_y;
     bool mbc7_latch;
+    CupidGbMbc7 mbc7;
     /* MMM01 */
     bool mmm01_locked;
-    uint8_t mmm01_bank_base;
+    uint8_t mmm01_bank_base; /* Retained for the legacy native state prefix. */
+    uint8_t mmm01_rom_select, mmm01_bank_select, mmm01_mode, mmm01_ram_mask;
+    bool mmm01_menu_first; /* Immutable physical ROM dump layout. */
     /* HuC1 */
     bool huc1_ir_mode;
     /* HuC3 */
     uint8_t huc3_mode;
     uint8_t huc3_value;
+    CupidGbCamera camera;
     bool serial_master_clock;
     uint64_t elapsed_cycles; /* Base-speed T-cycles, including LCD-off execution. */
     uint8_t serial_bits_remaining;
@@ -270,10 +352,23 @@ typedef struct CupidGb {
     uint16_t hdma_destination;
     uint8_t hdma_blocks_remaining;
     bool hdma_active;
+    /* Ready CPU work is distinct from an armed HBlank request. A false active
+     * flag with pending work denotes a general transfer. */
+    bool hdma_pending;
+    uint8_t hdma_hblank_delay; /* Remaining LCD dots before a block becomes ready. */
+    bool hdma_allow_on_wake;   /* Sleep began outside mode 0. */
     bool double_speed;
     bool speed_switch_armed;
     bool speed_phase;
+    uint32_t speed_switch_halt_cycles; /* CPU T-cycles remaining in the timed wait. */
+    uint8_t speed_switch_toggle_cycles;
+    uint8_t speed_switch_freeze_cycles;
+    uint8_t stop_divider_hold_cycles;
+    /* LCD clock phase in half-dot units modulo eight, measured from LCD enable.
+     * LCD power transitions reset this origin; frozen CPU clocks do not advance it. */
+    uint8_t speed_switch_alignment;
     uint8_t joypad;              /* button state: bits 0-3 dpad, 4-7 action; 0=pressed */
+    uint8_t joypad_extra[3];     /* SGB players 2..4, with the same active-low layout. */
     uint8_t window_line_counter; /* internal window scanline counter */
     uint8_t ppu_lcd_warmup_lines;
     uint8_t stat_irq_delay;
@@ -294,6 +389,8 @@ typedef struct CupidGb {
     /* Host observation only; never encoded in hardware snapshots. */
     CupidGbSerialOutputCallback serial_output_callback;
     void *serial_output_user_data;
+    CupidGbRumbleCallback rumble_callback;
+    void *rumble_user_data;
 } CupidGb;
 
 /* Optional host observation for one hardware step. This output is not stored
@@ -322,6 +419,12 @@ void cupid_gb_cleanup(CupidGb *gb);
  * writes serial bytes to a host stream. */
 void cupid_gb_set_serial_output_callback(CupidGb *gb, CupidGbSerialOutputCallback callback,
                                          void *user_data);
+/* MBC5 motor transitions are observed at the current base-cycle timestamp.
+ * Callbacks must not mutate or reenter the core. Registration survives resets
+ * and state loading; state loading emits no callback. Resynchronize host output
+ * with the getter after loading a state, resetting, or changing cartridges. */
+void cupid_gb_set_rumble_callback(CupidGb *gb, CupidGbRumbleCallback callback, void *user_data);
+bool cupid_gb_rumble_enabled(const CupidGb *gb);
 void cupid_gb_set_model(CupidGb *gb, CupidGbModel model);
 /* Physical base-speed T-cycles per second, independent of CGB double speed.
  * SGB uses its NTSC host-derived clock; other current models use 4194304 Hz.

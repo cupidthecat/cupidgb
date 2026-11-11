@@ -14,7 +14,7 @@ void cupid_gb_set_ppu_mode(CupidGb *gb, uint8_t mode) {
         (uint8_t)((gb->io_registers[CUPID_GB_IO_STAT] & 0xfc) | (mode & 3));
 }
 
-void cupid_gb_update_stat_irq(CupidGb *gb) {
+static void update_stat_irq(CupidGb *gb, bool write, bool half_dot, bool stat_write, int forced) {
     bool coincidence;
     bool irq_signal;
     uint8_t stat;
@@ -36,7 +36,10 @@ void cupid_gb_update_stat_irq(CupidGb *gb) {
     }
 
     const CupidGbPixels *p = &gb->pixels;
-    bool compare_valid = !p->initialized || gb->ppu_lcd_startup || p->dot != 0;
+    bool compare_valid = !p->initialized || gb->ppu_lcd_startup || p->dot != 0 || p->line == 0 ||
+                         (stat & 3u) == CUPID_GB_PPU_MODE_OAM;
+    if (p->initialized && p->line < 143 && gb->io_registers[CUPID_GB_IO_LY] == p->line + 1u)
+        compare_valid = false;
     unsigned compare_line = gb->io_registers[CUPID_GB_IO_LY];
     if (p->initialized && p->line == 143 && p->dot >= 455)
         compare_valid = false;
@@ -48,23 +51,52 @@ void cupid_gb_update_stat_irq(CupidGb *gb) {
     coincidence = compare_valid && compare_line == gb->io_registers[CUPID_GB_IO_LYC];
     if (compare_valid)
         gb->pixels.lyc_irq = coincidence;
-    if (coincidence) {
-        stat = (uint8_t)(stat | 0x04u);
-    } else {
-        stat = (uint8_t)(stat & 0xfbu);
+    /* Monochrome hardware clears the readable bit during invalid comparison
+     * phases while retaining the previous comparison input to the IRQ line. */
+    if (compare_valid || gb->model != CUPID_GB_MODEL_CGB) {
+        if (coincidence)
+            stat = (uint8_t)(stat | 0x04u);
+        else
+            stat = (uint8_t)(stat & 0xfbu);
     }
 
     gb->io_registers[CUPID_GB_IO_STAT] = stat;
+    /* The line-tail interrupt input is available to register writes before its
+     * next automatic latch edge. Recomputing that latch on every intervening
+     * dot would fabricate a new HBlank edge after a STAT write. */
+    unsigned line_length =
+        gb->ppu_lcd_startup ? (gb->model == CUPID_GB_MODEL_CGB ? 452u : 453u) : 456u;
+    if (!write && forced == -2 && p->initialized && p->line < 143 && !p->active &&
+        p->x == CUPID_GB_SCREEN_WIDTH && p->dot >= line_length - 3 && p->dot < line_length)
+        return;
     mode = (uint8_t)(stat & 0x03u);
-    bool oam_pulse = !p->initialized ? mode == CUPID_GB_PPU_MODE_OAM
-                                     : !gb->ppu_lcd_startup && p->line < 144 && p->dot == 0 &&
-                                           (p->line != 0 || mode == CUPID_GB_PPU_MODE_OAM);
+    int irq_mode = mode;
+    if (p->initialized && !gb->ppu_lcd_startup) {
+        if (mode == CUPID_GB_PPU_MODE_OAM)
+            irq_mode = -1;
+        if (p->dot == 0 && p->line < 144)
+            irq_mode = mode == CUPID_GB_PPU_MODE_OAM ? -1 : p->line == 0 ? 1 : 2;
+        unsigned length = 456;
+        if (write && p->line < 143 && !p->active && p->x == CUPID_GB_SCREEN_WIDTH &&
+            (p->dot >= length - 3 || (half_dot && gb->double_speed && p->dot == length - 4)))
+            irq_mode = CUPID_GB_PPU_MODE_OAM;
+        if (write && stat_write && gb->model == CUPID_GB_MODEL_CGB && gb->double_speed &&
+            p->line < 144 && p->dot == 2 && mode == CUPID_GB_PPU_MODE_OAM && !half_dot)
+            irq_mode = CUPID_GB_PPU_MODE_OAM;
+    } else if (write && gb->ppu_lcd_startup) {
+        unsigned length = gb->model == CUPID_GB_MODEL_CGB ? 452 : 453;
+        if (!p->active && p->x == CUPID_GB_SCREEN_WIDTH &&
+            (p->dot >= length - 3 || (half_dot && gb->double_speed && p->dot == length - 4)))
+            irq_mode = CUPID_GB_PPU_MODE_OAM;
+    }
+    if (forced != -2)
+        irq_mode = forced;
     bool startup_blank = gb->ppu_lcd_startup && !p->active && p->x == 0;
     irq_signal =
         (gb->pixels.lyc_irq && (stat & 0x40u) != 0u) ||
-        (mode == CUPID_GB_PPU_MODE_HBLANK && !gb->stat_irq_delay && (stat & 0x08u) != 0u) ||
-        (mode == CUPID_GB_PPU_MODE_VBLANK && (stat & 0x10u) != 0u) ||
-        (oam_pulse && (stat & 0x20u) != 0u);
+        (irq_mode == CUPID_GB_PPU_MODE_HBLANK && !gb->stat_irq_delay && (stat & 0x08u) != 0u) ||
+        (irq_mode == CUPID_GB_PPU_MODE_VBLANK && (stat & 0x10u) != 0u) ||
+        (irq_mode == CUPID_GB_PPU_MODE_OAM && (stat & 0x20u) != 0u);
     if (startup_blank)
         irq_signal = gb->pixels.lyc_irq && (stat & 0x40u) != 0u;
 
@@ -76,6 +108,42 @@ void cupid_gb_update_stat_irq(CupidGb *gb) {
     }
 
     gb->stat_irq_line = irq_signal;
+}
+
+void cupid_gb_update_stat_irq(CupidGb *gb) {
+    update_stat_irq(gb, false, false, false, -2);
+}
+
+void cupid_gb_update_stat_write(CupidGb *gb, bool half_dot, bool stat_write) {
+    update_stat_irq(gb, true, half_dot, stat_write, -2);
+}
+
+bool cupid_gb_stat_boundary(const CupidGb *gb) {
+    return gb->pixels.initialized && !gb->ppu_lcd_startup && gb->pixels.line < 144 &&
+           gb->pixels.dot == 0 && !gb->pixels.active &&
+           (gb->io_registers[CUPID_GB_IO_STAT] & 3u) != CUPID_GB_PPU_MODE_OAM;
+}
+
+void cupid_gb_sync_stat_half(CupidGb *gb) {
+    cupid_gb_sync_lcd_startup(gb);
+    if (gb->model != CUPID_GB_MODEL_CGB || !gb->double_speed || !cupid_gb_lcd_enabled(gb) ||
+        !gb->pixels.initialized)
+        return;
+    const CupidGbPixels *p = &gb->pixels;
+    unsigned length = gb->ppu_lcd_startup ? 452u : 456u;
+    if (p->line < 143 && p->dot == length - 1u && !p->active && p->x == CUPID_GB_SCREEN_WIDTH) {
+        /* LY and its interrupt input settle between pipeline dots. Keep the
+         * comparison frozen until the following OAM-mode edge; the next whole
+         * dot still owns the line-counter and fetch-pipeline transition. */
+        gb->io_registers[CUPID_GB_IO_LY] = (uint8_t)(p->line + 1u);
+        cupid_gb_set_ppu_mode(gb, CUPID_GB_PPU_MODE_HBLANK);
+        update_stat_irq(gb, false, true, false, 2);
+    } else if (!gb->ppu_lcd_startup && p->line < 144 && p->dot == 0 &&
+               (gb->io_registers[CUPID_GB_IO_STAT] & 3u) != CUPID_GB_PPU_MODE_OAM) {
+        cupid_gb_set_ppu_mode(gb, CUPID_GB_PPU_MODE_OAM);
+        update_stat_irq(gb, false, true, false, 2);
+        update_stat_irq(gb, false, true, false, -1);
+    }
 }
 
 // PPU reset / DMA
@@ -176,7 +244,7 @@ void cupid_gb_run_dma_transfer(CupidGb *gb, uint8_t source_high) {
  * @note Does nothing if @p gb is NULL.
  */
 void cupid_gb_tick_dma(CupidGb *gb) {
-    if (gb == 0) {
+    if (gb == 0 || gb->cpu.halted || gb->cpu.stopped) {
         return;
     }
 
@@ -219,7 +287,13 @@ static void tick_ppu(CupidGb *gb, uint32_t dots, uint8_t *midpoint) {
     if (!gb)
         return;
     CupidGbPixels *p = &gb->pixels;
-    if (!cupid_gb_lcd_enabled(gb)) {
+    const bool lcd_enabled = cupid_gb_lcd_enabled(gb);
+    const bool stopped = gb->cpu.stopped && gb->model != CUPID_GB_MODEL_CGB;
+    const bool sgb = gb->sgb.enabled;
+    if (sgb) {
+        cupid_gb_sgb_clock(gb, dots, !lcd_enabled || stopped);
+    }
+    if (!lcd_enabled) {
         const bool previous_lyc_irq = p->lyc_irq;
         memset(p, 0, sizeof(*p));
         p->lyc_irq = previous_lyc_irq;
@@ -234,6 +308,8 @@ static void tick_ppu(CupidGb *gb, uint32_t dots, uint8_t *midpoint) {
         cupid_gb_update_stat_irq(gb);
         return;
     }
+    if (stopped)
+        return;
     if (!p->initialized) {
         p->initialized = true;
         p->line = gb->io_registers[CUPID_GB_IO_LY];
@@ -252,6 +328,7 @@ static void tick_ppu(CupidGb *gb, uint32_t dots, uint8_t *midpoint) {
     }
     while (dots) {
         for (unsigned subcycle = 0; subcycle < 4 && dots; ++subcycle, --dots) {
+            cupid_cgb_advance_hdma(gb);
             cupid_gb_sync_lcd_startup(gb);
             if (gb->stat_irq_delay) {
                 --gb->stat_irq_delay;
@@ -268,8 +345,12 @@ static void tick_ppu(CupidGb *gb, uint32_t dots, uint8_t *midpoint) {
                 if (p->dot == 0) {
                     cupid_gb_pixels_begin_line(gb);
                     if (!gb->ppu_lcd_startup) {
+                        bool already_visible =
+                            (gb->io_registers[CUPID_GB_IO_STAT] & 3u) == CUPID_GB_PPU_MODE_OAM;
                         cupid_gb_set_ppu_mode(gb, CUPID_GB_PPU_MODE_OAM);
-                        cupid_gb_update_stat_irq(gb);
+                        if (!already_visible)
+                            update_stat_irq(gb, false, false, false, 2);
+                        update_stat_irq(gb, false, false, false, -1);
                     }
                 }
                 if (!gb->ppu_lcd_startup && p->dot < 80 && (p->dot & 1))
@@ -294,6 +375,9 @@ static void tick_ppu(CupidGb *gb, uint32_t dots, uint8_t *midpoint) {
                 /* LY changes before VBlank's interrupt request. Keeping this phase
                  * explicit avoids treating a following DI as an instruction exception. */
                 gb->frame_ready = true;
+                if (sgb) {
+                    cupid_gb_sgb_vblank(gb, dots - 1);
+                }
                 cupid_gb_set_ppu_mode(gb, CUPID_GB_PPU_MODE_VBLANK);
                 cupid_gb_request_interrupt(gb, CUPID_GB_INTERRUPT_VBLANK);
                 if (!gb->stat_irq_line && (gb->io_registers[CUPID_GB_IO_STAT] & 0x20))
@@ -320,6 +404,8 @@ static void tick_ppu(CupidGb *gb, uint32_t dots, uint8_t *midpoint) {
                 gb->ppu_line_boundary_hold = false;
                 if (p->line == 154) {
                     p->line = 0;
+                    if (gb->model != CUPID_GB_MODEL_CGB)
+                        cupid_gb_set_ppu_mode(gb, CUPID_GB_PPU_MODE_HBLANK);
                     p->window_armed = false;
                     gb->window_line_counter = 0;
                     gb->frame_ready = false;

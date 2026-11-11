@@ -60,8 +60,8 @@ static uint16_t cupid_gb_sgb_read_le16(const uint8_t *data) {
 /**
  * @brief Converts a 15-bit RGB555 color to a 32-bit ARGB8888 value.
  *
- * Each 5-bit channel is scaled to the full 8-bit range using the
- * formula `(c * 255 + 15) / 31`. Alpha is always set to 0xFF.
+ * The upper channel bits are replicated into the low bits of the
+ * output byte. Alpha is always set to 0xFF.
  *
  * @param color The 15-bit RGB555 color (bits 14–0 = 0BBBBBGGGGGRRRRR).
  *
@@ -72,9 +72,9 @@ static uint32_t cupid_gb_sgb_rgb15_to_argb(uint16_t color) {
     uint32_t g = (uint32_t)((color >> 5u) & 0x1fu);
     uint32_t b = (uint32_t)((color >> 10u) & 0x1fu);
 
-    r = (r * 255u + 15u) / 31u;
-    g = (g * 255u + 15u) / 31u;
-    b = (b * 255u + 15u) / 31u;
+    r = (r << 3u) | (r >> 2u);
+    g = (g << 3u) | (g >> 2u);
+    b = (b << 3u) | (b >> 2u);
 
     return 0xff000000u | (r << 16u) | (g << 8u) | b;
 }
@@ -154,91 +154,106 @@ static void cupid_gb_sgb_pal_command(CupidGb *gb, unsigned first, unsigned secon
     }
 }
 
-/**
- * @brief Captures the first 4 KiB of VRAM into a caller-supplied buffer.
- *
- * Used by PAL_TRN, ATTR_TRN, CHR_TRN, and PCT_TRN to snapshot the
- * tile data that the game has pre-loaded into VRAM bank 0.
- *
- * @param gb     Pointer to the Game Boy state.
- * @param buffer Destination buffer; must be at least 0x1000 bytes.
- */
-static void cupid_gb_sgb_capture_transfer_buffer(const CupidGb *gb, uint8_t *buffer) {
-    memcpy(buffer, gb->video_ram, 0x1000u);
-}
-
-/**
- * @brief Executes the PAL_TRN command: uploads 512 palettes from VRAM.
- *
- * Reads 4 KiB from VRAM and interprets it as 512 palettes of 4 RGB555
- * colors each, storing them in `gb->sgb.ram_palettes`.
- *
- * @param gb Pointer to the Game Boy state.
- */
-static void cupid_gb_sgb_apply_pal_trn(CupidGb *gb) {
-    uint8_t buffer[0x1000u];
-    unsigned i;
-
-    cupid_gb_sgb_capture_transfer_buffer(gb, buffer);
-    for (i = 0u; i < 512u * 4u; ++i) {
-        gb->sgb.ram_palettes[i] = cupid_gb_sgb_read_le16(&buffer[i * 2u]);
+/* The adapter samples LCD shades, then reconstructs the tile bitplanes
+ * in left-to-right, top-to-bottom screen order. Scroll, the tilemap, and
+ * palette remapping therefore affect the bytes just like the tile pixels do. */
+static void pack_lcd_tiles(const uint8_t *screen, uint8_t *output, unsigned tile_count) {
+    for (unsigned tile = 0; tile < tile_count; ++tile) {
+        const unsigned left = (tile % CUPID_SGB_ATTR_WIDTH) * 8u;
+        const unsigned top = (tile / CUPID_SGB_ATTR_WIDTH) * 8u;
+        for (unsigned row = 0; row < 8; ++row) {
+            const uint8_t *pixels = screen + (top + row) * CUPID_GB_SCREEN_WIDTH + left;
+            unsigned lower = 0;
+            unsigned upper = 0;
+            for (unsigned x = 0; x < 8; ++x) {
+                lower = (lower << 1) | (pixels[x] & 1u);
+                upper = (upper << 1) | ((pixels[x] >> 1) & 1u);
+            }
+            *output++ = (uint8_t)lower;
+            *output++ = (uint8_t)upper;
+        }
     }
 }
 
-/**
- * @brief Executes the ATTR_TRN command: uploads attribute files from VRAM.
- *
- * Reads 4 KiB from VRAM and stores it verbatim into
- * `gb->sgb.attribute_files`, providing up to 45 attribute files of
- * 90 bytes each.
- *
- * @param gb Pointer to the Game Boy state.
- */
-static void cupid_gb_sgb_apply_attr_trn(CupidGb *gb) {
-    uint8_t buffer[0x1000u];
-
-    cupid_gb_sgb_capture_transfer_buffer(gb, buffer);
-    memcpy(gb->sgb.attribute_files, buffer, sizeof(gb->sgb.attribute_files));
+static void schedule_transfer(CupidGbSgb *sgb, uint8_t destination) {
+    sgb->transfer.destination = destination;
+    sgb->transfer.frames_remaining = CUPID_SGB_TRANSFER_FRAMES;
 }
 
-/**
- * @brief Executes a CHR_TRN command: uploads one half of the border tile set from VRAM.
- *
- * The SGB border uses 256 tiles, transferred in two 4 KiB blocks.
- * The @p high flag selects which block is written:
- *   - `false` → lower 4 KiB (tiles 0–127) at offset 0x0000
- *   - `true`  → upper 4 KiB (tiles 128–255) at offset 0x1000
- *
- * @param gb   Pointer to the Game Boy state.
- * @param high `false` for the lower tile block, `true` for the upper block.
- */
-static void cupid_gb_sgb_apply_chr_trn(CupidGb *gb, bool high) {
-    uint8_t buffer[0x1000u];
-
-    cupid_gb_sgb_capture_transfer_buffer(gb, buffer);
-    memcpy(&gb->sgb.border_tiles[high ? 0x1000u : 0u], buffer, sizeof(buffer));
+static void capture_transfer(CupidGb *gb) {
+    CupidGbSgb *sgb = &gb->sgb;
+    CupidGbSgbTransfer *transfer = &sgb->transfer;
+    uint8_t packed[4096];
+    switch (transfer->destination) {
+        case CUPID_SGB_TRANSFER_PALETTES:
+            pack_lcd_tiles(gb->frame_buffer, packed, 256);
+            for (unsigned i = 0; i < 512u * 4u; ++i) {
+                sgb->ram_palettes[i] = cupid_gb_sgb_read_le16(packed + i * 2u);
+            }
+            break;
+        case CUPID_SGB_TRANSFER_ATTRIBUTES:
+            pack_lcd_tiles(gb->frame_buffer, packed, 254);
+            memcpy(sgb->attribute_files, packed, sizeof(sgb->attribute_files));
+            break;
+        case CUPID_SGB_TRANSFER_TILES_LOW:
+            pack_lcd_tiles(gb->frame_buffer, transfer->tiles, 256);
+            break;
+        case CUPID_SGB_TRANSFER_TILES_HIGH:
+            pack_lcd_tiles(gb->frame_buffer, transfer->tiles + 4096, 256);
+            break;
+        case CUPID_SGB_TRANSFER_BORDER:
+            /* The transfer includes a 32-by-32 map even though the
+             * displayed border uses only its first 28 rows. */
+            pack_lcd_tiles(gb->frame_buffer, packed, 136);
+            for (unsigned i = 0; i < CUPID_SGB_TILE_WIDTH * CUPID_SGB_TILE_HEIGHT; ++i) {
+                transfer->map[i] = cupid_gb_sgb_read_le16(packed + i * 2u);
+            }
+            for (unsigned i = 0; i < CUPID_SGB_BORDER_PALETTE_COLORS; ++i) {
+                transfer->palettes[i] = cupid_gb_sgb_read_le16(packed + 0x800u + i * 2u);
+            }
+            transfer->border_transition = CUPID_SGB_BORDER_TRANSITION_FRAMES;
+            break;
+        default:
+            break;
+    }
+    transfer->destination = CUPID_SGB_TRANSFER_NONE;
 }
 
-/**
- * @brief Executes the PCT_TRN command: uploads the border tilemap and palettes from VRAM.
- *
- * Reads 4 KiB from VRAM. The first 2 KiB are decoded as the
- * 32×28 border tilemap (one 16-bit entry per tile), and the following
- * 512 bytes are decoded as the 8 border palettes of 16 RGB555 colors each.
- *
- * @param gb Pointer to the Game Boy state.
- */
-static void cupid_gb_sgb_apply_pct_trn(CupidGb *gb) {
-    uint8_t buffer[0x1000u];
-    unsigned i;
+static void advance_host_frame(CupidGb *gb, bool complete) {
+    CupidGbSgb *sgb = &gb->sgb;
+    CupidGbSgbTransfer *transfer = &sgb->transfer;
 
-    cupid_gb_sgb_capture_transfer_buffer(gb, buffer);
-    for (i = 0u; i < CUPID_SGB_TILE_WIDTH * CUPID_SGB_TILE_HEIGHT; ++i) {
-        gb->sgb.border_map[i] = cupid_gb_sgb_read_le16(&buffer[i * 2u]);
+    if (transfer->frames_remaining && --transfer->frames_remaining == 0) {
+        capture_transfer(gb);
     }
-    for (i = 0u; i < 8u * 16u; ++i) {
-        gb->sgb.border_palettes[i] = cupid_gb_sgb_read_le16(&buffer[0x800u + i * 2u]);
+    if (transfer->border_transition && --transfer->border_transition == 32) {
+        memcpy(sgb->border_tiles, transfer->tiles, sizeof(sgb->border_tiles));
+        memcpy(sgb->border_map, transfer->map, sizeof(sgb->border_map));
+        memcpy(sgb->border_palettes, transfer->palettes, sizeof(transfer->palettes));
     }
+    if (complete && sgb->mask_mode != CUPID_SGB_MASK_FREEZE) {
+        memcpy(sgb->freeze_buffer, gb->frame_buffer, sizeof(sgb->freeze_buffer));
+    }
+}
+
+void cupid_gb_sgb_clock(CupidGb *gb, uint32_t dots, bool lcd_idle) {
+    CupidGbSgbTransfer *transfer = &gb->sgb.transfer;
+    uint32_t total = transfer->frame_dots + dots;
+    if (lcd_idle) {
+        /* The adapter's frame cadence continues with the handheld LCD
+         * disabled or stopped. These frames retain the last complete screen. */
+        while (total >= CUPID_SGB_FRAME_DOTS) {
+            advance_host_frame(gb, false);
+            total -= CUPID_SGB_FRAME_DOTS;
+        }
+    }
+    transfer->frame_dots = total > CUPID_SGB_FRAME_DOTS ? CUPID_SGB_FRAME_DOTS : total;
+}
+
+void cupid_gb_sgb_vblank(CupidGb *gb, uint32_t dots_after_vblank) {
+    advance_host_frame(gb, true);
+    gb->sgb.transfer.frame_dots =
+        dots_after_vblank > CUPID_SGB_FRAME_DOTS ? CUPID_SGB_FRAME_DOTS : dots_after_vblank;
 }
 
 /* Decode six-byte rectangle records without relying on host structure layout. */
@@ -406,26 +421,32 @@ static void cupid_gb_sgb_handle_command(CupidGb *gb) {
             break;
         }
         case CUPID_SGB_CMD_PAL_TRN:
-            cupid_gb_sgb_apply_pal_trn(gb);
+            schedule_transfer(&gb->sgb, CUPID_SGB_TRANSFER_PALETTES);
             break;
         case CUPID_SGB_CMD_DATA_SND:
             break;
-        case CUPID_SGB_CMD_MLT_REQ:
-            gb->sgb.player_count = (uint8_t)((gb->sgb.command[1] & 0x03u) + 1u);
-            if (gb->sgb.player_count == 3u) {
-                gb->sgb.player_count = 4u;
+        case CUPID_SGB_CMD_MLT_REQ: {
+            const unsigned selection = gb->sgb.command[1] & 3u;
+            const unsigned active = gb->sgb.current_player;
+            gb->sgb.player_count = (uint8_t)(selection + 1u);
+            if (selection == 2u) {
+                /* The irregular three-pad request selects pad 1 or 3 and
+                 * disables subsequent rotation on the P15 rising edge. */
+                gb->sgb.current_player = (active == 1u || active == 2u) ? 2u : 0u;
+            } else {
+                gb->sgb.current_player = (uint8_t)(active & selection);
             }
-            gb->sgb.current_player =
-                (uint8_t)(gb->sgb.current_player & (gb->sgb.player_count - 1u));
             break;
+        }
         case CUPID_SGB_CMD_CHR_TRN:
-            cupid_gb_sgb_apply_chr_trn(gb, (gb->sgb.command[1] & 0x01u) != 0u);
+            schedule_transfer(&gb->sgb, gb->sgb.command[1] & 1u ? CUPID_SGB_TRANSFER_TILES_HIGH
+                                                                : CUPID_SGB_TRANSFER_TILES_LOW);
             break;
         case CUPID_SGB_CMD_PCT_TRN:
-            cupid_gb_sgb_apply_pct_trn(gb);
+            schedule_transfer(&gb->sgb, CUPID_SGB_TRANSFER_BORDER);
             break;
         case CUPID_SGB_CMD_ATTR_TRN:
-            cupid_gb_sgb_apply_attr_trn(gb);
+            schedule_transfer(&gb->sgb, CUPID_SGB_TRANSFER_ATTRIBUTES);
             break;
         case CUPID_SGB_CMD_ATTR_SET:
             cupid_gb_sgb_load_attr_file(gb, gb->sgb.command[1] & 0x3fu);
@@ -435,13 +456,10 @@ static void cupid_gb_sgb_handle_command(CupidGb *gb) {
             break;
         case CUPID_SGB_CMD_MASK_EN:
             gb->sgb.mask_mode = (uint8_t)(gb->sgb.command[1] & 0x03u);
-            if (gb->sgb.mask_mode == CUPID_SGB_MASK_FREEZE) {
-                memcpy(gb->sgb.freeze_buffer, gb->frame_buffer, sizeof(gb->sgb.freeze_buffer));
-            }
             break;
         default:
-            if (command == 0x08u && (gb->sgb.command[1] & (uint8_t)~0x80u) == 0u &&
-                (gb->sgb.command[2] & (uint8_t)~0x80u) == 0u) {
+            if (command == 0x08u && (gb->sgb.command[1] & 0x7fu) == 0u &&
+                (gb->sgb.command[2] & 0x7fu) == 0u) {
                 break;
             }
             cupid_log_infof("Ignoring unsupported SGB command 0x%02X", command);
@@ -584,6 +602,17 @@ void cupid_gb_sgb_write_joyp(CupidGb *gb, uint8_t value) {
     }
 }
 
+static uint32_t border_color_argb(uint16_t rgb555, unsigned fade) {
+    uint16_t adjusted = 0;
+    for (unsigned shift = 0; shift < 15; shift += 5) {
+        const unsigned channel = ((unsigned)rgb555 >> shift) & 31u;
+        if (channel > fade) {
+            adjusted |= (uint16_t)((channel - fade) << shift);
+        }
+    }
+    return cupid_gb_sgb_rgb15_to_argb(adjusted);
+}
+
 /**
  * @brief Renders a full SGB frame into an ARGB8888 pixel buffer.
  *
@@ -594,8 +623,12 @@ void cupid_gb_sgb_write_joyp(CupidGb *gb, uint8_t value) {
  * The Game Boy viewport is placed at (@ref CUPID_SGB_VIEWPORT_X,
  * @ref CUPID_SGB_VIEWPORT_Y) within the output buffer. Border tiles
  * that overlap the viewport with color index 0 are left transparent
- * (the screen pixels show through). The active mask mode is respected:
- *   - @ref CUPID_SGB_MASK_DISABLED / FREEZE: normal screen rendering
+ * (the screen pixels show through). Outside the viewport, valid tiles
+ * use the shared screen backdrop for color index 0. Unavailable tile
+ * entries leave the viewport intact and use black in the surrounding area.
+ * The active mask mode is respected:
+ *   - @ref CUPID_SGB_MASK_DISABLED: show the current screen
+ *   - @ref CUPID_SGB_MASK_FREEZE: show the saved screen
  *   - @ref CUPID_SGB_MASK_BLACK: viewport filled with black
  *   - @ref CUPID_SGB_MASK_COLOR0: viewport filled with palette color 0
  *
@@ -603,101 +636,88 @@ void cupid_gb_sgb_write_joyp(CupidGb *gb, uint8_t value) {
  * @param pixels      Output buffer of at least
  *                    `CUPID_SGB_SCREEN_WIDTH * CUPID_SGB_SCREEN_HEIGHT`
  *                    `uint32_t` elements.
- * @param pixel_count Total number of elements in @p pixels; must be≥
+ * @param pixel_count Total number of elements in @p pixels; must be at least
  *                    `CUPID_SGB_SCREEN_WIDTH * CUPID_SGB_SCREEN_HEIGHT`.
  *
  * @note Does nothing if @p gb or @p pixels is NULL, or @p pixel_count
  *       is too small.
  */
 void cupid_gb_sgb_render_argb(const CupidGb *gb, uint32_t *pixels, size_t pixel_count) {
-    uint32_t border_colors[8u * 16u];
-    const uint8_t *screen_source;
-    unsigned i;
-    unsigned y;
-    unsigned x;
-
-    if (gb == NULL || pixels == NULL ||
-        pixel_count < CUPID_SGB_SCREEN_WIDTH * CUPID_SGB_SCREEN_HEIGHT) {
+    if (!gb || !pixels || pixel_count < CUPID_SGB_SCREEN_WIDTH * CUPID_SGB_SCREEN_HEIGHT) {
         return;
     }
 
-    for (i = 0u; i < 8u * 16u; ++i) {
-        border_colors[i] = cupid_gb_sgb_rgb15_to_argb(gb->sgb.border_palettes[i]);
-    }
-
-    if (gb->sgb.mask_mode == CUPID_SGB_MASK_FREEZE) {
-        screen_source = gb->sgb.freeze_buffer;
-    } else {
-        screen_source = gb->frame_buffer;
-    }
-
-    for (i = 0u; i < CUPID_SGB_SCREEN_WIDTH * CUPID_SGB_SCREEN_HEIGHT; ++i) {
-        pixels[i] = 0xff000000u;
-    }
-
-    for (y = 0u; y < CUPID_GB_SCREEN_HEIGHT; ++y) {
-        for (x = 0u; x < CUPID_GB_SCREEN_WIDTH; ++x) {
-            uint32_t color;
-            size_t out_index =
-                (CUPID_SGB_VIEWPORT_Y + y) * CUPID_SGB_SCREEN_WIDTH + CUPID_SGB_VIEWPORT_X + x;
-
-            switch (gb->sgb.mask_mode) {
-                case CUPID_SGB_MASK_BLACK:
-                    color = 0xff000000u;
-                    break;
-                case CUPID_SGB_MASK_COLOR0:
-                    color = cupid_gb_sgb_rgb15_to_argb(gb->sgb.screen_palettes[0]);
-                    break;
-                case CUPID_SGB_MASK_FREEZE:
-                case CUPID_SGB_MASK_DISABLED:
-                default: {
-                    uint8_t shade = (uint8_t)(screen_source[y * CUPID_GB_SCREEN_WIDTH + x] & 0x03u);
-                    uint8_t palette =
-                        gb->sgb.attribute_map[(y >> 3u) * CUPID_SGB_ATTR_WIDTH + (x >> 3u)];
-                    color =
-                        cupid_gb_sgb_rgb15_to_argb(gb->sgb.screen_palettes[palette * 4u + shade]);
-                    break;
-                }
+    const CupidGbSgb *sgb = &gb->sgb;
+    const uint32_t backdrop = cupid_gb_sgb_rgb15_to_argb(sgb->screen_palettes[0]);
+    const uint8_t *screen = sgb->freeze_buffer;
+    const unsigned transition = sgb->transfer.border_transition;
+    const unsigned fade = transition >= 64 ? 0 : (transition > 32 ? 64 - transition : transition);
+    uint32_t screen_colors[4][4];
+    uint32_t border_colors[4][16];
+    for (unsigned palette = 0; palette < 4; ++palette) {
+        for (unsigned color = 0; color < 4; ++color) {
+            if (sgb->mask_mode == CUPID_SGB_MASK_BLACK) {
+                screen_colors[palette][color] = 0xff000000u;
+            } else if (sgb->mask_mode == CUPID_SGB_MASK_COLOR0 || color == 0) {
+                screen_colors[palette][color] = backdrop;
+            } else {
+                screen_colors[palette][color] =
+                    cupid_gb_sgb_rgb15_to_argb(sgb->screen_palettes[palette * 4u + color]);
             }
-
-            pixels[out_index] = color;
+        }
+        for (unsigned color = 1; color < 16; ++color) {
+            border_colors[palette][color] =
+                border_color_argb(sgb->border_palettes[palette * 16u + color], fade);
         }
     }
 
-    for (y = 0u; y < CUPID_SGB_TILE_HEIGHT; ++y) {
-        for (x = 0u; x < CUPID_SGB_TILE_WIDTH; ++x) {
-            uint16_t tile = gb->sgb.border_map[x + y * CUPID_SGB_TILE_WIDTH];
-            uint8_t tile_index = (uint8_t)(tile & 0xffu);
-            uint8_t palette = (uint8_t)((tile >> 10u) & 0x07u);
-            uint8_t flip_x = (tile & 0x4000u) != 0u ? 0u : 7u;
-            uint8_t flip_y = (tile & 0x8000u) != 0u ? 7u : 0u;
-            unsigned py;
+    const unsigned view_tile_x = CUPID_SGB_VIEWPORT_X / 8u;
+    const unsigned view_tile_y = CUPID_SGB_VIEWPORT_Y / 8u;
+    for (unsigned tile_y = 0; tile_y < CUPID_SGB_TILE_HEIGHT; ++tile_y) {
+        for (unsigned tile_x = 0; tile_x < CUPID_SGB_TILE_WIDTH; ++tile_x) {
+            const bool in_viewport =
+                tile_x >= view_tile_x && tile_x < view_tile_x + CUPID_SGB_ATTR_WIDTH &&
+                tile_y >= view_tile_y && tile_y < view_tile_y + CUPID_SGB_ATTR_HEIGHT;
+            const uint8_t *source = NULL;
+            const uint32_t *lcd_palette = NULL;
+            if (in_viewport) {
+                const unsigned lcd_x = tile_x - view_tile_x;
+                const unsigned lcd_y = tile_y - view_tile_y;
+                source = screen + 8u * (lcd_y * CUPID_GB_SCREEN_WIDTH + lcd_x);
+                lcd_palette =
+                    screen_colors[sgb->attribute_map[lcd_y * CUPID_SGB_ATTR_WIDTH + lcd_x] & 3u];
+            }
 
-            for (py = 0u; py < 8u; ++py) {
-                unsigned px;
-                unsigned screen_y = y * 8u + py;
-                size_t base = (size_t)tile_index * 32u + (size_t)((py ^ flip_y) * 2u);
+            const uint16_t entry = sgb->border_map[tile_y * CUPID_SGB_TILE_WIDTH + tile_x];
+            /* The map has a ten-bit tile index, but the adapter uploads only
+             * 256 tiles. Entries outside that range do not draw an overlay. */
+            const bool tile_available = (entry & 0x0300u) == 0;
+            const uint8_t *tile = sgb->border_tiles + 32u * (entry & 0xffu);
+            const uint32_t *palette = border_colors[(entry >> 10u) & 3u];
+            const unsigned x_flip = (entry & 0x4000u) ? 7u : 0u;
+            const unsigned y_flip = (entry & 0x8000u) ? 7u : 0u;
+            uint32_t *output = pixels + tile_y * 8u * CUPID_SGB_SCREEN_WIDTH + tile_x * 8u;
 
-                for (px = 0u; px < 8u; ++px) {
-                    uint8_t bit = (uint8_t)(1u << (px ^ flip_x));
-                    uint8_t color_index = 0u;
-                    unsigned screen_x = x * 8u + px;
-                    bool in_viewport = screen_x >= CUPID_SGB_VIEWPORT_X &&
-                                       screen_x < CUPID_SGB_VIEWPORT_X + CUPID_GB_SCREEN_WIDTH &&
-                                       screen_y >= CUPID_SGB_VIEWPORT_Y &&
-                                       screen_y < CUPID_SGB_VIEWPORT_Y + CUPID_GB_SCREEN_HEIGHT;
-
-                    color_index |= (gb->sgb.border_tiles[base] & bit) != 0u ? 1u : 0u;
-                    color_index |= (gb->sgb.border_tiles[base + 1u] & bit) != 0u ? 2u : 0u;
-                    color_index |= (gb->sgb.border_tiles[base + 16u] & bit) != 0u ? 4u : 0u;
-                    color_index |= (gb->sgb.border_tiles[base + 17u] & bit) != 0u ? 8u : 0u;
-
-                    if (in_viewport && color_index == 0u) {
-                        continue;
+            for (unsigned y = 0; y < 8; ++y) {
+                uint32_t *output_row = output + y * CUPID_SGB_SCREEN_WIDTH;
+                const uint8_t *lcd_row = source ? source + y * CUPID_GB_SCREEN_WIDTH : NULL;
+                const unsigned row = 2u * (y ^ y_flip);
+                for (unsigned x = 0; x < 8; ++x) {
+                    unsigned color = 0;
+                    if (tile_available) {
+                        const unsigned shift = 7u - (x ^ x_flip);
+                        color = (((unsigned)tile[row] >> shift) & 1u) |
+                                ((((unsigned)tile[row + 1] >> shift) & 1u) << 1u) |
+                                ((((unsigned)tile[row + 16] >> shift) & 1u) << 2u) |
+                                ((((unsigned)tile[row + 17] >> shift) & 1u) << 3u);
                     }
-
-                    pixels[screen_y * CUPID_SGB_SCREEN_WIDTH + screen_x] =
-                        border_colors[palette * 16u + color_index];
+                    if (color) {
+                        output_row[x] = palette[color];
+                    } else if (lcd_row) {
+                        output_row[x] = lcd_palette[lcd_row[x] & 3u];
+                    } else {
+                        output_row[x] = tile_available ? backdrop : 0xff000000u;
+                    }
                 }
             }
         }

@@ -299,7 +299,7 @@ static void test_first_line_oam_interrupt_waits_for_visible_mode(void) {
     gb.io_registers[CUPID_GB_IO_STAT] = 0xa1;
     cupid_gb_tick_ppu(&gb, 1);
     assert(gb.pixels.line == 0 && gb.pixels.dot == 0);
-    assert((gb.io_registers[CUPID_GB_IO_STAT] & 3) == CUPID_GB_PPU_MODE_VBLANK);
+    assert((gb.io_registers[CUPID_GB_IO_STAT] & 3) == CUPID_GB_PPU_MODE_HBLANK);
     assert((gb.interrupt_flags & 2) == 0);
     cupid_gb_tick_ppu(&gb, 1);
     assert((gb.io_registers[CUPID_GB_IO_STAT] & 3) == CUPID_GB_PPU_MODE_OAM);

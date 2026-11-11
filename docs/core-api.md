@@ -62,6 +62,8 @@ Loading a cartridge resets hardware. The direct loader is not a transactional se
 
 `cupid_gb_step` and `cupid_emulator_step` execute one instruction, interrupt entry, or bounded HALT/STOP work. They return false when execution cannot continue. They do not sleep or synchronize with a display.
 
+An IME-clear HALT wake can return successfully with an unchanged PC and no fetched opcode. A fully frozen CGB speed-switch poll can update CPU-domain sequencing without advancing `elapsed_cycles`. Use observed step-event information when tracking executed instructions, rather than assuming every successful call fetched the byte currently at PC.
+
 `CupidGb.elapsed_cycles` counts base-speed T-cycles. Query `cupid_gb_base_clock_hz(gb)` to convert those cycles to seconds: the SGB NTSC profile uses 4,295,454 Hz, and the other current profiles use 4,194,304 Hz. A null instance returns the default 4,194,304 Hz. SGB PAL is not implemented. A regular LCD frame spans 70,224 base-speed T-cycles for every current profile. Do not infer guest time from CPU instruction count or host paint count. CGB double speed changes CPU-domain work while the base-speed clock remains the timekeeping domain.
 
 Use both a cycle bound and an execution-step bound for unattended runs. The LCD can be disabled, so waiting only for `frame_ready` can leave a host loop without a useful presentation bound. Host stalls must not be corrected by silently dropping guest hardware work.
@@ -77,13 +79,19 @@ Use both a cycle bound and an execution-step bound for unattended runs. The LCD 
 
 Check and clear `frame_ready` when consuming completed images. Keep color/model selection consistent with the core's compatibility behavior; a monochrome cartridge can still use a color hardware palette. The Qt frontend's display pipeline is a host component and is not part of the C core.
 
-Drain audio regularly, including while the LCD is disabled. The core's sample buffer is finite. A host that drains only on VBlank can lose output during prolonged LCD-off execution. `tools/rom_runner.c` drains per instruction; another host can use a bounded interval small enough to preserve every generated sample.
+Drain audio regularly, including while the LCD is disabled. The core's sample buffer is finite. A host that drains only on VBlank can lose output during prolonged LCD-off execution. `tools/rom_runner.c` drains per hardware step; another host can use a bounded interval small enough to preserve every generated sample. The [audio guide](audio.md) separates channel timing, integration and host delivery.
 
 `cupid/gb/apu.h` exposes output sample-rate and high-pass controls. The configured rate is samples per physical model-second, so sample scheduling and the high-pass coefficient use the model clock. Changing the output rate discards queued and partial output frames while preserving oscillators. Clear or recreate corresponding host conversion state when changing formats or loading a state. Host volume, mute, resampling, and playback-device control belong outside the core.
 
 ## Input and memory access
 
 Buttons use an active-low byte, ordered Right, Left, Up, Down, A, B, Select, Start. All released is `0xff`; pressing A alone is `0xef`. Call `cupid_gb_set_buttons(gb, released_mask)` from `cupid/gb/input.h` when supplying physical button state so selected-line interrupt behavior remains in the core. Selecting a row containing an already-held key can also request an interrupt. Only falling selected-line levels request an interrupt. Resolving opposing directions can expose a new falling level even when a physical contact is released.
+
+`cupid_gb_set_buttons_for_player(gb, player, released_mask)` accepts indexes 0–3 and returns false for an invalid instance/player. The old setter still targets player 0. The existing `joypad` field is player 0; `joypad_extra[0..2]` stores players 1–3. SGB selects the active mask through its multiplayer protocol. A nonselected mask change creates no selected-line edge. Device assignments and single-player controller folding belong to the host, which should keep distinct masks available as the guest changes player count.
+
+`cupid_gb_rumble_enabled(gb)` queries the MBC5 motor latch. `cupid_gb_set_rumble_callback(gb, callback, user_data)` registers a synchronous observer receiving the const instance, new motor state, base-speed cycle timestamp and user pointer. It fires only on a motor transition caused by a supported bus write. Do not mutate or reenter hardware from the callback. Registration survives guest reset/load and is not serialized. State decoding emits no callback: hosts must explicitly stop and resynchronize feedback after reset, loading, rewind and session changes. The hardware core does not open a controller or impose host feedback policy.
+
+`cupid_gb_mbc7_set_motion(gb, x, y)` supplies signed motion samples relative to neutral. About 112 counts correspond to one g. The cartridge copies them into its axis registers when the guest requests a sample. Native states store the sampled registers. The current host sample remains with the live instance.
 
 The direction-only scan resolves opposing direction contacts consistently; when both rows are selected, it preserves their wired-AND result. Monochrome row-switch settling and physical contact bouncing remain unimplemented. Do not interpret the immediate input API as complete electrical input timing.
 
@@ -115,7 +123,7 @@ Normal disk-state APIs recompute cartridge identity. A rejected load leaves the 
 
 `CupidGbStateContext` caches cartridge identity for trusted in-memory rewind. It binds to one owner, ROM pointer, ROM size, and model. Discard it after cartridge/model changes or any in-place ROM patch. Binding checks cannot detect a patch that preserves the pointer and size. Never use the cached context to validate an untrusted disk file.
 
-The version 2 codec checks a complete word-array range before reading or writing its explicit little-endian elements. It accepts unaligned state buffers without host-endian loads or structure dumps. The complete wire length remains 300,518 bytes; identity, integrity, final-offset, and hardware-domain checks still apply.
+The codec checks a complete word-array range before reading or writing its little-endian elements. It accepts unaligned state buffers. New snapshots use version 4 or 5 depending on the hardware and cartridge. Version 2 through 4 files remain loadable with deterministic defaults for absent fields. Query the size for each loaded cartridge and model. Identity, integrity, final-offset, and hardware-domain checks apply to every accepted version.
 
 The core supplies snapshot bytes. The host supplies compression, history limits, storage, and UI. Convert rewind age from base T-cycles using the selected model clock, not a fixed rate. The complete wire-format and continuation contract is in [save states and rewind](save-states.md).
 

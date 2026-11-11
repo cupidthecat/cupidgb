@@ -20,6 +20,28 @@ Hash regressions cover known vectors, span partitions, large inputs, unaligned b
 
 Core tests exercise lifecycle, CPU/memory behavior, serial, timer/bus phases, graphics, audio, cartridge persistence, native snapshots, older-state battery recovery, and SGB behavior. Frontend checks cover sample conversion, WAVE file output, display processing, and integrated desktop workflows as those targets are present in the current build. Query the exact list with `ctest --test-dir build -N`; avoid carrying test counts from an older revision into a new result.
 
+Run the generated mapper, persistence, and SGB continuation checks together:
+
+```sh
+ctest --test-dir build --output-on-failure \
+    -R 'cupidgb_(gb|cartridge|battery|camera|mbc7|tpp1|sgb|state)$'
+```
+
+For a library scan, inventory cartridge type bytes separately from the selected hardware model. Give each ROM a fixed guest-clock budget and retain its exact result, including an execution error or incomplete boot. Run banking and peripheral probes for hardware absent from the library. Use separate gameplay and persistence checks before claiming compatibility for a title.
+
+Controller checks run only in a desktop build with SDL2:
+
+```sh
+ctest --test-dir build --output-on-failure \
+    -R 'cupidgb_(controller_backend|controller_workflows|qt_workflows)$'
+```
+
+The backend check attaches two identical standardized virtual controllers and one raw joystick. It verifies device identity/capabilities, axes/buttons/hats, transient raw and normalized edges, hotplug/reconnect, focus/background/master blocking, remapping, unrelated SDL events, rumble callbacks, subsystem ownership and teardown through a Qt event loop. It checks that SDL video and audio remain uninitialized.
+
+The workflow check uses actual native Qt controls for capture, wrong-device rejection, Cancel/OK, player/dead-zone changes, settings-file reload and detach during capture. The application smoke adds generated guest programs for immediate SGB player-count transitions in both directions, held/disabled/preferred device policy, keyboard/controller contribution merging, per-player rapid controls, selected-player reads, shortcuts, paused-tool input, state reconciliation and MBC5 feedback boundaries. Menu/settings tests process timers while checking cycle invariance and restoration of the running or paused state.
+
+Virtual devices are detached before exit. These tests do not qualify a physical USB/Bluetooth device, motor force/duration, actual sensor output, real window-system focus behavior, input latency or commercial play. Run native Windows/Linux smoke and real-device gameplay separately. A WSL environment without exposed input devices cannot establish physical Linux controller support. Do not infer those results from a virtual rumble callback or an offscreen dialog.
+
 C++/C integration checks exercise shared hardware records, initialization/reset, serial observers, and native-state restoration. Run them with Release IPO enabled as well as any fallback configuration being qualified. IPO comparisons must record the effective setting and, for GCC C++, the `-fno-strict-aliasing` flag. The build disables IPO with sanitizers.
 
 Release tests explicitly keep their assertions enabled. Run the GCC/Clang sanitizer configuration as a separate check, with leak detection where available. Preserve the failing command and complete diagnostic when a sanitizer reports a defect.
@@ -38,6 +60,8 @@ The second command requires an actual output device and exercises playback aroun
 Generated inputs protect normal user data and allow repeatable failure cases. Commercial-game checks still need real cartridge execution, visual inspection, input, sound, and saving.
 
 Set `CUPIDGB_UI_CAPTURE_DIR` when running the smoke check to retain private images of the generated-cartridge debugger and all five inspector tabs. The optional hook creates the supplied directory and writes fixed `debugger.png`, `memory.png`, `tiles.png`, `maps.png`, `objects.png`, and `palettes.png` files. Capture failures fail the check. Use the native platform to inspect actual Qt layout and fonts; a widget capture does not measure physical display presentation.
+
+The separate `cupidgb_controller_workflows` executable uses the same variable to save `controllers.png` from its native dialog and generated SDL devices. Run it without an offscreen platform override when reviewing the platform's layout and fonts. This capture contains test device state and does not need a game or physical controller.
 
 For example, from a Linux desktop session:
 
@@ -66,10 +90,13 @@ Create the output directory first. Model names are `dmg`, `mgb`, `cgb`, `sgb`, a
 | --- | --- |
 | `serial` | Explicit success or failure text emitted by the cartridge's serial transfer protocol |
 | `register` | The selected debug-marker opcode with the expected success/failure register pattern |
+| `fibonacci` | The register convention above, or six serial bytes `03 05 08 0d 15 22` for success and six `42` bytes for failure |
 | `memory` | The expected memory signature, observed running status, and final result code |
 | `none` | Measurement only; no test-pass verdict |
 
 These protocols are opt-in interpretations for test ROMs. They must not affect ordinary guest execution. A ROM using a different result mechanism needs a suitable observation method; it cannot be called passed because it reached the duration limit.
+
+The `fibonacci` serial form is binary, independent of success/failure text. It requires all six bytes in order and can follow an unrelated serial prefix. A partial signature remains inconclusive. Use it only for a cartridge with that verified reporting convention; the older `register` and `serial` selections keep their separate meanings.
 
 The runner always observes completed serial bytes, reports their count as `serial_bytes`, and evaluates serial verdict text when that protocol is selected. It suppresses raw serial output by default. Add `--serial-output` to emit the transmitted bytes to stdout; the host buffers them and flushes at the report boundary. This diagnostic choice does not change serial clocks or verdict detection. Output errors are reported as `output_error`.
 
@@ -115,7 +142,9 @@ An input trace is repeatable host input, not evidence that a game reached active
     --input-trace /private/start.trace /private/cartridge.gbc
 ```
 
-Use `--model dmg`, `--model cgb`, or another supported Qt profile to avoid automatic hardware selection in comparable runs. Explicit `--model auto` deliberately requests automatic selection. The frontend isolates its settings, opens a normal audio device, and exits after the requested duration. A report path and cartridge are required. Supported durations are greater than zero and no more than 86,400 seconds. The report has a companion PNG.
+Use `--model dmg`, `--model cgb`, or another supported Qt profile to avoid automatic hardware selection in comparable runs. Explicit `--model auto` deliberately requests automatic selection. The frontend isolates its settings, opens a normal audio device, and exits after the requested duration. A report path and cartridge are required. Supported durations are greater than zero and no more than 86,400 seconds. The report has a companion core-image PNG and a `.window.png` capture of the Qt interface.
+
+`window_visible`, `window_capture_saved`, and the capture dimensions describe the Qt widget and its saved interface image. Inspect that image to verify menus and presentation as well as the game pixels. A visible widget under the `offscreen` platform remains a component test; require the native `windows` or `xcb` backend for the corresponding runtime scope. In-process capture avoids blank external readbacks from compositors, but does not measure physical display presentation.
 
 `requested_model` is null when the option is absent, `"auto"` for explicit automatic selection, or the canonical selected profile name for a fixed request. The `dmg` alias reports `"dmgabc"`. `hardware_model` records the actual hardware chosen for the cartridge. `base_clock_hz` records that model's physical clock, and the whole-run and post-warmup speed calculations use it. This distinction matters when comparing automatic, fixed DMG, and SGB runs.
 

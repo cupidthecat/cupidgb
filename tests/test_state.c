@@ -1,9 +1,11 @@
 #include "cupid/common/sha256.h"
 #include "cupid/gb/apu.h"
 #include "cupid/gb/gb.h"
+#include "cupid/gb/input.h"
 #include "cupid/gb/ppu.h"
 #include "cupid/gb/state.h"
 #include "cupid/gb/timer.h"
+#include "cupid/gbc/cgb.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -142,6 +144,10 @@ static void assert_hardware_equal(const CupidGb *a, const CupidGb *b) {
     assert(a->joypad == b->joypad && a->boot_rom_enabled == b->boot_rom_enabled);
     assert(a->sgb.command_write_index == b->sgb.command_write_index);
     assert(a->sgb.ready_for_write == b->sgb.ready_for_write);
+    assert(a->sgb.transfer.frame_dots == b->sgb.transfer.frame_dots);
+    assert(a->sgb.transfer.destination == b->sgb.transfer.destination);
+    assert(a->sgb.transfer.frames_remaining == b->sgb.transfer.frames_remaining);
+    assert(a->sgb.transfer.border_transition == b->sgb.transfer.border_transition);
 #define SAME_ARRAY(field) assert(memcmp(a->field, b->field, sizeof(a->field)) == 0)
     SAME_ARRAY(video_ram);
     SAME_ARRAY(cartridge_ram);
@@ -162,6 +168,9 @@ static void assert_hardware_equal(const CupidGb *a, const CupidGb *b) {
     SAME_ARRAY(sgb.border_map);
     SAME_ARRAY(sgb.border_palettes);
     SAME_ARRAY(sgb.freeze_buffer);
+    SAME_ARRAY(sgb.transfer.tiles);
+    SAME_ARRAY(sgb.transfer.map);
+    SAME_ARRAY(sgb.transfer.palettes);
     SAME_ARRAY(apu.buf);
 #undef SAME_ARRAY
 }
@@ -221,8 +230,9 @@ static void test_resume(void) {
                 prepare_phase(a, phase);
                 size_t length;
                 uint8_t *state = encode(a, &length);
-                /* Every version 2 model and power phase has the same portable wire shape. */
-                assert(length == 300518);
+                const bool sgb = model == CUPID_GB_MODEL_SGB || model == CUPID_GB_MODEL_SGB2;
+                assert(length == cupid_gb_state_size(b) && length > 300518);
+                assert(state[8] == (sgb ? 5 : 4));
                 uint8_t *rom_pointer = b->rom;
                 strcpy(b->save_path, "host-session-save.sav");
                 assert(cupid_gb_load_state(b, state, length) == CUPID_GB_STATE_OK);
@@ -276,6 +286,435 @@ static void update_integrity(uint8_t *bytes, size_t length) {
     cupid_sha256_update(&hash, bytes, 96);
     cupid_sha256_update(&hash, bytes + 128, length - 128);
     cupid_sha256_final(&hash, bytes + 96);
+}
+
+static void put_u32(uint8_t *bytes, uint32_t value) {
+    for (unsigned i = 0; i < 4; ++i) {
+        bytes[i] = (uint8_t)(value >> (i * 8));
+    }
+}
+
+static void state_rumble_callback(const CupidGb *gb, bool enabled, uint64_t cycles, void *data) {
+    unsigned *count = data;
+    assert(enabled == cupid_gb_rumble_enabled(gb) && cycles == gb->elapsed_cycles);
+    ++*count;
+}
+
+static void test_controller_state_versions(void) {
+    CupidGb *source = calloc(1, sizeof(*source)), *target = calloc(1, sizeof(*target));
+    assert(source && target);
+    uint8_t rom[32768] = {0};
+    rom[0x146] = 3;
+    rom[0x147] = 0x1e;
+    rom[0x149] = 3;
+    cupid_gb_set_model(source, CUPID_GB_MODEL_SGB);
+    cupid_gb_set_model(target, CUPID_GB_MODEL_SGB);
+    assert(cupid_gb_load_rom(source, rom, sizeof(rom)));
+    assert(cupid_gb_load_rom(target, rom, sizeof(rom)));
+    source->sgb.player_count = 4;
+    source->sgb.current_player = 2;
+    source->io_registers[0] = 0x10;
+    for (unsigned player = 0; player < 4; ++player) {
+        assert(cupid_gb_set_buttons_for_player(source, player, (uint8_t)~(0x11u << player)));
+    }
+    cupid_gb_write_u8(source, 0x4000, 0x0d);
+    size_t length;
+    uint8_t *bytes = encode(source, &length);
+    assert(length == 310691 && bytes[300568] == source->joypad_extra[0] &&
+           bytes[300569] == source->joypad_extra[1] && bytes[300570] == source->joypad_extra[2] &&
+           bytes[300571] == 1);
+    unsigned callbacks = 0;
+    cupid_gb_set_rumble_callback(target, state_rumble_callback, &callbacks);
+    assert(cupid_gb_load_state(target, bytes, length) == CUPID_GB_STATE_OK);
+    assert_encoded_equal(source, target);
+    assert(cupid_gb_input_read(source) == cupid_gb_input_read(target));
+    assert(cupid_gb_rumble_enabled(target) && callbacks == 0 &&
+           target->rumble_callback == state_rumble_callback &&
+           target->rumble_user_data == &callbacks);
+    /* A stored motor bool has one canonical byte encoding. Failure must retain
+     * both controller state and host registration without generating events. */
+    bytes[300571] = 2;
+    update_integrity(bytes, length);
+    CupidGb *before = malloc(sizeof(*before));
+    assert(before);
+    *before = *target;
+    assert(cupid_gb_load_state(target, bytes, length) == CUPID_GB_STATE_INVALID);
+    assert(memcmp(target, before, sizeof(*target)) == 0 && callbacks == 0);
+    bytes[300571] = 1;
+    for (unsigned version = 2; version <= 3; ++version) {
+        const size_t old_length = version == 2 ? 300518 : 300568;
+        put_u32(bytes + 8, version);
+        put_u32(bytes + 12, (uint32_t)old_length);
+        update_integrity(bytes, old_length);
+        assert(cupid_gb_load_state(target, bytes, old_length) == CUPID_GB_STATE_OK);
+        assert(target->joypad == source->joypad && target->sgb.current_player == 2 &&
+               target->sgb.player_count == 4 && target->current_ram_bank == 5);
+        for (unsigned pad = 0; pad < 3; ++pad) {
+            assert(target->joypad_extra[pad] == 0xff);
+        }
+        assert(!cupid_gb_rumble_enabled(target) && callbacks == 0);
+        /* The bank field is an explicit little-endian u64 in the frozen prefix.
+         * A legacy writer could never encode bit 3 on this cartridge. */
+        const size_t bank_offset = 128 + 17 + 0x4000 + CUPID_GB_MAX_RAM_SIZE + 0x8000 + 0xa0 +
+                                   0x80 + 0x7f + 160 * 144 * 3 + 2 + 8;
+        assert(bytes[bank_offset] == 5);
+        bytes[bank_offset] = 13;
+        update_integrity(bytes, old_length);
+        *before = *target;
+        assert(cupid_gb_load_state(target, bytes, old_length) == CUPID_GB_STATE_INVALID);
+        assert(memcmp(target, before, sizeof(*target)) == 0 && callbacks == 0);
+        bytes[bank_offset] = 5;
+    }
+    free(bytes);
+    source->sgb.player_count = 3;
+    bytes = encode(source, &length);
+    assert(cupid_gb_load_state(target, bytes, length) == CUPID_GB_STATE_OK);
+    assert_encoded_equal(source, target);
+    assert(target->sgb.player_count == 3 && target->sgb.current_player == 2 && callbacks == 0);
+    *before = *target;
+    for (unsigned version = 2; version <= 3; ++version) {
+        const size_t old_length = version == 2 ? 300518 : 300568;
+        put_u32(bytes + 8, version);
+        put_u32(bytes + 12, (uint32_t)old_length);
+        update_integrity(bytes, old_length);
+        assert(cupid_gb_load_state(target, bytes, old_length) == CUPID_GB_STATE_INVALID);
+        assert(memcmp(target, before, sizeof(*target)) == 0 && callbacks == 0);
+    }
+    free(before);
+    free(bytes);
+    cupid_gb_cleanup(source);
+    cupid_gb_cleanup(target);
+    free(source);
+    free(target);
+}
+
+static void test_v2_import(void) {
+    const size_t legacy_length = 300518;
+    CupidGb *source = calloc(1, sizeof(*source));
+    CupidGb *target = calloc(1, sizeof(*target));
+    CupidGb *expected = malloc(sizeof(*expected));
+    assert(source && target && expected);
+    const CupidGbModel models[] = {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_CGB, CUPID_GB_MODEL_SGB};
+    for (unsigned model = 0; model < sizeof(models) / sizeof(models[0]); ++model) {
+        for (unsigned boot = 0; boot < 2; ++boot) {
+            prepare(source, models[model], boot != 0);
+            prepare(target, models[model], boot != 0);
+            cupid_gb_write_u8(source, 0xff21, 0xf2);
+            cupid_gb_write_u8(source, 0xff22, 0x09);
+            cupid_gb_write_u8(source, 0xff23, 0x80);
+            prepare_phase(source, 2);
+            size_t length;
+            uint8_t *bytes = encode(source, &length);
+            assert(length > legacy_length);
+            /* The v2 payload is frozen. Remove only the new extension and rebuild
+             * its original header and digest, without running the current encoder again. */
+            put_u32(bytes + 8, 2);
+            put_u32(bytes + 12, (uint32_t)legacy_length);
+            update_integrity(bytes, legacy_length);
+            *expected = *source;
+            expected->hdma_pending = false;
+            expected->hdma_hblank_delay = 0;
+            expected->hdma_allow_on_wake = false;
+            expected->speed_switch_halt_cycles = 0;
+            expected->speed_switch_toggle_cycles = 0;
+            expected->speed_switch_freeze_cycles = 0;
+            expected->stop_divider_hold_cycles = 0;
+            expected->speed_switch_alignment = 0;
+            cupid_gb_apu_import_legacy(expected);
+            if (expected->model == CUPID_GB_MODEL_SGB) {
+                expected->sgb.transfer.frame_dots = 0;
+                memcpy(expected->sgb.transfer.tiles, expected->sgb.border_tiles,
+                       sizeof(expected->sgb.transfer.tiles));
+                memcpy(expected->sgb.freeze_buffer, expected->frame_buffer,
+                       sizeof(expected->sgb.freeze_buffer));
+            }
+            for (unsigned trusted = 0; trusted < 2; ++trusted) {
+                /* A live target's unrelated oscillator and DMA history must never
+                 * supply fields absent from the old file. */
+                target->hdma_pending = true;
+                target->hdma_blocks_remaining = 2;
+                target->hdma_hblank_delay = 3;
+                target->hdma_allow_on_wake = true;
+                target->apu.clock_phase = 3;
+                target->apu.envelope_delay = 2;
+                target->apu.pulse_timing[0].start_delay = 12;
+                target->apu.pulse_timing[1].output_blocked = true;
+                target->apu.sweep_timing.delta = 2047;
+                target->apu.noise_timing.divider_counter = 0x3fff;
+                target->apu.noise_timing.started_dac_off = true;
+                target->speed_switch_halt_cycles = 131080;
+                target->speed_switch_toggle_cycles = 6;
+                target->speed_switch_freeze_cycles = 5;
+                target->stop_divider_hold_cycles = 4;
+                target->speed_switch_alignment = 7;
+                CupidGbStateContext context = {0};
+                assert(cupid_gb_state_context_init(&context, target) == CUPID_GB_STATE_OK);
+                CupidGbStateResult result =
+                    trusted
+                        ? cupid_gb_load_state_with_context(target, bytes, legacy_length, &context)
+                        : cupid_gb_load_state(target, bytes, legacy_length);
+                assert(result == CUPID_GB_STATE_OK);
+                assert(!target->hdma_pending && !target->hdma_hblank_delay &&
+                       !target->hdma_allow_on_wake);
+                assert(!target->speed_switch_halt_cycles && !target->speed_switch_toggle_cycles &&
+                       !target->speed_switch_freeze_cycles && !target->stop_divider_hold_cycles &&
+                       !target->speed_switch_alignment);
+                assert(target->apu.clock_phase == (source->elapsed_cycles & 3u));
+                assert(target->apu.envelope_delay == 0 && target->apu.sweep_timing.delta == 0);
+                assert(target->apu.noise_timing.foreground ==
+                       (source->apu.ch4_on && source->apu.ch4_dac));
+                assert(!target->apu.noise_timing.started_dac_off &&
+                       target->apu.noise_timing.divider_counter == 0);
+                assert_hardware_equal(expected, target);
+                assert_encoded_equal(expected, target);
+                /* Queued PCM, integration and capacitor history belong to v2,
+                 * and importing missing latches must preserve all three. */
+                assert(target->apu.sample_acc == source->apu.sample_acc);
+                assert(target->apu.mix_left == source->apu.mix_left);
+                assert(target->apu.highpass_left == source->apu.highpass_left);
+            }
+            free(bytes);
+        }
+    }
+    cupid_gb_cleanup(source);
+    cupid_gb_cleanup(target);
+    free(source);
+    free(target);
+    free(expected);
+}
+
+static void test_cgb_dma_audio_resume(void) {
+    CupidGb *source = calloc(1, sizeof(*source)), *target = calloc(1, sizeof(*target));
+    assert(source && target);
+    for (unsigned fast = 0; fast < 2; ++fast) {
+        for (unsigned phase = 0; phase < 5; ++phase) {
+            prepare(source, CUPID_GB_MODEL_CGB, false);
+            prepare(target, CUPID_GB_MODEL_CGB, false);
+            source->double_speed = fast != 0;
+            source->io_registers[0x4d] = fast ? 0x80 : 0;
+            cupid_gb_write_u8(source, 0xff40, 0);
+            cupid_gb_write_u8(source, 0xff51, 0xc0);
+            cupid_gb_write_u8(source, 0xff52, 0);
+            cupid_gb_write_u8(source, 0xff53, 8);
+            cupid_gb_write_u8(source, 0xff54, 0);
+            if (phase) {
+                cupid_gb_write_u8(source, 0xff40, 0x91);
+                for (unsigned dot = 0; !(source->io_registers[0x41] & 3u); ++dot) {
+                    assert(dot < 500);
+                    cupid_gb_tick_ppu_dots(source, 1);
+                }
+                cupid_gb_write_u8(source, 0xff55, 0x81);
+                if (phase >= 3) {
+                    cupid_cgb_hdma_sleep(source);
+                    source->cpu.halted = phase == 3;
+                    source->cpu.stopped = phase == 4;
+                    assert(source->hdma_allow_on_wake);
+                }
+                for (unsigned dot = 0; !source->hdma_hblank_delay; ++dot) {
+                    assert(dot < 1000);
+                    cupid_gb_tick_ppu_dots(source, 1);
+                }
+                if (phase >= 2) {
+                    cupid_gb_tick_ppu_dots(source, 3);
+                    assert(source->hdma_pending == (phase == 2));
+                }
+            } else {
+                cupid_gb_write_u8(source, 0xff55, 1);
+                assert(source->hdma_pending);
+            }
+            /* Trigger immediately before capture: restart delay and held output
+             * must survive together with the independently scheduled DMA edge. */
+            cupid_gb_write_u8(source, 0xff19, 0x87);
+            size_t length;
+            uint8_t *bytes = encode(source, &length);
+            assert(cupid_gb_load_state(target, bytes, length) == CUPID_GB_STATE_OK);
+            free(bytes);
+            assert_encoded_equal(source, target);
+            if (phase >= 3) {
+                source->cpu.halted = target->cpu.halted = false;
+                source->cpu.stopped = target->cpu.stopped = false;
+                cupid_cgb_hdma_wake(source);
+                cupid_cgb_hdma_wake(target);
+                assert(source->hdma_pending && target->hdma_pending);
+            }
+            for (unsigned step = 0; step < 160; ++step) {
+                assert(cupid_gb_step(source) && cupid_gb_step(target));
+                if (step < 4) {
+                    assert_encoded_equal(source, target);
+                } else if (step % 19 == 0) {
+                    assert_hardware_equal(source, target);
+                }
+            }
+            assert_encoded_equal(source, target);
+            assert_hardware_equal(source, target);
+        }
+    }
+    cupid_gb_cleanup(source);
+    cupid_gb_cleanup(target);
+    free(source);
+    free(target);
+}
+
+static void test_audio_pipeline_resume(void) {
+    CupidGb *source = calloc(1, sizeof(*source)), *target = calloc(1, sizeof(*target));
+    assert(source && target);
+    unsigned delayed_pulse = 0, calculating_sweep = 0, advancing_noise = 0;
+    for (unsigned fast = 0; fast < 2; ++fast) {
+        for (unsigned phase = 0; phase < 64; ++phase) {
+            prepare(source, CUPID_GB_MODEL_CGB, false);
+            prepare(target, CUPID_GB_MODEL_CGB, false);
+            source->double_speed = fast != 0;
+            source->io_registers[0x4d] = fast ? 0x80 : 0;
+            cupid_gb_write_u8(source, 0xff40, 0);
+            cupid_gb_write_u8(source, 0xff26, 0);
+            cupid_gb_write_u8(source, 0xff26, 0x80);
+            cupid_gb_write_u8(source, 0xff10, 0x11);
+            cupid_gb_write_u8(source, 0xff11, 0x80);
+            cupid_gb_write_u8(source, 0xff12, 0xf1);
+            cupid_gb_write_u8(source, 0xff13, 0xf0);
+            cupid_gb_write_u8(source, 0xff14, 0x83);
+            cupid_gb_write_u8(source, 0xff21, 0xf2);
+            cupid_gb_write_u8(source, 0xff22, 0x09);
+            cupid_gb_write_u8(source, 0xff23, 0x80);
+            /* Component clocks place snapshots on both sides of base-clock
+             * edges, including phases not aligned to a CPU machine cycle. */
+            cupid_gb_tick_apu(source, (uint16_t)phase);
+            delayed_pulse += source->apu.pulse_timing[0].start_delay != 0;
+            calculating_sweep += source->apu.sweep_timing.startup_ticks != 0 ||
+                                 source->apu.sweep_timing.shift_ticks != 0;
+            advancing_noise += source->apu.noise_timing.divider_counter != 0;
+            size_t length;
+            uint8_t *bytes = encode(source, &length);
+            assert(cupid_gb_load_state(target, bytes, length) == CUPID_GB_STATE_OK);
+            free(bytes);
+            assert_encoded_equal(source, target);
+            for (unsigned step = 0; step < 160; ++step) {
+                if (step == 3) {
+                    /* Frequency and width writes act on restored in-flight
+                     * calculations and held output, rather than fresh oscillators. */
+                    cupid_gb_write_u8(source, 0xff10, 0x19);
+                    cupid_gb_write_u8(target, 0xff10, 0x19);
+                    cupid_gb_write_u8(source, 0xff22, 0x01);
+                    cupid_gb_write_u8(target, 0xff22, 0x01);
+                }
+                assert(cupid_gb_step(source) && cupid_gb_step(target));
+                if (step < 4) {
+                    assert_encoded_equal(source, target);
+                } else if (step % 19 == 0) {
+                    assert_hardware_equal(source, target);
+                }
+            }
+            assert_encoded_equal(source, target);
+            assert_hardware_equal(source, target);
+        }
+    }
+    assert(delayed_pulse && calculating_sweep && advancing_noise);
+    cupid_gb_cleanup(source);
+    cupid_gb_cleanup(target);
+    free(source);
+    free(target);
+}
+
+static void test_noise_counter_wire_domain(void) {
+    CupidGb *source = calloc(1, sizeof(*source)), *target = calloc(1, sizeof(*target));
+    assert(source && target);
+    prepare(source, CUPID_GB_MODEL_CGB, false);
+    prepare(target, CUPID_GB_MODEL_CGB, false);
+    const uint16_t counters[] = {0x3fff, 0x4000, 0x4001, 0x7fff, 0xbfff, 0xffff};
+    for (unsigned i = 0; i < sizeof(counters) / sizeof(counters[0]); ++i) {
+        /* Ordinary clocks mask to fourteen bits, but DAC-off carries can reach
+         * every uint16_t value. The codec must not truncate or reject that state. */
+        source->apu.noise_timing.divider_counter = counters[i];
+        size_t length;
+        uint8_t *bytes = encode(source, &length);
+        assert(bytes[300548] == (uint8_t)counters[i]);
+        assert(bytes[300549] == (uint8_t)(counters[i] >> 8));
+        assert(cupid_gb_load_state(target, bytes, length) == CUPID_GB_STATE_OK);
+        assert(target->apu.noise_timing.divider_counter == counters[i]);
+        assert_encoded_equal(source, target);
+        free(bytes);
+    }
+    cupid_gb_cleanup(source);
+    cupid_gb_cleanup(target);
+    free(source);
+    free(target);
+}
+
+static void prepare_switch(CupidGb *gb, bool fast, bool lcd, unsigned ime) {
+    prepare(gb, CUPID_GB_MODEL_CGB, false);
+    gb->rom[0x100] = 0x10;
+    gb->rom[0x101] = 0;
+    gb->rom[0x102] = 4; /* INC B makes resumed opcode execution observable. */
+    gb->cpu.pc = 0x100;
+    gb->cpu.b = 0;
+    gb->cpu.ime = ime == 1;
+    gb->cpu.ime_delay = ime == 2;
+    gb->joypad = 0xff;
+    gb->double_speed = fast;
+    gb->io_registers[0x4d] = fast ? 0x80 : 0;
+    cupid_gb_write_u8(gb, 0xff00, 0x30);
+    if (!lcd) {
+        cupid_gb_write_u8(gb, 0xff40, 0);
+    }
+    cupid_gb_write_u8(gb, 0xff4d, 1);
+}
+
+static void restore_peer(const CupidGb *source, CupidGb *target) {
+    size_t length;
+    uint8_t *bytes = encode(source, &length);
+    assert(cupid_gb_load_state(target, bytes, length) == CUPID_GB_STATE_OK);
+    free(bytes);
+    assert_encoded_equal(source, target);
+}
+
+static void test_speed_switch_resume(void) {
+    CupidGb *source = calloc(1, sizeof(*source)), *target = calloc(1, sizeof(*target));
+    assert(source && target);
+    for (unsigned fast = 0; fast < 2; ++fast) {
+        for (unsigned lcd = 0; lcd < 2; ++lcd) {
+            for (unsigned ime = 0; ime < 3; ++ime) {
+                prepare_switch(source, fast != 0, lcd != 0, ime);
+                prepare_switch(target, fast != 0, lcd != 0, ime);
+                assert(cupid_gb_step(source));
+                assert(source->cpu.halted && source->speed_switch_halt_cycles == 131080);
+                unsigned polls = 0;
+                while (source->cpu.halted) {
+                    assert(polls < 32780);
+                    if (polls <= 2 || source->speed_switch_halt_cycles <= 8) {
+                        /* Capture before/after the freeze, a pending toggle,
+                         * and expiry. Each loaded peer resumes the complete wait. */
+                        restore_peer(source, target);
+                    }
+                    assert(cupid_gb_step(source) && cupid_gb_step(target));
+                    ++polls;
+                    if (polls <= 3 || !source->cpu.halted || polls % 4096 == 0) {
+                        assert_encoded_equal(source, target);
+                    }
+                }
+                assert(source->double_speed == !fast && source->cpu.b == 1);
+                assert(source->cpu.pc == 0x103 && source->speed_switch_halt_cycles == 0);
+                assert_hardware_equal(source, target);
+            }
+            prepare_switch(source, fast != 0, lcd != 0, 0);
+            prepare_switch(target, fast != 0, lcd != 0, 0);
+            assert(cupid_gb_step(source));
+            restore_peer(source, target);
+            source->interrupt_enable = target->interrupt_enable = 4;
+            source->interrupt_flags = target->interrupt_flags = 4;
+            assert(cupid_gb_step(source) && cupid_gb_step(target));
+            assert(!source->cpu.halted && !source->speed_switch_halt_cycles);
+            assert(source->cpu.pc == 0x102 && source->cpu.b == 0);
+            assert_encoded_equal(source, target);
+            restore_peer(source, target);
+            assert(cupid_gb_step(source) && cupid_gb_step(target));
+            assert(source->double_speed == !fast && source->cpu.b == 1);
+            assert_encoded_equal(source, target);
+        }
+    }
+    cupid_gb_cleanup(source);
+    cupid_gb_cleanup(target);
+    free(source);
+    free(target);
 }
 
 static void test_word_array_wire_encoding(void) {
@@ -375,6 +814,11 @@ static void test_rejection(void) {
     memcpy(damaged, valid, length);
     damaged[length - 1] ^= 1;
     rejected_unchanged(gb, damaged, length, CUPID_GB_STATE_INVALID);
+    memcpy(damaged, valid, length);
+    damaged[length - 1] = 1;
+    update_integrity(damaged, length);
+    /* A cartridge without this motor cannot restore an asserted motor latch. */
+    rejected_unchanged(gb, damaged, length, CUPID_GB_STATE_INVALID);
     const size_t invalid_payload_offsets[] = {
         129,    141,    180784, 300352, 300388, 300389, 300391, 300392, 300393, 300394, 300402,
         300410, 300418, 300419, 300420, 300425, 300426, 300427, 300429, 300430, 300460, 300462,
@@ -392,6 +836,18 @@ static void test_rejection(void) {
         update_integrity(damaged, length);
         rejected_unchanged(gb, damaged, length, CUPID_GB_STATE_INVALID);
     }
+    const uint8_t invalid_extension[][2] = {
+        {0, 2},  {1, 4},  {1, 1},  {2, 2},   {3, 4},  {4, 3},   {5, 13}, {6, 5},  {7, 2},
+        {8, 2},  {9, 2},  {10, 2}, {11, 2},  {12, 2}, {13, 13}, {14, 5}, {15, 2}, {16, 2},
+        {17, 2}, {18, 2}, {19, 2}, {20, 2},  {21, 4}, {22, 8},  {23, 9}, {25, 8}, {27, 8},
+        {28, 2}, {29, 2}, {32, 8}, {33, 35}, {34, 2}, {35, 2},  {36, 2}, {37, 2}, {38, 2},
+        {39, 2}, {40, 2}, {41, 2}, {44, 3},  {46, 7}, {47, 6},  {48, 5}, {49, 8}};
+    for (unsigned i = 0; i < sizeof(invalid_extension) / sizeof(invalid_extension[0]); ++i) {
+        memcpy(damaged, valid, length);
+        damaged[300518 + invalid_extension[i][0]] = invalid_extension[i][1];
+        update_integrity(damaged, length);
+        rejected_unchanged(gb, damaged, length, CUPID_GB_STATE_INVALID);
+    }
     const uint16_t invalid_map_addresses[] = {0, 0x17ff, 0x2000, 0x3000, 0x3fff};
     for (unsigned i = 0; i < sizeof(invalid_map_addresses) / sizeof(invalid_map_addresses[0]);
          ++i) {
@@ -406,7 +862,7 @@ static void test_rejection(void) {
     damaged[length] = 0;
     rejected_unchanged(gb, damaged, length + 1, CUPID_GB_STATE_INVALID);
     memcpy(damaged, valid, length);
-    damaged[8] = 3;
+    damaged[8] = 6;
     update_integrity(damaged, length);
     rejected_unchanged(gb, damaged, length, CUPID_GB_STATE_UNSUPPORTED_VERSION);
     memcpy(damaged, valid, length);
@@ -451,6 +907,155 @@ static void test_rejection(void) {
     free(valid);
     cupid_gb_cleanup(gb);
     free(gb);
+}
+
+static void test_sgb_transfer_resume(void) {
+    const size_t v4_length = 300572;
+    CupidGb *source = calloc(1, sizeof(*source)), *target = calloc(1, sizeof(*target));
+    assert(source && target);
+    prepare(source, CUPID_GB_MODEL_SGB2, false);
+    prepare(target, CUPID_GB_MODEL_SGB2, false);
+    cupid_gb_write_u8(source, 0xff40, 0);
+    source->sgb.transfer.destination = CUPID_SGB_TRANSFER_PALETTES;
+    source->sgb.transfer.frames_remaining = 1;
+    source->sgb.transfer.frame_dots = CUPID_SGB_FRAME_DOTS - 1;
+    source->sgb.transfer.border_transition = 33;
+    source->sgb.transfer.tiles[4096] = 0xa5;
+    source->sgb.transfer.map[0] = 0x0c80;
+    source->sgb.transfer.palettes[63] = 0x1234;
+    source->sgb.border_map[0] = 0x007f;
+    source->sgb.border_palettes[63] = 0x7fff;
+    source->frame_buffer[0] = 1;
+    source->frame_buffer[1] = 2;
+    source->sgb.freeze_buffer[0] = 3;
+
+    size_t length;
+    uint8_t *bytes = encode(source, &length);
+    assert(length == 310691 && bytes[8] == 5);
+    assert(bytes[v4_length + 7 + 4096] == 0xa5);
+    assert(bytes[v4_length + 7 + 8192] == 0x80 && bytes[v4_length + 7 + 8193] == 0x0c);
+    assert(bytes[length - 2] == 0x34 && bytes[length - 1] == 0x12);
+    assert(cupid_gb_load_state(target, bytes, length) == CUPID_GB_STATE_OK);
+    assert_hardware_equal(source, target);
+    cupid_gb_tick_ppu_dots(source, 1);
+    cupid_gb_tick_ppu_dots(target, 1);
+    assert_encoded_equal(source, target);
+    assert(target->sgb.ram_palettes[0] == 0x4080 && target->sgb.border_map[0] == 0x0c80 &&
+           target->sgb.border_tiles[4096] == 0xa5 && target->sgb.border_palettes[63] == 0x1234);
+    assert(target->sgb.transfer.border_transition == 32 && target->sgb.freeze_buffer[0] == 3);
+
+    const uint8_t invalid[][2] = {{0, 0xff}, {4, 6}, {4, 0}, {5, 4}, {6, 105}};
+    for (unsigned i = 0; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
+        size_t offset = v4_length + invalid[i][0];
+        uint8_t original = bytes[offset];
+        bytes[offset] = invalid[i][1];
+        update_integrity(bytes, length);
+        rejected_unchanged(target, bytes, length, CUPID_GB_STATE_INVALID);
+        bytes[offset] = original;
+    }
+
+    /* A legacy state had visible border data but no unfinished transfer. */
+    put_u32(bytes + 8, 4);
+    put_u32(bytes + 12, (uint32_t)v4_length);
+    update_integrity(bytes, v4_length);
+    assert(cupid_gb_load_state(target, bytes, v4_length) == CUPID_GB_STATE_OK);
+    assert(!target->sgb.transfer.destination && !target->sgb.transfer.frames_remaining &&
+           !target->sgb.transfer.frame_dots && !target->sgb.transfer.border_transition);
+    assert(target->sgb.transfer.map[0] == 0x007f && target->sgb.transfer.tiles[4096] != 0xa5 &&
+           target->sgb.transfer.palettes[63] == 0x7fff && target->sgb.freeze_buffer[0] == 1);
+
+    free(bytes);
+    cupid_gb_cleanup(source);
+    cupid_gb_cleanup(target);
+    free(source);
+    free(target);
+}
+
+static void test_v5_sgb_mapper_sections(void) {
+    const size_t mapper_offset = 310691;
+    const uint8_t types[] = {0x0b, 0x22, 0xfc, 0xbc};
+    uint8_t rom[32768] = {0};
+    rom[0x146] = 3;
+    for (unsigned mapper = 0; mapper < sizeof(types); ++mapper) {
+        CupidGb *source = calloc(1, sizeof(*source)), *target = calloc(1, sizeof(*target));
+        assert(source && target);
+        rom[0x147] = types[mapper];
+        if (types[mapper] == 0xbc) {
+            rom[0x149] = 0xc1;
+            rom[0x14a] = 0x65;
+            rom[0x152] = 1;
+        }
+        cupid_gb_set_model(source, CUPID_GB_MODEL_SGB2);
+        cupid_gb_set_model(target, CUPID_GB_MODEL_SGB2);
+        assert(cupid_gb_load_rom(source, rom, sizeof(rom)));
+        assert(cupid_gb_load_rom(target, rom, sizeof(rom)));
+        source->sgb.transfer.palettes[63] = 0x1234;
+        uint8_t wire[64] = {0};
+        size_t mapper_length;
+        if (types[mapper] == 0x0b) {
+            source->mmm01_rom_select = 0x37;
+            source->mmm01_bank_select = 0x19;
+            source->mmm01_mode = 0x45;
+            source->mmm01_ram_mask = 2;
+            const uint8_t expected[] = {0x37, 0x19, 0x45, 0x02};
+            mapper_length = sizeof(expected);
+            memcpy(wire, expected, mapper_length);
+        } else if (types[mapper] == 0x22) {
+            source->mbc7.command = 0x513;
+            source->mbc7.output = 0x1234;
+            source->mbc7.data_bits = 7;
+            source->mbc7.pins = 0x82;
+            source->mbc7.registers_enabled = true;
+            source->mbc7.programming_enabled = true;
+            const uint8_t expected[] = {0x13, 0x05, 0x34, 0x12, 7, 0x82, 1, 1};
+            mapper_length = sizeof(expected);
+            memcpy(wire, expected, mapper_length);
+        } else if (types[mapper] == 0xfc) {
+            source->camera.registers[0] = 5;
+            source->camera.registers[53] = 0x95;
+            source->camera.clock_phase = 7;
+            source->camera.mapped = true;
+            source->camera.busy_tcycles = 1024;
+            source->camera.capture_number = UINT32_C(0x12345678);
+            wire[0] = 5;
+            wire[53] = 0x95;
+            wire[54] = 7;
+            wire[55] = 1;
+            wire[57] = 4;
+            wire[60] = 0x78;
+            wire[61] = 0x56;
+            wire[62] = 0x34;
+            wire[63] = 0x12;
+            mapper_length = sizeof(wire);
+        } else {
+            source->tpp1.rom_bank = 0x4321;
+            source->tpp1.ram_bank = 3;
+            source->tpp1.mode = 5;
+            source->tpp1.status = 0x0b;
+            const uint8_t live[] = {10, 20, 30, 40};
+            const uint8_t latched[] = {11, 21, 31, 41};
+            memcpy(source->tpp1.live, live, sizeof(live));
+            memcpy(source->tpp1.latched, latched, sizeof(latched));
+            source->tpp1.rtc_base_time = INT64_C(0x0123456789abcdef);
+            const uint8_t expected[] = {0x21, 0x43, 3,    5,    0x0b, 10,   20,
+                                        30,   40,   11,   21,   31,   41,   0xef,
+                                        0xcd, 0xab, 0x89, 0x67, 0x45, 0x23, 0x01};
+            mapper_length = sizeof(expected);
+            memcpy(wire, expected, mapper_length);
+        }
+        size_t length;
+        uint8_t *bytes = encode(source, &length);
+        assert(length == mapper_offset + mapper_length && bytes[8] == 5 &&
+               bytes[mapper_offset - 2] == 0x34 && bytes[mapper_offset - 1] == 0x12);
+        assert(memcmp(bytes + mapper_offset, wire, mapper_length) == 0);
+        assert(cupid_gb_load_state(target, bytes, length) == CUPID_GB_STATE_OK);
+        assert_encoded_equal(source, target);
+        free(bytes);
+        cupid_gb_cleanup(source);
+        cupid_gb_cleanup(target);
+        free(source);
+        free(target);
+    }
 }
 
 static void test_sgb_sample_phase_and_legacy_filter(void) {
@@ -516,6 +1121,8 @@ static void print_fixture(const char *path) {
     CupidGb *gb = calloc(1, sizeof(*gb));
     assert(gb);
     prepare(gb, CUPID_GB_MODEL_CGB, true);
+    /* Preserve the original divider phase of this compatibility fixture. */
+    gb->div_counter = 0;
     gb->double_speed = true;
     cupid_gb_write_u8(gb, 0xff40, 0);
     prepare_phase(gb, 2);
@@ -525,10 +1132,20 @@ static void print_fixture(const char *path) {
     digest_hex(bytes, length, sha256);
     printf("CUPIDGB_STATE_FIXTURE size=%zu sha256=%s\n", length, sha256);
     fflush(stdout);
-    /* Native format v2 compatibility fixture: changing its schema or generated
-     * machine state requires an intentional update to this portable golden. */
-    assert(length == 300518);
-    assert(strcmp(sha256, "6106c038f80d9ef4ca4417f31305dc05bb714d9252e6caff3eec0205ea4ec0eb") == 0);
+    assert(length == 300572);
+    assert(strcmp(sha256, "652af4f40504c86dd59eff09f0997f5b60b654816a0908d7802704f981b43be5") == 0);
+    /* The previous wire payload remains byte-for-byte compatible when wrapped
+     * in its original header. New controller fields cannot shift that prefix. */
+    put_u32(bytes + 8, 3);
+    put_u32(bytes + 12, 300568);
+    update_integrity(bytes, 300568);
+    char legacy_sha256[65];
+    digest_hex(bytes, 300568, legacy_sha256);
+    assert(strcmp(legacy_sha256,
+                  "e4fdd3d7ebfdd04aec94ce7b85f0f2d7d83de1416242fa89f26ccf5dfaf71eb2") == 0);
+    put_u32(bytes + 8, 4);
+    put_u32(bytes + 12, (uint32_t)length);
+    update_integrity(bytes, length);
     if (path) {
         FILE *file = fopen(path, "wb");
         assert(file && fwrite(bytes, 1, length, file) == length && fclose(file) == 0);
@@ -663,8 +1280,11 @@ static void test_mapper_snapshots(void) {
             cupid_gb_write_u8(a, 0x6000, 0);
             cupid_gb_write_u8(a, 0x6000, 1);
         } else if (controllers[i] == CUPID_GB_MBC7) {
+            cupid_gb_write_u8(a, 0x4000, 0x40);
+            cupid_gb_write_u8(a, 0xa010, 0xaa);
+            assert(!a->mbc7_latch && cupid_gb_read_u8(a, 0xa020) == 0xd0);
             cupid_gb_write_u8(a, 0xa000, 0x55);
-            assert(a->mbc7_latch);
+            assert(a->mbc7_latch && cupid_gb_read_u8(a, 0xa020) == 0);
         } else if (controllers[i] == CUPID_GB_HUC1) {
             cupid_gb_write_u8(a, 0x0000, 0x0e);
             assert(a->huc1_ir_mode);
@@ -926,6 +1546,12 @@ int main(int argc, char **argv) {
     test_sha256();
     test_resume();
     test_word_array_wire_encoding();
+    test_v2_import();
+    test_controller_state_versions();
+    test_cgb_dma_audio_resume();
+    test_audio_pipeline_resume();
+    test_noise_counter_wire_domain();
+    test_speed_switch_resume();
     test_rejection();
     test_trusted_context();
     test_restored_rtc_extreme_timestamps();
@@ -933,6 +1559,8 @@ int main(int argc, char **argv) {
     test_lcd_interrupt_edge_resume();
     test_pixel_pipeline_resume();
     test_first_halt_poll_resume();
+    test_sgb_transfer_resume();
+    test_v5_sgb_mapper_sections();
     test_sgb_sample_phase_and_legacy_filter();
     print_fixture(argc == 3 ? argv[2] : NULL);
     puts("Portable state checks passed.");

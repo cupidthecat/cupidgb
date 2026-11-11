@@ -19,6 +19,8 @@ The debugger shows CPU registers, flags, interrupt-enable state, HALT/STOP state
 
 Next and Finish run in small event-loop slices so Break and the rest of the interface remain available. A command stops after one million hardware-step attempts if its target has not been reached. HALT, STOP, an endless loop, a missing return, or modified stack contents can prevent a target from being reached. The status message distinguishes a completed command, breakpoint, exhausted budget, and execution error.
 
+With IME clear, a HALT wake can consume one hardware step without fetching an opcode. Step exposes that event with an unchanged PC. Next continues through the wake and then tracks the instruction actually fetched, including calls or a newly blocked memory region. Expiry of the timed CGB speed-switch wait can fetch the next opcode in the expiring step.
+
 Breakpoints stop before the matching instruction or idle step. Continuing from an actual breakpoint skips that occurrence once, then honors the breakpoint on a later visit. A breakpoint can match every mapped bank at an address or one specific bank. Up to 128 entries are retained in the session. Closing the debugger does not delete them.
 
 The disassembly describes underlying mapped memory. CPU execution still obeys bus restrictions: an instruction fetched while a region is blocked can differ from the raw bytes shown by an inspector. Execution tracking uses the opcode the CPU actually fetched, including a bus-lock transition during HALT wake.

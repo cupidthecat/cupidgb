@@ -7,14 +7,14 @@ if [ "${1-}" = "--install" ]; then
     INSTALL=1
 fi
 
-PACKAGES_APT="build-essential python3 cmake qt6-base-dev qt6-multimedia-dev gdb clangd clang-format cppcheck valgrind"
-PACKAGES_FEDORA="gcc gcc-c++ make python3 cmake qt6-qtbase-devel qt6-qtmultimedia-devel gdb clang-tools-extra clang-format cppcheck valgrind"
-PACKAGES_ARCH="gcc make python cmake qt6-base qt6-multimedia gdb clang clang-format cppcheck valgrind"
-PACKAGES_OPENSUSE="gcc gcc-c++ make python3 cmake qt6-base-devel qt6-multimedia-devel gdb clang-tools clang-format cppcheck valgrind"
+PACKAGES_APT="build-essential python3 cmake qt6-base-dev qt6-multimedia-dev libsdl2-dev gdb clangd clang-format cppcheck valgrind"
+PACKAGES_FEDORA="gcc gcc-c++ make python3 cmake qt6-qtbase-devel qt6-qtmultimedia-devel pkgconfig(sdl2) gdb clang-tools-extra clang-format cppcheck valgrind"
+PACKAGES_ARCH="gcc make python cmake qt6-base qt6-multimedia sdl2-compat gdb clang clang-format cppcheck valgrind"
+PACKAGES_OPENSUSE="gcc gcc-c++ make python3 cmake qt6-base-devel qt6-multimedia-devel pkgconfig(sdl2) gdb clang-tools clang-format cppcheck valgrind"
 
 print_plan() {
     printf 'cupidgb development environment helper\n\n'
-    printf 'This script can install recommended packages for Linux development, including Qt 6 Widgets and Multimedia.\n'
+    printf 'This script can install recommended packages for Linux development, including Qt 6 Widgets, Qt Multimedia, and SDL2.\n'
     printf 'Run with --install to perform installation.\n\n'
 }
 

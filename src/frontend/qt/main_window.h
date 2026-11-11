@@ -1,5 +1,6 @@
 #pragma once
 
+#include "controller_manager.h"
 #include "guest_clock_pacer.h"
 
 #include <QElapsedTimer>
@@ -55,6 +56,16 @@ class MainWindow final : public QMainWindow {
     void resizeDisplay(int scale);
     void updateRecentMenu();
     void configure();
+    void configureControllers();
+    void reconcileControllerInput();
+    void refreshControllerGate();
+    void refreshControllerPlayerCount();
+    std::array<uint8_t, 4> livePlayerButtons() const;
+    void applyPlayerButtons(const std::array<uint8_t, 4> &buttons);
+    void navigateControllerMenu(const QString &action, SDL_JoystickID instance);
+    void resetControllerRumble();
+    void finishControllerRumble();
+    bool controllerSmokeTest(const QString &directory);
     QString bootDirectory() const;
     void setPaused(bool paused);
     void releaseKeys();
@@ -170,6 +181,17 @@ class MainWindow final : public QMainWindow {
     std::array<QAction *, 10> loadSlotActions_{};
     std::array<int, 8> keys_{};
     std::array<int, 5> specialKeys_{};
+    std::unique_ptr<cupid::input::ControllerManager> controllers_;
+    cupid::input::ControllerOutput controllerOutput_;
+    std::array<bool, 5> keyboardSpecialHeld_{};
+    std::array<std::array<bool, 2>, 4> controllerRapidHeld_{};
+    std::array<std::array<unsigned, 2>, 4> controllerRapidPhase_{};
+    std::array<uint8_t, 4> debuggerPlayerButtons_{0xff, 0xff, 0xff, 0xff};
+    unsigned controllerPlayerCount_ = 1;
+    uint64_t rumbleLastCycles_ = 0, rumbleWindowCycles_ = 0, rumbleOnCycles_ = 0;
+    bool rumbleMotor_ = false;
+    unsigned menuDepth_ = 0;
+    bool controllerSmokeActive_ = false;
     std::vector<QAction *> shortcutActions_;
     std::array<bool, 2> rapidHeld_{};
     std::array<unsigned, 2> rapidPhase_{};

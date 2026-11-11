@@ -473,8 +473,16 @@ static void test_pcm_taps(void) {
     gb.apu.ch4_dac = true;
     gb.apu.ch4_vol = 9;
     gb.apu.ch4_lfsr = 0;
+    cupid_gb_apu_import_legacy(&gb); /* Materialize the synthetic fixture's digital latches. */
     assert(cupid_gb_apu_read_pcm12(&gb) == 0xc5);
     assert(cupid_gb_apu_read_pcm34(&gb) == 0x93);
+    for (unsigned color_mode = 0; color_mode < 2; ++color_mode) {
+        gb.cgb_mode = color_mode != 0;
+        /* Software reads the memory bus, so direct tap tests alone cannot
+         * establish that the hardware registers are actually reachable. */
+        assert(cupid_gb_read_u8(&gb, 0xff76) == 0xc5);
+        assert(cupid_gb_read_u8(&gb, 0xff77) == 0x93);
+    }
     cupid_gb_write_u8(&gb, 0xff24, 0x77);
     cupid_gb_write_u8(&gb, 0xff25, 0xff);
     cupid_gb_apu_set_highpass(&gb, false);
@@ -487,6 +495,8 @@ static void test_pcm_taps(void) {
     }
     gb.apu.ch1_on = false;
     gb.apu.ch4_lfsr = 1;
+    assert(cupid_gb_apu_read_pcm34(&gb) == 0x93); /* The sample is held between shift edges. */
+    cupid_gb_apu_import_legacy(&gb);
     assert(cupid_gb_apu_read_pcm12(&gb) == 0xc0);
     assert(cupid_gb_apu_read_pcm34(&gb) == 3);
     cupid_gb_write_u8(&gb, 0xff17, 0);
@@ -497,6 +507,8 @@ static void test_pcm_taps(void) {
         gb.model = (CupidGbModel)model;
         assert(cupid_gb_apu_read_pcm12(&gb) == (model == CUPID_GB_MODEL_CGB ? 0 : 0xff));
         assert(cupid_gb_apu_read_pcm34(&gb) == (model == CUPID_GB_MODEL_CGB ? 0 : 0xff));
+        assert(cupid_gb_read_u8(&gb, 0xff76) == (model == CUPID_GB_MODEL_CGB ? 0 : 0xff));
+        assert(cupid_gb_read_u8(&gb, 0xff77) == (model == CUPID_GB_MODEL_CGB ? 0 : 0xff));
     }
 }
 
@@ -618,7 +630,350 @@ static void test_power_preserves_output_pipeline(bool color) {
     assert(gb.apu.buf_write == pipeline.buf_write);
 }
 
+static void test_color_pulse_clock_and_held_duty(void) {
+    for (unsigned channel = 0; channel < 2; ++channel) {
+        for (unsigned phase = 0; phase < 4; phase += 2) {
+            CupidGb gb = {0};
+            gb.model = CUPID_GB_MODEL_CGB;
+            uint16_t duty = channel ? 0xff16 : 0xff11;
+            uint16_t envelope = channel ? 0xff17 : 0xff12;
+            uint16_t low = channel ? 0xff18 : 0xff13;
+            uint16_t high = channel ? 0xff19 : 0xff14;
+            unsigned shift = channel * 4;
+            cupid_gb_write_u8(&gb, 0xff26, 0x80);
+            cupid_gb_tick_apu(&gb, 100);
+            assert(gb.apu.ch1_duty_pos == 0 && gb.apu.ch2_duty_pos == 0);
+            cupid_gb_tick_apu(&gb, (uint16_t)phase);
+            cupid_gb_write_u8(&gb, duty, 0);
+            cupid_gb_write_u8(&gb, envelope, 0xf0);
+            cupid_gb_write_u8(&gb, low, 0xff);
+            cupid_gb_write_u8(&gb, high, 0x87);
+            unsigned first_high = 36 + phase;
+            cupid_gb_tick_apu(&gb, (uint16_t)(first_high - 1));
+            assert(((cupid_gb_read_u8(&gb, 0xff76) >> shift) & 15) == 0);
+            cupid_gb_tick_apu(&gb, 1);
+            assert(((cupid_gb_read_u8(&gb, 0xff76) >> shift) & 15) == 15);
+            cupid_gb_write_u8(&gb, duty, 0xc0); /* New duty is low at phase seven. */
+            assert(((cupid_gb_read_u8(&gb, 0xff76) >> shift) & 15) == 15);
+            cupid_gb_tick_apu(&gb, 3);
+            assert(((cupid_gb_read_u8(&gb, 0xff76) >> shift) & 15) == 15);
+            cupid_gb_tick_apu(&gb, 1);
+            assert(((cupid_gb_read_u8(&gb, 0xff76) >> shift) & 15) == 0);
+            cupid_gb_write_u8(&gb, envelope, 0);
+            unsigned index = channel ? gb.apu.ch2_duty_pos : gb.apu.ch1_duty_pos;
+            cupid_gb_tick_apu(&gb, 100);
+            assert((channel ? gb.apu.ch2_duty_pos : gb.apu.ch1_duty_pos) == index);
+        }
+    }
+}
+
+static void test_color_envelope_edges(void) {
+    for (unsigned channel = 0; channel < 2; ++channel) {
+        for (unsigned speed = 0; speed < 2; ++speed) {
+            CupidGb gb = {0};
+            gb.model = CUPID_GB_MODEL_CGB;
+            gb.double_speed = speed != 0;
+            uint16_t envelope = channel ? 0xff17 : 0xff12;
+            uint16_t high = channel ? 0xff19 : 0xff14;
+            cupid_gb_write_u8(&gb, 0xff26, 0x80);
+            cupid_gb_write_u8(&gb, envelope, 0xf0);
+            cupid_gb_write_u8(&gb, high, 0x80);
+            cupid_gb_write_u8(&gb, envelope, 0xf8);
+            assert((channel ? gb.apu.ch2_vol : gb.apu.ch1_vol) == 0);
+            cupid_gb_write_u8(&gb, envelope, 0xf8);
+            assert((channel ? gb.apu.ch2_vol : gb.apu.ch1_vol) == 1);
+            cupid_gb_write_u8(&gb, envelope, 0xf1);
+            assert((channel ? gb.apu.ch2_vol : gb.apu.ch1_vol) == 14);
+            cupid_gb_write_u8(&gb, high, 0x80);
+            for (unsigned edge = 0; edge < 7; ++edge) {
+                cupid_gb_apu_div_event(&gb);
+            }
+            cupid_gb_apu_div_secondary_event(&gb);
+            assert((channel ? gb.apu.ch2_vol : gb.apu.ch1_vol) == 15);
+            cupid_gb_apu_div_event(&gb);
+            if (speed) {
+                cupid_gb_tick_apu(&gb, 1);
+                assert((channel ? gb.apu.ch2_vol : gb.apu.ch1_vol) == 15);
+                cupid_gb_tick_apu(&gb, 1);
+            }
+            assert((channel ? gb.apu.ch2_vol : gb.apu.ch1_vol) == 14);
+
+            cupid_gb_write_u8(&gb, envelope, 0xf9);
+            cupid_gb_write_u8(&gb, high, 0x80);
+            for (unsigned edge = 0; edge < 7; ++edge) {
+                cupid_gb_apu_div_event(&gb);
+            }
+            cupid_gb_apu_div_secondary_event(&gb);
+            cupid_gb_write_u8(&gb, envelope, 0xf1);
+            assert((channel ? gb.apu.ch2_vol : gb.apu.ch1_vol) == 1);
+            cupid_gb_apu_div_event(&gb);
+            cupid_gb_tick_apu(&gb, 2);
+            assert((channel ? gb.apu.ch2_vol : gb.apu.ch1_vol) == 1);
+            cupid_gb_write_u8(&gb, 0xff26, 0);
+            assert(gb.apu.envelope_delay == 0);
+            assert(!gb.apu.pulse_timing[channel].envelope_locked);
+            assert(gb.apu.pulse_timing[channel].edge_age == 4);
+        }
+    }
+}
+
+static void test_color_frequency_reload_window(void) {
+    for (unsigned age = 0; age <= 4; age += 2) {
+        CupidGb gb = {0};
+        gb.model = CUPID_GB_MODEL_CGB;
+        cupid_gb_write_u8(&gb, 0xff26, 0x80);
+        cupid_gb_write_u8(&gb, 0xff12, 0xf0);
+        cupid_gb_write_u8(&gb, 0xff13, 0xfc);
+        cupid_gb_write_u8(&gb, 0xff14, 0x87);
+        cupid_gb_tick_apu(&gb, (uint16_t)(104 + age));
+        assert(gb.apu.ch1_duty_pos == 6);
+        cupid_gb_write_u8(&gb, 0xff14, 0);
+        assert(cupid_gb_read_u8(&gb, 0xff76) == 0);
+        cupid_gb_tick_apu(&gb, 32);
+        assert(cupid_gb_read_u8(&gb, 0xff76) == (age <= 2 ? 0 : 15));
+    }
+}
+
+static void test_color_sweep_live_frequency_and_latency(void) {
+    CupidGb gb = {0};
+    gb.model = CUPID_GB_MODEL_CGB;
+    cupid_gb_write_u8(&gb, 0xff26, 0x80);
+    cupid_gb_write_u8(&gb, 0xff10, 0x1f);
+    cupid_gb_write_u8(&gb, 0xff12, 0x80);
+    cupid_gb_write_u8(&gb, 0xff13, 0xff);
+    cupid_gb_write_u8(&gb, 0xff14, 0x87);
+    cupid_gb_tick_apu(&gb, 64);
+    for (unsigned edge = 0; edge < 3; ++edge) {
+        cupid_gb_apu_div_event(&gb);
+    }
+    assert(gb.apu.ch1_freq == 0x7f0);
+    assert(gb.io_registers[0x13] == 0xff); /* Sweep output is not the software write latch. */
+    cupid_gb_write_u8(&gb, 0xff14, 0x87);
+    assert(gb.apu.ch1_freq == 0x7f0);
+
+    cupid_gb_write_u8(&gb, 0xff26, 0);
+    cupid_gb_write_u8(&gb, 0xff26, 0x80);
+    cupid_gb_write_u8(&gb, 0xff10, 0x17);
+    cupid_gb_write_u8(&gb, 0xff12, 0x80);
+    cupid_gb_write_u8(&gb, 0xff13, 0xff);
+    cupid_gb_write_u8(&gb, 0xff14, 0x87);
+    assert(cupid_gb_read_u8(&gb, 0xff26) & 1);
+    cupid_gb_tick_apu(&gb, 37);
+    assert(cupid_gb_read_u8(&gb, 0xff26) & 1);
+    cupid_gb_tick_apu(&gb, 1);
+    assert(!(cupid_gb_read_u8(&gb, 0xff26) & 1));
+}
+
+static void test_color_sweep_overflow_mixer_edge(void) {
+    for (unsigned sample_boundary = 0; sample_boundary < 2; ++sample_boundary) {
+        CupidGb batch = {0};
+        batch.model = CUPID_GB_MODEL_CGB;
+        cupid_gb_write_u8(&batch, 0xff26, 0x80);
+        cupid_gb_write_u8(&batch, 0xff10, 0x17);
+        cupid_gb_write_u8(&batch, 0xff11, 0x80);
+        cupid_gb_write_u8(&batch, 0xff12, 0x80);
+        cupid_gb_write_u8(&batch, 0xff13, 0xff);
+        cupid_gb_write_u8(&batch, 0xff14, 0x87);
+        cupid_gb_write_u8(&batch, 0xff24, 0x77);
+        cupid_gb_write_u8(&batch, 0xff25, 0xff);
+        cupid_gb_tick_apu(&batch, 36);
+        if (sample_boundary) {
+            batch.apu.sample_acc = cupid_gb_base_clock_hz(&batch) - 2 * CUPID_GB_APU_SAMPLE_RATE;
+        }
+        CupidGb split = batch;
+        cupid_gb_tick_apu(&batch, 4);
+        for (unsigned dot = 0; dot < 4; ++dot) {
+            cupid_gb_tick_apu(&split, 1);
+        }
+        assert(!batch.apu.ch1_on && !split.apu.ch1_on);
+        /* Channel shutdown changes the mixer on its own base-clock edge,
+         * including partial integration and a host sample crossing that edge. */
+        assert(memcmp(&batch.apu, &split.apu, sizeof(batch.apu)) == 0);
+    }
+}
+
+static void test_color_noise_prescaler_and_reload(void) {
+    static const uint8_t start_ticks[4][8] = {
+        {6, 10, 10, 14, 18, 22, 26, 30},
+        {7, 9, 13, 17, 21, 25, 29, 33},
+        {6, 8, 12, 16, 20, 24, 28, 32},
+        {7, 11, 11, 15, 19, 23, 27, 31},
+    };
+    for (unsigned phase = 0; phase < 4; ++phase) {
+        for (unsigned divisor = 0; divisor < 8; ++divisor) {
+            CupidGb gb = {0};
+            gb.model = CUPID_GB_MODEL_CGB;
+            cupid_gb_write_u8(&gb, 0xff26, 0x80);
+            cupid_gb_tick_apu(&gb, (uint16_t)(phase * 2));
+            cupid_gb_write_u8(&gb, 0xff21, 0xf0);
+            cupid_gb_write_u8(&gb, 0xff22, (uint8_t)divisor);
+            cupid_gb_write_u8(&gb, 0xff23, 0x80);
+            assert(cupid_gb_read_u8(&gb, 0xff77) == 0);
+            cupid_gb_tick_apu(&gb, (uint16_t)(start_ticks[phase][divisor] * 2 - 1));
+            assert(gb.apu.noise_timing.divider_counter == 0);
+            cupid_gb_tick_apu(&gb, 1);
+            assert(gb.apu.noise_timing.divider_counter == 1);
+            assert(gb.apu.noise_timing.remaining == (divisor ? divisor * 4 : 2));
+        }
+    }
+
+    CupidGb gb = {0};
+    gb.model = CUPID_GB_MODEL_CGB;
+    cupid_gb_write_u8(&gb, 0xff26, 0x80);
+    cupid_gb_write_u8(&gb, 0xff21, 0xf0);
+    cupid_gb_write_u8(&gb, 0xff23, 0x80);
+    cupid_gb_tick_apu(&gb, 12);
+    cupid_gb_write_u8(&gb, 0xff22, 3);
+    assert(gb.apu.noise_timing.remaining == 12); /* Reload edge sees the new divisor. */
+    cupid_gb_tick_apu(&gb, 2);
+    cupid_gb_write_u8(&gb, 0xff22, 0);
+    assert(gb.apu.noise_timing.remaining == 11); /* A running countdown is retained. */
+    cupid_gb_tick_apu(&gb, 22);
+    assert(gb.apu.noise_timing.remaining == 2);
+}
+
+static void test_color_noise_retrigger_and_gates(void) {
+    CupidGb gb = {0};
+    gb.model = CUPID_GB_MODEL_CGB;
+    cupid_gb_write_u8(&gb, 0xff26, 0x80);
+    cupid_gb_write_u8(&gb, 0xff21, 0xf0);
+    cupid_gb_write_u8(&gb, 0xff23, 0x80);
+    cupid_gb_tick_apu(&gb, 6);
+    cupid_gb_write_u8(&gb, 0xff23, 0x80);
+    assert(gb.apu.ch4_lfsr == 0x7faa);
+    assert(cupid_gb_read_u8(&gb, 0xff77) == 0); /* Trigger holds zero despite the LFSR seed. */
+    cupid_gb_write_u8(&gb, 0xff21, 0);
+    uint16_t previous = gb.apu.noise_timing.divider_counter;
+    cupid_gb_tick_apu(&gb, 32);
+    assert(gb.apu.noise_timing.divider_counter != previous); /* Divisor zero retains background. */
+    assert(!gb.apu.ch4_on && cupid_gb_read_u8(&gb, 0xff77) == 0);
+
+    cupid_gb_write_u8(&gb, 0xff22, 1);
+    cupid_gb_write_u8(&gb, 0xff21, 0xf0);
+    cupid_gb_write_u8(&gb, 0xff23, 0x80);
+    cupid_gb_tick_apu(&gb, 32);
+    cupid_gb_write_u8(&gb, 0xff21, 0);
+    previous = gb.apu.noise_timing.divider_counter;
+    cupid_gb_tick_apu(&gb, 32);
+    assert(gb.apu.noise_timing.divider_counter == previous);
+    cupid_gb_write_u8(&gb, 0xff21, 0xf0);
+    cupid_gb_tick_apu(&gb, 32);
+    assert(gb.apu.noise_timing.divider_counter == previous); /* DAC enable is not a trigger. */
+    cupid_gb_write_u8(&gb, 0xff26, 0);
+    assert(gb.apu.noise_timing.divider_counter == 0);
+    assert(!gb.apu.noise_timing.background && !gb.apu.noise_timing.foreground);
+}
+
+static void test_color_noise_selector_edge(void) {
+    CupidGb gb = {0};
+    gb.model = CUPID_GB_MODEL_CGB;
+    cupid_gb_write_u8(&gb, 0xff26, 0x80);
+    cupid_gb_write_u8(&gb, 0xff21, 0xf0);
+    cupid_gb_write_u8(&gb, 0xff22, 0x38);
+    cupid_gb_write_u8(&gb, 0xff23, 0x80);
+    cupid_gb_tick_apu(&gb, 12);
+    assert(gb.apu.noise_timing.divider_counter == 1 && gb.apu.ch4_lfsr == 0x7fff);
+    cupid_gb_write_u8(&gb, 0xff22, 8);
+    assert(gb.apu.ch4_lfsr == 0x3fbf);
+    cupid_gb_write_u8(&gb, 0xff22, 0x38);
+    assert(gb.apu.ch4_lfsr == 0x3fbf);
+    cupid_gb_write_u8(&gb, 0xff22, 8);
+    assert(gb.apu.ch4_lfsr == 0x1f9f);
+}
+
+static void test_color_noise_dac_off_counter_carry(void) {
+    CupidGb gb = {0};
+    gb.model = CUPID_GB_MODEL_CGB;
+    cupid_gb_write_u8(&gb, 0xff26, 0x80);
+    cupid_gb_write_u8(&gb, 0xff21, 0xf0);
+    cupid_gb_write_u8(&gb, 0xff22, 9);
+    cupid_gb_write_u8(&gb, 0xff23, 0x80);
+    tick_audio(&gb, 65540u * 2);
+    assert(gb.apu.noise_timing.divider_counter == 0x3fff);
+    assert(gb.apu.noise_timing.remaining == 2);
+    assert(gb.apu.ch4_lfsr == (0x47c7 ^ 0x7fff));
+    cupid_gb_write_u8(&gb, 0xff21, 0);
+    assert(gb.apu.noise_timing.divider_counter == 0x4000);
+    assert(!gb.apu.noise_timing.foreground && !gb.apu.noise_timing.background);
+    tick_audio(&gb, 16);
+    assert(gb.apu.noise_timing.divider_counter == 0x4000);
+    cupid_gb_write_u8(&gb, 0xff22, 0xe9);
+    assert(gb.apu.ch4_lfsr == (0x63e3 ^ 0x7fff));
+    assert(cupid_gb_read_u8(&gb, 0xff77) == 0);
+    cupid_gb_write_u8(&gb, 0xff22, 9);
+    /* Repeated gate transitions can carry beyond 0x4000 without a normal
+     * prescaler edge. The held counter wraps at its sixteen-bit storage width. */
+    for (unsigned restart = 0; restart < 0xc000; ++restart) {
+        cupid_gb_write_u8(&gb, 0xff21, 0xf0);
+        cupid_gb_write_u8(&gb, 0xff23, 0x80);
+        cupid_gb_tick_apu(&gb, 16);
+        cupid_gb_write_u8(&gb, 0xff21, 0);
+        if (restart < 3) {
+            assert(gb.apu.noise_timing.divider_counter == 0x4001 + restart);
+        }
+    }
+    assert(gb.apu.noise_timing.divider_counter == 0);
+}
+
+static void test_audio_chunk_splitting(void) {
+    const CupidGbModel models[] = {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_CGB, CUPID_GB_MODEL_SGB};
+    const uint32_t rates[] = {8000, 44100, 192000};
+    const uint16_t chunks[] = {1, 2, 4, 31, 257, UINT16_MAX};
+    for (unsigned model = 0; model < sizeof(models) / sizeof(models[0]); ++model) {
+        for (unsigned rate = 0; rate < sizeof(rates) / sizeof(rates[0]); ++rate) {
+            for (unsigned scenario = 0; scenario < 6; ++scenario) {
+                CupidGb batch = {0};
+                batch.model = models[model];
+                assert(cupid_gb_apu_set_sample_rate(&batch, rates[rate]));
+                cupid_gb_write_u8(&batch, 0xff26, 0x80);
+                cupid_gb_write_u8(&batch, 0xff10, scenario == 2 ? 0x17 : 0);
+                cupid_gb_write_u8(&batch, 0xff11, 0x80);
+                cupid_gb_write_u8(&batch, 0xff12, 0x89);
+                cupid_gb_write_u8(&batch, 0xff13, 0xff);
+                cupid_gb_write_u8(&batch, 0xff14, 0x87);
+                cupid_gb_write_u8(&batch, 0xff21, 0xb3);
+                cupid_gb_write_u8(&batch, 0xff22, 9);
+                cupid_gb_write_u8(&batch, 0xff23, 0x80);
+                cupid_gb_write_u8(&batch, 0xff24, 0x77);
+                cupid_gb_write_u8(&batch, 0xff25, 0xff);
+                if (scenario == 0) {
+                    cupid_gb_write_u8(&batch, 0xff26, 0);
+                } else if (scenario == 3) {
+                    batch.apu.buf_write = CUPID_GB_APU_BUF_FRAMES;
+                } else if (scenario == 4) {
+                    batch.cpu.stopped = true;
+                    batch.apu.ch3_wave_access_ticks = 3;
+                } else if (scenario == 5) {
+                    batch.apu.ch1_timer = 500;
+                    batch.apu.ch2_timer = 500;
+                    batch.apu.ch3_wave_access_ticks = 3;
+                    batch.apu.ch4_timer = 2;
+                    batch.apu.ch4_shift = 14;
+                }
+                for (unsigned chunk = 0; chunk < sizeof(chunks) / sizeof(chunks[0]); ++chunk) {
+                    CupidGb split = batch;
+                    cupid_gb_tick_apu(&batch, chunks[chunk]);
+                    for (unsigned dot = 0; dot < chunks[chunk]; ++dot) {
+                        cupid_gb_tick_apu(&split, 1);
+                    }
+                    assert(memcmp(&batch.apu, &split.apu, sizeof(batch.apu)) == 0);
+                }
+            }
+        }
+    }
+}
+
 int main(void) {
+    test_color_pulse_clock_and_held_duty();
+    test_color_envelope_edges();
+    test_color_frequency_reload_window();
+    test_color_sweep_live_frequency_and_latency();
+    test_color_sweep_overflow_mixer_edge();
+    test_color_noise_prescaler_and_reload();
+    test_color_noise_retrigger_and_gates();
+    test_color_noise_selector_edge();
+    test_color_noise_dac_off_counter_carry();
+    test_audio_chunk_splitting();
     test_divider_clock(false);
     test_divider_clock(true);
     test_div_reset_edge();

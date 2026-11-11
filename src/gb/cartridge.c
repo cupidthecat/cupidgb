@@ -8,7 +8,7 @@
  * and MBC controllers.
  *
  * Implements ROM-only, MBC1 (including multicart), MBC2, MBC3/MBC30,
- * MBC5, and HuC1 banking. MBC6, MBC7, MMM01, and HuC3 remain partial.
+ * MBC5, MBC7, MMM01, and HuC1 banking. MBC6 and HuC3 remain partial.
  */
 
 #include "cupid/gb/cartridge.h"
@@ -22,6 +22,7 @@
 #include "cupid/common/log.h"
 #include "cupid/gb/battery.h"
 #include "cupid/gb/gb.h"
+#include "cupid/gb/mbc7.h"
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -67,7 +68,7 @@ enum {
  *
  * @return The corresponding RAM size in bytes, or 0 for unrecognised codes.
  */
-static size_t cupid_gb_ram_size_from_code(uint8_t code) {
+size_t cupid_gb_ram_size_from_code(uint8_t code) {
     switch (code) {
         case 0x00u:
             return 0u;
@@ -258,6 +259,8 @@ static CupidGbMbcType cupid_gb_detect_mbc_type(uint8_t cartridge_type) {
             return CUPID_GB_MBC6;
         case 0x22u:
             return CUPID_GB_MBC7;
+        case 0xfcu:
+            return CUPID_GB_CAMERA;
         case 0xfeu:
             return CUPID_GB_HUC3;
         case 0xffu:
@@ -362,6 +365,25 @@ void cupid_gb_huc1_write(CupidGb *gb, uint16_t address, uint8_t value) {
     gb->current_rom_bank = gb->mbc5_rom_bank;
 }
 
+/* Before the first control write, the upper window shows bank 1 even
+ * though the cartridge's seven-bit bank latch is zero. Keep this initial
+ * mapping in the existing snapshot field using an impossible bank value. */
+enum { HUC3_STARTUP_BANK = 0x80 };
+
+void cupid_gb_huc3_write(CupidGb *gb, uint16_t address, uint8_t value) {
+    if (gb->current_rom_bank == HUC3_STARTUP_BANK)
+        gb->current_rom_bank = 0u;
+
+    if (address < 0x2000u) {
+        gb->huc3_mode = value & 0x0fu;
+        gb->ram_enabled = gb->huc3_mode == 0x0au;
+    } else if (address < 0x4000u) {
+        gb->current_rom_bank = value & 0x7fu;
+    } else if (address < 0x6000u) {
+        gb->current_ram_bank = value & 0x0fu;
+    }
+}
+
 // MBC bank helpers (used by memory map in gb.c)
 
 /**
@@ -421,24 +443,42 @@ size_t cupid_gb_effective_rom_bank(const CupidGb *gb, bool lower_region) {
         case CUPID_GB_HUC1:
             bank = lower_region ? 0u : gb->current_rom_bank & 0x3fu;
             break;
+        case CUPID_GB_TPP1:
+            bank = lower_region ? 0u : gb->tpp1.rom_bank;
+            break;
+        case CUPID_GB_HUC3:
+            bank = gb->current_rom_bank == HUC3_STARTUP_BANK ? 1u : gb->current_rom_bank;
+            if (lower_region)
+                bank = 0u;
+            break;
         case CUPID_GB_MMM01: {
+            const size_t count = gb->rom_bank_count;
+            if (!count)
+                return 0;
             if (!gb->mmm01_locked) {
-                bank = lower_region ? 0u : gb->current_rom_bank;
+                bank = count - (lower_region ? 2u : 1u);
             } else {
-                size_t b = gb->current_rom_bank;
-                if (b == 0u) {
-                    b = 1u;
-                }
-                bank =
-                    lower_region ? (size_t)gb->mmm01_bank_base : ((size_t)gb->mmm01_bank_base + b);
+                const unsigned selected = gb->mmm01_rom_select;
+                const unsigned extension = gb->mmm01_bank_select;
+                const unsigned mode = gb->mmm01_mode;
+                const unsigned upper_bits = ((extension >> 4u) & 3u) << 7u;
+                const unsigned middle = mode & 0x40u ? extension & 3u : selected >> 5u;
+                const unsigned menu_middle = (mode & 0x41u) == 0x41u ? 0u : middle;
+                const unsigned fixed =
+                    upper_bits | (menu_middle << 5u) | (selected & ((mode & 0x3cu) >> 1u));
+                const unsigned switched = upper_bits | (middle << 5u) | (selected & 31u);
+                bank = lower_region ? fixed : switched + (fixed == switched);
             }
+            /* Some dumps put the two menu banks first. Translate bus bank
+             * numbers without rotating the original bytes or their identity. */
+            bank += gb->mmm01_menu_first ? 2u : 0u;
             break;
         }
         case CUPID_GB_MBC_NONE:
             bank = lower_region ? 0u : 1u;
             break;
         default:
-            /* MBC3, MBC6, MBC7, HuC3, unknown */
+            /* MBC3, MBC6, MBC7, unknown */
             bank = lower_region ? 0u : gb->current_rom_bank;
             break;
     }
@@ -467,6 +507,9 @@ size_t cupid_gb_effective_ram_bank(const CupidGb *gb) {
         return 0u;
     }
 
+    if (gb->header.mbc_type == CUPID_GB_TPP1)
+        return gb->tpp1.ram_bank % gb->ram_bank_count;
+
     if (gb->header.mbc_type == CUPID_GB_MBC1) {
         if (gb->mbc1_ram_banking_mode && !gb->mbc1_multicart) {
             return (size_t)(gb->mbc1_bank_high2 & 0x03u) % gb->ram_bank_count;
@@ -476,9 +519,38 @@ size_t cupid_gb_effective_ram_bank(const CupidGb *gb) {
     }
 
     size_t bank = gb->current_ram_bank;
+    if (gb->header.mbc_type == CUPID_GB_MMM01 && gb->mmm01_locked) {
+        const unsigned low =
+            gb->mmm01_mode & 0x40u ? gb->mmm01_rom_select >> 5u : gb->mmm01_bank_select & 3u;
+        bank = (gb->mmm01_bank_select & 0x0cu) | low;
+    }
     if (gb->header.mbc_type == CUPID_GB_MBC3 && !cupid_gb_has_extended_mbc3(gb))
         bank &= 3u;
     return bank % gb->ram_bank_count;
+}
+
+void cupid_gb_mmm01_write(CupidGb *gb, uint16_t address, uint8_t value) {
+    if (address < 0x2000u) {
+        gb->ram_enabled = (value & 0x0fu) == 0x0au;
+        if (!gb->mmm01_locked) {
+            gb->mmm01_ram_mask = (uint8_t)((value >> 4u) & 3u);
+            gb->mmm01_locked = (value & 0x40u) != 0;
+        }
+    } else if (address < 0x4000u) {
+        /* A mask holds the subcartridge's configured address lines while
+         * writes switch the remaining low ROM bits. Bit zero stays writable. */
+        const unsigned held = (gb->mmm01_mode & 0x3cu) >> 1u;
+        const unsigned mid = (gb->mmm01_locked ? gb->mmm01_rom_select : value) & 0x60u;
+        gb->mmm01_rom_select =
+            (uint8_t)(mid | (gb->mmm01_rom_select & held) | (value & (31u ^ held)));
+    } else if (address < 0x6000u) {
+        const unsigned high = (gb->mmm01_locked ? gb->mmm01_bank_select : value) & 0x7cu;
+        gb->mmm01_bank_select = (uint8_t)(high | ((value | (3u ^ gb->mmm01_ram_mask)) & 3u));
+    } else {
+        const unsigned settings = (gb->mmm01_locked ? gb->mmm01_mode : value) & 0x7cu;
+        const unsigned mode = (gb->mmm01_bank_select & 0x40u ? gb->mmm01_mode : value) & 1u;
+        gb->mmm01_mode = (uint8_t)(settings | mode);
+    }
 }
 
 // Header parsing
@@ -535,6 +607,20 @@ bool cupid_gb_parse_header(const uint8_t *rom_data, size_t rom_size,
     header->header_checksum_valid =
         cupid_gb_compute_header_checksum(rom_data) == header->header_checksum;
 
+    /* TPP1 uses an extended header and its own SRAM size encoding. */
+    if (header->cartridge_type == 0xbcu && header->ram_size_code == 0xc1u &&
+        header->destination_code == 0x65u) {
+        if (rom_size < 0x154u)
+            return false;
+        const unsigned ram_code = rom_data[0x152u];
+        header->ram_bank_count = ram_code >= 1 && ram_code <= 9 ? (size_t)1u << (ram_code - 1) : 0;
+        header->mbc_type = CUPID_GB_TPP1;
+        header->has_battery = (rom_data[0x153u] & 8u) != 0;
+        header->has_timer = true;
+        header->has_rumble = true;
+        return true;
+    }
+
     /* Detect battery-backed SRAM */
     switch (header->cartridge_type) {
         case 0x03u: /* MBC1+RAM+BATTERY */
@@ -546,7 +632,8 @@ bool cupid_gb_parse_header(const uint8_t *rom_data, size_t rom_size,
         case 0x13u: /* MBC3+RAM+BATTERY */
         case 0x1bu: /* MBC5+RAM+BATTERY */
         case 0x1eu: /* MBC5+RUMBLE+RAM+BATTERY */
-        case 0x22u: /* MBC7+SENSOR+RUMBLE+RAM+BATTERY */
+        case 0x22u: /* MBC7+SENSOR+EEPROM */
+        case 0xfcu: /* Camera */
         case 0xfeu: /* HuC3 (battery-backed RTC/RAM) */
         case 0xffu: /* HuC1+RAM+BATTERY */
             header->has_battery = true;
@@ -572,7 +659,6 @@ bool cupid_gb_parse_header(const uint8_t *rom_data, size_t rom_size,
         case 0x1cu: /* MBC5+RUMBLE */
         case 0x1du: /* MBC5+RUMBLE+RAM */
         case 0x1eu: /* MBC5+RUMBLE+RAM+BATTERY */
-        case 0x22u: /* MBC7+SENSOR+RUMBLE+RAM+BATTERY */
             header->has_rumble = true;
             break;
         default:
@@ -691,6 +777,28 @@ bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size) {
         cupid_log_error("Failed to parse Game Boy cartridge header.");
         return false;
     }
+    const bool mmm01_menu_first = header.mbc_type == CUPID_GB_MMM01;
+    if (!mmm01_menu_first && header.mbc_type != CUPID_GB_TPP1 && rom_size > 0x8000u) {
+        const uint8_t *menu = rom_data + rom_size - 0x8000u;
+        if (!memcmp(rom_data + CUPID_GB_LOGO_START, menu + CUPID_GB_LOGO_START,
+                    CUPID_GB_LOGO_END - CUPID_GB_LOGO_START + 1u)) {
+            CupidGbMbcType tail_type = cupid_gb_detect_mbc_type(menu[CUPID_GB_CARTRIDGE_TYPE]);
+            if (tail_type == CUPID_GB_MMM01) {
+                cupid_gb_parse_header(menu, 0x8000u, &header);
+            } else if (menu[CUPID_GB_CARTRIDGE_TYPE] == 0x11u) {
+                /* Some MMM01 menus declare a plain MBC3 type. */
+                header.mbc_type = CUPID_GB_MMM01;
+            }
+        }
+    }
+
+    const size_t ram_size = header.mbc_type == CUPID_GB_TPP1
+                                ? header.ram_bank_count * 0x2000u
+                                : cupid_gb_ram_size_from_code(header.ram_size_code);
+    if (ram_size > CUPID_GB_MAX_RAM_SIZE) {
+        cupid_log_error("Game Boy cartridge RAM size exceeds emulator limits.");
+        return false;
+    }
 
     cupid_gb_init(gb);
     if (gb->rom == 0) {
@@ -735,16 +843,18 @@ bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size) {
         gb->header.mbc_type = CUPID_GB_MBC_NONE;
     }
 
-    if (gb->header.cartridge_type == 0 && rom_size > 0x8000u) {
+    if (gb->header.mbc_type == CUPID_GB_MBC_NONE && gb->header.cartridge_type == 0 &&
+        rom_size > 0x8000u) {
         cupid_log_info("ROM-only header exceeds 32 KiB; selecting MBC3 banking.");
         gb->header.mbc_type = CUPID_GB_MBC3;
     }
 
-    gb->cartridge_ram_size = cupid_gb_ram_size_from_code(gb->header.ram_size_code);
-    if (gb->cartridge_ram_size > CUPID_GB_MAX_RAM_SIZE) {
-        cupid_log_error("Game Boy cartridge RAM size exceeds emulator limits.");
-        return false;
-    }
+    gb->cartridge_ram_size = ram_size;
+
+    if (gb->header.mbc_type == CUPID_GB_TPP1)
+        gb->tpp1.rom_bank = 1;
+    if (gb->header.mbc_type == CUPID_GB_CAMERA || gb->header.mbc_type == CUPID_GB_TPP1)
+        memset(gb->cartridge_ram, 0xff, gb->cartridge_ram_size);
 
     /* Connected ROM address lines follow file population, independently of
      * header metadata. Missing bytes read as erased 0xff in the memory map.
@@ -755,36 +865,39 @@ bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size) {
     gb->ram_bank_count = gb->header.ram_bank_count;
     gb->current_rom_bank = gb->rom_bank_count > 1u ? 1u : 0u;
     gb->current_ram_bank = 0u;
+    gb->mbc5_rumble_on = false;
     gb->mbc1_bank_low5 = 1u;
     gb->mbc1_bank_high2 = 0u;
     gb->mbc1_multicart = cupid_gb_detect_mbc1_multicart(rom_data, rom_size, &gb->header);
     gb->ram_enabled = gb->header.mbc_type == CUPID_GB_MBC_NONE;
     gb->mbc1_ram_banking_mode = false;
-    gb->mbc5_rom_bank = gb->header.mbc_type == CUPID_GB_HUC1 ? 0u : 1u;
+    gb->mbc5_rom_bank = (uint16_t)(gb->header.mbc_type != CUPID_GB_HUC1);
     gb->rtc_register = 0u;
     gb->rtc.base_time = 0;
+    /* Keep the reserved sensor fields stable in non-MBC7 native states. */
     gb->mbc7_sensor_x = 0x81d0u;
     gb->mbc7_sensor_y = 0x81d0u;
     gb->mbc7_latch = false;
     gb->mmm01_locked = false;
     gb->mmm01_bank_base = 0u;
+    gb->mmm01_ram_mask = 3u;
+    gb->mmm01_menu_first = mmm01_menu_first;
     gb->huc1_ir_mode = false;
     gb->huc3_mode = 0u;
     gb->huc3_value = 0u;
+    if (gb->header.mbc_type == CUPID_GB_HUC3)
+        gb->current_rom_bank = HUC3_STARTUP_BANK;
 
     /* MBC2 has 512x4-bit built-in RAM regardless of header RAM size */
     if (gb->header.mbc_type == CUPID_GB_MBC2) {
         gb->cartridge_ram_size = 512u;
         gb->ram_bank_count = 1u;
     }
-    /* MBC7 uses cartridge RAM region for EEPROM mapping */
     if (gb->header.mbc_type == CUPID_GB_MBC7) {
-        if (gb->cartridge_ram_size < 256u) {
-            gb->cartridge_ram_size = 256u;
-        }
-        if (gb->ram_bank_count == 0u) {
-            gb->ram_bank_count = 1u;
-        }
+        gb->cartridge_ram_size = CUPID_GB_MBC7_EEPROM_SIZE;
+        gb->ram_bank_count = 1u;
+        gb->current_rom_bank = 0;
+        cupid_gb_mbc7_reset(gb);
     }
 
     gb->loaded = true;
@@ -862,7 +975,9 @@ const char *cupid_gb_cartridge_type_name(uint8_t cartridge_type) {
         case 0x20u:
             return "MBC6";
         case 0x22u:
-            return "MBC7+SENSOR+RUMBLE+RAM+BATTERY";
+            return "MBC7+SENSOR+EEPROM";
+        case 0xfcu:
+            return "Game Boy Camera";
         case 0xfeu:
             return "HuC3";
         case 0xffu:
@@ -904,6 +1019,10 @@ const char *cupid_gb_mbc_name(CupidGbMbcType mbc_type) {
             return "HuC1";
         case CUPID_GB_HUC3:
             return "HuC3";
+        case CUPID_GB_CAMERA:
+            return "Camera";
+        case CUPID_GB_TPP1:
+            return "TPP1";
         default:
             return "UNKNOWN";
     }

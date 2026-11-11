@@ -10,4 +10,6 @@ The Qt frontend saves after a quiet period following guest writes and flushes be
 
 File > Recover Battery from Older State validates a native version 1 snapshot's size, integrity, and cartridge identity, then exports its RAM and supported clock data to a separate file. It does not change the running cartridge or restore older execution state. Cartridge, battery, and input snapshot paths are protected from accidental replacement during recovery.
 
-Clock persistence currently covers MBC3. Other controllers with clocks, EEPROM, flash, motion sensors, or camera hardware still require separate implementation and validation. Battery-file interoperability is limited to the layouts described here.
+MBC7 files store the 256 EEPROM bytes in address order. An oversized file from an older CupidGB build is accepted when its length matches the RAM size declared by that cartridge header. Only the first 256 bytes contain usable EEPROM data. Camera cartridges persist their banked SRAM as a RAM-only file.
+
+Battery-enabled TPP1 cartridges append a 20-byte clock trailer to SRAM. It stores the `TPP1` signature, version, status, Unix timestamp, and four live clock bytes. Loading also accepts exact SRAM-only data. Other clock and flash devices remain pending.

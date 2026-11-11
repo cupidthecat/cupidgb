@@ -108,6 +108,18 @@ def main():
         rom.write_bytes(make_rom(bytes((0x06, 0x42, 0x0E, 0x42, 0x16, 0x42,
                                        0x1E, 0x42, 0x26, 0x42, 0x2E, 0x42, 0x40))))
         assert run(runner, rom, "--protocol", "register", expected_code=1)["status"] == "fail"
+        for data, expected, code in ((bytes((3, 5, 8, 13, 21, 34)), "pass", 0),
+                                     (bytes((0x42,)) * 6, "fail", 1)):
+            rom.write_bytes(make_rom(serial_program(data)))
+            signature = run(runner, rom, "--protocol", "fibonacci", expected_code=code)
+            assert signature["status"] == expected and signature["serial_bytes"] == 6
+            assert run(runner, rom, "--frames", "2")["status"] == "bounded"
+        for data in (bytes((3, 5, 8, 13, 21)), bytes((0x42,)) * 5, b"Passed"):
+            rom.write_bytes(make_rom(serial_program(data)))
+            assert run(runner, rom, "--protocol", "fibonacci", "--frames", "2",
+                       expected_code=3)["status"] == "bounded"
+        rom.write_bytes(make_rom(serial_program(b"prefix\0" + bytes((3, 5, 8, 13, 21, 34)))))
+        assert run(runner, rom, "--protocol", "fibonacci")["status"] == "pass"
         rom.write_bytes(make_rom(bytes((0xF3, 0xAF, 0xE0, 0x40, 0x76, 0x18, 0xFD))))
         bounded = run(runner, rom, "--frames", "2")
         assert bounded["status"] == "bounded"

@@ -19,9 +19,20 @@ jobs:
           version: '6.8.3'
           modules: qtmultimedia
           cache: true
-      - name: Linux hashing dependency
+      - name: Linux desktop dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev libsdl2-dev
+      - name: Windows controller SDK
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $archive = Join-Path $env:RUNNER_TEMP 'SDL2-devel-2.28.5-VC.zip'
+          Invoke-WebRequest 'https://github.com/libsdl-org/SDL/releases/download/release-2.28.5/SDL2-devel-2.28.5-VC.zip' -OutFile $archive
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne '4AC4BA2208410B7B984759EE12E13E0606BD62032B5DDC36FB7D96B9ADE78871') {
+            throw 'Controller SDK checksum mismatch'
+          }
+          Expand-Archive $archive -DestinationPath $env:RUNNER_TEMP
+          "SDL2_ROOT=$env:RUNNER_TEMP/SDL2-2.28.5" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
       - name: Build

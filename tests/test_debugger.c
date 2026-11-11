@@ -118,8 +118,10 @@ static void test_execution(CupidGb *gb) {
     halt_at_vram_boundary(gb);
     assert(cupid_gb_read_u8(gb, 0x8000) == 0);
     cupid_gb_debugger_begin(&debug, gb, CUPID_GB_DEBUG_NEXT);
+    assert(cupid_gb_debugger_step(&debug, gb) == CUPID_GB_DEBUG_STOP_NONE);
+    assert(!gb->cpu.halted && gb->cpu.pc == 0x8000 && debug.steps == 1);
     assert(cupid_gb_debugger_run(&debug, gb, 8) == CUPID_GB_DEBUG_STOP_TARGET);
-    assert(gb->cpu.pc == 0x8001 && gb->cpu.sp == 0xdff0 && debug.steps == 2);
+    assert(gb->cpu.pc == 0x8001 && gb->cpu.sp == 0xdff0 && debug.steps == 3);
 
     prepare(gb);
     gb->rom[0x100] = 0x18;
@@ -168,8 +170,8 @@ static void test_interrupts_and_halt(CupidGb *gb) {
     assert(gb->cpu.halted && gb->cpu.pc == 0x101);
     cupid_gb_debugger_breakpoints_clear(&debug);
 
-    /* With IME clear, a pending request wakes HALT and executes the next
-     * opcode in the same core step. Calls and returns still affect depth. */
+    /* With IME clear, the wake-only poll precedes the next opcode. Next must
+     * wait through that idle event and still track calls and returns. */
     prepare(gb);
     gb->rom[0x101] = 0xcd;
     gb->rom[0x102] = 0x10;
@@ -180,7 +182,7 @@ static void test_interrupts_and_halt(CupidGb *gb) {
     gb->interrupt_enable = gb->interrupt_flags = 1;
     cupid_gb_debugger_begin(&debug, gb, CUPID_GB_DEBUG_NEXT);
     assert(cupid_gb_debugger_run(&debug, gb, 8) == CUPID_GB_DEBUG_STOP_TARGET);
-    assert(gb->cpu.pc == 0x104 && gb->cpu.sp == 0xdff0 && debug.steps == 2);
+    assert(gb->cpu.pc == 0x104 && gb->cpu.sp == 0xdff0 && debug.steps == 3);
     gb->cpu.pc = 0x110;
     gb->cpu.sp = 0xdfee;
     gb->cpu.halted = true;
@@ -188,7 +190,7 @@ static void test_interrupts_and_halt(CupidGb *gb) {
     assert(cupid_gb_debug_poke(gb, 0xdfef, 0x01));
     cupid_gb_debugger_begin(&debug, gb, CUPID_GB_DEBUG_FINISH);
     assert(cupid_gb_debugger_run(&debug, gb, 8) == CUPID_GB_DEBUG_STOP_TARGET);
-    assert(gb->cpu.pc == 0x104 && gb->cpu.sp == 0xdff0 && debug.steps == 1);
+    assert(gb->cpu.pc == 0x104 && gb->cpu.sp == 0xdff0 && debug.steps == 2);
 
     prepare(gb);
     gb->rom[0x100] = 0x10;
@@ -464,9 +466,7 @@ static void test_step_observation(CupidGb *gb) {
                 gb->joypad = 0;
         } else {
             halt_at_vram_boundary(gb);
-            event = CUPID_GB_STEP_INSTRUCTION;
             address = 0x8000;
-            opcode = 0xff;
             assert(cupid_gb_read_u8(gb, address) == 0);
         }
         uint8_t *owned_rom = observed->rom;
@@ -478,6 +478,15 @@ static void test_step_observation(CupidGb *gb) {
         assert(cupid_gb_step_observed(observed, &trace));
         assert(trace.event == event && trace.address == address && trace.opcode == opcode);
         assert_same_hardware(gb, observed);
+        if (scenario == 5) {
+            /* Wake changes bus visibility before the following opcode fetch.
+             * The idle trace must not describe the earlier readable NOP. */
+            assert(!gb->cpu.halted && gb->cpu.pc == address);
+            assert(cupid_gb_step(gb) && cupid_gb_step_observed(observed, &trace));
+            assert(trace.event == CUPID_GB_STEP_INSTRUCTION && trace.address == address &&
+                   trace.opcode == 0xff);
+            assert_same_hardware(gb, observed);
+        }
     }
     CupidGbStepTrace trace = {CUPID_GB_STEP_INTERRUPT, 1, 1};
     assert(!cupid_gb_step_observed(NULL, &trace));

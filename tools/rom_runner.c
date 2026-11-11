@@ -151,6 +151,10 @@ typedef struct SerialCapture {
     bool output;
     bool output_error;
     bool changed;
+    bool binary_protocol;
+    uint8_t signature[6];
+    unsigned signature_length;
+    int signature_result;
 } SerialCapture;
 
 static void observe_serial(const CupidGb *gb, uint8_t transmitted, void *user_data) {
@@ -158,6 +162,22 @@ static void observe_serial(const CupidGb *gb, uint8_t transmitted, void *user_da
     SerialCapture *capture = user_data;
     ++capture->bytes;
     capture->changed = true;
+    if (capture->binary_protocol && !capture->signature_result) {
+        if (capture->signature_length == sizeof(capture->signature)) {
+            memmove(capture->signature, capture->signature + 1, sizeof(capture->signature) - 1);
+            --capture->signature_length;
+        }
+        capture->signature[capture->signature_length++] = transmitted;
+        if (capture->signature_length == sizeof(capture->signature)) {
+            static const uint8_t passed[] = {3, 5, 8, 13, 21, 34};
+            static const uint8_t failed[] = {0x42, 0x42, 0x42, 0x42, 0x42, 0x42};
+            if (!memcmp(capture->signature, passed, sizeof(passed))) {
+                capture->signature_result = 1;
+            } else if (!memcmp(capture->signature, failed, sizeof(failed))) {
+                capture->signature_result = -1;
+            }
+        }
+    }
     if (capture->length == sizeof(capture->text) - 1) {
         memmove(capture->text, capture->text + 1024, capture->length - 1024);
         capture->length -= 1024;
@@ -179,7 +199,7 @@ int main(int argc, char **argv) {
         if (!strcmp(argv[i], "--help")) {
             puts(
                 "CupidGB ROM runner: [--model dmg|mgb|cgb|sgb|sgb2] [--frames N] "
-                "[--max-steps N] [--protocol none|serial|register|memory] [--boot FILE] "
+                "[--max-steps N] [--protocol none|serial|register|fibonacci|memory] [--boot FILE] "
                 "[--image FILE.ppm] [--audio FILE.pcm] [--input-trace FILE] [--serial-output] ROM");
             return 0;
         }
@@ -234,11 +254,12 @@ int main(int argc, char **argv) {
     }
     if (!rom || !known_model ||
         (strcmp(protocol, "none") && strcmp(protocol, "serial") && strcmp(protocol, "register") &&
-         strcmp(protocol, "memory"))) {
+         strcmp(protocol, "fibonacci") && strcmp(protocol, "memory"))) {
         fprintf(stderr, "A ROM, valid model and valid protocol are required. Use --help.\n");
         return 2;
     }
-    const bool protocol_register = !strcmp(protocol, "register");
+    const bool protocol_fibonacci = !strcmp(protocol, "fibonacci");
+    const bool protocol_register = !strcmp(protocol, "register") || protocol_fibonacci;
     const bool protocol_memory = !strcmp(protocol, "memory");
     const bool protocol_serial = !strcmp(protocol, "serial");
     if (!max_steps) {
@@ -272,7 +293,7 @@ int main(int argc, char **argv) {
     }
     uint64_t steps = 0, vblank_frames = 0, audio_frames = 0;
     uint32_t audio_crc = UINT32_MAX, image_crc = 0;
-    SerialCapture serial = {.output = serial_output};
+    SerialCapture serial = {.output = serial_output, .binary_protocol = protocol_fibonacci};
     cupid_gb_set_serial_output_callback(gb, observe_serial, &serial);
     bool memory_running = false;
     int memory_code = -1;
@@ -326,6 +347,10 @@ int main(int argc, char **argv) {
                 status = "pass";
                 test_finished = true;
             }
+        }
+        if (protocol_fibonacci && serial.signature_result) {
+            status = serial.signature_result > 0 ? "pass" : "fail";
+            test_finished = true;
         }
         if (gb->frame_ready) {
             ++vblank_frames;
