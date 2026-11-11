@@ -1,4 +1,5 @@
 #include "cupid/gb/input.h"
+#include "cupid/gb/timer.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -114,6 +115,161 @@ static void adapter_player_buttons(CupidGb *gb) {
     assert(!cupid_gb_set_buttons_for_player(NULL, 0, 0));
 }
 
+static void prepare_rows(CupidGb *gb, CupidGbModel model, uint8_t rows, uint8_t buttons) {
+    gb->model = model;
+    gb->sgb.enabled = false;
+    gb->io_registers[0] = rows;
+    gb->joypad = buttons;
+    gb->joyp_select_delay = 0;
+    gb->joyp_select_value = 0;
+    gb->interrupt_flags = 0;
+}
+
+static void monochrome_row_release(CupidGb *gb) {
+    const struct {
+        CupidGbModel model;
+        uint8_t old_rows, requested, delay, during, settled;
+    } cases[] = {
+        {CUPID_GB_MODEL_DMG_ABC, 0x00, 0x10, 24, 0xd0, 0xd5},
+        {CUPID_GB_MODEL_DMG_ABC, 0x00, 0x20, 12, 0xe0, 0xea},
+        {CUPID_GB_MODEL_DMG_ABC, 0x00, 0x30, 24, 0xf0, 0xff},
+        {CUPID_GB_MODEL_DMG_ABC, 0x10, 0x20, 12, 0xe0, 0xea},
+        {CUPID_GB_MODEL_DMG_ABC, 0x20, 0x10, 24, 0xd0, 0xd5},
+        {CUPID_GB_MODEL_DMG_ABC, 0x10, 0x30, 12, 0xf5, 0xff},
+        {CUPID_GB_MODEL_DMG_ABC, 0x20, 0x30, 24, 0xfa, 0xff},
+        {CUPID_GB_MODEL_MGB, 0x00, 0x10, 16, 0xd0, 0xd5},
+        {CUPID_GB_MODEL_MGB, 0x00, 0x20, 4, 0xe0, 0xea},
+        {CUPID_GB_MODEL_MGB, 0x20, 0x10, 20, 0xd0, 0xd5},
+        {CUPID_GB_MODEL_MGB, 0x10, 0x30, 4, 0xf5, 0xff},
+        {CUPID_GB_MODEL_DMG0, 0x20, 0x30, 24, 0xfa, 0xff},
+    };
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        prepare_rows(gb, cases[i].model, cases[i].old_rows, 0x5a);
+        cupid_gb_input_select(gb, cases[i].requested);
+        assert(cupid_gb_input_read(gb) == cases[i].during);
+        assert(gb->joyp_select_delay == cases[i].delay);
+        cupid_gb_input_tick(gb, 0);
+        assert(gb->joyp_select_delay == cases[i].delay);
+        cupid_gb_input_tick(gb, cases[i].delay - 1u);
+        assert(cupid_gb_input_read(gb) == cases[i].during);
+        cupid_gb_input_tick(gb, 1);
+        assert(cupid_gb_input_read(gb) == cases[i].settled);
+        assert(!gb->joyp_select_delay && !gb->joyp_select_value);
+        gb->interrupt_flags = 0;
+        cupid_gb_input_tick(gb, 100);
+        assert(!gb->interrupt_flags);
+    }
+}
+
+static void pending_row_writes(CupidGb *gb) {
+    prepare_rows(gb, CUPID_GB_MODEL_DMG_ABC, 0x20, 0xfe);
+    cupid_gb_input_select(gb, 0x30);
+    assert(cupid_gb_input_read(gb) == 0xfe);
+    cupid_gb_input_tick(gb, 10);
+    /* Writing the still-active row is ignored, even though FF00 already
+     * reports the pending deselection. It must not cancel its release. */
+    cupid_gb_input_select(gb, 0x20);
+    assert(gb->joyp_select_delay == 14 && gb->joyp_select_value == 0x30);
+    cupid_gb_input_tick(gb, 14);
+    assert(cupid_gb_input_read(gb) == 0xff);
+
+    prepare_rows(gb, CUPID_GB_MODEL_DMG_ABC, 0x00, 0x5a);
+    cupid_gb_input_select(gb, 0x30);
+    cupid_gb_input_tick(gb, 10);
+    cupid_gb_input_select(gb, 0x20);
+    assert(gb->joyp_select_delay == 14);
+    assert(gb->joyp_select_value == 0x20 && cupid_gb_input_read(gb) == 0xea);
+    cupid_gb_input_tick(gb, 14);
+    assert(cupid_gb_input_read(gb) == 0xea);
+
+    prepare_rows(gb, CUPID_GB_MODEL_DMG_ABC, 0x10, 0x5a);
+    cupid_gb_input_select(gb, 0x20);
+    cupid_gb_input_tick(gb, 8);
+    cupid_gb_input_select(gb, 0x30);
+    assert(gb->joyp_select_delay == 24);
+    assert(cupid_gb_input_read(gb) == 0xfa);
+    cupid_gb_input_tick(gb, 23);
+    assert(cupid_gb_input_read(gb) == 0xfa);
+    cupid_gb_input_tick(gb, 1);
+    assert(cupid_gb_input_read(gb) == 0xff);
+}
+
+static void settling_interrupts(CupidGb *gb) {
+    /* A row handover briefly selects both rows. Opposing direction contacts
+     * then use their electrical AND rather than the direction-only policy. */
+    prepare_rows(gb, CUPID_GB_MODEL_DMG_ABC, 0x20, 0xfc);
+    assert(cupid_gb_input_read(gb) == 0xee);
+    cupid_gb_input_select(gb, 0x10);
+    assert(cupid_gb_input_read(gb) == 0xdc && gb->interrupt_flags == 0x10);
+    gb->interrupt_flags = 0;
+    cupid_gb_input_tick(gb, 24);
+    assert(cupid_gb_input_read(gb) == 0xdf && !gb->interrupt_flags);
+
+    /* Input changes still reach a row whose select readback is already high.
+     * Its eventual release only raises lines and cannot request another IRQ. */
+    prepare_rows(gb, CUPID_GB_MODEL_DMG_ABC, 0x10, 0xff);
+    cupid_gb_input_select(gb, 0x30);
+    cupid_gb_set_buttons(gb, 0xef);
+    assert(cupid_gb_input_read(gb) == 0xfe && gb->interrupt_flags == 0x10);
+    gb->interrupt_flags = 0;
+    cupid_gb_input_tick(gb, 12);
+    assert(cupid_gb_input_read(gb) == 0xff && !gb->interrupt_flags);
+}
+
+static void model_and_clock_boundaries(CupidGb *gb) {
+    const CupidGbModel immediate[] = {CUPID_GB_MODEL_CGB, CUPID_GB_MODEL_SGB, CUPID_GB_MODEL_SGB2};
+    for (size_t i = 0; i < sizeof(immediate) / sizeof(immediate[0]); ++i) {
+        prepare_rows(gb, immediate[i], 0x20, 0xfe);
+        gb->cgb_mode = false;
+        cupid_gb_input_select(gb, 0x30);
+        assert(cupid_gb_input_read(gb) == 0xff && !gb->joyp_select_delay);
+    }
+    for (unsigned sleep = 0; sleep < 3; ++sleep) {
+        prepare_rows(gb, CUPID_GB_MODEL_DMG_ABC, 0x20, 0xfe);
+        gb->cpu.halted = sleep == 1;
+        gb->cpu.stopped = sleep == 2;
+        cupid_gb_input_select(gb, 0x30);
+        cupid_gb_tick(gb, 5);
+        assert(cupid_gb_input_read(gb) == 0xfe && gb->joyp_select_delay == 4);
+        cupid_gb_tick(gb, 1);
+        assert(cupid_gb_input_read(gb) == 0xff && !gb->joyp_select_delay);
+    }
+    gb->cpu.halted = gb->cpu.stopped = false;
+}
+
+static void instruction_row_readback(void) {
+    uint8_t rom[0x8000] = {0};
+    /* The second instruction samples before the monochrome P15 release but
+     * finishes on that release. Pocket and color hardware have already settled. */
+    rom[0x100] = 0xe2; /* LD (FF00+C),A */
+    rom[0x101] = 0xf2; /* LD A,(FF00+C) */
+    const CupidGbModel models[] = {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_MGB, CUPID_GB_MODEL_CGB};
+    for (size_t i = 0; i < sizeof(models) / sizeof(models[0]); ++i) {
+        CupidGb *gb = calloc(1, sizeof(*gb));
+        assert(gb);
+        cupid_gb_set_model(gb, models[i]);
+        rom[0x143] = models[i] == CUPID_GB_MODEL_CGB ? 0x80 : 0;
+        rom[0x14d] = 0;
+        for (unsigned address = 0x134; address <= 0x14c; ++address)
+            rom[0x14d] = (uint8_t)(rom[0x14d] - rom[address] - 1u);
+        assert(cupid_gb_load_rom(gb, rom, sizeof(rom)));
+        prepare_rows(gb, models[i], 0, 0);
+        gb->io_registers[0x40] = 0;
+        gb->cpu.pc = 0x100;
+        gb->cpu.c = 0;
+        gb->cpu.a = 0x20;
+        gb->cpu.ime = false;
+        gb->interrupt_enable = 0;
+        assert(cupid_gb_step(gb) && cupid_gb_step(gb));
+        assert(gb->cpu.a == (models[i] == CUPID_GB_MODEL_DMG_ABC ? 0xe0 : 0xea));
+        assert(cupid_gb_input_read(gb) == 0xea && !gb->joyp_select_delay);
+        assert(gb->elapsed_cycles == 16);
+        cupid_gb_cleanup(gb);
+        free(gb);
+    }
+}
+
 int main(void) {
     CupidGb *gb = calloc(1, sizeof(*gb));
     assert(gb);
@@ -121,15 +277,23 @@ int main(void) {
     for (unsigned player = 0; player < 3; ++player) {
         assert(gb->joypad_extra[player] == 0xff);
     }
+    gb->model = CUPID_GB_MODEL_CGB;
     all_masks_and_selection_edges(gb);
+    gb->model = CUPID_GB_MODEL_DMG_ABC;
     all_button_transitions(gb);
     adapter_player_identity(gb);
     adapter_player_buttons(gb);
+    monochrome_row_release(gb);
+    pending_row_writes(gb);
+    settling_interrupts(gb);
+    model_and_clock_boundaries(gb);
+    instruction_row_readback();
     cupid_gb_set_buttons(NULL, 0u);
     cupid_gb_input_select(NULL, 0u);
+    cupid_gb_input_tick(NULL, 1u);
     assert(cupid_gb_input_read(NULL) == 0xffu);
     cupid_gb_cleanup(gb);
     free(gb);
-    puts("Input rows and interrupt edges passed.");
+    puts("Input rows, settling and interrupt edges passed.");
     return 0;
 }

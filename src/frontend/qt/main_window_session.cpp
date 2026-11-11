@@ -68,7 +68,8 @@ bool MainWindow::runFrame() {
         audioConverter_->setInputRate(double(rate) * speedSteps_ / 16);
     gb.frame_ready = false;
     const uint64_t startCycles = gb.elapsed_cycles;
-    // With LCD disabled no vblank arrives. Bound the interval with the guest clock.
+    // Presentation events also cover LCD-off intervals. Keep a guest-clock bound
+    // for a stalled or temporarily frozen display pipeline.
     for (unsigned steps = 0; steps < 80000; ++steps) {
         if (!inputTrace_.empty()) {
             const uint64_t frame = (gb.elapsed_cycles - telemetryStartCycles_) / 70224;
@@ -78,10 +79,14 @@ bool MainWindow::runFrame() {
                 setJoypad(physicalJoypad_);
             }
         }
-        if (debugger_ && debugger_->bp_count &&
-            cupid_gb_debugger_check(debugger_.get(), &gb) == CUPID_GB_DEBUG_STOP_BREAKPOINT) {
-            stopDebugger("Breakpoint reached.");
-            return true;
+        if (debugger_ && debugger_->bp_count) {
+            const auto stop = cupid_gb_debugger_check(debugger_.get(), &gb);
+            if (stop == CUPID_GB_DEBUG_STOP_BREAKPOINT || stop == CUPID_GB_DEBUG_STOP_ERROR) {
+                stopDebugger(stop == CUPID_GB_DEBUG_STOP_ERROR
+                                 ? "Breakpoint condition evaluation failed."
+                                 : "Breakpoint reached.");
+                return true;
+            }
         }
         if (!cupid_emulator_step(emulator_.get())) {
             setPaused(true);

@@ -486,7 +486,7 @@ static void test_mmm01_menu_and_lock(void) {
         const size_t length = cupid_gb_state_size(&gb);
         uint8_t *state = malloc(length);
         assert(state && cupid_gb_save_state(&gb, state, length, NULL) == CUPID_GB_STATE_OK);
-        assert(state[8] == 7);
+        assert(state[8] == 8);
         assert(cupid_gb_load_rom(&gb, rom, size));
         assert(cupid_gb_load_state(&gb, state, length) == CUPID_GB_STATE_OK);
         assert(cupid_gb_read_u8(&gb, 0) == menu_offset);
@@ -500,7 +500,59 @@ static void test_mmm01_menu_and_lock(void) {
     cupid_gb_cleanup(&gb);
 }
 
+static void test_mbc3_snapshot_writes(void) {
+    const uint16_t addresses[] = {0x6000, 0x6fff, 0x7000, 0x7fff};
+    const uint8_t masks[] = {0x3f, 0x3f, 0x1f, 0xff, 0xc1};
+    CupidGb *gb = calloc(1, sizeof(*gb));
+    assert(gb);
+    for (unsigned model = 0; model < 2; ++model) {
+        for (unsigned type = 0x0f; type <= 0x10; ++type) {
+            uint8_t *rom = make_rom(0x8000, type, 0, type == 0x10 ? 3 : 0);
+            cupid_gb_init(gb);
+            gb->model = model ? CUPID_GB_MODEL_CGB : CUPID_GB_MODEL_DMG_ABC;
+            assert(cupid_gb_load_rom(gb, rom, 0x8000));
+            cupid_gb_write_u8(gb, 0xff40, 0);
+            cupid_gb_write_u8(gb, 0, 0x0a);
+            for (size_t address = 0; address < sizeof(addresses) / sizeof(addresses[0]);
+                 ++address) {
+                for (unsigned value = 0; value < 256; ++value) {
+                    // Hold the clock to isolate mapper writes from host time.
+                    gb->rtc.dh = 0xc1;
+                    gb->rtc.s = 37;
+                    cupid_gb_write_u8(gb, 0x6000, 1);
+                    const uint8_t values[] = {(uint8_t)value, (uint8_t)(value ^ 0x35),
+                                              (uint8_t)(value ^ 0x72), (uint8_t)(value ^ 0xa9),
+                                              0xc1};
+                    gb->rtc.s = values[0];
+                    gb->rtc.m = values[1];
+                    gb->rtc.h = values[2];
+                    gb->rtc.dl = values[3];
+                    cupid_gb_write_u8(gb, addresses[address], (uint8_t)value);
+                    for (unsigned reg = 0; reg < 5; ++reg) {
+                        cupid_gb_write_u8(gb, 0x4000, (uint8_t)(8 + reg));
+                        assert(cupid_gb_read_u8(gb, 0xa000) == (values[reg] & masks[reg]));
+                        const uint64_t generation = gb->battery_write_generation;
+                        assert(cupid_gb_read_bus_u8(gb, 0xa000) == (values[reg] & masks[reg]));
+                        assert(gb->rtc.ls == (values[0] & masks[0]) &&
+                               gb->rtc.lm == (values[1] & masks[1]) &&
+                               gb->rtc.lh == (values[2] & masks[2]) && gb->rtc.ldl == values[3] &&
+                               gb->rtc.ldh == (values[4] & masks[4]));
+                        assert(gb->battery_write_generation == generation);
+                        // Live writes cannot alter the snapshot until another latch write.
+                        cupid_gb_write_u8(gb, 0xa000, 0);
+                        assert(cupid_gb_read_u8(gb, 0xa000) == (values[reg] & masks[reg]));
+                    }
+                }
+            }
+            cupid_gb_cleanup(gb);
+            free(rom);
+        }
+    }
+    free(gb);
+}
+
 int main(void) {
+    test_mbc3_snapshot_writes();
     test_fresh_storage_and_restore();
     test_physical_rom_address_lines();
     test_reject_advance_cartridge();

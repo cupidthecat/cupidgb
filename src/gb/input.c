@@ -3,10 +3,7 @@
 #include "cupid/gb/cpu.h"
 #include "cupid/gb/sgb.h"
 
-uint8_t cupid_gb_input_read(const CupidGb *gb) {
-    if (!gb) {
-        return 0xffu;
-    }
+static uint8_t electrical_lines(const CupidGb *gb) {
     const uint8_t rows = gb->io_registers[0] & 0x30u;
     const unsigned player = cupid_gb_sgb_active(gb) ? gb->sgb.current_player & 3u : 0u;
     const uint8_t buttons = player ? gb->joypad_extra[player - 1u] : gb->joypad;
@@ -34,6 +31,16 @@ uint8_t cupid_gb_input_read(const CupidGb *gb) {
         }
     }
     return (uint8_t)(0xc0u | rows | lines);
+}
+
+uint8_t cupid_gb_input_read(const CupidGb *gb) {
+    if (!gb)
+        return 0xffu;
+    const uint8_t lines = electrical_lines(gb);
+    /* The select register is readable before the row's pull-up has settled.
+     * Contact data and its interrupt detector still use the active row. */
+    return gb->joyp_select_delay ? (uint8_t)((lines & (uint8_t)~0x30u) | gb->joyp_select_value)
+                                 : lines;
 }
 
 static void request_line_edges(CupidGb *gb, uint8_t before) {
@@ -65,11 +72,53 @@ bool cupid_gb_set_buttons_for_player(CupidGb *gb, unsigned player, uint8_t relea
 }
 
 void cupid_gb_input_select(CupidGb *gb, uint8_t value) {
-    if (gb) {
-        const uint8_t before = cupid_gb_input_read(gb);
-        /* SGB packet reception must see the old select lines before the write. */
-        cupid_gb_sgb_write_joyp(gb, value);
-        gb->io_registers[0] = (uint8_t)((gb->io_registers[0] & 0x0fu) | (value & 0x30u));
-        request_line_edges(gb, before);
+    if (!gb)
+        return;
+    const uint8_t selected = value & 0x30u;
+    uint8_t active = gb->io_registers[0] & 0x30u;
+    if (active == selected)
+        return;
+    const uint8_t before = electrical_lines(gb);
+    if (gb->model != CUPID_GB_MODEL_CGB && gb->model != CUPID_GB_MODEL_SGB &&
+        gb->model != CUPID_GB_MODEL_SGB2 && !cupid_gb_sgb_active(gb)) {
+        /* A second write starts from the previous requested row but cannot
+         * shorten an outstanding release. Newly selected rows pull low at
+         * once; deselected rows take longer to float high. */
+        if (gb->joyp_select_delay)
+            active = gb->joyp_select_value;
+        const unsigned released = selected & (uint8_t)~active;
+        unsigned delay = (released & 0x10u) ? 24u : (released & 0x20u) ? 12u : 0u;
+        if (delay && gb->model == CUPID_GB_MODEL_MGB) {
+            delay -= 8u;
+            if (active == 0x20u && selected == 0x10u)
+                delay += 4u;
+        }
+        if (delay > gb->joyp_select_delay)
+            gb->joyp_select_delay = (uint8_t)delay;
+        gb->joyp_select_value = gb->joyp_select_delay ? selected : 0u;
+        if (gb->joyp_select_delay)
+            active &= selected;
+        else
+            active = selected;
+    } else {
+        active = selected;
     }
+    /* SGB packet reception must see the old select lines before the write. */
+    cupid_gb_sgb_write_joyp(gb, active);
+    gb->io_registers[0] = (uint8_t)((gb->io_registers[0] & 0x0fu) | active);
+    request_line_edges(gb, before);
+}
+
+void cupid_gb_input_tick(CupidGb *gb, unsigned base_cycles) {
+    if (!gb || !gb->joyp_select_delay)
+        return;
+    if (base_cycles < gb->joyp_select_delay) {
+        gb->joyp_select_delay = (uint8_t)(gb->joyp_select_delay - base_cycles);
+        return;
+    }
+    const uint8_t before = electrical_lines(gb);
+    gb->io_registers[0] = (uint8_t)((gb->io_registers[0] & 0x0fu) | gb->joyp_select_value);
+    gb->joyp_select_delay = 0;
+    gb->joyp_select_value = 0;
+    request_line_edges(gb, before);
 }

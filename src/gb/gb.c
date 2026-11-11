@@ -625,9 +625,74 @@ static uint8_t read_program(const CupidGb *gb, uint16_t address) {
     return offset < gb->rom_size ? gb->rom[offset] : 0xffu;
 }
 
-static bool on_cgb_cartridge_bus(const CupidGb *gb, uint16_t address) {
-    return (address < 0x8000u || (address >= 0xa000u && address < 0xc000u)) &&
-           gb->model == CUPID_GB_MODEL_CGB;
+static bool on_main_bus(const CupidGb *gb, uint16_t address) {
+    if (address < 0x8000u)
+        return true;
+    if (address < 0xa000u || address >= 0xff00u)
+        return false;
+    // Color hardware separates WRAM/OAM from the cartridge bus. Monochrome
+    // hardware shares those drivers, but VRAM and internal I/O stay separate.
+    return gb->model != CUPID_GB_MODEL_CGB || address < 0xc000u;
+}
+
+static unsigned memory_bus(const CupidGb *gb, uint16_t address) {
+    if (address >= 0x8000u && address < 0xa000u)
+        return 1; // The video bus is separate on every model.
+    if (gb->model == CUPID_GB_MODEL_CGB && address >= 0xc000u)
+        return 2; // Color hardware also separates work RAM.
+    return 0;
+}
+
+static bool oam_dma_conflict(const CupidGb *gb, uint16_t address, uint16_t *source) {
+    if (!gb->dma_active || !gb->dma_index || gb->dma_index > sizeof(gb->object_attribute_memory) ||
+        address >= 0xfe00u || gb->hdma_running)
+        return false;
+    *source = (uint16_t)(gb->dma_source_base + gb->dma_index);
+    const unsigned page = gb->io_registers[CUPID_GB_IO_DMA];
+    if (gb->model != CUPID_GB_MODEL_CGB && page >= 0xe0u &&
+        gb->dma_source_base == (page - 0x20u) * 0x100u) {
+        // FF46 retains the original page while the copy engine stores its
+        // decoded WRAM mirror. Both next-source aliases bypass contention.
+        *source = (uint16_t)(*source + 0x2000u);
+    }
+    // The DMA engine reads its next source through this same map. Its source
+    // address and echo alias must bypass CPU contention to avoid recursion.
+    if (address == *source || (*source >= 0xe000u && address == (*source & ~0x2000u)))
+        return false;
+    const unsigned source_bus = memory_bus(gb, *source);
+    if (gb->model == CUPID_GB_MODEL_CGB) {
+        if (address >= 0xc000u)
+            return source_bus != 1;
+        if (*source >= 0xe000u)
+            return memory_bus(gb, address) != 1;
+    }
+    return memory_bus(gb, address) == source_bus;
+}
+
+static bool resolve_dma_access(CupidGb *gb, uint16_t *address, bool write, uint8_t value) {
+    uint16_t source;
+    if (!oam_dma_conflict(gb, *address, &source))
+        return true;
+    const bool color = gb->model == CUPID_GB_MODEL_CGB;
+    if (color && !memory_bus(gb, *address) && source >= 0xe000u)
+        return false;
+    if (color && *address >= 0xc000u && (source < 0xc000u || source >= 0xe000u)) {
+        // Contention pulls the WRAM bank line from the preceding source slot,
+        // while the CPU retains its low twelve address lines.
+        *address = (uint16_t)(0xc000u | ((source - 1u) & 0x1000u) | (*address & 0xfffu));
+        return true;
+    }
+    *address = (uint16_t)(source - 1u);
+    if (!write)
+        return true;
+    if (*address < 0xa000u) {
+        if (color)
+            gb->object_attribute_memory[gb->dma_index - 1u] = 0;
+        return true;
+    }
+    if (!color)
+        gb->object_attribute_memory[gb->dma_index - 1u] &= value;
+    return false;
 }
 
 static void drive_cartridge_bus(CupidGb *gb, uint8_t value, bool half_dot) {
@@ -686,10 +751,18 @@ static uint8_t read_data_bus(const CupidGb *gb, uint16_t address, CupidGb *bus, 
         const uint16_t value = read_cartridge_window(gb, address);
         if (floating)
             *floating = value == CARTRIDGE_WINDOW_FLOATING;
-        if (bus && gb->model == CUPID_GB_MODEL_CGB) {
+        if (bus) {
             if (value == CARTRIDGE_WINDOW_FLOATING)
                 return cupid_gb_sample_cartridge_bus(gb);
-            drive_cartridge_bus(bus, (uint8_t)value, false);
+            if (gb->header.mbc_type == CUPID_GB_MBC3 && gb->header.has_timer &&
+                gb->rtc_register >= 8u) {
+                // A driven clock read clears disconnected shadow-register bits
+                // together. Passive inspection must leave those stored bytes alone.
+                bus->rtc.ls &= 0x3fu;
+                bus->rtc.lm &= 0x3fu;
+                bus->rtc.lh &= 0x1fu;
+                bus->rtc.ldh &= 0xc1u;
+            }
         }
         return value == CARTRIDGE_WINDOW_FLOATING ? 0xffu : (uint8_t)value;
     }
@@ -702,7 +775,7 @@ static uint8_t read_data_bus(const CupidGb *gb, uint16_t address, CupidGb *bus, 
         return gb->work_ram[cupid_cgb_wram_offset(gb, (uint16_t)(address - 0x2000u))];
     }
 
-    if (address >= 0xfe00u && address <= 0xfe9fu) {
+    if (address >= 0xfe00u && address <= 0xfeffu) {
         if (cupid_gb_oam_dma_blocks_bus(gb))
             return 0xffu;
         uint8_t mode = (uint8_t)(gb->io_registers[CUPID_GB_IO_STAT] & 0x03u);
@@ -716,11 +789,13 @@ static uint8_t read_data_bus(const CupidGb *gb, uint16_t address, CupidGb *bus, 
              mode == CUPID_GB_PPU_MODE_OAM || mode == CUPID_GB_PPU_MODE_TRANSFER)) {
             return 0xffu;
         }
-        return gb->object_attribute_memory[address - 0xfe00u];
-    }
-
-    if (address >= 0xfea0u && address <= 0xfeffu) {
-        return 0xffu;
+        if (address < 0xfea0u)
+            return gb->object_attribute_memory[address - 0xfe00u];
+        // The unused OAM tail still has a model-specific readback circuit.
+        // The current color profile repeats the upper address nibble.
+        return gb->model == CUPID_GB_MODEL_CGB
+                   ? (uint8_t)((address & 0xf0u) | ((address >> 4u) & 0x0fu))
+                   : 0;
     }
 
     if (address == 0xff26u) {
@@ -808,21 +883,23 @@ uint8_t cupid_gb_read_u8(const CupidGb *gb, uint16_t address) {
 }
 
 uint8_t cupid_gb_read_bus_u8(CupidGb *gb, uint16_t address) {
+    if (gb && gb->dma_active && !resolve_dma_access(gb, &address, false, 0))
+        return 0xffu;
     /* Keep the common instruction fetch out of the slower I/O and RAM map. */
     if (gb && address < 0x8000u) {
         uint8_t value = read_program(gb, address);
         if (gb->cheats)
             value = cupid_gb_cheats_apply(gb, address, value);
-        if (gb->model == CUPID_GB_MODEL_CGB)
-            drive_cartridge_bus(gb, value, false);
+        drive_cartridge_bus(gb, value, false);
         return value;
     }
-    if (!gb || !gb->cheats)
-        return read_data_bus(gb, address, gb, NULL);
+    if (!gb)
+        return 0xffu;
     bool floating = false;
     uint8_t value = read_data_bus(gb, address, gb, &floating);
-    value = cupid_gb_cheats_apply(gb, address, value);
-    if (gb->model == CUPID_GB_MODEL_CGB && address >= 0xa000u && address < 0xc000u && !floating)
+    if (gb->cheats)
+        value = cupid_gb_cheats_apply(gb, address, value);
+    if (on_main_bus(gb, address) && !floating)
         drive_cartridge_bus(gb, value, false);
     return value;
 }
@@ -869,7 +946,7 @@ static void cupid_gb_rtc_latch(CupidGb *gb) {
  *
  * Implements the complete DMG/CGB memory map for writes, including:
  *   - MBC register writes (RAM enable, ROM/RAM bank select, mode)
- *   - MBC3 RTC latch sequence
+ *   - MBC3 RTC snapshot writes
  *   - VRAM (with Mode 3 lock)
  *   - Cartridge RAM / RTC register writes / MBC7 latch
  *   - WRAM and echo RAM
@@ -888,10 +965,15 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
         return;
     }
 
-    if (on_cgb_cartridge_bus(gb, address))
+    if (on_main_bus(gb, address))
         drive_cartridge_bus(gb, value, half_dot);
 
-    if (cupid_gb_oam_dma_blocks_bus(gb) && address >= 0xfe00u && address <= 0xfeffu) {
+    // A CPU write drives its original bus even when contention redirects or
+    // rejects the storage write. Reads instead drive their resolved bus.
+    if (gb->dma_active && !resolve_dma_access(gb, &address, true, value))
+        return;
+
+    if ((gb->dma_active || gb->dma_start_delay) && address >= 0xfe00u && address <= 0xfeffu) {
         return;
     }
 
@@ -1033,10 +1115,9 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
                 gb->current_ram_bank = cupid_gb_effective_ram_bank(gb);
                 break;
             case CUPID_GB_MBC3:
-                /* Latch clock data: write 0x00 then 0x01 */
-                if (value == 0x01u && gb->rtc.latch_prev == 0x00u) {
-                    cupid_gb_rtc_latch(gb);
-                }
+                /* Every write to the latch window refreshes the snapshot,
+                 * including repeated values and either half of a 0/1 pair. */
+                cupid_gb_rtc_latch(gb);
                 gb->rtc.latch_prev = value;
                 break;
             default:
@@ -1184,6 +1265,8 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
         } else if (address == 0xff40u) {
             bool lcd_was_enabled = cupid_gb_lcd_enabled(gb);
             const uint8_t previous_mode = gb->io_registers[CUPID_GB_IO_STAT] & 3u;
+            if (!lcd_was_enabled && (value & 0x80u))
+                cupid_gb_prepare_lcd_enable(gb);
             if (lcd_was_enabled != ((value & 0x80u) != 0))
                 gb->speed_switch_alignment = 0;
 
@@ -1195,7 +1278,6 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
                         gb->lcd_frame_odd = !gb->lcd_frame_odd;
                 }
                 gb->ppu_counter = 0u;
-                gb->frame_ready = false;
                 gb->lcd_first_frame = false;
                 gb->ppu_lcd_warmup_lines = 0u;
                 gb->ppu_lcd_startup = false;

@@ -5,6 +5,7 @@
 #include "cupid/gb/camera.h"
 #include "cupid/gb/huc3.h"
 #include "cupid/gb/mbc7.h"
+#include "cupid/gb/ppu.h"
 #include "cupid/gb/tpp1.h"
 
 #include <limits.h>
@@ -13,6 +14,7 @@
 
 enum {
     STATE_HEADER_SIZE = 128,
+    STATE_VERSION_V8 = 8,
     STATE_VERSION_V7 = 7,
     STATE_VERSION_V6 = 6,
     STATE_VERSION_V5 = 5,
@@ -26,6 +28,7 @@ enum {
     STATE_DMA_BUS_SIZE = 2,
     STATE_V6_TAIL_SIZE = STATE_LCD_PHASE_SIZE + STATE_DMA_BUS_SIZE,
     STATE_V7_TAIL_SIZE = STATE_V6_TAIL_SIZE + 1,
+    STATE_V8_TAIL_SIZE = STATE_V7_TAIL_SIZE + 11,
     STATE_MMM01_EXTENSION_SIZE = 4,
     STATE_MBC7_EXTENSION_SIZE = 8,
     STATE_CAMERA_EXTENSION_SIZE = 64,
@@ -698,14 +701,30 @@ static void state_dma_bus(StateIo *io, CupidGb *gb) {
     bytes(io, &half_dots, 1);
     bytes(io, &data, 1);
     if (io->input) {
-        if (half_dots > CUPID_GB_CARTRIDGE_BUS_HALF_DOTS || (!half_dots && data != 0xffu) ||
-            (gb->model != CUPID_GB_MODEL_CGB && half_dots)) {
+        if (half_dots > CUPID_GB_CARTRIDGE_BUS_HALF_DOTS || (!half_dots && data != 0xffu)) {
             io->invalid = true;
             return;
         }
         gb->cartridge_bus_expiry = half_dots ? now + half_dots : 0;
         gb->cartridge_bus_data = data;
     }
+}
+
+static void state_input_and_display(StateIo *io, CupidGb *gb) {
+    byte(io, &gb->joyp_select_delay);
+    byte(io, &gb->joyp_select_value);
+    double_word(io, &gb->display_cycles_since_frame);
+    double_word(io, &gb->lcd_repeat_countdown);
+    byte(io, &gb->display_frame_type);
+    const bool monochrome = gb->model == CUPID_GB_MODEL_DMG_ABC ||
+                            gb->model == CUPID_GB_MODEL_DMG0 || gb->model == CUPID_GB_MODEL_MGB;
+    const unsigned maximum_delay = gb->model == CUPID_GB_MODEL_MGB ? 20u : 24u;
+    if ((gb->joyp_select_value & ~0x30u) || (!gb->joyp_select_delay && gb->joyp_select_value) ||
+        (gb->joyp_select_delay && (!monochrome || gb->joyp_select_delay > maximum_delay)) ||
+        gb->display_cycles_since_frame >= 140448u || gb->lcd_repeat_countdown > 67484u ||
+        (gb->model != CUPID_GB_MODEL_CGB && gb->lcd_repeat_countdown) ||
+        gb->display_frame_type > CUPID_GB_FRAME_REPEAT)
+        io->invalid = true;
 }
 
 static bool valid_v5_sections(const CupidGb *gb, unsigned sections) {
@@ -829,7 +848,7 @@ size_t cupid_gb_state_size(const CupidGb *gb) {
     if (!ready(gb)) {
         return 0;
     }
-    return extended_wire_size(state_sections(gb)) + STATE_V7_TAIL_SIZE;
+    return extended_wire_size(state_sections(gb)) + STATE_V8_TAIL_SIZE;
 }
 
 static void put_u32(uint8_t *data, uint32_t value) {
@@ -861,7 +880,7 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
         return CUPID_GB_STATE_NO_ROM;
     }
     const unsigned sections = state_sections(gb);
-    const size_t size = extended_wire_size(sections) + STATE_V7_TAIL_SIZE;
+    const size_t size = extended_wire_size(sections) + STATE_V8_TAIL_SIZE;
     if (!data || capacity < size) {
         return CUPID_GB_STATE_BUFFER_TOO_SMALL;
     }
@@ -871,7 +890,7 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
     }
     memset(data, 0, STATE_HEADER_SIZE);
     memcpy(data, state_magic, sizeof(state_magic));
-    put_u32(data + 8, STATE_VERSION_V7);
+    put_u32(data + 8, STATE_VERSION_V8);
     put_u32(data + 12, (uint32_t)size);
     put_u32(data + 16, (uint32_t)gb->model);
     put_u32(data + 20, (uint32_t)gb->rom_size);
@@ -896,6 +915,7 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
     bytes(&io, &dma_phase, 1);
     if (gb->dma_phase > 3u)
         io.invalid = true;
+    state_input_and_display(&io, (CupidGb *)gb);
     if (io.invalid || io.offset != size) {
         return CUPID_GB_STATE_INVALID;
     }
@@ -915,13 +935,14 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
         return CUPID_GB_STATE_INVALID;
     }
     const uint32_t version = get_u32(data + 8);
-    if (version < STATE_VERSION_V2 || version > STATE_VERSION_V7) {
+    if (version < STATE_VERSION_V2 || version > STATE_VERSION_V8) {
         return CUPID_GB_STATE_UNSUPPORTED_VERSION;
     }
     const size_t prefix_size = version == STATE_VERSION_V2   ? STATE_WIRE_SIZE_V2
                                : version == STATE_VERSION_V3 ? STATE_WIRE_SIZE_V3
                                                              : STATE_WIRE_SIZE_V4;
-    const size_t tail_size = version >= STATE_VERSION_V7   ? STATE_V7_TAIL_SIZE
+    const size_t tail_size = version >= STATE_VERSION_V8   ? STATE_V8_TAIL_SIZE
+                             : version == STATE_VERSION_V7 ? STATE_V7_TAIL_SIZE
                              : version == STATE_VERSION_V6 ? STATE_V6_TAIL_SIZE
                                                            : 0;
     const size_t device_size = length - tail_size;
@@ -1003,6 +1024,9 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
     if (version >= STATE_VERSION_V6) {
         state_lcd_phase(&io, candidate);
         state_dma_bus(&io, candidate);
+        if (version < STATE_VERSION_V8 && candidate->model != CUPID_GB_MODEL_CGB &&
+            candidate->cartridge_bus_expiry)
+            io.invalid = true;
     } else {
         candidate->cartridge_bus_expiry = 0;
         candidate->cartridge_bus_data = 0xffu;
@@ -1017,6 +1041,16 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
             io.invalid = true;
     } else {
         candidate->dma_phase = 2;
+    }
+    if (version >= STATE_VERSION_V8) {
+        state_input_and_display(&io, candidate);
+    } else {
+        /* Older payloads have no row-release or presentation-event history. */
+        candidate->joyp_select_delay = 0;
+        candidate->joyp_select_value = 0;
+        candidate->display_cycles_since_frame = 0;
+        candidate->lcd_repeat_countdown = 0;
+        candidate->display_frame_type = CUPID_GB_FRAME_NORMAL;
     }
     if (io.invalid || io.offset != length || candidate->boot_rom_enabled != (flags != 0) ||
         !valid_hardware_prefix(candidate, version) || !valid_v5_sections(candidate, sections)) {

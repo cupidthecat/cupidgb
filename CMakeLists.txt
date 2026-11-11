@@ -164,7 +164,7 @@ if(CUPIDGB_BUILD_QT)
 endif()
 if(CUPIDGB_ENABLE_TESTS)
     enable_testing()
-    foreach(test_name IN ITEMS smoke gb serial printer ppu stat apu cpu_timing dma state battery native_v1_recovery sgb input cartridge camera mbc7 tpp1 huc3 cheats debugger sha256)
+    foreach(test_name IN ITEMS smoke gb serial printer ppu stat apu cpu_timing dma bus state battery native_v1_recovery sgb input cartridge camera mbc7 tpp1 huc3 cheats debugger sha256)
         add_executable(cupidgb_${test_name} tests/test_${test_name}.c)
         target_link_libraries(cupidgb_${test_name} PRIVATE cupidgb_core)
         # Tests use assert for setup and checks, including in Release builds.

@@ -881,6 +881,83 @@ static void test_color_noise_selector_edge(void) {
     assert(gb.apu.ch4_lfsr == 0x1f9f);
 }
 
+static void test_color_noise_selector_corruption(void) {
+    /* Fixed digital observations exercise partial shifts, neighbor-cell gates,
+     * held output, and the overwritten bit exposed when narrow mode is left. */
+    const struct {
+        uint16_t counter, before;
+        uint8_t old_register, new_register, narrow_history, bit7_history, active;
+        uint16_t after;
+        uint8_t held, after_narrow, after_bit7;
+    } cases[] = {
+        {0x0100, 0x1234, 0x01, 0xa1, 0, 0, 1, 0x4918, 0, 0, 0},
+        {0x0200, 0x47c7, 0x11, 0xb1, 1, 1, 1, 0x43e3, 1, 0, 1},
+        {0x0100, 0x5555, 0x01, 0xb1, 0, 0, 1, 0x0000, 0, 0, 0},
+        {0x0400, 0x47c7, 0x21, 0x81, 0, 0, 1, 0x63e3, 1, 0, 1},
+        {0x0400, 0x7abc, 0x29, 0xb9, 1, 1, 1, 0x7d5c, 0, 1, 1},
+        {0x0400, 0x1234, 0x21, 0x91, 0, 1, 1, 0x0010, 0, 0, 0},
+        {0x0400, 0x0022, 0x29, 0xc9, 1, 0, 1, 0x0023, 1, 1, 0},
+        {0x0400, 0x47c7, 0x21, 0xd1, 0, 1, 1, 0x47c7, 1, 0, 1},
+        {0x2000, 0x0041, 0x59, 0x89, 1, 1, 1, 0x0000, 0, 1, 0},
+        {0x2000, 0x4002, 0x51, 0x81, 0, 0, 1, 0x2001, 1, 0, 0},
+        {0x0402, 0x1234, 0x11, 0xa1, 0, 1, 1, 0x5234, 0, 0, 1},
+        {0x0801, 0x47c7, 0x09, 0xb1, 1, 1, 1, 0x47c7, 1, 0, 1},
+        {0x0804, 0x7abc, 0x29, 0xb1, 1, 0, 1, 0x781c, 0, 0, 0},
+        {0x0804, 0x7abc, 0x29, 0xb1, 1, 1, 1, 0x785c, 0, 0, 1},
+        {0x0810, 0x5555, 0x41, 0xb9, 0, 0, 1, 0x45c5, 1, 1, 0},
+        {0x0201, 0x47c7, 0x99, 0x01, 1, 1, 1, 0x63e3, 1, 0, 1},
+        {0x0002, 0x1234, 0x01, 0x19, 0, 0, 1, 0x495a, 0, 1, 0},
+        {0x0001, 0x47c7, 0x01, 0x11, 1, 0, 1, 0x47c7, 1, 1, 0},
+        {0xffff, 0x7abc, 0x29, 0x21, 1, 1, 1, 0x7abc, 0, 1, 1},
+        {0x0804, 0x1234, 0x29, 0xb1, 1, 1, 0, 0x4054, 0, 0, 1},
+        {0x0100, 0x5555, 0x01, 0xb1, 0, 0, 0, 0x0000, 0, 0, 0},
+        {0x0400, 0x0019, 0x21, 0xc1, 0, 0, 1, 0x0018, 0, 0, 0},
+        {0x0400, 0x0002, 0x21, 0xc1, 0, 0, 1, 0x0003, 1, 0, 0},
+        {0x2000, 0x4000, 0x51, 0x81, 0, 0, 1, 0x6000, 0, 0, 0},
+    };
+
+    for (unsigned speed = 0; speed < 2; ++speed) {
+        for (unsigned i = 0; i < sizeof(cases) / sizeof(*cases); ++i) {
+            CupidGb gb = {0};
+            gb.model = CUPID_GB_MODEL_CGB;
+            gb.double_speed = speed != 0;
+            cupid_gb_write_u8(&gb, 0xff26, 0x80);
+            cupid_gb_write_u8(&gb, 0xff21, 0xf0);
+            cupid_gb_write_u8(&gb, 0xff22, cases[i].old_register);
+            gb.apu.ch4_lfsr = cases[i].before ^ 0x7fff;
+            gb.apu.ch4_on = cases[i].active != 0;
+            gb.apu.ch4_vol = 15;
+            CupidGbNoiseTiming *timing = &gb.apu.noise_timing;
+            timing->divider_counter = cases[i].counter;
+            timing->remaining = 3;
+            timing->output_high = (cases[i].before & 1) != 0;
+            timing->last_shift_narrow = cases[i].narrow_history != 0;
+            timing->pre_shift_bit7 = cases[i].bit7_history != 0;
+            cupid_gb_write_u8(&gb, 0xff22, cases[i].new_register);
+            assert(gb.apu.ch4_lfsr == (cases[i].after ^ 0x7fff));
+            assert(timing->output_high == (cases[i].held != 0));
+            assert(timing->last_shift_narrow == (cases[i].after_narrow != 0));
+            assert(timing->pre_shift_bit7 == (cases[i].after_bit7 != 0));
+            assert(timing->divider_counter == cases[i].counter && timing->remaining == 3);
+            assert((cupid_gb_apu_read_pcm34(&gb) >> 4) ==
+                   (cases[i].active && cases[i].held ? 15 : 0));
+        }
+        CupidGb gb = {0};
+        gb.model = CUPID_GB_MODEL_CGB;
+        gb.double_speed = speed != 0;
+        cupid_gb_write_u8(&gb, 0xff26, 0x80);
+        cupid_gb_write_u8(&gb, 0xff21, 0xf0);
+        cupid_gb_write_u8(&gb, 0xff22, 1);
+        cupid_gb_write_u8(&gb, 0xff23, 0x80);
+        cupid_gb_tick_apu(&gb, 38);
+        assert(gb.apu.noise_timing.divider_counter == 3);
+        /* Both endpoint bits are low. The intermediate bit still clocks a shift. */
+        cupid_gb_write_u8(&gb, 0xff22, 0x81);
+        cupid_gb_write_u8(&gb, 0xff22, 0x21);
+        assert(gb.apu.ch4_lfsr == 0x0fff);
+    }
+}
+
 static void test_color_noise_dac_off_counter_carry(void) {
     CupidGb gb = {0};
     gb.model = CUPID_GB_MODEL_CGB;
@@ -1042,6 +1119,7 @@ int main(void) {
     test_color_noise_prescaler_and_reload();
     test_color_noise_retrigger_and_gates();
     test_color_noise_selector_edge();
+    test_color_noise_selector_corruption();
     test_color_noise_dac_off_counter_carry();
     test_audio_chunk_splitting();
     test_divider_clock(false);

@@ -291,7 +291,7 @@ int main(int argc, char **argv) {
         free(gb);
         return 2;
     }
-    uint64_t steps = 0, vblank_frames = 0, audio_frames = 0;
+    uint64_t steps = 0, presentation_events = 0, audio_frames = 0;
     uint32_t audio_crc = UINT32_MAX, image_crc = 0;
     SerialCapture serial = {.output = serial_output, .binary_protocol = protocol_fibonacci};
     cupid_gb_set_serial_output_callback(gb, observe_serial, &serial);
@@ -353,7 +353,7 @@ int main(int argc, char **argv) {
             test_finished = true;
         }
         if (gb->frame_ready) {
-            ++vblank_frames;
+            ++presentation_events;
             gb->frame_ready = false;
         }
         /* Drain per instruction, including with the LCD off, to avoid audio overflow. */
@@ -375,6 +375,7 @@ int main(int argc, char **argv) {
         }
     }
     double elapsed = host_seconds() - start;
+    const uint64_t vblank_frames = gb->vblank_events;
     // Serial output is a host diagnostic. Flush once at the report boundary.
     if (serial_output && fflush(stdout) == EOF) {
         result = 2;
@@ -406,13 +407,14 @@ int main(int argc, char **argv) {
     printf("\nCUPIDGB_RESULT {\"status\":\"%s\",\"model\":\"%s\",\"protocol\":\"%s\","
            "\"steps\":%" PRIu64 ",\"base_cycles\":%" PRIu64 ",\"base_clock_hz\":%" PRIu32 ","
            "\"vblank_frames\":%" PRIu64 ","
+           "\"presentation_events\":%" PRIu64 ","
            "\"audio_frames\":%" PRIu64 ",\"serial_bytes\":%" PRIu64 ","
            "\"audio_crc32\":\"%08" PRIx32 "\","
            "\"image_crc32\":\"%08" PRIx32 "\",\"host_seconds\":%.9f,"
            "\"memory_result_code\":%d,\"memory_text_hex\":\"%s\"}\n",
            status, model_name, protocol, steps, gb->elapsed_cycles, cupid_gb_base_clock_hz(gb),
-           vblank_frames, audio_frames, serial.bytes, audio_crc ^ UINT32_MAX, image_crc, elapsed,
-           memory_code, memory_text);
+           vblank_frames, presentation_events, audio_frames, serial.bytes, audio_crc ^ UINT32_MAX,
+           image_crc, elapsed, memory_code, memory_text);
     if (!strcmp(status, "fail")) {
         result = 1;
     } else if (strcmp(protocol, "none") && strcmp(status, "pass") && !result) {

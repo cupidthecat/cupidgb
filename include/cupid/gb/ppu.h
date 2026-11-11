@@ -31,6 +31,17 @@ enum {
 };
 
 bool cupid_gb_lcd_enabled(const CupidGb *gb);
+
+enum {
+    CUPID_GB_FRAME_NORMAL = 0,
+    CUPID_GB_FRAME_LCD_OFF = 1,
+    CUPID_GB_FRAME_ARTIFICIAL = 2,
+    CUPID_GB_FRAME_BLANK_FIRST = 3,
+    CUPID_GB_FRAME_REPEAT = 4
+};
+
+/* Called before a disabled LCD is enabled; any pending presentation stays latched. */
+void cupid_gb_prepare_lcd_enable(CupidGb *gb);
 void cupid_gb_set_ppu_mode(CupidGb *gb, uint8_t mode);
 void cupid_gb_update_stat_irq(CupidGb *gb);
 void cupid_gb_update_stat_write(CupidGb *gb, bool half_dot, bool stat_write);

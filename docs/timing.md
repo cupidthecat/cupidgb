@@ -19,7 +19,7 @@ Call `cupid_gb_base_clock_hz(gb)` to convert base T-cycles to physical seconds. 
 
 CGB double speed doubles CPU-domain progress relative to the base clock. It does not double the LCD, channel oscillator, or output sample clocks. One double-speed M-cycle consumes two base T-cycles every time it executes. Alternating zero-dot and four-dot batches would preserve an average rate while moving intervening reads and interrupts to the wrong dots.
 
-A regular scanline occupies 456 base T-cycles, and a regular 154-line LCD interval occupies 70,224. Startup, LCD enable/disable, and an interval beginning partway through a frame need not produce an image after another full 70,224 cycles. Geometry, image completion, and elapsed guest time are different observations.
+A regular scanline occupies 456 base T-cycles, and a regular 154-line LCD interval occupies 70,224. Startup, LCD enable/disable, and an interval beginning partway through a frame need not produce an image after another full 70,224 cycles. Geometry, presentation events, VBlank interrupts, and elapsed guest time are different observations. rame_ready latches a presentation event, classified by display_frame_type. Synthetic LCD-off and STOP events do not request VBlank. The host observation counter blank_events records actual VBlank boundaries and stays outside guest snapshots.
 
 The headless runner's `--frames` limit and both input-trace formats use 70,224 base T-cycles per numbered interval. They do not count displayed images. The same cycle interval has a different physical duration on SGB NTSC.
 
@@ -30,6 +30,8 @@ The CPU decoder in [cpu.c](../src/gb/cpu.c) schedules bus accesses around calls 
 That ordering is part of the implementation contract. A register write between two PPU dots must not advance the divider twice or omit audio integration. Conversely, moving every device update to the end of an instruction can make a CPU read observe a future LCD mode or miss an interrupt that arrived before its sampling point.
 
 `cupid_gb_read_bus_u8` drives the guest cartridge bus. The passive `cupid_gb_read_u8` observes mapping and restrictions without extending bus hold. `cupid_gb_write_u8` applies register and memory effects at the current phase. The decoder supplies the access schedule. Debugger raw inspection can observe storage that the CPU cannot currently read. Drive CPU execution when testing a CPU-visible bus result.
+
+The shared main bus retains its last driven byte for twelve half-dots. Floating cartridge-window reads observe that byte without extending its lifetime. Monochrome WRAM, echo RAM, and OAM share the bus; CGB separates them. VRAM and internal I/O do not drive it. During OAM DMA, reads use the contended address before bus drive, while writes drive their original address/value before storage redirection or rejection. CGB high-source reads can return FF without driving the bus. Warmup, final-tail, next-source aliases, and color-DMA overlap are separate conditions.
 
 Immediate operands, stores, relative jumps, and CB memory operations use their actual machine-cycle boundaries. CB memory operations fetch the sub-opcode in M2, read `(HL)` in M3, and perform a modifying write in M4. BIT operations finish after the read. OAM DMA retains a CPU-T-cycle phase across split clock spans. Warmup ends at T2, the first byte arrives at T6, the last at T642, and the final active tail releases the bus at T646. CGB double speed halves the corresponding base-dot distances.
 
@@ -152,6 +154,12 @@ Save or restore at an instruction boundary with exclusive core access. An interr
 The native codec uses explicit field widths and byte order. A phase repair can change generated field values without changing a schema. Version 3 adds persistent DMA and audio latches that version 2 did not record. Do not add host-only helper cursors or temporary event lists to the guest structure merely to implement an atomic sequence. If a new persistent hardware latch is required, update the codec and validate its continuation deliberately. See [save states and rewind](save-states.md).
 
 CPU, PPU, and APU execution never sleep or use elapsed host time to decide how many hardware clocks to skip. Cartridge calendar time is a separate domain: MBC3 register/latch and battery helpers can use the host calendar, and explicit `_at` battery functions accept a supplied timestamp. Deterministic RTC checks must control that input. This exception must not turn host scheduling into a source of CPU or LCD clocks.
+
+## Joypad row release and clock snapshots
+
+On monochrome profiles, deselecting a JOYP row can leave its contacts electrically active for a model-dependent delay. The upper FF00 bits show the requested selection immediately; its low bits and falling-edge interrupt detector still observe the settling contacts. Pending rewrites can retain or extend the deadline. The countdown advances in base dots through running, HALT, and STOP clock paths. CGB, SGB, and SGB2 switch immediately. Physical contact bounce remains unmodeled.
+
+Every MBC3 write in 6000–7FFF refreshes the clock snapshot, including repeated values and both writes of a 0/1 pair. Reads retain that snapshot while writes to the clock registers change the live counters. Driven reads clear disconnected shadow-register bits together; passive inspection leaves their stored bytes unchanged. Host calendar advancement remains separate from CPU and LCD clocks.
 
 ## Qt deadlines and measurements
 

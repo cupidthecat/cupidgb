@@ -96,6 +96,8 @@ View > Frame Blending and Settings offer Disabled, Simple, and Accurate. Simple 
 
 Settings > SGB display controls whether to show the Super Game Boy border. Hiding it crops the image to the game viewport and does not disable SGB commands or palette behavior. Host palettes and blending do not establish hardware color accuracy. Custom palette-file import remains pending. See [the parity checklist](parity.md).
 
+The custom monochrome palette has four hardware shades and a separate LCD-off color. Older settings with only four shades use their lightest shade for the missing off color. LCD-off and first-blank events use the off color; monochrome STOP uses the lightest hardware shade. Repeat events retain the displayed image and blend history.
+
 ## Audio and recording
 
 Audio > Mute and the Settings volume slider control host playback. The frontend requests stereo signed 16-bit audio at 44,100 Hz and converts generated samples when the output device needs a different supported format.

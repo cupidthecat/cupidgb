@@ -132,6 +132,7 @@ class MainWindow final : public QMainWindow {
     void drainDebuggerAudio();
     bool debuggerSmokeTest(const QString &directory);
     bool pacingSmokeTest(const QString &path);
+    bool displayCadenceSmokeTest(const QString &path);
     bool modelSmokeTest(const QString &directory);
     void openCheats(bool search = false);
     void refreshCheats(bool newSession = false);
@@ -199,6 +200,7 @@ class MainWindow final : public QMainWindow {
     uint64_t observedBatteryGeneration_ = 0;
     bool batteryDirty_ = false;
     std::array<QRgb, 4> displayPalette_{};
+    QRgb displayOffColor_ = 0;
     ColorSettings colorSettings_;
     std::unique_ptr<ColorTable> cgbColorTable_;
     std::unique_ptr<ColorTable> sgbColorTable_;

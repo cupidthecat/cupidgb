@@ -2,6 +2,10 @@
 
 #include <QDebug>
 
+extern "C" {
+#include "cupid/gb/ppu.h"
+}
+
 bool MainWindow::modelSmokeTest(const QString &directory) {
     QByteArray rom(32768, char(0));
     rom[0x100] = char(0x18);
@@ -263,10 +267,12 @@ bool MainWindow::pacingSmokeTest(const QString &path) {
         cupid_gb_write_u8(&gb, 0xff40, 0);
         resetPacing();
         const uint64_t blankStart = gb.elapsed_cycles;
+        const uint32_t blankCounter = gb.display_cycles_since_frame;
         const qint64 blankDeadline = nextFrame_;
         tick();
         const uint64_t blankCycles = gb.elapsed_cycles - blankStart;
-        if (paused_ || blankCycles != 70224 ||
+        if (paused_ || !gb.frame_ready || gb.display_frame_type != CUPID_GB_FRAME_LCD_OFF ||
+            blankCycles + blankCounter != 70224u + gb.display_cycles_since_frame ||
             nextFrame_ != blankDeadline + qint64(blankCycles * 1000000000 / clockHz))
             return smokeFailure(__FILE__, __LINE__);
         if (model == CUPID_GB_MODEL_SGB) {
@@ -287,5 +293,119 @@ bool MainWindow::pacingSmokeTest(const QString &path) {
         if (!closeRom())
             return smokeFailure(__FILE__, __LINE__);
     }
+    return displayCadenceSmokeTest(path);
+}
+
+bool MainWindow::displayCadenceSmokeTest(const QString &path) {
+    for (const auto model : {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_CGB}) {
+        MainWindow session(true, false, false, QStringLiteral(""), model);
+        if (!session.openRom(path))
+            return smokeFailure(__FILE__, __LINE__);
+        session.setPaused(true);
+        session.displayPalette_ = monochromeColors(MonochromePalette::Grayscale, {});
+        session.displayOffColor_ = qRgb(210, 230, 166);
+        session.setFrameBlending(FrameBlending::Accurate);
+        auto &gb = session.emulator_->gb;
+        cupid_gb_write_u8(&gb, 0xff47, 0xe4);
+        for (unsigned row = 0; row < 8; ++row) {
+            gb.video_ram[row * 2] = 0xff;
+            gb.video_ram[row * 2 + 1] = 0xff;
+        }
+        session.previousDisplayFrame_ = {};
+        session.currentDisplayFrame_ = {};
+        if (!session.runFrame() || gb.display_frame_type != CUPID_GB_FRAME_NORMAL)
+            return smokeFailure(__FILE__, __LINE__);
+        const QImage lastActive = session.image_;
+        cupid_gb_write_u8(&gb, 0xff40, 0);
+        const uint64_t beforeIdle = gb.elapsed_cycles;
+        const uint32_t beforeCounter = gb.display_cycles_since_frame;
+        if (!session.runFrame() || gb.display_frame_type != CUPID_GB_FRAME_LCD_OFF ||
+            gb.elapsed_cycles - beforeIdle + beforeCounter !=
+                70224u + gb.display_cycles_since_frame)
+            return smokeFailure(__FILE__, __LINE__);
+        const QRgb offColor = model == CUPID_GB_MODEL_CGB ? (*session.cgbColorTable_)[0x7fff]
+                                                          : session.displayOffColor_;
+        if (session.image_.pixel(0, 0) != offColor || session.image_.pixel(159, 143) != offColor ||
+            session.previousDisplayFrame_ != lastActive ||
+            session.display_->image != blendDisplayFrames(session.image_, lastActive,
+                                                          FrameBlending::Accurate,
+                                                          gb.lcd_frame_odd))
+            return smokeFailure(__FILE__, __LINE__);
+        if (!session.runFrame() || session.display_->image != session.image_ ||
+            session.previousDisplayFrame_ != session.image_)
+            return smokeFailure(__FILE__, __LINE__);
+        const bool savedPhase = gb.lcd_frame_odd;
+        if (!session.saveSlot(7) || !session.runFrame() || gb.lcd_frame_odd == savedPhase ||
+            !session.loadSlot(7) || gb.display_frame_type != CUPID_GB_FRAME_LCD_OFF ||
+            gb.lcd_frame_odd != savedPhase || session.image_.pixel(0, 0) != offColor ||
+            session.display_->image != session.image_)
+            return smokeFailure(__FILE__, __LINE__);
+        cupid_gb_write_u8(&gb, 0xff40, 0x91);
+        if (!session.runFrame() || gb.display_frame_type != CUPID_GB_FRAME_BLANK_FIRST ||
+            session.image_.pixel(0, 0) != offColor || !session.runFrame() ||
+            gb.display_frame_type != CUPID_GB_FRAME_NORMAL)
+            return smokeFailure(__FILE__, __LINE__);
+        if (model == CUPID_GB_MODEL_CGB) {
+            const QImage lastImage = session.image_;
+            const QImage lastVisible = session.display_->image;
+            const QImage currentHistory = session.currentDisplayFrame_;
+            const QImage previousHistory = session.previousDisplayFrame_;
+            const uint64_t images = session.presentedImages_;
+            std::memset(gb.video_ram, 0, 16);
+            cupid_gb_write_u8(&gb, 0xff40, 0);
+            cupid_gb_write_u8(&gb, 0xff40, 0x91);
+            if (!session.runFrame() || gb.display_frame_type != CUPID_GB_FRAME_REPEAT ||
+                session.image_ != lastImage || session.display_->image != lastVisible ||
+                session.currentDisplayFrame_ != currentHistory ||
+                session.previousDisplayFrame_ != previousHistory ||
+                session.presentedImages_ != images)
+                return smokeFailure(__FILE__, __LINE__);
+            if (!session.runFrame() || gb.display_frame_type != CUPID_GB_FRAME_NORMAL ||
+                session.previousDisplayFrame_ != currentHistory ||
+                session.presentedImages_ != images + 1)
+                return smokeFailure(__FILE__, __LINE__);
+        }
+    }
+    const QVariant savedPalette = settings_.value("video/palette", 0);
+    const bool hadOffColor = settings_.contains("video/customPalette/off");
+    const QVariant savedOffColor = settings_.value("video/customPalette/off");
+    settings_.setValue("video/palette", int(MonochromePalette::Custom));
+    settings_.remove("video/customPalette/off");
+    {
+        MainWindow custom(true);
+        const auto originalShades = custom.displayPalette_;
+        if (custom.displayOffColor_ != originalShades[0])
+            return smokeFailure(__FILE__, __LINE__);
+        for (const bool accept : {false, true}) {
+            bool checked = false;
+            QTimer::singleShot(0, &custom, [&] {
+                auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+                if (!dialog)
+                    return;
+                auto *off = dialog->findChild<QLineEdit *>("customPalette/off");
+                checked =
+                    off && off->isEnabled() && off->text() == QColor(originalShades[0]).name();
+                if (off)
+                    off->setText("#2468ac");
+                dialog->findChild<QDialogButtonBox *>()
+                    ->button(accept ? QDialogButtonBox::Ok : QDialogButtonBox::Cancel)
+                    ->click();
+            });
+            custom.configure();
+            if (!checked || custom.displayPalette_ != originalShades ||
+                settings_.contains("video/customPalette/off") != accept ||
+                custom.displayOffColor_ != (accept ? qRgb(36, 104, 172) : originalShades[0]))
+                return smokeFailure(__FILE__, __LINE__);
+        }
+        MainWindow restored(true);
+        if (restored.displayOffColor_ != qRgb(36, 104, 172) ||
+            restored.displayPalette_ != originalShades)
+            return smokeFailure(__FILE__, __LINE__);
+    }
+    settings_.setValue("video/palette", savedPalette);
+    if (hadOffColor)
+        settings_.setValue("video/customPalette/off", savedOffColor);
+    else
+        settings_.remove("video/customPalette/off");
     return true;
 }

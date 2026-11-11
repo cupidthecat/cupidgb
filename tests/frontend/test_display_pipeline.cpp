@@ -32,6 +32,11 @@ int main() {
     assert(monochromeColors(MonochromePalette::Lime, custom)[0] == QColor("#c6de8c").rgb());
     assert(monochromeColors(MonochromePalette::Olive, custom)[3] == QColor("#07100e").rgb());
     assert(monochromeColors(MonochromePalette::Teal, custom)[0] == QColor("#7fe2c3").rgb());
+    assert(monochromeOffColor(MonochromePalette::Lime, custom[0]) == QColor("#d2e6a6").rgb());
+    assert(monochromeOffColor(MonochromePalette::Grayscale, custom[0]) == qRgb(255, 255, 255));
+    assert(monochromeOffColor(MonochromePalette::Olive, custom[0]) == QColor("#cfdaac").rgb());
+    assert(monochromeOffColor(MonochromePalette::Teal, custom[0]) == QColor("#91ead0").rgb());
+    assert(monochromeOffColor(MonochromePalette::Custom, custom[0]) == custom[0]);
 
     QImage black(160, 144, QImage::Format_RGB32);
     QImage white(160, 144, QImage::Format_RGB32);

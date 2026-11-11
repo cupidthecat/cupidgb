@@ -10,7 +10,7 @@ Load a native state file through File > Load State File or drop a `.s0` through 
 
 Writes use an atomic file replacement. Loading checks the complete cartridge identity and hardware model. A state captured with an active boot overlay requires the matching local boot binary. Failed validation preserves the running session and its host audio queue. A successful load replaces the emulated state, reapplies current physical input, clears queued host audio, and realigns pacing.
 
-New files use CupidGB native version 7. Versions 2 through 6 remain loadable. Interoperable BESS state imports remain pending.
+New files use CupidGB native version 8. Versions 2 through 7 remain loadable. Interoperable BESS state imports remain pending.
 
 The version identifies the wire encoding, not a promise to preserve emulation bugs between builds. Version 3 records pending CGB DMA work, CPU speed-switch sequencing, and audio clock, held-output, envelope, sweep, and noise latches. Version 2 has no values for these latches. Its loader initializes them deterministically after validating the old payload; it never takes missing history from the target's running session. Pending DMA and speed-switch delays start cleared, while an old armed HBlank transfer retains its saved block count. Pulse clock startup follows the saved channel enable, and held pulse output follows the saved duty position. Noise gates and held output derive from the saved channel/DAC and LFSR state, with a canonical prescaler phase. The old LFSR, timer, queued PCM, partial integration, and filter state remain intact. This cannot reproduce timing history the old format did not record. Keep the original state if you need to revisit its earlier build.
 
@@ -71,6 +71,8 @@ Version 5 appends the sections required by the selected model and cartridge afte
 Version 6 also carries a 25-byte HuC3 section on applicable cartridges. It stores the clock and alarm, command index and response, and infrared sensing state. Every version 6 file ends with the LCD row phase and first-frame flag, then the cartridge bus hold time in half-dots and the held byte. An expired bus is encoded as `00 FF`. Older snapshots restore an expired bus and derive the initial LCD flags from the saved model and startup state.
 
 Version 7 preserves that prefix and appends the OAM DMA phase as one byte. Its active values are 0 through 3 CPU T-cycles. Idle transfers encode zero. Version 2 through 6 imports initialize phase 2 and project the older pending-start and restart counters into the current scheduler. The older formats did not retain the exact subcycle history.
+
+Version 8 appends eleven bytes after the V7 tail: the remaining JOYP row-release delay and requested select bits, little-endian 32-bit presentation-cycle and CGB repeat countdowns, and the presentation event type. Idle JOYP fields are zero. Older imports clear these fields; they cannot reconstruct a pending row release or display callback that the file did not record. Version 8 also permits the existing main-bus timing bytes on monochrome models, whose WRAM/OAM share that bus. Older V6/V7 files still require their original zero monochrome bus history. The older payload offsets remain unchanged.
 
 Cheat collections, global enable, color correction, and memory-search history are host configuration outside snapshots. Loading keeps the current rules and display settings.
 

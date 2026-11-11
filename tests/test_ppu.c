@@ -539,6 +539,101 @@ static void test_dot_chunks_preserve_pipeline_state(void) {
     assert(memcmp(&machine, &dots, sizeof(machine)) == 0);
 }
 
+static void advance_dots(CupidGb *gb, unsigned dots) {
+    while (dots) {
+        const unsigned chunk = dots > 60000u ? 60000u : dots;
+        cupid_gb_tick_ppu_dots(gb, (uint16_t)chunk);
+        dots -= chunk;
+    }
+}
+
+static unsigned next_presentation(CupidGb *gb) {
+    gb->frame_ready = false;
+    unsigned dots = 0;
+    while (!gb->frame_ready && dots < 70225u) {
+        cupid_gb_tick_ppu_dots(gb, 1);
+        ++dots;
+    }
+    assert(gb->frame_ready);
+    return dots;
+}
+
+static void test_idle_presentation_cadence(void) {
+    CupidGb gb;
+    prepare(&gb, false, 3);
+    cupid_gb_write_u8(&gb, 0xff40, 0);
+    const bool after_disable = gb.lcd_frame_odd;
+    advance_dots(&gb, 70223);
+    assert(!gb.frame_ready);
+    advance_dots(&gb, 1);
+    assert(gb.frame_ready && gb.display_frame_type == CUPID_GB_FRAME_LCD_OFF);
+    assert(gb.display_cycles_since_frame == 0 && gb.lcd_frame_odd != after_disable);
+    assert(!gb.interrupt_flags && !gb.vblank_events && gb.frame_buffer[0] == 0);
+    assert(gb.frame_buffer_color[0] == 0x7fff);
+    assert(next_presentation(&gb) == 70224u);
+    assert(gb.lcd_frame_odd == after_disable);
+    gb.frame_ready = false;
+    gb.cpu.stopped = true;
+    assert(next_presentation(&gb) == 70224u);
+    assert(gb.display_frame_type == CUPID_GB_FRAME_LCD_OFF);
+    assert(gb.lcd_frame_odd == after_disable);
+    prepare(&gb, false, 3);
+    gb.cpu.stopped = true;
+    assert(next_presentation(&gb) == 70224u);
+    assert(gb.display_frame_type == CUPID_GB_FRAME_ARTIFICIAL && !gb.lcd_frame_odd);
+    assert(gb.pixels.dot == 0 && gb.pixels.line == 0 && !gb.interrupt_flags && !gb.vblank_events);
+}
+
+static void test_first_frame_presentation(bool color) {
+    CupidGb gb;
+    prepare(&gb, color, 1);
+    cupid_gb_write_u8(&gb, 0xff40, 0);
+    const bool after_disable = gb.lcd_frame_odd;
+    cupid_gb_write_u8(&gb, 0xff40, 0x91);
+    assert(next_presentation(&gb) < 70224u);
+    assert(gb.display_frame_type == CUPID_GB_FRAME_BLANK_FIRST);
+    assert(gb.vblank_events == 1);
+    assert(gb.lcd_frame_odd == (color ? after_disable : !after_disable));
+    assert(gb.frame_buffer[0] == 0 && gb.frame_buffer_color[0] == 0x7fff);
+    advance_dots(&gb, 4560);
+    assert(gb.frame_ready); // The caller owns consumption of the presentation latch.
+    assert(next_presentation(&gb) == 70224u - 4560u);
+    assert(gb.display_frame_type == CUPID_GB_FRAME_NORMAL);
+    assert(gb.vblank_events == 2);
+    assert(gb.frame_buffer[0] == 1 && !gb.lcd_first_frame);
+    if (color) {
+        cupid_gb_write_u8(&gb, 0xff40, 0);
+        cupid_gb_write_u8(&gb, 0xff40, 0x91);
+        assert(next_presentation(&gb) < 70224u);
+        assert(gb.display_frame_type == CUPID_GB_FRAME_REPEAT);
+        assert(next_presentation(&gb) == 70224u);
+        assert(gb.display_frame_type == CUPID_GB_FRAME_NORMAL);
+    }
+    cupid_gb_write_u8(&gb, 0xff40, 0);
+    gb.frame_ready = false;
+    advance_dots(&gb, 4561);
+    const bool before_enable = gb.lcd_frame_odd;
+    cupid_gb_write_u8(&gb, 0xff40, 0x91);
+    assert(gb.frame_ready && gb.display_frame_type == CUPID_GB_FRAME_LCD_OFF);
+    assert(gb.display_cycles_since_frame == 0 && gb.lcd_frame_odd == before_enable);
+}
+
+static void test_presentation_chunk_invariance(void) {
+    for (unsigned color = 0; color < 2; ++color) {
+        CupidGb machine, dots;
+        prepare(&machine, color != 0, 1);
+        cupid_gb_write_u8(&machine, 0xff40, 0);
+        cupid_gb_write_u8(&machine, 0xff40, 0x91);
+        dots = machine;
+        advance_dots(&machine, 220000);
+        for (unsigned n = 0; n < 220000; ++n)
+            cupid_gb_tick_ppu_dots(&dots, 1);
+        assert(memcmp(&machine, &dots, sizeof(machine)) == 0);
+        assert(machine.display_cycles_since_frame < 70224u);
+        assert(machine.lcd_repeat_countdown <= 67483u);
+    }
+}
+
 int main(void) {
     test_dmg_object_order();
     test_dmg_priority_uses_raw_bg_color();
@@ -564,6 +659,10 @@ int main(void) {
     test_pending_hblank_is_canceled_by_lcd_restart();
     test_lcd_enable_comparison_refresh();
     test_dot_chunks_preserve_pipeline_state();
+    test_idle_presentation_cadence();
+    test_first_frame_presentation(false);
+    test_first_frame_presentation(true);
+    test_presentation_chunk_invariance();
     puts("PPU priority checks passed.");
     return 0;
 }

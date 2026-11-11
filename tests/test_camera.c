@@ -95,7 +95,7 @@ static void test_capture(CupidGbModel model) {
     const size_t size = cupid_gb_state_size(&gb);
     uint8_t *before = malloc(size), *after = malloc(size), *replayed = malloc(size);
     assert(before && after && replayed);
-    assert(cupid_gb_save_state(&gb, before, size, NULL) == CUPID_GB_STATE_OK && before[8] == 7);
+    assert(cupid_gb_save_state(&gb, before, size, NULL) == CUPID_GB_STATE_OK && before[8] == 8);
     /* The first machine cycle leaves PHI in its longer shutter phase. */
     cupid_gb_tick(&gb, 37056);
     assert(cupid_gb_read_u8(&gb, 0xa020) == 0);

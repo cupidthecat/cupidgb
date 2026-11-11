@@ -34,6 +34,9 @@ Type `help` or `?` for the supported command list. Console numbers are decimal u
 | `break $0100` | Break at address 0100 in any mapped bank |
 | `break $01:$4000` | Break at address 4000 when bank 01 is mapped |
 | `break GameLoop` | Resolve a loaded symbol and use its bank/address |
+| `break GameLoop if a == $42` | Stop at the symbol only when A equals 42 hex |
+| `print (hl + 2)` | Evaluate a pure 16-bit expression |
+| `print [$c000]` / `print {$c000}` | Read a byte or little-endian word without advancing hardware |
 | `break` or `b` | Pause execution |
 | `breakpoints` | List the current breakpoint count and refresh the breakpoint view |
 | `delete 1` / `delete all` | Remove one listed breakpoint or all breakpoints |
@@ -49,6 +52,12 @@ Type `help` or `?` for the supported command list. Console numbers are decimal u
 
 Register edits accept AF, BC, DE, HL, SP, PC, A, F, B, C, D, E, H, L, and IME. The unused low bits of F remain zero; IME accepts only 0 or 1. A bank-qualified memory/disassembly request must refer to the bank currently mapped at that address. The commands do not switch hardware banks or patch ROM bytes.
 
+## Expressions and conditional stops
+
+Expressions accept CPU registers, loaded symbols, decimal literals, `$`/`0x` hexadecimal literals, parentheses, and byte `[address]` or little-endian word `{address}` reads. Arithmetic wraps to 16 bits. Division or remainder by zero and shifts by 16 or more yield zero. Both logical operands are evaluated. A bank qualifier selects a side-effect-free ROM, VRAM, or WRAM view without switching guest banks; bank zero selects the mapped view. Conditions are true when their value is nonzero. A condition that loses a symbol or otherwise fails evaluation pauses execution with a debugger error. Invalid new definitions leave existing breakpoints intact.
+
+Precedence from lowest to highest is: comparisons; `+ - | ||`; `* / % & ^ &&`; shifts; bank qualification with `:`. Operators in a group associate left to right. These groups differ from C. Expressions are limited to 255 bytes and 32 nested levels. Assignment, unary operators, watchpoints, and range breakpoints remain unsupported.
+
 ## Symbols
 
 Load Symbols accepts RGBDS-style `.sym` text with hexadecimal `bank:address name` lines and optional semicolon comments:
@@ -60,7 +69,7 @@ Load Symbols accepts RGBDS-style `.sym` text with hexadecimal `bank:address name
 01:4010 GameLoop.wait
 ```
 
-Loading replaces the symbol table only after complete validation. A malformed file leaves existing symbols intact and reports a line number. Duplicate names resolve to their last definition. Files are limited to 4 MiB and 16,384 symbols, with at most 127 bytes per name. This is a symbol-file reader, not a general expression evaluator or object-file loader.
+Loading replaces the symbol table only after complete validation. A malformed file leaves existing symbols intact and reports a line number. Duplicate names resolve to their last definition. Files are limited to 4 MiB and 16,384 symbols, with at most 127 bytes per name. The symbol loader does not read object files.
 
 Symbols and breakpoints are host debugger data. They are not embedded in native save states. Resetting the same cartridge path, data, and model preserves them while clearing execution history. A replacement clears the previous session's debugger data and loads a matching basename `.sym` file if available. The first debugger open also checks for that companion file. A failed cartridge open preserves the current session. Use the explicit symbol loader when a file needs to be reloaded or changed.
 
