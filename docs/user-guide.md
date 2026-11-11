@@ -58,6 +58,8 @@ Changes apply when you accept the dialog. Hardware and boot settings take effect
 
 Open Emulation > Controllers for device selection, button/axis/hat capture, dead zones, player assignments, hold controls, command shortcuts, background input and cartridge rumble. Layouts and preferred devices persist separately from cartridge state. Keyboard and controller contributions combine. Single-player sessions accept eligible controllers regardless of their saved SGB player assignment; a multiplayer request switches to the assigned input slots at the next hardware-step boundary. [The controller guide](controllers.md) explains defaults, capture, weak device identities, native menu navigation and remaining physical/motion limits.
 
+MBC7 games use the horizontal and vertical tilt axes selected in Controllers. Emulation > Motion-Controlled Games > Allow mouse control enables pointer tilt and mouse-button A for those cartridges; it starts off. Center the pointer or release the stick when the game asks to calibrate. [Motion controls](controllers.md#motion-cartridges) explains axis selection and input ownership.
+
 Settings and controller dialogs explicitly pause emulation and restore the prior pause choice on close. Open menus temporarily block execution and playback without changing that choice; nested menus retain the block until all menus close. Selecting Pause or resuming from a menu keeps the selected state afterward.
 
 ## Boot behavior

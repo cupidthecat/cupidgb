@@ -941,8 +941,9 @@ bool MainWindow::smokeTest() {
         return smokeFailure(__FILE__, __LINE__);
     if (!pacingSmokeTest(path) || !modelSmokeTest(directory.path()) ||
         !cheatSmokeTest(path, directory.path()) || !printerSmokeTest(path, directory.path()) ||
-        !controllerSmokeTest(directory.path()) || display_->collectPaintIntervals ||
-        !display_->paintIntervals.empty() || display_->lastPaintAt)
+        !controllerSmokeTest(directory.path()) || !motionSmokeTest(directory.path()) ||
+        display_->collectPaintIntervals || !display_->paintIntervals.empty() ||
+        display_->lastPaintAt)
         return smokeFailure(__FILE__, __LINE__);
     qInfo("CupidGB Qt workflow smoke test passed");
     return !failed_;

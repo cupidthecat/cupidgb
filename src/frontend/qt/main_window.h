@@ -8,6 +8,7 @@
 #include <QElapsedTimer>
 #include <QImage>
 #include <QMainWindow>
+#include <QPointF>
 #include <QSettings>
 #include <QTimer>
 #include <array>
@@ -71,6 +72,16 @@ class MainWindow final : public QMainWindow {
     void configureControllers();
     void reconcileControllerInput();
     void refreshControllerGate();
+    static std::optional<QPoint> pointerMotionSample(QPointF position, QSize source,
+                                                     QSizeF available, DisplayScaling scaling,
+                                                     qreal devicePixelRatio);
+    bool motionInputAllowed(bool mouse = false) const;
+    void refreshMotionGate();
+    void resetMotionInput();
+    void releaseMouseInput();
+    void controllerMotionChanged(const cupid::input::ControllerOutput &previous);
+    bool handleMotionEvent(QObject *object, QEvent *event);
+    bool motionSmokeTest(const QString &directory);
     void refreshControllerPlayerCount();
     std::array<uint8_t, 4> livePlayerButtons() const;
     void applyPlayerButtons(const std::array<uint8_t, 4> &buttons);
@@ -231,6 +242,11 @@ class MainWindow final : public QMainWindow {
     std::array<int, 5> specialKeys_{};
     std::unique_ptr<cupid::input::ControllerManager> controllers_;
     cupid::input::ControllerOutput controllerOutput_;
+    enum class MotionSource { None, Mouse, Controller };
+    MotionSource motionSource_ = MotionSource::None;
+    int16_t lastControllerMotionX_ = 0, lastControllerMotionY_ = 0;
+    bool mouseButtonA_ = false, motionGateOpen_ = false, motionFocusActive_ = true;
+    QAction *mouseMotionAction_ = nullptr;
     std::array<bool, 5> keyboardSpecialHeld_{};
     std::array<std::array<bool, 2>, 4> controllerRapidHeld_{};
     std::array<std::array<unsigned, 2>, 4> controllerRapidPhase_{};

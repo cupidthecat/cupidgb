@@ -6,6 +6,7 @@
 #include <QMap>
 #include <QStringList>
 #include <array>
+#include <optional>
 
 namespace cupid::input {
 
@@ -17,11 +18,20 @@ struct Binding {
     bool operator==(const Binding &other) const;
 };
 
+struct MotionAxis {
+    enum Kind { Unassigned, Raw, Controller } kind = Unassigned;
+
+    int control = 0;
+    bool operator==(const MotionAxis &other) const;
+};
+
 struct ControllerProfile {
     int player = 0;
     int pressThreshold = 16384, releaseThreshold = 14336;
     bool enabled = true;
     QMap<QString, QList<Binding>> bindings;
+    // Missing selections in older profiles resolve using the current device type.
+    std::optional<MotionAxis> motionX, motionY;
     bool operator==(const ControllerProfile &other) const;
 };
 
@@ -38,6 +48,8 @@ struct ControllerOutput {
     std::array<uint8_t, 4> buttons{0xff, 0xff, 0xff, 0xff};
     std::array<bool, 5> held{}; // Turbo, rewind, slow motion, rapid A, rapid B.
     std::array<std::array<bool, 2>, 4> rapid{};
+    bool motionAvailable = false;
+    int16_t motionX = 0, motionY = 0;
     bool operator==(const ControllerOutput &other) const;
 };
 
@@ -51,6 +63,8 @@ class ControllerManager final : public QObject {
                    const QMap<SDL_JoystickID, int> &players = {});
     ControllerProfile profile(const DeviceInfo &device) const;
     static ControllerProfile defaults(const DeviceInfo &device);
+    static bool motionAxesValid(const ControllerProfile &profile, const DeviceInfo &device);
+    static int16_t motionCounts(int16_t raw);
     static QStringList gameplayActions();
     static QString actionName(const QString &action);
     static QString bindingName(const Binding &binding);
@@ -60,6 +74,8 @@ class ControllerManager final : public QObject {
     ControllerOutput output() const;
     void setDeliveryEnabled(bool enabled);
     bool deliveryEnabled() const;
+    void setMotionEnabled(bool enabled);
+    bool motionEnabled() const;
     void setFocused(bool focused);
     void setPreferredInstance(SDL_JoystickID instance);
     QMap<SDL_JoystickID, int> playerOverrides() const;
@@ -90,6 +106,7 @@ class ControllerManager final : public QObject {
     void aggregate();
     bool eligible(const State &state) const;
     bool selected(const State &state) const;
+    bool motionReady(const State &state) const;
     ControllerBackend backend_;
     ControllerConfiguration configuration_;
     std::map<SDL_JoystickID, State> states_;
@@ -100,6 +117,7 @@ class ControllerManager final : public QObject {
     qint64 lastRumbleRefresh_ = -250;
     bool focused_ = true;
     bool delivery_ = true;
+    bool motionEnabled_ = false;
 };
 
 } // namespace cupid::input

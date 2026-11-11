@@ -31,6 +31,10 @@ void MainWindow::setPaused(bool value) {
 }
 
 void MainWindow::releaseKeys() {
+    if (!motionFocusActive_ && motionSource_ == MotionSource::Controller && motionInputAllowed())
+        releaseMouseInput();
+    else
+        resetMotionInput();
     keyboardSpecialHeld_.fill(false);
     turbo_ = false;
     rewind_ = false;
@@ -70,6 +74,8 @@ std::array<uint8_t, 4> MainWindow::livePlayerButtons() const {
         return buttons;
     buttons = controllerOutput_.buttons;
     buttons[0] &= physicalJoypad_;
+    if (mouseButtonA_ && emulator_ && emulator_->gb.header.mbc_type == CUPID_GB_MBC7)
+        buttons[0] &= 0xefu;
     for (size_t action = 0; action < rapidHeld_.size(); ++action) {
         if (!rapidHeld_[action])
             continue;
@@ -128,7 +134,9 @@ void MainWindow::reconcileControllerInput() {
                 controllerRapidPhase_[player][action] = 0;
             controllerRapidHeld_[player][action] = next;
         }
-    if (oldTurbo != turbo_ || oldRewind != rewind_) {
+    // Session commits restore audio and pacing after their metadata is ready.
+    // Opening a sink here could dispatch events against a partially committed ROM.
+    if (!stateOperation_ && (oldTurbo != turbo_ || oldRewind != rewind_)) {
         clearAudio();
         resetPacing();
     }
@@ -137,6 +145,7 @@ void MainWindow::reconcileControllerInput() {
 }
 
 void MainWindow::refreshControllerGate() {
+    refreshMotionGate();
     if (!controllers_)
         return;
     const bool focused = QApplication::applicationState() == Qt::ApplicationActive;
@@ -147,6 +156,9 @@ void MainWindow::refreshControllerGate() {
                          QApplication::activeModalWidget() || QApplication::activePopupWidget() ||
                          otherWindow || !inputTrace_.empty();
     controllers_->setDeliveryEnabled(!blocked);
+    // Classification belongs to the cartridge, independently of delivery gates.
+    // A paused tilt axis must not become a digital direction on resume.
+    controllers_->setMotionEnabled(emulator_ && emulator_->gb.header.mbc_type == CUPID_GB_MBC7);
 }
 
 void MainWindow::navigateControllerMenu(const QString &action, SDL_JoystickID instance) {
@@ -259,6 +271,14 @@ void MainWindow::advanceControls() {
 }
 
 bool MainWindow::eventFilter(QObject *object, QEvent *event) {
+    if (event->type() == QEvent::ApplicationDeactivate ||
+        (event->type() == QEvent::WindowDeactivate && object == this))
+        motionFocusActive_ = false;
+    if (event->type() == QEvent::ApplicationActivate ||
+        (event->type() == QEvent::WindowActivate && object == this))
+        motionFocusActive_ = true;
+    if (handleMotionEvent(object, event))
+        return true;
     if (event->type() == QEvent::ApplicationDeactivate ||
         (event->type() == QEvent::WindowDeactivate && object == this))
         releaseKeys();
