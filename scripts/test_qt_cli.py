@@ -120,12 +120,13 @@ def main():
             battery[0x14D] = (-sum(battery[0x134:0x14D]) - 25) & 255
             archive_battery = root / "game.zip"
             raw_save = root / "game.sav"
-            raw_save.write_bytes(bytes([0xFF]) * 8192)
+            # Distinct bytes expose accidental loading of the raw cartridge's save.
+            raw_save.write_bytes(bytes([0xA5]) * 8192)
             with zipfile.ZipFile(archive_battery, "w", zipfile.ZIP_DEFLATED) as compressed:
                 compressed.writestr("game.gb", battery)
             run(archive_battery)
-            assert (root / "game.zip.sav").read_bytes() == bytes([0x42]) + bytes(8191)
-            assert raw_save.read_bytes() == bytes([0xFF]) * 8192
+            assert (root / "game.zip.sav").read_bytes() == bytes([0x42]) + bytes([0xFF]) * 8191
+            assert raw_save.read_bytes() == bytes([0xA5]) * 8192
 
             for name, contents in (
                 ("ambiguous", {"one.gb": plain.read_bytes(), "other.gbc": color.read_bytes()}),

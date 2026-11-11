@@ -606,16 +606,18 @@ The complete builds passed 36 of 36 checks on Windows/MSVC and Linux/GCC with Qt
 
 ### Bounded core throughput
 
-Each sample executes 3,600 guest intervals, approximately 60.274 guest seconds. Each host ran sequentially, discarded one warmup pair, then measured five alternating pairs against the preceding checkpoint. All guest counters, image/audio checksums, and complete captured PCM/PPM hashes matched.
+Each sample executes 3,600 guest intervals, approximately 60.274 guest seconds. The final core measurement compares `8106f93` with `3b896f3`. Hosts ran sequentially, discarded one warmup pair, then measured five alternating pairs. Tetris guest counters and complete PCM/PPM captures match on both hosts. Mario Deluxe retains the same guest cycles, VBlank count, audio frame count, and final image, but the corrected fresh SRAM produces 63 additional instructions and different startup PCM.
 
 | Host and input | Previous median wall time | Current median wall time | Change |
 | --- | ---: | ---: | ---: |
-| Linux, Tetris | 6.699 s | 6.951 s | +3.8% |
-| Linux, Mario Deluxe | 7.791 s | 8.066 s | +3.5% |
-| Windows, Tetris | 7.515 s | 7.286 s | -3.0% |
-| Windows, Mario Deluxe | 9.259 s | 9.322 s | +0.7% |
+| Linux, Tetris | 7.511 s | 7.702 s | +2.5% |
+| Linux, Mario Deluxe | 8.506 s | 8.462 s | -0.5% |
+| Windows, Tetris | 7.713 s | 7.693 s | -0.3% |
+| Windows, Mario Deluxe | 9.553 s | 9.443 s | -1.2% |
 
-Linux process CPU medians increased from 6.701 to 6.953 seconds and 7.788 to 8.046 seconds. Windows process CPU counters varied widely between repeats, so their median changes do not establish an improvement. The current bounded core rates span 6.47 to 8.67 times nominal guest speed. These are uncapped core samples; they do not measure sustained desktop frame pacing or qualify other games.
+Linux process CPU medians changed from 6.934 to 7.111 seconds and 7.855 to 7.814 seconds. Windows process CPU counters varied widely between repeats, so their median changes do not establish an improvement. Current bounded core rates span 6.38 to 7.83 times nominal guest speed. These uncapped core samples do not measure desktop frame pacing or qualify other games.
+
+A separate correctness control imports an explicit 8 KiB zero-filled battery before boot. This restores every baseline Mario signature and byte-identical PCM/PPM, isolating the startup difference to the fresh-storage correction. It was not used for performance claims. An isolated inactive-DMA call guard preserved output but increased Linux runtime by 6.4% and 2.5% in its two screening inputs; it was excluded from the implementation.
 
 ### Native desktop playback
 
