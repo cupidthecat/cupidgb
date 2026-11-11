@@ -872,8 +872,6 @@ bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size) {
 
     if (gb->header.mbc_type == CUPID_GB_TPP1)
         gb->tpp1.rom_bank = 1;
-    if (gb->header.mbc_type == CUPID_GB_CAMERA || gb->header.mbc_type == CUPID_GB_TPP1)
-        memset(gb->cartridge_ram, 0xff, gb->cartridge_ram_size);
 
     /* Connected ROM address lines follow file population, independently of
      * header metadata. Missing bytes read as erased 0xff in the memory map.
@@ -920,6 +918,9 @@ bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size) {
         gb->current_rom_bank = 0;
         cupid_gb_mbc7_reset(gb);
     }
+    /* A fresh cartridge exposes erased storage until the host restores its
+     * battery image. Resolve built-in RAM sizes before filling the array. */
+    memset(gb->cartridge_ram, 0xff, gb->cartridge_ram_size);
 
     gb->loaded = true;
 
