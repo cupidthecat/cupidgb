@@ -191,7 +191,13 @@ static void fetch_background(CupidGb *gb) {
 
 static int due_object(CupidGb *gb) {
     CupidGbPixels *p = &gb->pixels;
+    if (!p->object_count)
+        return -1;
     if (!(gb->io_registers[CUPID_GB_IO_LCDC] & 2) && !gb->cgb_mode)
+        return -1;
+    /* Older snapshots may retain fetched bits above the selected slot count. */
+    const unsigned selected_mask = (1u << p->object_count) - 1u;
+    if ((p->fetched_objects & selected_mask) == selected_mask)
         return -1;
     unsigned match = p->x + 8;
     if (!p->window_active && p->column == 0) {
