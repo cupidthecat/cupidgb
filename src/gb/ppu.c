@@ -9,6 +9,25 @@ bool cupid_gb_lcd_enabled(const CupidGb *gb) {
     return (gb->io_registers[CUPID_GB_IO_LCDC] & 0x80) != 0;
 }
 
+static void publish_frame(CupidGb *gb, uint8_t type, uint32_t remaining_dots) {
+    gb->display_cycles_since_frame = remaining_dots;
+    gb->display_frame_type = type;
+    gb->frame_ready = true;
+    if (!gb->sgb.enabled && type != CUPID_GB_FRAME_NORMAL && type != CUPID_GB_FRAME_REPEAT) {
+        // Blank presentation changes the output surface, not the fetch pipeline.
+        memset(gb->frame_buffer, 0, sizeof(gb->frame_buffer));
+        for (size_t pixel = 0; pixel < CUPID_GB_SCREEN_WIDTH * CUPID_GB_SCREEN_HEIGHT; ++pixel)
+            gb->frame_buffer_color[pixel] = 0x7fff;
+    }
+}
+
+void cupid_gb_prepare_lcd_enable(CupidGb *gb) {
+    if (gb && gb->display_cycles_since_frame > 4560u)
+        // Enabling late in an idle interval presents the off image first.
+        // This artificial boundary does not change LCD row polarity.
+        publish_frame(gb, CUPID_GB_FRAME_LCD_OFF, 0);
+}
+
 void cupid_gb_set_ppu_mode(CupidGb *gb, uint8_t mode) {
     gb->io_registers[CUPID_GB_IO_STAT] =
         (uint8_t)((gb->io_registers[CUPID_GB_IO_STAT] & 0xfc) | (mode & 3));
@@ -176,8 +195,7 @@ void cupid_gb_reset_ppu(CupidGb *gb) {
     cupid_gb_pixels_begin_line(gb);
     gb->ppu_counter = 0u;
     gb->stat_irq_delay = 0u;
-    gb->frame_ready = false;
-    gb->lcd_first_frame = gb->model == CUPID_GB_MODEL_CGB;
+    gb->lcd_first_frame = !gb->sgb.enabled;
     gb->ppu_lcd_warmup_lines = 2u;
     gb->ppu_lcd_startup = true;
     gb->ppu_line_boundary_hold = false;
@@ -269,6 +287,10 @@ static void tick_ppu(CupidGb *gb, uint32_t dots, uint8_t *midpoint) {
     const bool lcd_enabled = cupid_gb_lcd_enabled(gb);
     const bool stopped = gb->cpu.stopped && gb->model != CUPID_GB_MODEL_CGB;
     const bool sgb = gb->sgb.enabled;
+    const uint32_t initial_dots = dots;
+    const uint32_t initial_repeat = gb->lcd_repeat_countdown;
+    gb->display_cycles_since_frame += dots;
+    gb->lcd_repeat_countdown = initial_repeat > dots ? initial_repeat - dots : 0;
     if (sgb) {
         cupid_gb_sgb_clock(gb, dots, !lcd_enabled || stopped);
     }
@@ -277,7 +299,6 @@ static void tick_ppu(CupidGb *gb, uint32_t dots, uint8_t *midpoint) {
         memset(p, 0, sizeof(*p));
         p->lyc_irq = previous_lyc_irq;
         gb->ppu_counter = 0;
-        gb->frame_ready = false;
         gb->ppu_lcd_warmup_lines = 0;
         gb->ppu_lcd_startup = false;
         gb->ppu_line_boundary_hold = false;
@@ -285,10 +306,18 @@ static void tick_ppu(CupidGb *gb, uint32_t dots, uint8_t *midpoint) {
         gb->io_registers[CUPID_GB_IO_LY] = 0;
         cupid_gb_set_ppu_mode(gb, CUPID_GB_PPU_MODE_HBLANK);
         cupid_gb_update_stat_irq(gb);
+    }
+    if (!lcd_enabled || stopped) {
+        while (gb->display_cycles_since_frame >= 70224u) {
+            const uint32_t remaining = gb->display_cycles_since_frame - 70224u;
+            if (!sgb && !stopped)
+                gb->lcd_frame_odd = !gb->lcd_frame_odd;
+            publish_frame(
+                gb, stopped && lcd_enabled ? CUPID_GB_FRAME_ARTIFICIAL : CUPID_GB_FRAME_LCD_OFF,
+                remaining);
+        }
         return;
     }
-    if (stopped)
-        return;
     if (!p->initialized) {
         p->initialized = true;
         p->line = gb->io_registers[CUPID_GB_IO_LY];
@@ -353,10 +382,18 @@ static void tick_ppu(CupidGb *gb, uint32_t dots, uint8_t *midpoint) {
             } else if (p->line == 144 && p->dot == 1) {
                 /* LY changes before VBlank's interrupt request. Keeping this phase
                  * explicit avoids treating a following DI as an instruction exception. */
-                gb->frame_ready = true;
-                if (!sgb && !gb->lcd_first_frame)
+                ++gb->vblank_events;
+                uint8_t type = CUPID_GB_FRAME_NORMAL;
+                if (gb->lcd_first_frame && !sgb) {
+                    const uint32_t consumed = initial_dots - dots + 1u;
+                    type = gb->model == CUPID_GB_MODEL_CGB && initial_repeat > consumed
+                               ? CUPID_GB_FRAME_REPEAT
+                               : CUPID_GB_FRAME_BLANK_FIRST;
+                }
+                if (!sgb && !(gb->model == CUPID_GB_MODEL_CGB && gb->lcd_first_frame))
                     gb->lcd_frame_odd = !gb->lcd_frame_odd;
                 gb->lcd_first_frame = false;
+                publish_frame(gb, type, dots - 1u);
                 if (sgb) {
                     cupid_gb_sgb_vblank(gb, dots - 1);
                 }
@@ -368,6 +405,14 @@ static void tick_ppu(CupidGb *gb, uint32_t dots, uint8_t *midpoint) {
             } else if (p->line == 153 && p->dot == (gb->model == CUPID_GB_MODEL_CGB ? 4 : 2)) {
                 gb->io_registers[CUPID_GB_IO_LY] = 0;
                 cupid_gb_update_stat_irq(gb);
+            }
+            if (gb->model == CUPID_GB_MODEL_CGB && p->line >= 144 && p->line <= 152 &&
+                p->dot == 1) {
+                // Each early VBlank scanline refreshes the startup-repeat window.
+                // Charge the dot already consumed at this edge and the remainder
+                // of this call without adding bookkeeping to every pixel clock.
+                const uint32_t remaining = dots - 1u;
+                gb->lcd_repeat_countdown = 67483u > remaining ? 67483u - remaining : 0;
             }
             ++p->dot;
             if (p->line >= 143 && p->line < 153 && p->dot == 455) {
@@ -390,7 +435,6 @@ static void tick_ppu(CupidGb *gb, uint32_t dots, uint8_t *midpoint) {
                         cupid_gb_set_ppu_mode(gb, CUPID_GB_PPU_MODE_HBLANK);
                     p->window_armed = false;
                     gb->window_line_counter = 0;
-                    gb->frame_ready = false;
                 }
                 gb->io_registers[CUPID_GB_IO_LY] = p->line;
                 cupid_gb_update_stat_irq(gb);

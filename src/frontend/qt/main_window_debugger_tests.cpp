@@ -146,6 +146,34 @@ bool MainWindow::debuggerSmokeTest(const QString &directory) {
     debuggerWindow_->submitCommand("delete all");
     if (!paused_ || debugger_->bp_count)
         return smokeFailure(__FILE__, __LINE__);
+    // Conditions use live register and memory values, and print must leave the
+    // emulated timeline intact. Invalid conditions cannot replace a valid one.
+    debuggerWindow_->submitCommand("set pc $0158");
+    debuggerWindow_->submitCommand("set a 0");
+    debuggerWindow_->submitCommand("break $0158 if a == 3");
+    if (debugger_->bp_count != 1 ||
+        QString::fromUtf8(debugger_->breakpoints[0].condition) != "a == 3")
+        return smokeFailure(__FILE__, __LINE__);
+    debuggerWindow_->submitCommand("break $0158 if a = 4");
+    if (debugger_->bp_count != 1)
+        return smokeFailure(__FILE__, __LINE__);
+    const QByteArray beforeExpression = captureState();
+    debuggerWindow_->submitCommand("print ($ffff + 2) * 3");
+    if (captureState() != beforeExpression || !debuggerWindow_->outputText().contains("$0003 (3)"))
+        return smokeFailure(__FILE__, __LINE__);
+    // The normal program loops at $0159; use a bounded explicit instruction
+    // sequence to check false and true conditions at the same execution point.
+    debuggerWindow_->submitCommand("step");
+    if (!complete() || emulator_->gb.cpu.a != 1)
+        return smokeFailure(__FILE__, __LINE__);
+    debuggerWindow_->submitCommand("set pc $0158");
+    if (cupid_gb_debugger_match_breakpoint(debugger_.get(), &emulator_->gb))
+        return smokeFailure(__FILE__, __LINE__);
+    debuggerWindow_->submitCommand("set a 3");
+    debuggerWindow_->submitCommand("continue");
+    if (!runFrame() || !paused_ || emulator_->gb.cpu.pc != 0x158 || emulator_->gb.cpu.a != 3)
+        return smokeFailure(__FILE__, __LINE__);
+    debuggerWindow_->submitCommand("delete all");
     const QString symbolsPath = QDir(directory).filePath("debugger.sym");
     QFile symbols(symbolsPath);
     if (!symbols.open(QIODevice::WriteOnly) ||
@@ -164,6 +192,52 @@ bool MainWindow::debuggerSmokeTest(const QString &directory) {
     if (loadDebuggerSymbols(invalidPath) || debugger_->symbol_count != 2 ||
         captureState() != beforeSymbols)
         return smokeFailure(__FILE__, __LINE__);
+    // Replacing symbols can invalidate a live condition. Ordinary playback must
+    // pause at that boundary too, rather than silently executing past the error.
+    debuggerWindow_->submitCommand("set pc $0158");
+    debuggerWindow_->submitCommand("break $0158 if Inner != 0");
+    const QString withoutInnerPath = QDir(directory).filePath("debugger-without-inner.sym");
+    QFile withoutInner(withoutInnerPath);
+    if (!withoutInner.open(QIODevice::WriteOnly) || withoutInner.write("00:0155 Subcall\n") <= 0)
+        return smokeFailure(__FILE__, __LINE__);
+    withoutInner.close();
+    if (!loadDebuggerSymbols(withoutInnerPath) || debugger_->symbol_count != 1 ||
+        debugger_->bp_count != 1)
+        return smokeFailure(__FILE__, __LINE__);
+    auto *const conditionSession = emulator_.get();
+    debuggerWindow_->submitCommand("continue");
+    emulator_->gb.frame_ready = true;
+    const QByteArray beforeConditionError = captureState();
+    const uint64_t conditionCycles = emulator_->gb.elapsed_cycles;
+    if (paused_ || !runFrame() || !paused_ || emulator_.get() != conditionSession ||
+        emulator_->gb.cpu.pc != 0x158 || emulator_->gb.elapsed_cycles != conditionCycles ||
+        debugger_->last_stop != CUPID_GB_DEBUG_STOP_ERROR || debuggerTimer_.isActive() ||
+        !emulator_->gb.frame_ready || !debuggerWindow_->isVisible() ||
+        captureState() != beforeConditionError ||
+        !debuggerWindow_->outputText().contains("Breakpoint condition evaluation failed."))
+        return smokeFailure(__FILE__, __LINE__);
+    const QString beforeErrorInspection = debuggerWindow_->outputText();
+    debuggerWindow_->submitCommand("print pc");
+    if (debuggerWindow_->outputText() == beforeErrorInspection ||
+        captureState() != beforeConditionError || !loadDebuggerSymbols(symbolsPath))
+        return smokeFailure(__FILE__, __LINE__);
+    debuggerWindow_->submitCommand("delete all");
+    debuggerWindow_->submitCommand("set pc $0155");
+    debuggerWindow_->submitCommand("set sp $fffe");
+    debuggerWindow_->submitCommand("break $0160 if Inner != 0");
+    if (!loadDebuggerSymbols(withoutInnerPath) || debugger_->symbol_count != 1)
+        return smokeFailure(__FILE__, __LINE__);
+    const QByteArray beforeNextConditionError = captureState();
+    const uint64_t beforeNextConditionCycles = emulator_->gb.elapsed_cycles;
+    debuggerWindow_->submitCommand("next");
+    if (!complete() || !paused_ || emulator_->gb.cpu.pc != 0x160 ||
+        emulator_->gb.elapsed_cycles <= beforeNextConditionCycles ||
+        debugger_->last_stop != CUPID_GB_DEBUG_STOP_ERROR || debuggerHistory_.size() != 1 ||
+        !debuggerWindow_->outputText().contains("Breakpoint condition evaluation failed.") ||
+        !debuggerBackstep() || emulator_->gb.cpu.pc != 0x155 ||
+        captureState() != beforeNextConditionError || !loadDebuggerSymbols(symbolsPath))
+        return smokeFailure(__FILE__, __LINE__);
+    debuggerWindow_->submitCommand("delete all");
     debuggerWindow_->submitCommand("break Inner");
     if (debugger_->bp_count != 1 || debugger_->breakpoints[0].address != 0x160)
         return smokeFailure(__FILE__, __LINE__);
@@ -304,8 +378,9 @@ bool MainWindow::debuggerSmokeTest(const QString &directory) {
     debuggerWindow_->submitCommand("set pc $0150");
     const QByteArray beforeIllegal = captureState();
     debuggerWindow_->submitCommand("step");
-    if (!complete() || !emulator_->gb.cpu.halted || !debuggerBackstep() ||
-        captureState() != beforeIllegal)
+    if (!complete() || !emulator_->gb.cpu.halted ||
+        debugger_->last_stop != CUPID_GB_DEBUG_STOP_ERROR || debuggerHistory_.size() != 1 ||
+        !debuggerBackstep() || captureState() != beforeIllegal)
         return smokeFailure(__FILE__, __LINE__);
     const QString captureDirectory = qEnvironmentVariable("CUPIDGB_UI_CAPTURE_DIR");
     if (!captureDirectory.isEmpty()) {

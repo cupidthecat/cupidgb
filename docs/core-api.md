@@ -141,6 +141,8 @@ Begin RUN, STEP, NEXT, or FINISH with `cupid_gb_debugger_begin`, then call `cupi
 
 `cupid_gb_debug_peek` reads underlying mapped memory without ticking hardware or applying CPU VRAM/OAM/wave restrictions. `cupid_gb_debug_poke` rejects ROM/unusable ranges, edits writable mapped storage, and applies device semantics for I/O. It requires the same exclusive instruction-boundary access as state operations. Raw observation and intentional edits are different contracts; an I/O edit can have hardware side effects.
 
+`cupid_gb_debugger_evaluate` evaluates bounded, pure 16-bit expressions over registers, symbols, and side-effect-free memory views. Conditional execution breakpoints store their expression as host metadata and evaluate it only at a matching instruction boundary. An evaluation failure pauses execution with a debugger error. Invalid new definitions leave existing breakpoints intact. The Qt console exposes these operations through `print` and `break ... if ...`. See [debugging](debugging.md) for syntax and limits.
+
 Disassembly, symbol loading/lookups, bank identification, and breakpoint management have separate APIs. Symbol-buffer loading is transactional and bounded. The Qt host implements Backstep with trusted native snapshots; C hosts must provide their own instruction history and reconcile audio/pacing after restoration. See [debugging](debugging.md) for command behavior, memory scopes, and remaining capabilities.
 
 ## Errors and compatibility

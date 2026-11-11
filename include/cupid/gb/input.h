@@ -11,9 +11,11 @@ void cupid_gb_set_buttons(CupidGb *gb, uint8_t released_mask);
  * changing an unselected pad does not produce a selected-line interrupt. */
 bool cupid_gb_set_buttons_for_player(CupidGb *gb, unsigned player, uint8_t released_mask);
 
-/* Memory-map helpers. Physical contact bounce and monochrome row settling are
- * not modeled here; the selected rows are evaluated immediately. */
+/* Memory-map helpers. Monochrome row release is delayed while select-bit
+ * readback changes immediately. Physical contact bounce is not modeled. */
 uint8_t cupid_gb_input_read(const CupidGb *gb);
 void cupid_gb_input_select(CupidGb *gb, uint8_t value);
+/* Advance row settling by base-clock dots, including during HALT and STOP. */
+void cupid_gb_input_tick(CupidGb *gb, unsigned base_cycles);
 
 #endif

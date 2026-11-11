@@ -101,7 +101,7 @@ Foreground and background counting gates are separate. DAC disable can leave a b
 
 NR43 writes can change a selected bit from low to high and clock the LFSR without elapsed guest time. Changing the divisor exactly on a prescaler reload edge also differs from changing it between edges. `reload_edge`, counter history and the held sample preserve these distinctions. The older `ch4_timer` remains in the legacy state prefix and serves the simpler non-CGB path; it is not the color prescaler's remaining count.
 
-The implemented selector-edge path does not cover every high-selector corruption. Retained width and pre-shift history are present, but the remaining corruption paths still need implementation and validation. This is separate from passing the basic alignment, frequency-change, width-switch and restart tables.
+High-selector NR43 transitions can generate an intermediate selector pulse and shift only part of the LFSR. The result depends on the old/new selector lines, retained width, and pre-shift history. The deterministic color profile models these transitions separately from ordinary counter edges. Paired digital observations cover the implemented CGB-E profile; they do not qualify instance-dependent silicon variation or other revisions.
 
 ## Digital taps, mixing and sample generation
 
@@ -149,6 +149,6 @@ ctest --test-dir build --output-on-failure -R 'cupidgb_(apu|state|audio_converte
 
 Qt-dependent targets require a frontend-enabled build. The ordinary offscreen workflow test does not prove that a real audio device played sound. Native audio smoke checks, device changes and sustained gameplay belong in the platform validation described in [testing](testing.md).
 
-Authored digital result tables establish particular register/timing observations for the modeled CGB profile. They do not establish every hardware revision, all commercial audio, complete analog behavior or host audio stability. Wider non-CGB quirks, unaligned and other-revision pulse-trigger cases, high-selector noise corruption, filtering/interference behavior and broader APU acceptance remain open. Report digital-tap comparisons, generated PCM, host playback and listening results separately so one result does not stand in for another.
+Authored digital result tables establish particular register/timing observations for the modeled CGB profile. They do not establish every hardware revision, all commercial audio, complete analog behavior or host audio stability. Wider non-CGB quirks, unaligned and other-revision pulse-trigger cases, other-revision and unaligned noise transitions, filtering/interference behavior and broader APU acceptance remain open. Report digital-tap comparisons, generated PCM, host playback and listening results separately so one result does not stand in for another.
 
 The current color pulse model retains the old timer and frequency through a trigger. A qualifying old counter phase can immediately advance duty, while a suppressed retrigger at the maximum frequency adds four base dots. Inactive channels retain reload qualification for later frequency writes. A fresh trigger clears the previous duty-cancellation opportunity without inventing a new persistent latch.

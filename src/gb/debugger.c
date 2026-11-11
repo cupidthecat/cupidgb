@@ -308,18 +308,38 @@ void cupid_gb_debugger_cleanup(CupidGbDebugger *debugger) {
 }
 
 bool cupid_gb_debugger_breakpoint_add(CupidGbDebugger *debugger, int bank, uint16_t address) {
+    return cupid_gb_debugger_breakpoint_add_condition(debugger, NULL, bank, address, NULL);
+}
+
+bool cupid_gb_debugger_breakpoint_add_condition(CupidGbDebugger *debugger, const CupidGb *gb,
+                                                int bank, uint16_t address, const char *condition) {
     if (!debugger || bank < -1 || bank > UINT16_MAX)
         return false;
+    if (!condition)
+        condition = "";
+    size_t length = 0;
+    while (length < CUPID_GB_DEBUG_EXPRESSION_SIZE && condition[length])
+        ++length;
+    if (length == CUPID_GB_DEBUG_EXPRESSION_SIZE)
+        return false;
+    if (length) {
+        CupidGbDebugValue value;
+        if (!cupid_gb_debugger_evaluate(debugger, gb, condition, &value, NULL))
+            return false;
+    }
     for (size_t index = 0; index < debugger->bp_count; ++index) {
         CupidGbDebugBreakpoint *point = &debugger->breakpoints[index];
-        if (point->bank == bank && point->address == address) {
+        if (point->bank == bank && point->address == address &&
+            strcmp(point->condition, condition) == 0) {
             point->enabled = true;
             return true;
         }
     }
     if (debugger->bp_count == CUPID_GB_DEBUG_MAX_BREAKPOINTS)
         return false;
-    debugger->breakpoints[debugger->bp_count++] = (CupidGbDebugBreakpoint){address, bank, true};
+    CupidGbDebugBreakpoint point = {.address = address, .bank = bank, .enabled = true};
+    memcpy(point.condition, condition, length + 1);
+    debugger->breakpoints[debugger->bp_count++] = point;
     return true;
 }
 
@@ -337,17 +357,28 @@ void cupid_gb_debugger_breakpoints_clear(CupidGbDebugger *debugger) {
         debugger->bp_count = 0;
 }
 
-bool cupid_gb_debugger_match_breakpoint(const CupidGbDebugger *debugger, const CupidGb *gb) {
+static int match_breakpoint(const CupidGbDebugger *debugger, const CupidGb *gb) {
     if (!debugger || !gb || !gb->loaded)
         return false;
     const int bank = cupid_gb_debugger_bank(gb, gb->cpu.pc);
     for (size_t index = 0; index < debugger->bp_count; ++index) {
         const CupidGbDebugBreakpoint *point = &debugger->breakpoints[index];
-        if (point->enabled && point->address == gb->cpu.pc &&
-            (point->bank < 0 || point->bank == bank))
-            return true;
+        if (!point->enabled || point->address != gb->cpu.pc ||
+            (point->bank >= 0 && point->bank != bank))
+            continue;
+        if (!point->condition[0])
+            return 1;
+        CupidGbDebugValue value;
+        if (!cupid_gb_debugger_evaluate(debugger, gb, point->condition, &value, NULL))
+            return -1;
+        if (value.value)
+            return 1;
     }
     return false;
+}
+
+bool cupid_gb_debugger_match_breakpoint(const CupidGbDebugger *debugger, const CupidGb *gb) {
+    return match_breakpoint(debugger, gb) > 0;
 }
 
 static CupidGbDebugStop stopped(CupidGbDebugger *debugger, CupidGbDebugStop reason) {
@@ -389,7 +420,10 @@ CupidGbDebugStop cupid_gb_debugger_check(CupidGbDebugger *debugger, const CupidG
     const bool skip = debugger->skip_breakpoint && debugger->skip_address == gb->cpu.pc &&
                       debugger->skip_bank == cupid_gb_debugger_bank(gb, gb->cpu.pc);
     debugger->skip_breakpoint = false;
-    if (!skip && cupid_gb_debugger_match_breakpoint(debugger, gb)) {
+    const int matched = skip ? 0 : match_breakpoint(debugger, gb);
+    if (matched < 0)
+        return stopped(debugger, CUPID_GB_DEBUG_STOP_ERROR);
+    if (matched > 0) {
         debugger->skip_address = gb->cpu.pc;
         debugger->skip_bank = cupid_gb_debugger_bank(gb, gb->cpu.pc);
         return stopped(debugger, CUPID_GB_DEBUG_STOP_BREAKPOINT);
@@ -621,4 +655,329 @@ bool cupid_gb_debugger_lookup_symbol(const CupidGbDebugger *debugger, const char
         }
     }
     return false;
+}
+
+typedef enum ExpressionOperation {
+    EXPR_ADD,
+    EXPR_SUBTRACT,
+    EXPR_OR,
+    EXPR_LOGICAL_OR,
+    EXPR_MULTIPLY,
+    EXPR_DIVIDE,
+    EXPR_REMAINDER,
+    EXPR_AND,
+    EXPR_XOR,
+    EXPR_LOGICAL_AND,
+    EXPR_SHIFT_LEFT,
+    EXPR_SHIFT_RIGHT,
+    EXPR_BANK,
+    EXPR_EQUAL,
+    EXPR_UNEQUAL,
+    EXPR_LESS,
+    EXPR_LESS_EQUAL,
+    EXPR_GREATER,
+    EXPR_GREATER_EQUAL
+} ExpressionOperation;
+
+typedef struct ExpressionOperator {
+    const char *text;
+    unsigned precedence;
+    ExpressionOperation operation;
+} ExpressionOperator;
+
+static const ExpressionOperator expression_operators[] = {
+    {"||", 2, EXPR_LOGICAL_OR}, {"&&", 3, EXPR_LOGICAL_AND},
+    {"<<", 4, EXPR_SHIFT_LEFT}, {">>", 4, EXPR_SHIFT_RIGHT},
+    {"==", 1, EXPR_EQUAL},      {"!=", 1, EXPR_UNEQUAL},
+    {"<=", 1, EXPR_LESS_EQUAL}, {">=", 1, EXPR_GREATER_EQUAL},
+    {"+", 2, EXPR_ADD},         {"-", 2, EXPR_SUBTRACT},
+    {"|", 2, EXPR_OR},          {"*", 3, EXPR_MULTIPLY},
+    {"/", 3, EXPR_DIVIDE},      {"%", 3, EXPR_REMAINDER},
+    {"&", 3, EXPR_AND},         {"^", 3, EXPR_XOR},
+    {":", 5, EXPR_BANK},        {"<", 1, EXPR_LESS},
+    {">", 1, EXPR_GREATER},
+};
+
+typedef struct ExpressionParser {
+    const CupidGbDebugger *debugger;
+    const CupidGb *gb;
+    const char *start, *cursor;
+    unsigned depth;
+    bool failed;
+} ExpressionParser;
+
+static void expression_space(ExpressionParser *parser) {
+    while (isspace((unsigned char)*parser->cursor))
+        ++parser->cursor;
+}
+
+static CupidGbDebugValue expression_value(uint16_t value) {
+    return (CupidGbDebugValue){value, -1};
+}
+
+static uint8_t expression_peek(const CupidGb *gb, int bank, uint16_t address) {
+    // A zero bank qualifier retains the mapped view, as does an unqualified value.
+    if (bank <= 0)
+        return cupid_gb_debug_peek(gb, address);
+    if (address < 0x8000u) {
+        /* A qualified address selects physical storage without changing the
+         * mapper's latches. Firmware remains visible while its overlay is on. */
+        if (gb->boot_rom_enabled && (address < 0x100u || (gb->model == CUPID_GB_MODEL_CGB &&
+                                                          address >= 0x200u && address < 0x900u)))
+            return cupid_gb_debug_peek(gb, address);
+        if (!gb->rom_size)
+            return 0xff;
+        const size_t offset = ((size_t)bank * 0x4000u + (address & 0x3fffu)) % gb->rom_size;
+        return gb->rom[offset];
+    }
+    if (address < 0xa000u) {
+        const unsigned selected = gb->model == CUPID_GB_MODEL_CGB ? (unsigned)bank & 1u : 0;
+        return gb->video_ram[selected * 0x2000u + address - 0x8000u];
+    }
+    if (address < 0xc000u && ordinary_cartridge_ram(gb)) {
+        if (gb->header.mbc_type == CUPID_GB_MBC2)
+            return (uint8_t)(gb->cartridge_ram[address & 0x1ffu] | 0xf0u);
+        const size_t offset = ((size_t)bank * 0x2000u + address - 0xa000u) % gb->cartridge_ram_size;
+        return gb->cartridge_ram[offset];
+    }
+    if (address >= 0xe000u && address < 0xfe00u)
+        return expression_peek(gb, bank, (uint16_t)(address - 0x2000u));
+    if (address >= 0xd000u && address < 0xe000u && gb->model == CUPID_GB_MODEL_CGB) {
+        unsigned selected = (unsigned)bank & 7u;
+        if (!selected)
+            selected = 1;
+        return gb->work_ram[selected * 0x1000u + address - 0xd000u];
+    }
+    return cupid_gb_debug_peek(gb, address);
+}
+
+static CupidGbDebugValue expression_parse(ExpressionParser *parser, unsigned minimum);
+
+static CupidGbDebugValue expression_primary(ExpressionParser *parser) {
+    expression_space(parser);
+    if (++parser->depth > 32) {
+        parser->failed = true;
+        --parser->depth;
+        return expression_value(0);
+    }
+    CupidGbDebugValue result = expression_value(0);
+    const char opening = *parser->cursor;
+    if (opening == '(' || opening == '[' || opening == '{') {
+        ++parser->cursor;
+        result = expression_parse(parser, 1);
+        expression_space(parser);
+        const char closing = opening == '(' ? ')' : opening == '[' ? ']' : '}';
+        if (*parser->cursor != closing) {
+            parser->failed = true;
+        } else {
+            ++parser->cursor;
+            if (opening != '(' && !parser->failed) {
+                const uint16_t address = result.value;
+                const int bank = result.bank;
+                result = expression_value(expression_peek(parser->gb, bank, address));
+                if (opening == '{')
+                    result.value |=
+                        (uint16_t)expression_peek(parser->gb, bank, (uint16_t)(address + 1u)) << 8u;
+            }
+        }
+    } else if (isdigit((unsigned char)opening) || opening == '$') {
+        unsigned base = 10;
+        if (opening == '$') {
+            base = 16;
+            ++parser->cursor;
+        } else if (opening == '0' && (parser->cursor[1] == 'x' || parser->cursor[1] == 'X')) {
+            base = 16;
+            parser->cursor += 2;
+        }
+        const char *digits = parser->cursor;
+        unsigned digit;
+        while (hex_value(*parser->cursor, &digit) && digit < base) {
+            result.value = (uint16_t)(result.value * base + digit);
+            ++parser->cursor;
+        }
+        if (digits == parser->cursor)
+            parser->failed = true;
+    } else {
+        char name[CUPID_GB_DEBUG_EXPRESSION_SIZE];
+        size_t length = 0;
+        while (isalnum((unsigned char)*parser->cursor) || *parser->cursor == '_' ||
+               *parser->cursor == '.')
+            name[length++] = *parser->cursor++;
+        name[length] = 0;
+        const CupidGbCpu *cpu = &parser->gb->cpu;
+        if (length == 1) {
+            switch (name[0]) {
+                case 'a':
+                    result.value = cpu->a;
+                    break;
+                case 'f':
+                    result.value = cpu->f;
+                    break;
+                case 'b':
+                    result.value = cpu->b;
+                    break;
+                case 'c':
+                    result.value = cpu->c;
+                    break;
+                case 'd':
+                    result.value = cpu->d;
+                    break;
+                case 'e':
+                    result.value = cpu->e;
+                    break;
+                case 'h':
+                    result.value = cpu->h;
+                    break;
+                case 'l':
+                    result.value = cpu->l;
+                    break;
+                default:
+                    length = 0;
+                    break;
+            }
+            if (length)
+                goto finished;
+        }
+        if (!strcmp(name, "af"))
+            result.value = (uint16_t)(cpu->a * 256u + cpu->f);
+        else if (!strcmp(name, "bc"))
+            result.value = (uint16_t)(cpu->b * 256u + cpu->c);
+        else if (!strcmp(name, "de"))
+            result.value = (uint16_t)(cpu->d * 256u + cpu->e);
+        else if (!strcmp(name, "hl"))
+            result.value = (uint16_t)(cpu->h * 256u + cpu->l);
+        else if (!strcmp(name, "sp"))
+            result.value = cpu->sp;
+        else if (!strcmp(name, "pc")) {
+            result.value = cpu->pc;
+            // PC values qualify cartridge and switchable WRAM addresses.
+            // Other execution regions use the zero-bank mapped view.
+            result.bank = cpu->pc < 0x8000u ? cupid_gb_debugger_bank(parser->gb, cpu->pc)
+                          : cpu->pc >= 0xd000u && cpu->pc < 0xe000u ? parser->gb->cgb_wram_bank
+                                                                    : 0;
+            result.bank &= 0x1ff;
+        } else {
+            uint16_t bank;
+            if (cupid_gb_debugger_lookup_symbol(parser->debugger, name, &bank, &result.value))
+                result.bank = bank & 0x1ff;
+            else
+                parser->failed = true;
+        }
+    }
+finished:
+    --parser->depth;
+    return result;
+}
+
+static CupidGbDebugValue expression_apply(ExpressionOperation operation, CupidGbDebugValue left,
+                                          CupidGbDebugValue right) {
+    const uint16_t a = left.value, b = right.value;
+    CupidGbDebugValue result = {
+        0, (left.bank >= 0) != (right.bank >= 0) ? (left.bank >= 0 ? left.bank : right.bank) : -1};
+    switch (operation) {
+        case EXPR_ADD:
+            result.value = (uint16_t)(a + b);
+            break;
+        case EXPR_SUBTRACT:
+            result.value = (uint16_t)(a - b);
+            break;
+        case EXPR_MULTIPLY:
+            result.value = (uint16_t)((uint32_t)a * b);
+            break;
+        case EXPR_DIVIDE:
+            result.value = b ? a / b : 0;
+            break;
+        case EXPR_REMAINDER:
+            result.value = b ? a % b : 0;
+            break;
+        case EXPR_OR:
+            result.value = a | b;
+            break;
+        case EXPR_AND:
+            result.value = a & b;
+            break;
+        case EXPR_XOR:
+            result.value = a ^ b;
+            break;
+        case EXPR_SHIFT_LEFT:
+            result.value = b < 16 ? (uint16_t)(a << b) : 0;
+            break;
+        case EXPR_SHIFT_RIGHT:
+            result.value = b < 16 ? a >> b : 0;
+            break;
+        case EXPR_BANK:
+            return (CupidGbDebugValue){b, a & 0x1ffu};
+        case EXPR_EQUAL:
+            result = expression_value(a == b);
+            break;
+        case EXPR_UNEQUAL:
+            result = expression_value(a != b);
+            break;
+        case EXPR_LESS:
+            result = expression_value(a < b);
+            break;
+        case EXPR_LESS_EQUAL:
+            result = expression_value(a <= b);
+            break;
+        case EXPR_GREATER:
+            result = expression_value(a > b);
+            break;
+        case EXPR_GREATER_EQUAL:
+            result = expression_value(a >= b);
+            break;
+        case EXPR_LOGICAL_AND:
+            result = expression_value(a && b);
+            break;
+        case EXPR_LOGICAL_OR:
+            result = expression_value(a || b);
+            break;
+    }
+    return result;
+}
+
+static CupidGbDebugValue expression_parse(ExpressionParser *parser, unsigned minimum) {
+    CupidGbDebugValue left = expression_primary(parser);
+    while (!parser->failed) {
+        expression_space(parser);
+        const ExpressionOperator *operation = NULL;
+        for (size_t index = 0;
+             index < sizeof(expression_operators) / sizeof(expression_operators[0]); ++index) {
+            const ExpressionOperator *candidate = &expression_operators[index];
+            if (strncmp(parser->cursor, candidate->text, strlen(candidate->text)) == 0) {
+                operation = candidate;
+                break;
+            }
+        }
+        if (!operation || operation->precedence < minimum)
+            break;
+        parser->cursor += strlen(operation->text);
+        CupidGbDebugValue right = expression_parse(parser, operation->precedence + 1u);
+        left = expression_apply(operation->operation, left, right);
+    }
+    return left;
+}
+
+bool cupid_gb_debugger_evaluate(const CupidGbDebugger *debugger, const CupidGb *gb,
+                                const char *expression, CupidGbDebugValue *result,
+                                size_t *error_offset) {
+    if (error_offset)
+        *error_offset = 0;
+    if (!debugger || !gb || !gb->loaded || !expression || !result)
+        return false;
+    size_t length = 0;
+    while (length < CUPID_GB_DEBUG_EXPRESSION_SIZE && expression[length])
+        ++length;
+    if (!length || length == CUPID_GB_DEBUG_EXPRESSION_SIZE)
+        return false;
+    ExpressionParser parser = {
+        .debugger = debugger, .gb = gb, .start = expression, .cursor = expression};
+    CupidGbDebugValue value = expression_parse(&parser, 1);
+    expression_space(&parser);
+    if (parser.failed || *parser.cursor) {
+        if (error_offset)
+            *error_offset = (size_t)(parser.cursor - parser.start);
+        return false;
+    }
+    *result = value;
+    return true;
 }

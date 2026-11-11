@@ -9,6 +9,7 @@ extern "C" {
 
 #define CUPID_GB_DEBUG_MAX_BREAKPOINTS 128u
 #define CUPID_GB_DEBUG_SYMBOL_NAME 128u
+#define CUPID_GB_DEBUG_EXPRESSION_SIZE 256u
 
 typedef enum CupidGbDebugMode {
     CUPID_GB_DEBUG_PAUSED = 0,
@@ -32,7 +33,13 @@ typedef struct CupidGbDebugBreakpoint {
     uint16_t address;
     int bank; /* -1 matches every currently mapped bank. */
     bool enabled;
+    char condition[CUPID_GB_DEBUG_EXPRESSION_SIZE]; /* Empty means unconditional. */
 } CupidGbDebugBreakpoint;
+
+typedef struct CupidGbDebugValue {
+    uint16_t value;
+    int bank; /* -1 is a plain value; otherwise a bank-qualified address. */
+} CupidGbDebugValue;
 
 typedef struct CupidGbDebugSymbol {
     uint16_t address;
@@ -81,6 +88,23 @@ void cupid_gb_debugger_cleanup(CupidGbDebugger *debugger);
 /* Execution reset preserves breakpoints and symbols; it does not change gb. */
 void cupid_gb_debugger_reset_execution(CupidGbDebugger *debugger);
 bool cupid_gb_debugger_breakpoint_add(CupidGbDebugger *debugger, int bank, uint16_t address);
+/* Conditions are pure expressions evaluated only at matching instruction addresses.
+ * Invalid conditions leave the collection intact. A missing symbol at runtime
+ * stops execution with ERROR instead of silently bypassing the breakpoint. */
+bool cupid_gb_debugger_breakpoint_add_condition(CupidGbDebugger *debugger, const CupidGb *gb,
+                                                int bank, uint16_t address, const char *condition);
+/* Pure 16-bit expressions support registers, symbols, decimal/$/0x literals,
+ * parentheses, byte [address] and little-endian word {address} reads, bank:address,
+ * arithmetic, shifts, bitwise operators, comparisons, && and ||. Precedence from
+ * low to high: comparisons; + - | ||; * / % & ^ &&; shifts; bank qualification.
+ * Arithmetic wraps to 16 bits; division/remainder by zero and large shifts yield
+ * zero. Both logical operands are evaluated. Assignment and unary operators are
+ * rejected. Reads use debugger peek semantics without changing guest hardware.
+ * Bank qualifiers wrap to nine bits; a zero qualifier retains the mapped view.
+ * Maximum text is 255 bytes and nesting is bounded to 32 levels. */
+bool cupid_gb_debugger_evaluate(const CupidGbDebugger *debugger, const CupidGb *gb,
+                                const char *expression, CupidGbDebugValue *result,
+                                size_t *error_offset);
 bool cupid_gb_debugger_breakpoint_remove(CupidGbDebugger *debugger, size_t index);
 void cupid_gb_debugger_breakpoints_clear(CupidGbDebugger *debugger);
 bool cupid_gb_debugger_match_breakpoint(const CupidGbDebugger *debugger, const CupidGb *gb);

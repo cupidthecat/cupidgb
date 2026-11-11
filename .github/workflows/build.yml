@@ -12,18 +12,63 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
+        if: runner.os == 'Windows'
+        timeout-minutes: 5
         with:
           python-version: '3.12'
-      - uses: jurplel/install-qt-action@v4
+      - name: Windows Qt SDK
+        if: runner.os == 'Windows'
+        timeout-minutes: 15
+        uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06 # v4
         with:
           version: '6.8.3'
           modules: qtmultimedia
           cache: true
+          setup-python: false
       - name: Linux desktop dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev libsdl2-dev 7zip
+        timeout-minutes: 10
+        run: |
+          mirror=
+          probe=$(mktemp)
+          trap 'rm -f "$probe"' EXIT
+          for candidate in https://archive.ubuntu.com/ubuntu/ https://mirrors.mit.edu/ubuntu/; do
+            verified=true
+            for pocket in noble noble-updates noble-backports noble-security; do
+              if ! curl --fail --silent --show-error --location --proto '=https' \
+                        --proto-redir '=https' --connect-timeout 3 --max-time 10 \
+                        --output "$probe" "${candidate}dists/${pocket}/InRelease" ||
+                 ! gpgv --keyring /usr/share/keyrings/ubuntu-archive-keyring.gpg "$probe"; then
+                verified=false
+                break
+              fi
+            done
+            if [ "$verified" = true ]; then
+              mirror=$candidate
+              break
+            fi
+          done
+          if [ -z "$mirror" ]; then
+            echo '::error::No reachable signed Ubuntu archive mirror'
+            exit 1
+          fi
+          echo "Using Ubuntu archive mirror: $mirror"
+          for source in /etc/apt/sources.list /etc/apt/sources.list.d/*.list \
+                        /etc/apt/sources.list.d/*.sources; do
+            if [ -f "$source" ]; then
+              sudo sed -i \
+                -e "s#https\?://\(azure\.archive\|archive\|security\)\.ubuntu\.com/ubuntu/#$mirror#g" \
+                -e "s#mirror+file:/etc/apt/apt-mirrors\.txt#$mirror#g" \
+                "$source"
+            fi
+          done
+          apt_options=(-o Acquire::Retries=2 -o Acquire::http::Timeout=20
+                       -o Acquire::https::Timeout=20)
+          sudo apt-get "${apt_options[@]}" -o APT::Update::Error-Mode=any update
+          sudo apt-get "${apt_options[@]}" install -y qt6-base-dev qt6-multimedia-dev libssl-dev libsdl2-dev 7zip
       - name: Windows controller SDK
         if: runner.os == 'Windows'
+        timeout-minutes: 5
         shell: pwsh
         run: |
           $archive = Join-Path $env:RUNNER_TEMP 'SDL2-devel-2.28.5-VC.zip'
@@ -46,7 +91,45 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Hashing dependency
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev
+        timeout-minutes: 10
+        run: |
+          mirror=
+          probe=$(mktemp)
+          trap 'rm -f "$probe"' EXIT
+          for candidate in https://archive.ubuntu.com/ubuntu/ https://mirrors.mit.edu/ubuntu/; do
+            verified=true
+            for pocket in noble noble-updates noble-backports noble-security; do
+              if ! curl --fail --silent --show-error --location --proto '=https' \
+                        --proto-redir '=https' --connect-timeout 3 --max-time 10 \
+                        --output "$probe" "${candidate}dists/${pocket}/InRelease" ||
+                 ! gpgv --keyring /usr/share/keyrings/ubuntu-archive-keyring.gpg "$probe"; then
+                verified=false
+                break
+              fi
+            done
+            if [ "$verified" = true ]; then
+              mirror=$candidate
+              break
+            fi
+          done
+          if [ -z "$mirror" ]; then
+            echo '::error::No reachable signed Ubuntu archive mirror'
+            exit 1
+          fi
+          echo "Using Ubuntu archive mirror: $mirror"
+          for source in /etc/apt/sources.list /etc/apt/sources.list.d/*.list \
+                        /etc/apt/sources.list.d/*.sources; do
+            if [ -f "$source" ]; then
+              sudo sed -i \
+                -e "s#https\?://\(azure\.archive\|archive\|security\)\.ubuntu\.com/ubuntu/#$mirror#g" \
+                -e "s#mirror+file:/etc/apt/apt-mirrors\.txt#$mirror#g" \
+                "$source"
+            fi
+          done
+          apt_options=(-o Acquire::Retries=2 -o Acquire::http::Timeout=20
+                       -o Acquire::https::Timeout=20)
+          sudo apt-get "${apt_options[@]}" -o APT::Update::Error-Mode=any update
+          sudo apt-get "${apt_options[@]}" install -y libssl-dev
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DCUPIDGB_BUILD_QT=OFF -DCUPIDGB_ENABLE_SANITIZERS=ON
       - name: Build

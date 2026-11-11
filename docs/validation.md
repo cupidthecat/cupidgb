@@ -652,3 +652,81 @@ Fresh traces for the four failing library inputs matched the complete instructio
 The pulse repair matches 50,420 paired records: 30,912 trigger-boundary observations, 19,200 register-only timeline rows, 220 power-cycle samples, 48 inactive reload/write rows, and 40 repeat-write rows. The initial trigger grids matched only 10,744 and 10,616 rows before correction. Scope is the pinned CGB-E profile, both pulse channels and CPU speeds, with aligned two-base-dot observations. Cold starts, trigger bit 2, retained inactive reloads, suppression, and maximum-frequency extra delay have regressions. Windows, Linux, and Linux ASan/UBSan pass all 24 core checks; no state field or format changed.
 
 A deterministic 3,600-interval Tetris replay retains identical PCM and pixels. Mario Deluxe retains guest cycles, instruction count, VBlank count, audio frame count, and final pixels, while its PCM changes after the corrected pulse edges. These are bounded comparisons, not a complete commercial audio or hardware-revision qualification.
+
+
+## Shared bus, input, presentation, and conditional debugging
+
+Windows/MSVC with Qt 6.8.3 and Linux/GCC with both system Qt 6.4.2 and SDK Qt 6.8.3 each pass 37/37 checks. The SDK build verifies Qt 6.8.3 in the CMake cache, link metadata, and resolved runtime library paths before testing, with archive checks required. Its complete test run passes in 40.67 seconds. Linux ASan/UBSan passes 25/25 core and runner checks. The Qt workflows cover custom LCD-off color persistence and Cancel, repeat-frame history, and a conditional breakpoint that loses its symbol.
+
+A condition error before an instruction pauses execution, retains the pending frame and session, and leaves inspection available. Native snapshot equality is verified in a fixture with an empty core audio output queue. The existing pause policy can drain or discard queued audio and is unchanged. Explicit stepping adds no fictitious Backstep entry for a condition failure before execution, while a failed hardware-step attempt retains its history entry.
+
+JOYP comparisons match 4,761,600 readback, interrupt, electrical-row, and countdown records across 92,160 cases using DMG-B, Pocket, CGB-E, SGB, and SGB2 profiles. Another 31,104 real-instruction cases cover three store forms, three read forms, and intervening instructions on DMG/Pocket/CGB. Contact bounce is disabled in those comparisons. Monochrome select-bit readback changes immediately while the electrical row releases later; pending rewrites can retain or extend that deadline. CGB and physical SGB profiles bypass settling.
+
+The noise-selector repair matches 1,592,640 controlled observations, including 49,152 register-only observations and 200,000 deterministic mixed-state cases. High-selector transitions can generate an intermediate pulse and partial shift rather than a complete LFSR clock. Existing width and pre-shift history suffice; no oscillator state was added. These are deterministic CGB-E observations, rather than every silicon instance or audio revision.
+
+Shared-bus and OAM-DMA comparisons match 89,910 normalized records: 67,230 primary memory/access records, 3,240 real CPU outcomes, and 19,440 additional bank-line/mirror records. They compare exact OAM bytes and fingerprints of complete WRAM, VRAM, and 8 KiB cartridge RAM, alongside registers, mapper latches, held data, and decay. Component probes use controlled clock adapters; CPU cases execute instructions. LCD is off. Mode 3 and other CGB revisions remain separate requirements.
+
+Monochrome WRAM/OAM now share the main-bus hold, while CGB retains its separate buses. Contended reads resolve their effective address before drive; writes drive the original address/value before redirection or rejection. Tests cover next-source aliases, the final active tail, CGB high-source suppression, and the initially readable OAM destination slot that still rejects writes. The unused OAM tail returns zero on the current monochrome profiles and the repeated address nibble on the current color profile when accessible. Continuation harnesses execute from HRAM during OAM DMA so the checks do not assume uncontended ROM access.
+
+The RTC probe matches all 4,096 snapshot/readback cases, including stored shadow bytes after driven reads. Every MBC3 latch-window write refreshes the snapshot. Clock reads clear disconnected shadow-register bits together; passive inspection remains unchanged. The clock is halted in this probe to separate mapper behavior from host calendar advancement.
+
+Presentation comparisons match all 1,130 events across 248 DMG-B/CGB-E scenarios: timestamp, normalized event kind, polarity, and two pixel samples per callback. Cases include LCD-off periods, STOP, first-frame blanking, CGB repeats, repeat cutoffs, and VBlank-line refreshes. They do not establish full-image equality or SGB host integration. The frontend retains image/blend history on repeats and provides a separate fifth off color, with a lightest-shade fallback for older custom palettes.
+
+Pure debugger expressions match 7,294 paired records; conditional execution hooks match 8,192 decisions. Coverage includes register/symbol arithmetic, the audited precedence, bank-qualified ROM/VRAM/WRAM views, byte/word reads, and bounded parse failures. Assignment, unary expressions, watchpoints, and range breakpoints remain pending.
+
+Native V8 appends pending JOYP release and presentation history without moving older payloads. V2–V7 imports receive explicit missing-history defaults. The frozen V4 fixture remains 300,572 bytes with SHA-256 `652af4f40504c86dd59eff09f0997f5b60b654816a0908d7802704f981b43be5`. Actual VBlank observation counts stay outside guest snapshots. Runner reports separate `vblank_frames` and `presentation_events`; synthetic LCD-off/STOP events cannot inflate VBlank counts.
+
+ROM+RAM headers `08`/`09` retain direct RAM support as an explicit comparison exception. Their eighteen differing observations remain visible rather than being counted as matches. Two MBC6 diagnostics remain outside the pinned mapper comparison scope. Physical mapper peripherals and complete commercial gameplay still require their own qualification.
+
+### Final regression and library checks
+
+The final hardware implementation at `2638ae4` completes all 181 external suite cases with 177 passes and four bounded cases, matching the preceding build and pinned comparison statuses. The expanded 80-case subset contributes 79 passes and one bounded case to those totals; it is not an additional suite. The four bounded cases cover boot divider, boot register, and serial-clock alignment diagnostics. The final candidate was rerun against hash-verified cached baseline and comparison receipts. Neither cached execution was repeated, and host elapsed time is excluded from the diagnostic comparison.
+
+The generated mapper matrix matches 42,886 of 42,906 observations. Its twenty raw differences are the eighteen retained ROM+RAM observations and two MBC6 diagnostics described above, with no unexpected difference. Separate probes match 17,056 MMM01, 552 MBC7, 7,208 Camera, and 4,736 TPP1 observations, plus two HuC3 and six classic-mapper trace summaries. TPP1 checks also reproduce two paused battery exports and two motor exports byte for byte, and all six candidate import cases pass. The final refresh uses hash-verified cached comparison outputs; the unchanged comparison import cases were not rerun. These generated checks do not qualify physical peripherals.
+
+The final 880-input library refresh uses 420 nominal 70,224-cycle guest intervals per input, without gameplay input automation. All 350 DMG inputs and 524 of 530 CGB inputs reach the bound and emit VBlank and PCM output. Bounded mapper counts are MBC5 481, MBC1 271, MBC3 81, MBC5 rumble 13, ROM-only 12, MBC2 11, and one each for MBC7, HuC3, Camera, MBC1 multicart, and an unknown-header fallback. HuC1, MMM01, MBC30, and TPP1 have no commercial entries in this library. ROM and firmware hashes remain unchanged.
+
+Six MBC5 inputs stop on illegal opcodes, including two additional stops after the shared-bus correction. Their complete recorded PC/opcode/accumulator/stack-pointer traces match the cached pinned execution through the stop: 94, 357,821, 197,367, 1,417, 215,861, and 3,139,898 records. The final refresh reproduces the preceding bus-corrected library statuses and deterministic report fields without changes. This accounts for the additional stops; it does not establish full gameplay compatibility for those inputs or complete hardware-state equality.
+
+### Final bounded core throughput
+
+The final `2638ae4` runners were compared with preserved runners built at `02f69c4`. The core, headers, runner, and build description are byte-identical between that baseline revision and merged `d8496e8`. Both hosts used Release builds with interprocedural optimization and native hashing enabled: GCC 13.3.0 on Linux and MSVC 19.43.34809.0 on Windows. Each run executes 3,600 guest intervals, approximately 60.274 guest seconds, with the same local firmware and recorded inputs. Hosts ran sequentially, discarded one warmup pair per profile, and measured five alternating baseline/final pairs. The values below are median elapsed times for the complete child process, excluding clock-rate queries. Positive changes mean longer execution time.
+
+| Host and input | Baseline median | Final median | Change |
+| --- | ---: | ---: | ---: |
+| Linux, Tetris | 7.133 s | 7.031 s | -1.44% |
+| Linux, Mario Deluxe | 7.969 s | 8.255 s | +3.59% |
+| Windows, Tetris | 7.453 s | 7.687 s | +3.13% |
+| Windows, Mario Deluxe | 9.196 s | 8.964 s | -2.53% |
+
+Linux elapsed times use `CLOCK_MONOTONIC_RAW`; Windows uses QueryPerformanceCounter. Read-only clock queries bracket every run and pair. Linux tick settings changed between 9,801 and 10,833 microseconds during its sweep, so the runner's adjusted monotonic times remain separate from the primary measurements. No clock setting was changed for these checks. Linux child CPU medians changed from 7.060 to 7.018 seconds for Tetris and 7.956 to 8.168 seconds for Mario Deluxe. Windows CPU counters varied widely between repeats and do not establish an improvement. Private receipts retain every elapsed and CPU sample, adjusted runner time, clock snapshot, command, input hash, and artifact hash.
+
+All comparable guest counters and complete PCM/PPM captures match across the two builds and hosts. Each build repeats the same signatures in all six runs. The added `presentation_events` field reports 3,603 events for Tetris and 3,604 for Mario Deluxe; the baseline has no separate field. Its legacy `vblank_frames` counted presentations, whereas the final field counts physical VBlank events. Their values happen to agree in these traces. These uncapped core measurements do not establish Qt frame pacing, sustained interactive gameplay, or performance for other games.
+
+A private candidate restored a direct return for resolved non-main-bus reads without cheats, preserving guest read side effects. It passed 25 core and runner tests on each host and retained all counters and full media output. Screening used 1,800 intervals, one discarded warmup pair, and two alternating measured pairs per profile. Linux elapsed time fell 3.22% for Tetris and 1.60% for Mario Deluxe, but Windows time rose 4.67% and 3.52%. The candidate was rejected. No bank-wrapping change or other performance modification was admitted.
+
+Private evidence for this final refresh is retained under `input-audio-20261111` in `external/post-rtc/paired-suites.json`, `mappers/final-2638ae4/final-verdict.json`, and `performance/final-receipt.json`. The receipts identify the source revision, artifacts, cached comparison outputs, and their hashes. ROMs, firmware, saves, and captured media remain private.
+
+### Final native desktop checks
+
+The refreshed Windows installation passes the native audio-required workflow with no SDK on PATH. The installed Linux system-Qt build and the separately verified Qt 6.8.3 SDK build pass native Xcb UI workflows. Those Linux UI checks do not require audio playback.
+
+Installed Windows Qt 6.8.3 sessions used local firmware, recorded inputs, normal audio, and default rewind. Every loaded Qt DLL came from the installed folder, with only system directories on PATH. The following samples exclude the first five seconds of each session. The first four sessions lasted 60 seconds; the Silver session lasted 90 seconds. All five report zero audio idle events and zero audio errors.
+
+| Input and model | Nominal guest progress | Widget paint p95 / maximum | Peak working set |
+| --- | ---: | ---: | ---: |
+| Tetris, DMG | 99.976% | 17.84 / 26.93 ms | 67.03 MiB |
+| Mario Deluxe, CGB | 99.982% | 17.79 / 20.78 ms | 88.23 MiB |
+| Tetris, SGB | 100.011% | 17.36 / 23.43 ms | 71.24 MiB |
+| Donkey Kong, SGB2 | 99.980% | 17.78 / 24.08 ms | 120.62 MiB |
+| Silver, CGB | 99.986% | 17.75 / 24.11 ms | 123.22 MiB |
+
+The Silver session applies 33 recorded input events and reaches New Bark Town. Its in-game save has a valid primary checksum and completion markers. A fresh 30-second process selects Continue and returns to the overworld, with 99.992% post-warmup guest progress and zero audio idle/errors. The primary saved block and checksum remain unchanged after reopening; scratch and clock regions account for 336 changed SRAM bytes, so the complete SRAM is not asserted equal. The native captures were inspected. This covers a bounded overworld save/reopen workflow; starter selection, battles, and complete gameplay remain unverified.
+
+A separate 36-second SGB2 capture shows active first-stage gameplay with the full border. Its final 31 seconds reach 100.028% nominal guest progress with zero audio idle/errors and paint p95/maximum 17.69/20.06 ms. All 34,304 corrected border pixels match the pinned oracle. The viewport has advanced to another gameplay time and is excluded from that pixel comparison.
+
+A 20-second installed Linux Qt 6.4.2 Tetris pilot reports 99.912% post-warmup guest progress, zero audio idle/errors, and paint p95/maximum 17.49/18.35 ms. Read-only clock queries show tick 10,000 microseconds/frequency zero before it and tick 9,997 microseconds/frequency +49.284 ppm afterward. No clock setting was changed.
+
+Subsequent 60-second Linux sessions give mixed results. Tetris reaches 100.005% post-warmup guest progress with zero audio idle/errors. Mario Deluxe reaches only 7.194%, with seven audio idle events and a 13,366.92 ms maximum paint interval. Donkey Kong/SGB2 reaches 28.908%, with six idle events and a 17,285.15 ms maximum paint interval. All three report zero audio errors. After this series, the clock query shows tick 10,833 microseconds/frequency +32.977 ppm.
+
+A preserved preceding installed build completes a shorter 20-second Mario Deluxe control at 100.057% post-warmup guest progress with zero audio idle/errors. Its matched 60-second control then reaches only 18.044%, with seven idle events, zero audio errors, and a 12,183.02 ms maximum paint interval. The final clock query shows tick 10,833 microseconds/frequency +33.130 ppm. Both builds reproduce long stalls at the matched duration, with different measured rates. Their cause remains unverified, and sustained Linux playback qualification remains blocked. Private receipts are retained in `windows-final-native`, `windows-silver-native`, `windows-silver-reopen-continued`, `windows-sgb2-active`, `linux-final-audio-pilot`, `linux-final-native`, `linux-preserved-control`, and `linux-preserved-control60` under the same validation directory.

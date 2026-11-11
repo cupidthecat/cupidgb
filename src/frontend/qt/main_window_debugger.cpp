@@ -78,16 +78,18 @@ void MainWindow::pauseDebugger() {
     debuggerInputPaused_ = true;
     debuggerTimer_.stop();
     const auto previousStop = debugger_ ? debugger_->last_stop : CUPID_GB_DEBUG_STOP_NONE;
-    if (debugger_) {
+    if (debugger_)
         cupid_gb_debugger_reset_execution(debugger_.get());
-        if (previousStop == CUPID_GB_DEBUG_STOP_BREAKPOINT)
-            debugger_->last_stop = previousStop;
-    }
     if (!paused_) {
         // Host focus/key releases continue to clear physical bindings, while
         // paused tools inspect the guest input at the stopped boundary.
         setPaused(true);
     }
+    // The pause transition also resets execution, so retain the stopped reason
+    // after it completes. Errors must remain inspectable without skipping a hit.
+    if (debugger_ && (previousStop == CUPID_GB_DEBUG_STOP_BREAKPOINT ||
+                      previousStop == CUPID_GB_DEBUG_STOP_ERROR))
+        debugger_->last_stop = previousStop;
 }
 
 void MainWindow::refreshDebugger() {
@@ -132,11 +134,13 @@ void MainWindow::refreshDebugger() {
     QString breakpoints = "Breakpoints (delete by number):\n";
     for (size_t index = 0; index < debugger_->bp_count; ++index) {
         const auto &point = debugger_->breakpoints[index];
-        breakpoints += QString("%1  %2:$%3%4\n")
-                           .arg(index + 1)
-                           .arg(point.bank < 0 ? "*" : "$" + QString::number(point.bank, 16))
-                           .arg(point.address, 4, 16, QChar('0'))
-                           .arg(point.enabled ? "" : " [disabled]");
+        breakpoints +=
+            QString("%1  %2:$%3%4%5\n")
+                .arg(index + 1)
+                .arg(point.bank < 0 ? "*" : "$" + QString::number(point.bank, 16))
+                .arg(point.address, 4, 16, QChar('0'))
+                .arg(point.enabled ? "" : " [disabled]")
+                .arg(point.condition[0] ? " if " + QString::fromUtf8(point.condition) : QString());
     }
     if (!debugger_->bp_count)
         breakpoints += "None\n";
@@ -253,12 +257,16 @@ void MainWindow::debuggerSlice() {
             stopDebugger("Debugger stopped: instruction history could not be captured.");
             return;
         }
+        const uint64_t previousSteps = debugger_->steps;
         const auto result = cupid_gb_debugger_step(debugger_.get(), &emulator_->gb);
+        const bool conditionError =
+            result == CUPID_GB_DEBUG_STOP_ERROR && debugger_->steps == previousSteps;
         if (emulator_->gb.sgb.player_count != controllerPlayerCount_)
             refreshControllerPlayerCount();
-        if (result == CUPID_GB_DEBUG_STOP_BREAKPOINT || result == CUPID_GB_DEBUG_STOP_NO_ROM) {
-            // A breakpoint stops before execution. Do not offer a fictitious
-            // backstep for an instruction that did not run.
+        if (result == CUPID_GB_DEBUG_STOP_BREAKPOINT || result == CUPID_GB_DEBUG_STOP_NO_ROM ||
+            conditionError) {
+            // These stops precede execution. Keep a failed hardware-step
+            // attempt, but do not offer a fictitious instruction Backstep.
             debuggerHistoryBytes_ -=
                 debuggerHistory_.back().capacity() + qsizetype(sizeof(QByteArray));
             debuggerHistory_.pop_back();
@@ -267,7 +275,8 @@ void MainWindow::debuggerSlice() {
         drainDebuggerAudio();
         updatePrinter();
         if (result != CUPID_GB_DEBUG_STOP_NONE) {
-            stopDebugger(QString::fromUtf8(cupid_gb_debugger_stop_name(result)));
+            stopDebugger(conditionError ? "Breakpoint condition evaluation failed."
+                                        : QString::fromUtf8(cupid_gb_debugger_stop_name(result)));
             return;
         }
         if (debuggerCommandSteps_ >= 1000000) {
@@ -342,13 +351,17 @@ void MainWindow::debuggerCommand(const QString &input) {
     const QString verb = words.front().toLower();
     const auto output = [this](const QString &text) { debuggerWindow_->appendOutput(text); };
     if (verb == "help" || verb == "?") {
-        output("break [bank:address|symbol]   delete NUMBER|all   breakpoints\n"
+        output("break [bank:address|symbol] [if expression]   delete NUMBER|all   breakpoints\n"
                "continue (c)   step (s)   next (n)   finish (f)   backstep (bs)\n"
-               "registers (r)   disassemble [address]   x address [decimal count]\n"
+               "registers (r)   print (p) expression   disassemble [address]\n"
+               "x address [decimal count]\n"
                "write address byte   set register value   symbols path\n"
                "Numbers are decimal; use $ or 0x for hexadecimal. Symbols are supported.\n"
                "Backstep retains up to 128 explicit debugger steps within 32 MiB.\n"
-               "Continuous playback does not record instruction history.");
+               "Continuous playback does not record instruction history.\n"
+               "Expressions are pure 16-bit values; [address] reads a byte and {address} a word.\n"
+               "Precedence: comparisons; + - | ||; * / % & ^ &&; shifts; bank:address.\n"
+               "Assignment and unary operators are not supported.");
         return;
     }
     if (verb == "symbols") {
@@ -408,15 +421,52 @@ void MainWindow::debuggerCommand(const QString &input) {
         }
         return false;
     };
-    if ((verb == "break" || verb == "b") && words.size() == 2) {
-        int bank;
-        uint16_t location;
-        if (!address(words[1], &bank, &location) ||
-            !cupid_gb_debugger_breakpoint_add(debugger_.get(), bank, location)) {
-            output("Cannot add breakpoint: invalid address/bank or breakpoint limit reached.");
+    if ((verb == "print" || verb == "p") && words.size() >= 2) {
+        const QByteArray expression = command.mid(words.front().size()).trimmed().toUtf8();
+        CupidGbDebugValue value;
+        size_t error = 0;
+        if (!cupid_gb_debugger_evaluate(debugger_.get(), &emulator_->gb, expression.constData(),
+                                        &value, &error)) {
+            output(QString("Invalid expression near byte %1.").arg(error + 1));
             return;
         }
-        output(QString("Breakpoint added at %1.").arg(words[1]));
+        const QString prefix =
+            value.bank < 0 ? QString() : "$" + QString::number(value.bank, 16) + ":";
+        output(
+            QString("%1$%2 (%3)").arg(prefix).arg(value.value, 4, 16, QChar('0')).arg(value.value));
+        return;
+    }
+    if ((verb == "break" || verb == "b") && words.size() >= 2) {
+        QString locationText = command.mid(words.front().size()).trimmed();
+        QString condition;
+        const auto separator = QRegularExpression("\\s+if\\s+").match(locationText);
+        if (separator.hasMatch()) {
+            condition = locationText.mid(separator.capturedEnd()).trimmed();
+            locationText = locationText.left(separator.capturedStart()).trimmed();
+        }
+        int bank;
+        uint16_t location;
+        bool valid = address(locationText, &bank, &location);
+        if (!valid) {
+            const QByteArray expression = locationText.toUtf8();
+            CupidGbDebugValue value;
+            valid = cupid_gb_debugger_evaluate(debugger_.get(), &emulator_->gb,
+                                               expression.constData(), &value, nullptr);
+            if (valid) {
+                bank = value.bank;
+                location = value.value;
+            }
+        }
+        const QByteArray expression = condition.toUtf8();
+        if (!valid ||
+            !cupid_gb_debugger_breakpoint_add_condition(debugger_.get(), &emulator_->gb, bank,
+                                                        location, expression.constData())) {
+            output("Cannot add breakpoint: invalid address/condition or breakpoint limit reached.");
+            return;
+        }
+        output(QString("Breakpoint added at %1%2.")
+                   .arg(locationText)
+                   .arg(condition.isEmpty() ? QString() : " if " + condition));
         refreshDebugger();
         return;
     }

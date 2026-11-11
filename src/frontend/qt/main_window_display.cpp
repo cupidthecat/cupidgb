@@ -2,6 +2,10 @@
 
 #include <QWidgetAction>
 
+extern "C" {
+#include "cupid/gb/ppu.h"
+}
+
 namespace {
 constexpr std::array<const char *, 7> correctionNames = {
     "Disabled",        "Correct Color Curves", "Modern - Balanced", "Modern - Boost Contrast",
@@ -79,6 +83,10 @@ void MainWindow::applyDisplaySettings() {
             custom[i] = value.rgb();
     }
     const auto colors = monochromeColors(MonochromePalette(palette), custom);
+    const QColor customOff(
+        settings_.value("video/customPalette/off", QColor(custom[0]).name()).toString());
+    const QRgb offColor = monochromeOffColor(MonochromePalette(palette),
+                                             customOff.isValid() ? customOff.rgb() : custom[0]);
     const auto colorSettings = configuredColorSettings(settings_);
     const bool colorChanged = !cgbColorTable_ ||
                               colorSettings.correction != colorSettings_.correction ||
@@ -101,11 +109,13 @@ void MainWindow::applyDisplaySettings() {
                                (image_.width() == CUPID_SGB_SCREEN_WIDTH) != showBorder;
     const bool colorHardware = emulator_ && (emulator_->gb.model == CUPID_GB_MODEL_CGB ||
                                              cupid_gb_sgb_active(&emulator_->gb));
-    if (displayPalette_ != colors || borderChanged || (colorChanged && colorHardware)) {
+    if (displayPalette_ != colors || displayOffColor_ != offColor || borderChanged ||
+        (colorChanged && colorHardware)) {
         previousDisplayFrame_ = {};
         currentDisplayFrame_ = {};
     }
     displayPalette_ = colors;
+    displayOffColor_ = offColor;
     setFrameBlending(configuredFrameBlending(settings_));
     borderAction_->setChecked(showBorder);
     if (emulator_)
@@ -156,6 +166,9 @@ void MainWindow::present(bool completedFrame) {
     if (!emulator_)
         return;
     const auto &gb = emulator_->gb;
+    // A repeated hardware frame leaves both the visible image and blend history intact.
+    if (completedFrame && gb.display_frame_type == CUPID_GB_FRAME_REPEAT)
+        return;
     const bool sgb = cupid_gb_sgb_active(&gb);
     const QSize nativeSize = sgb && borderAction_->isChecked()
                                  ? QSize(CUPID_SGB_SCREEN_WIDTH, CUPID_SGB_SCREEN_HEIGHT)
@@ -188,14 +201,22 @@ void MainWindow::present(bool completedFrame) {
             image_ = image_.copy(CUPID_SGB_VIEWPORT_X, CUPID_SGB_VIEWPORT_Y, 160, 144);
     } else {
         image_ = QImage(160, 144, QImage::Format_RGB32);
-        auto *pixels = reinterpret_cast<QRgb *>(image_.bits());
-        // Hardware mode stays fixed while this framebuffer is converted.
-        if (gb.cgb_mode || cupid_cgb_compat_active(&gb)) {
-            for (size_t i = 0; i < 160 * 144; ++i)
-                pixels[i] = (*cgbColorTable_)[gb.frame_buffer_color[i] & 0x7fffu];
+        const bool offImage = gb.display_frame_type == CUPID_GB_FRAME_LCD_OFF ||
+                              gb.display_frame_type == CUPID_GB_FRAME_BLANK_FIRST;
+        if (offImage || gb.display_frame_type == CUPID_GB_FRAME_ARTIFICIAL) {
+            image_.fill(gb.model == CUPID_GB_MODEL_CGB ? (*cgbColorTable_)[0x7fff]
+                        : offImage                     ? displayOffColor_
+                                                       : displayPalette_[0]);
         } else {
-            for (size_t i = 0; i < 160 * 144; ++i)
-                pixels[i] = displayPalette_[gb.frame_buffer[i] & 3];
+            auto *pixels = reinterpret_cast<QRgb *>(image_.bits());
+            // Hardware mode stays fixed while this framebuffer is converted.
+            if (gb.cgb_mode || cupid_cgb_compat_active(&gb)) {
+                for (size_t i = 0; i < 160 * 144; ++i)
+                    pixels[i] = (*cgbColorTable_)[gb.frame_buffer_color[i] & 0x7fffu];
+            } else {
+                for (size_t i = 0; i < 160 * 144; ++i)
+                    pixels[i] = displayPalette_[gb.frame_buffer[i] & 3];
+            }
         }
     }
     // Only completed LCD frames advance blend history. A restored VBlank frame
@@ -307,9 +328,17 @@ void MainWindow::configure() {
                                        : "middle"),
                      customColors[i]);
     }
-    connect(palette, &QComboBox::currentIndexChanged, &dialog, [customColors](int index) {
+    auto *offColor = new QLineEdit(
+        settings_.value("video/customPalette/off", customColors[0]->text()).toString());
+    offColor->setObjectName("customPalette/off");
+    offColor->setMaxLength(7);
+    offColor->setPlaceholderText("#RRGGBB");
+    offColor->setEnabled(palette->currentIndex() == int(MonochromePalette::Custom));
+    form->addRow("Custom LCD off color", offColor);
+    connect(palette, &QComboBox::currentIndexChanged, &dialog, [customColors, offColor](int index) {
         for (auto *color : customColors)
             color->setEnabled(index == int(MonochromePalette::Custom));
+        offColor->setEnabled(index == int(MonochromePalette::Custom));
     });
     auto *blending = new QComboBox;
     blending->setObjectName("frameBlending");
@@ -423,6 +452,12 @@ void MainWindow::configure() {
             }
             colorNames[i] = color.name();
         }
+        const QString offColorName = offColor->text().trimmed();
+        const QColor offColorValue(offColorName);
+        if (offColorName.size() != 7 || !offColorName.startsWith('#') || !offColorValue.isValid()) {
+            QMessageBox::warning(&dialog, "Display", "Enter the LCD off color as #RRGGBB.");
+            return;
+        }
         std::array<int, 8> values{};
         std::array<int, 5> specialValues{};
         std::vector<int> used;
@@ -494,6 +529,7 @@ void MainWindow::configure() {
         settings_.setValue("video/sgbBorder", border->isChecked());
         for (size_t i = 0; i < colorNames.size(); ++i)
             settings_.setValue(QString("video/customPalette/%1").arg(i), colorNames[i]);
+        settings_.setValue("video/customPalette/off", offColorValue.name());
         const bool outputChanged = requestedOutput != outputDevice->currentData().toByteArray();
         settings_.setValue("audio/outputDevice", outputDevice->currentData().toByteArray());
         settings_.setValue("audio/volume", volume->value());

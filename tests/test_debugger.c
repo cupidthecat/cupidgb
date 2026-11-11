@@ -495,6 +495,173 @@ static void test_step_observation(CupidGb *gb) {
     free(observed);
 }
 
+static void test_expressions_and_conditions(CupidGb *gb) {
+    prepare(gb);
+    gb->cpu.a = 0x12;
+    gb->cpu.f = 0xb0;
+    gb->cpu.b = 0x34;
+    gb->cpu.c = 0x56;
+    gb->cpu.d = 0x78;
+    gb->cpu.e = 0x9a;
+    gb->cpu.h = 0xc0;
+    gb->cpu.l = 0x20;
+    gb->work_ram[0x20] = 0x67;
+    gb->work_ram[0x21] = 0x45;
+    CupidGbDebugger debug;
+    cupid_gb_debugger_init(&debug);
+    const char symbols[] = "02:4000 Function\n00:c020 Counter\n";
+    assert(cupid_gb_debugger_load_symbols(&debug, symbols, sizeof(symbols) - 1, NULL));
+
+    static const struct {
+        const char *expression;
+        uint16_t value;
+        int bank;
+    } cases[] = {
+        {"a", 0x12, -1},
+        {"f", 0xb0, -1},
+        {"b", 0x34, -1},
+        {"c", 0x56, -1},
+        {"d", 0x78, -1},
+        {"e", 0x9a, -1},
+        {"h", 0xc0, -1},
+        {"l", 0x20, -1},
+        {"af", 0x12b0, -1},
+        {"bc", 0x3456, -1},
+        {"de", 0x789a, -1},
+        {"hl", 0xc020, -1},
+        {"sp", 0xdff0, -1},
+        {"pc", 0x100, 0},
+        {"$ffff+1", 0, -1},
+        {"0-1", 0xffff, -1},
+        {"$ffff*$ffff", 1, -1},
+        {"17/3", 5, -1},
+        {"17%3", 2, -1},
+        {"17/0", 0, -1},
+        {"17%0", 0, -1},
+        {"1<<15", 0x8000, -1},
+        {"$ffff>>15", 1, -1},
+        {"1<<16", 0, -1},
+        {"$ffff>>32", 0, -1},
+        {"1+2<<3", 17, -1},
+        {"3^1*2", 4, -1},
+        {"(1+2)<<3", 24, -1},
+        {"5&3", 1, -1},
+        {"5|2", 7, -1},
+        {"a==$12", 1, -1},
+        {"a!=$12", 0, -1},
+        {"a<$20", 1, -1},
+        {"a<=$12", 1, -1},
+        {"a>$20", 0, -1},
+        {"a>=$12", 1, -1},
+        {"a&&b", 1, -1},
+        {"0||b", 1, -1},
+        {"0&&b", 0, -1},
+        {"[hl]", 0x67, -1},
+        {"{hl}", 0x4567, -1},
+        {"[Counter]", 0x67, -1},
+        {"Function", 0x4000, 2},
+        {"Function+3", 0x4003, 2},
+        {"3+Function", 0x4003, 2},
+        {"Function-pc", 0x3f00, -1},
+        {"pc==$100", 1, -1},
+        {"$12:$3456", 0x3456, 0x12},
+        {"$ffff:$3456", 0x3456, 0x1ff},
+        {" ( a + 1 ) * 2 ", 38, -1},
+        {"0x1234 + $10", 0x1244, -1},
+    };
+
+    const size_t size = cupid_gb_state_size(gb);
+    uint8_t *before = malloc(size), *after = malloc(size);
+    assert(before && after && cupid_gb_save_state(gb, before, size, NULL) == CUPID_GB_STATE_OK);
+    for (size_t index = 0; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        CupidGbDebugValue value = {0xffff, 123};
+        assert(cupid_gb_debugger_evaluate(&debug, gb, cases[index].expression, &value, NULL));
+        assert(value.value == cases[index].value && value.bank == cases[index].bank);
+    }
+    static const char *const invalid[] = {
+        "",   " ",     "missing", "a=5", "a+=5",       "!a",         "-1",   "0x",   "$",
+        "1+", "(1+2]", "[hl",     "1 2", "1||missing", "0&&missing", "2**3", "{hl]", "1===1",
+    };
+    for (size_t index = 0; index < sizeof(invalid) / sizeof(invalid[0]); ++index) {
+        CupidGbDebugValue value = {0x1234, 7};
+        assert(!cupid_gb_debugger_evaluate(&debug, gb, invalid[index], &value, NULL));
+        assert(value.value == 0x1234 && value.bank == 7);
+    }
+    char deep[100];
+    memset(deep, '(', 40);
+    deep[40] = '1';
+    memset(deep + 41, ')', 40);
+    deep[81] = 0;
+    CupidGbDebugValue value;
+    assert(!cupid_gb_debugger_evaluate(&debug, gb, deep, &value, NULL));
+    char long_text[CUPID_GB_DEBUG_EXPRESSION_SIZE + 1];
+    memset(long_text, '1', sizeof(long_text) - 1);
+    long_text[sizeof(long_text) - 1] = 0;
+    assert(!cupid_gb_debugger_evaluate(&debug, gb, long_text, &value, NULL));
+    assert(cupid_gb_save_state(gb, after, size, NULL) == CUPID_GB_STATE_OK);
+    assert(memcmp(before, after, size) == 0);
+    free(before);
+    free(after);
+
+    prepare(gb);
+    gb->rom[0x100] = 0x3c;
+    gb->rom[0x101] = 0x18;
+    gb->rom[0x102] = 0xfd;
+    assert(cupid_gb_debugger_breakpoint_add_condition(&debug, gb, -1, 0x100, "a == 3"));
+    assert(cupid_gb_debugger_breakpoint_add_condition(&debug, gb, -1, 0x100, "a == 3"));
+    assert(debug.bp_count == 1);
+    assert(!cupid_gb_debugger_breakpoint_add_condition(&debug, gb, -1, 0x100, "a = 3"));
+    assert(debug.bp_count == 1 && !strcmp(debug.breakpoints[0].condition, "a == 3"));
+    assert(!cupid_gb_debugger_match_breakpoint(&debug, gb));
+    cupid_gb_debugger_begin(&debug, gb, CUPID_GB_DEBUG_RUN);
+    assert(cupid_gb_debugger_run(&debug, gb, 20) == CUPID_GB_DEBUG_STOP_BREAKPOINT);
+    assert(gb->cpu.pc == 0x100 && gb->cpu.a == 3 && debug.steps == 6);
+    cupid_gb_debugger_begin(&debug, gb, CUPID_GB_DEBUG_RUN);
+    assert(cupid_gb_debugger_run(&debug, gb, 4) == CUPID_GB_DEBUG_STOP_BUDGET);
+    assert(gb->cpu.a == 5);
+    cupid_gb_debugger_breakpoints_clear(&debug);
+    assert(cupid_gb_debugger_breakpoint_add_condition(&debug, gb, -1, 0x100, "Function != 0"));
+    cupid_gb_debugger_symbols_clear(&debug);
+    cupid_gb_debugger_reset_execution(&debug);
+    gb->cpu.pc = 0x100;
+    assert(cupid_gb_debugger_check(&debug, gb) == CUPID_GB_DEBUG_STOP_ERROR);
+    cupid_gb_debugger_cleanup(&debug);
+
+    cupid_gb_set_model(gb, CUPID_GB_MODEL_CGB);
+    prepare(gb);
+    gb->video_ram[2] = 0x11;
+    gb->video_ram[0x2002] = 0x22;
+    gb->work_ram[0x1002] = 0x33;
+    gb->work_ram[0x3002] = 0x44;
+    cupid_gb_debugger_init(&debug);
+    assert(cupid_gb_debugger_evaluate(&debug, gb, "[1:$8002]", &value, NULL) &&
+           value.value == 0x22);
+    assert(cupid_gb_debugger_evaluate(&debug, gb, "[0:$8002]", &value, NULL) &&
+           value.value == 0x11);
+    assert(cupid_gb_debugger_evaluate(&debug, gb, "[3:$d002]", &value, NULL) &&
+           value.value == 0x44);
+    assert(cupid_gb_debugger_evaluate(&debug, gb, "[0:$d002]", &value, NULL) &&
+           value.value == 0x33);
+    assert(cupid_gb_debugger_evaluate(&debug, gb, "[3:$f002]", &value, NULL) &&
+           value.value == 0x44);
+    assert(gb->cgb_wram_bank == 1 && gb->cgb_vram_bank == 0);
+    gb->cgb_wram_bank = 2;
+    gb->cgb_vram_bank = 1;
+    gb->work_ram[0x2002] = 0x55;
+    assert(cupid_gb_debugger_evaluate(&debug, gb, "[0:$d002]", &value, NULL) &&
+           value.value == 0x55);
+    assert(cupid_gb_debugger_evaluate(&debug, gb, "[0:$8002]", &value, NULL) &&
+           value.value == 0x22);
+    assert(gb->cgb_wram_bank == 2 && gb->cgb_vram_bank == 1);
+    gb->cpu.pc = 0x8000;
+    assert(cupid_gb_debugger_evaluate(&debug, gb, "pc", &value, NULL) && value.bank == 0);
+    gb->cpu.pc = 0xd002;
+    assert(cupid_gb_debugger_evaluate(&debug, gb, "pc", &value, NULL) && value.bank == 2);
+    gb->cpu.pc = 0xf002;
+    assert(cupid_gb_debugger_evaluate(&debug, gb, "pc", &value, NULL) && value.bank == 0);
+    cupid_gb_debugger_cleanup(&debug);
+}
+
 int main(void) {
     CupidGb *gb = calloc(1, sizeof(*gb));
     assert(gb);
@@ -506,6 +673,7 @@ int main(void) {
     test_symbols();
     test_execution_preserves_hardware(gb);
     test_step_observation(gb);
+    test_expressions_and_conditions(gb);
     cupid_gb_cleanup(gb);
     free(gb);
     puts("Debugger execution, memory, disassembly and symbols passed.");

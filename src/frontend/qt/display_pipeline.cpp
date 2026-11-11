@@ -46,6 +46,22 @@ std::array<QRgb, 4> monochromeColors(MonochromePalette palette, const std::array
     }
 }
 
+QRgb monochromeOffColor(MonochromePalette palette, QRgb custom) {
+    switch (palette) {
+        case MonochromePalette::Grayscale:
+            return qRgb(255, 255, 255);
+        case MonochromePalette::Olive:
+            return qRgb(207, 218, 172);
+        case MonochromePalette::Teal:
+            return qRgb(145, 234, 208);
+        case MonochromePalette::Custom:
+            return custom;
+        case MonochromePalette::Lime:
+        default:
+            return qRgb(210, 230, 166);
+    }
+}
+
 namespace {
 using BlendTable = std::array<uint8_t, 256 * 256>;
 

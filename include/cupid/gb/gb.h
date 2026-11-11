@@ -350,7 +350,7 @@ typedef struct CupidGb {
     bool huc3_ir_input; /* Live host signal, outside native snapshots. */
     CupidGbCamera camera;
     bool serial_master_clock;
-    uint64_t cartridge_bus_expiry; /* Half-dot deadline on CGB cartridge bus. */
+    uint64_t cartridge_bus_expiry; /* Half-dot deadline on the shared main bus. */
     uint8_t cartridge_bus_data;
     uint64_t elapsed_cycles; /* Base-speed T-cycles, including LCD-off execution. */
     uint8_t serial_bits_remaining;
@@ -397,6 +397,8 @@ typedef struct CupidGb {
     uint8_t speed_switch_alignment;
     uint8_t joypad;              /* button state: bits 0-3 dpad, 4-7 action; 0=pressed */
     uint8_t joypad_extra[3];     /* SGB players 2..4, with the same active-low layout. */
+    uint8_t joyp_select_delay;   /* Remaining base dots before monochrome row release. */
+    uint8_t joyp_select_value;   /* Requested select bits while old contacts settle. */
     uint8_t window_line_counter; /* internal window scanline counter */
     uint8_t ppu_lcd_warmup_lines;
     uint8_t stat_irq_delay;
@@ -405,8 +407,12 @@ typedef struct CupidGb {
     bool stat_irq_line;
     bool frame_ready;
     bool lcd_frame_odd;   /* Current handheld LCD row polarity. */
-    bool lcd_first_frame; /* CGB holds the polarity on the first VBlank after enable. */
+    bool lcd_first_frame; /* The first handheld frame after enable is blank or repeated. */
+    uint32_t display_cycles_since_frame; /* Base dots since the last presentation event. */
+    uint32_t lcd_repeat_countdown;       /* Remaining CGB first-frame repeat delay. */
+    uint8_t display_frame_type;          /* Presentation event, separate from VBlank IRQs. */
     bool loaded;
+    uint64_t vblank_events;            /* Host observation count; excluded from guest snapshots. */
     uint64_t battery_write_generation; /* Host dirty tracking; excluded from guest snapshots. */
     char save_path[260];
     CupidGbSgb sgb;

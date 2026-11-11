@@ -439,6 +439,86 @@ static void color_noise_trigger(CupidGbApu *apu, bool active) {
     timing->counter_stepped = phase == 2;
 }
 
+/* A short selector pulse can clock only part of the noise shift register. The
+ * operation depends on the old and new low selector lines, independently of
+ * the counter bits that decide whether the pulse exists. */
+typedef enum NoiseSelectorPulse {
+    NOISE_PULSE_SHIFT,
+    NOISE_PULSE_RETAIN,
+    NOISE_PULSE_NEIGHBORS,
+    NOISE_PULSE_LOW_PAIR,
+    NOISE_PULSE_CARRY,
+    NOISE_PULSE_HOLD,
+    NOISE_PULSE_HOLD_CLEAR
+} NoiseSelectorPulse;
+
+static NoiseSelectorPulse color_noise_short_pulse(unsigned from, unsigned to) {
+    if (from < 2 && to >= 2 && to <= 5)
+        return to == from + 2 ? NOISE_PULSE_NEIGHBORS : NOISE_PULSE_RETAIN;
+    if (from == 2) {
+        if (to == 0 || to == 3)
+            return NOISE_PULSE_LOW_PAIR;
+        if (to == 1)
+            return NOISE_PULSE_RETAIN;
+        if (to == 4)
+            return NOISE_PULSE_HOLD_CLEAR;
+        if (to == 5)
+            return NOISE_PULSE_HOLD;
+    }
+    if ((from == 3 && (to == 4 || to == 5)) || (from == 4 && to >= 1 && to <= 3) ||
+        (from == 5 && (to == 2 || to == 3)))
+        return NOISE_PULSE_RETAIN;
+    return from == 5 && to == 0 ? NOISE_PULSE_CARRY : NOISE_PULSE_SHIFT;
+}
+
+static uint16_t color_noise_bits(const CupidGbApu *apu) {
+    return apu->ch4_lfsr ^ 0x7fffu;
+}
+
+static void color_noise_store_bits(CupidGbApu *apu, uint16_t bits) {
+    apu->ch4_lfsr = bits ^ 0x7fffu;
+}
+
+static void color_noise_selector_pulse(CupidGbApu *apu, unsigned from, unsigned to) {
+    CupidGbNoiseTiming *timing = &apu->noise_timing;
+    NoiseSelectorPulse pulse = color_noise_short_pulse(from, to);
+    uint16_t before = color_noise_bits(apu);
+    uint16_t bits;
+    if (pulse == NOISE_PULSE_HOLD || pulse == NOISE_PULSE_HOLD_CLEAR) {
+        bits = before;
+        if (pulse == NOISE_PULSE_HOLD_CLEAR) {
+            if ((bits & 3u) == 2u)
+                bits &= (uint16_t)~(apu->ch4_width7 ? 0x4040u : 0x4000u);
+            if ((bits & 0x19u) == 8u)
+                bits &= (uint16_t)~8u;
+        }
+        bits = (uint16_t)((bits & ~1u) | ((bits >> 1) & 1u));
+        timing->output_high = (bits & 1u) != 0;
+        timing->last_shift_narrow = apu->ch4_width7;
+    } else {
+        color_noise_shift(apu);
+        bits = color_noise_bits(apu);
+        if (pulse == NOISE_PULSE_RETAIN) {
+            bits &= before | 1u;
+        } else if (pulse == NOISE_PULSE_NEIGHBORS) {
+            uint16_t cells = apu->ch4_width7 ? 0x2022u : 0x2002u;
+            bits &= (uint16_t)(before | ~cells);
+        } else if (pulse == NOISE_PULSE_LOW_PAIR || pulse == NOISE_PULSE_CARRY) {
+            if (pulse == NOISE_PULSE_CARRY) {
+                unsigned low = bits & 0x71u;
+                if ((apu->ch4_width7 && low == 0x20u) || low == 0x61u)
+                    bits &= (uint16_t)~0x20u;
+                unsigned high = bits & 0x7001u;
+                if (high == 0x2000u || high == 0x6001u)
+                    bits &= (uint16_t)~0x2000u;
+            }
+            if ((bits & 3u) == 2u)
+                bits &= (uint16_t)~2u;
+        }
+    }
+    color_noise_store_bits(apu, bits);
+}
+
 static void color_noise_frequency_write(CupidGbApu *apu, uint8_t previous) {
     CupidGbNoiseTiming *timing = &apu->noise_timing;
     if (timing->reload_edge) {
@@ -446,10 +526,49 @@ static void color_noise_frequency_write(CupidGbApu *apu, uint8_t previous) {
         unsigned phase = timing->clock_phase >> 1;
         timing->remaining = (uint8_t)(divisor + (divisor == 2 ? 0 : ((2 - phase) & 3)));
     }
-    unsigned old_shift = previous >> 4;
-    if (old_shift != apu->ch4_shift && !(timing->divider_counter & (1u << old_shift)) &&
-        (timing->divider_counter & (1u << apu->ch4_shift))) {
+    unsigned from = previous >> 4;
+    unsigned to = apu->ch4_shift;
+    if (from == to)
+        return;
+    /* The top selector line settles before the other three lines. Returning
+     * through that intermediate bit produces a pulse even when the final
+     * selected counter level is unchanged. */
+    unsigned middle = (from & 7u) | (to & 8u);
+    bool old_level = (timing->divider_counter & (1u << from)) != 0;
+    bool new_level = (timing->divider_counter & (1u << to)) != 0;
+    bool middle_level = (timing->divider_counter & (1u << middle)) != 0;
+    if (old_level != new_level) {
+        if (new_level)
+            color_noise_shift(apu);
+        return;
+    }
+    if (old_level == middle_level)
+        return;
+    if (!new_level) {
+        if (to < 8)
+            color_noise_shift(apu);
+        else
+            color_noise_selector_pulse(apu, from & 7u, to & 7u);
+    } else if (to < 8) {
         color_noise_shift(apu);
+    } else if ((to & 7u) & ~(from & 7u)) {
+        uint16_t bits = color_noise_bits(apu);
+        bits = (uint16_t)((bits & ~0x80u) | ((bits >> 1) & 0x80u));
+        unsigned low_from = from & 7u;
+        if ((to & 7u) == 3 && (low_from == 0 || low_from == 2 || low_from == 4)) {
+            uint16_t lanes = 0x545u;
+            if (low_from == 2)
+                lanes |= 0x10u | (uint16_t)((bits & (bits >> 1) & 0x404u) << 1);
+            bits &= (uint16_t)((bits >> 1) | lanes);
+            timing->output_high = (bits & 1u) != 0;
+        }
+        /* A wide write can expose the bit overwritten by the preceding narrow
+         * edge. Forcing feedback cells does not refresh the held output tap. */
+        if (!apu->ch4_width7 && (previous & 8u) && timing->last_shift_narrow)
+            bits = (uint16_t)((bits & ~0x40u) | (timing->pre_shift_bit7 ? 0x40u : 0));
+        bits |= apu->ch4_width7 ? 0x4040u : 0x4000u;
+        timing->last_shift_narrow = apu->ch4_width7;
+        color_noise_store_bits(apu, bits);
     }
 }
 

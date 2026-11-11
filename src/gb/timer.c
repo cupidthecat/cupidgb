@@ -4,6 +4,7 @@
 #include "cupid/gb/camera.h"
 #include "cupid/gb/cpu.h"
 #include "cupid/gb/huc3.h"
+#include "cupid/gb/input.h"
 #include "cupid/gb/ppu.h"
 
 enum {
@@ -190,6 +191,8 @@ static void clock_cpu_domain(CupidGb *gb) {
 
 static void advance_base_time(CupidGb *gb, unsigned dots) {
     gb->elapsed_cycles += dots;
+    if (gb->joyp_select_delay)
+        cupid_gb_input_tick(gb, dots);
     if (gb->header.mbc_type == CUPID_GB_HUC3)
         cupid_gb_huc3_tick_infrared(gb, dots);
 }

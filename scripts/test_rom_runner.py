@@ -124,6 +124,7 @@ def main():
         bounded = run(runner, rom, "--frames", "2")
         assert bounded["status"] == "bounded"
         assert bounded["vblank_frames"] == 0
+        assert bounded["presentation_events"] == 2
         assert bounded["base_cycles"] >= 140448
         for model, clock in (("sgb", 4295454), ("sgb2", 4194304)):
             model_result = run(runner, rom, "--frames", "2", "--model", model)
