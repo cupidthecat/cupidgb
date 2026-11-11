@@ -21,7 +21,7 @@ Automatic desktop selection is a convenience policy, not a new hardware profile.
 
 ## Cartridge controllers
 
-The core decodes ROM-only cartridges and the MBC1, MBC2, MBC3, MBC5, MMM01, MBC6, MBC7, HuC1, and HuC3 type families. Coverage differs by controller. Recognition of a type byte is separate from implementing all of its banking, storage, and peripheral behavior.
+The core decodes ROM-only, MBC1, MBC2, MBC3, MBC5, MMM01, MBC6, MBC7, HuC1, HuC3, Camera, and TPP1 cartridges. Coverage differs by controller.
 
 | Family | Current scope and limits |
 | --- | --- |
@@ -30,19 +30,21 @@ The core decodes ROM-only cartridges and the MBC1, MBC2, MBC3, MBC5, MMM01, MBC6
 | MBC2 | Address-dependent control and built-in 512 by 4-bit RAM |
 | MBC3 | Banked ROM/RAM, optional clock registers, live/latched clock persistence, halt and carry handling; extended MBC30-sized inputs use eight-bit ROM selection and up to eight RAM banks |
 | MBC5 | Nine-bit ROM selection, RAM banking, exact RAM-enable decoding and a motor latch/host observer for rumble cartridges; physical feedback remains unqualified |
-| MMM01 | Partial mapping; full controller qualification remains pending |
+| MMM01 | Menu-first and menu-last dump layouts, one-way lock, ROM/RAM masks, multiplex mode, and battery SRAM |
 | MBC6 | Partial mapping; flash behavior remains pending |
-| MBC7 | Partial mapping and sensor state; complete EEPROM, motion input, and persistence qualification remain pending |
+| MBC7 | Dual access gates, motion latches, 256-byte serial EEPROM, battery files, and mid-command continuation. Physical motion input remains pending |
 | HuC1 | Independent six-bit ROM and three-bit RAM selection, RAM access outside infrared mode, and disconnected infrared register behavior; transport and startup mapping qualification remain pending |
-| HuC3 | Partial controller behavior; clock and accessory behavior remain incomplete |
+| HuC3 | ROM bank zero after selection, 16 SRAM banks, read-only and read/write modes. Clock commands and infrared remain incomplete |
+| Camera | ROM/SRAM banking, shutter timing, generated sensor pixels, tile conversion, and capture continuation. Analog gain is approximate. Host camera input remains pending |
+| TPP1 | Extended header, mirrored bank registers, read-only and writable SRAM, RTC commands and persistence, and four guest rumble levels. Host feedback uses an on/off latch |
 
-Camera cartridges, TPP1 banking/clock/rumble, and other controller variants still need implementation and qualification. MBC6 is a legacy partial path, not a qualified controller requirement established by the pinned comparison build. Consult load errors and the parity checklist instead of treating a successful open as a compatibility verdict. The current maximum cartridge image size is 8 MiB; supported RAM storage is bounded by the core's 128 KiB capacity.
+MBC6 exposes partial mapping without flash support. The maximum cartridge image size is 8 MiB. The core supports up to 128 KiB of cartridge storage, including TPP1. Larger TPP1 SRAM configurations are rejected before cartridge replacement.
 
 Physical ROM bank population follows the actual file length, rounded to the next power of two with a minimum of two 16 KiB banks. Bytes in an unpopulated tail read as `0xff`. Header ROM-size metadata does not override the loaded bank population, and an unknown size code does not reject an otherwise loadable image. Cartridge identity and native-state hashes retain the original, unpadded input bytes. A ROM-only type-0 header on an image larger than 32 KiB selects an MBC3 banking fallback. An invalid header checksum is reported without necessarily rejecting the image.
 
 Two-KiB SRAM mirrors across the eight-KiB RAM window. Ordinary timer-equipped MBC3 RAM banks 4 through 7 are disconnected; the wider RAM wiring applies to extended inputs larger than 2 MiB ROM or 32 KiB RAM. These rules have targeted regression coverage, but do not qualify every undocumented board or decaying open-bus behavior.
 
-The frontend's `.sav` support is separate from controller emulation. Its complete clock persistence contract currently covers timer-equipped MBC3 cartridges. Other EEPROM, flash, sensor, or clock devices need their own validated file contracts.
+The frontend saves battery SRAM, MBC3 and TPP1 clock data, and MBC7 EEPROM to `.sav` files. See [battery saves](battery-saves.md) for the supported encodings.
 
 ## CPU, memory, and timing
 
@@ -62,7 +64,7 @@ The pixel pipeline keeps background and object fetch queues across LCD dots. It 
 
 Coincidence and mode sources feed one combined STAT interrupt line. A rising coincidence source must preserve a pending HBlank transition; suppressing a second interrupt edge does not cancel the display's mode change. LCD power cycling preserves the comparison and combined-line latches until startup refreshes them. Automatic refresh follows the measured model-specific startup edge, while explicit STAT and LYC writes can update the comparison earlier.
 
-SGB behavior includes packet reception, palette/attribute commands, screen masking, a border framebuffer and four independent input masks selected by the multiplayer protocol. These features do not establish complete SGB host emulation, physical multiplayer qualification, audio extensions or PAL timing.
+SGB behavior includes packet reception, palette and attribute commands, screen masking, and four player input masks. Transfers capture rendered shades on the third host frame. Character and map uploads stage the next border while the active border transitions. Host frames also advance during modeled LCD-off and STOP intervals. SGB audio extensions, PAL timing, and remaining display phase differences are still open.
 
 Complete fetcher timing, mid-scanline conflicts, broad pixel comparisons, model-specific startup, and hardware color response remain active accuracy work. Host scaling, optional blending, and palette presentation do not change those requirements.
 

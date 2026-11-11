@@ -20,6 +20,15 @@ Hash regressions cover known vectors, span partitions, large inputs, unaligned b
 
 Core tests exercise lifecycle, CPU/memory behavior, serial, timer/bus phases, graphics, audio, cartridge persistence, native snapshots, older-state battery recovery, and SGB behavior. Frontend checks cover sample conversion, WAVE file output, display processing, and integrated desktop workflows as those targets are present in the current build. Query the exact list with `ctest --test-dir build -N`; avoid carrying test counts from an older revision into a new result.
 
+Run the generated mapper, persistence, and SGB continuation checks together:
+
+```sh
+ctest --test-dir build --output-on-failure \
+    -R 'cupidgb_(gb|cartridge|battery|camera|mbc7|tpp1|sgb|state)$'
+```
+
+For a library scan, inventory cartridge type bytes separately from the selected hardware model. Give each ROM a fixed guest-clock budget and retain its exact result, including an execution error or incomplete boot. Run banking and peripheral probes for hardware absent from the library. Use separate gameplay and persistence checks before claiming compatibility for a title.
+
 Controller checks run only in a desktop build with SDL2:
 
 ```sh

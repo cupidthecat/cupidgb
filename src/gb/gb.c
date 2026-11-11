@@ -23,12 +23,15 @@
 
 #include "cupid/common/log.h"
 #include "cupid/gb/apu.h"
+#include "cupid/gb/camera.h"
 #include "cupid/gb/cartridge.h"
 #include "cupid/gb/cpu.h"
 #include "cupid/gb/input.h"
+#include "cupid/gb/mbc7.h"
 #include "cupid/gb/ppu.h"
 #include "cupid/gb/sgb.h"
 #include "cupid/gb/timer.h"
+#include "cupid/gb/tpp1.h"
 #include "cupid/gbc/cgb.h"
 
 // Serial transfer (memory-map helper)
@@ -251,6 +254,8 @@ void cupid_gb_init(CupidGb *gb) {
     serial_output_user_data = gb->serial_output_user_data;
     rumble_callback = gb->rumble_callback;
     rumble_user_data = gb->rumble_user_data;
+    const int16_t motion_x = gb->mbc7.motion_x;
+    const int16_t motion_y = gb->mbc7.motion_y;
     memset(gb, 0, sizeof(*gb));
     gb->model = model;
     gb->rom = rom;
@@ -258,6 +263,7 @@ void cupid_gb_init(CupidGb *gb) {
     gb->serial_output_user_data = serial_output_user_data;
     gb->rumble_callback = rumble_callback;
     gb->rumble_user_data = rumble_user_data;
+    cupid_gb_mbc7_set_motion(gb, motion_x, motion_y);
 
     if (gb->rom == 0) {
         gb->rom = malloc(CUPID_GB_MAX_ROM_SIZE);
@@ -545,8 +551,9 @@ void cupid_gb_set_rumble_callback(CupidGb *gb, CupidGbRumbleCallback callback, v
 }
 
 bool cupid_gb_rumble_enabled(const CupidGb *gb) {
-    return gb && gb->header.mbc_type == CUPID_GB_MBC5 && gb->header.has_rumble &&
-           gb->mbc5_rumble_on;
+    return gb && gb->header.has_rumble &&
+           ((gb->header.mbc_type == CUPID_GB_MBC5 && gb->mbc5_rumble_on) ||
+            (gb->header.mbc_type == CUPID_GB_TPP1 && (gb->tpp1.status & CUPID_GB_TPP1_MOTOR)));
 }
 
 // Memory map: read
@@ -631,7 +638,22 @@ uint8_t cupid_gb_read_u8(const CupidGb *gb, uint16_t address) {
     }
 
     if (address >= 0xa000u && address <= 0xbfffu) {
-        if (!gb->ram_enabled && gb->header.mbc_type != CUPID_GB_HUC1) {
+        if (gb->header.mbc_type == CUPID_GB_TPP1)
+            return cupid_gb_tpp1_read(gb, address);
+        if (gb->header.mbc_type == CUPID_GB_CAMERA) {
+            if (gb->camera.mapped)
+                return cupid_gb_camera_read_register(&gb->camera, address);
+            if (gb->cartridge_ram_size && gb->camera.busy_tcycles)
+                return 0;
+            if (gb->cartridge_ram_size && !gb->current_ram_bank && address >= 0xa100u &&
+                address < 0xaf00u)
+                return cupid_gb_camera_read_tile(&gb->camera, address - 0xa100u);
+        } else if (gb->header.mbc_type == CUPID_GB_HUC3) {
+            /* Mode zero leaves SRAM readable, while mode A also allows writes. */
+            const uint8_t mode = gb->huc3_mode & 0x0fu;
+            if (mode != 0u && mode != 0x0au)
+                return 0xffu;
+        } else if (!gb->ram_enabled && gb->header.mbc_type != CUPID_GB_HUC1) {
             return 0xffu;
         }
         /* MBC2: built-in 512x4-bit RAM, only bottom nibble valid */
@@ -655,26 +677,8 @@ uint8_t cupid_gb_read_u8(const CupidGb *gb, uint16_t address) {
             !cupid_gb_has_extended_mbc3(gb) && gb->current_ram_bank > 3u) {
             return 0xffu;
         }
-        /* MBC7: accelerometer / EEPROM registers */
-        if (gb->header.mbc_type == CUPID_GB_MBC7) {
-            if (address >= 0xa020u && address <= 0xa02fu) {
-                return (uint8_t)(gb->mbc7_sensor_x & 0xffu);
-            }
-            if (address >= 0xa030u && address <= 0xa03fu) {
-                return (uint8_t)((gb->mbc7_sensor_x >> 8u) & 0xffu);
-            }
-            if (address >= 0xa040u && address <= 0xa04fu) {
-                return (uint8_t)(gb->mbc7_sensor_y & 0xffu);
-            }
-            if (address >= 0xa050u && address <= 0xa05fu) {
-                return (uint8_t)((gb->mbc7_sensor_y >> 8u) & 0xffu);
-            }
-            return 0xffu;
-        }
-        /* HuC3: command interface */
-        if (gb->header.mbc_type == CUPID_GB_HUC3 && gb->huc3_mode == 0x0cu) {
-            return gb->huc3_value;
-        }
+        if (gb->header.mbc_type == CUPID_GB_MBC7)
+            return cupid_gb_mbc7_read(gb, address);
         /* HuC1: IR mode returns 0xC0 (no IR signal) */
         if (gb->header.mbc_type == CUPID_GB_HUC1 && gb->huc1_ir_mode) {
             return 0xc0u;
@@ -841,7 +845,7 @@ static void cupid_gb_rtc_latch(CupidGb *gb) {
  *   - MBC register writes (RAM enable, ROM/RAM bank select, mode)
  *   - MBC3 RTC latch sequence
  *   - VRAM (with Mode 3 lock)
- *   - Cartridge RAM / RTC register writes / MBC7 latch / HuC3 commands
+ *   - Cartridge RAM / RTC register writes / MBC7 latch
  *   - WRAM and echo RAM
  *   - OAM (with Mode 2/3 lock and DMG OAM corruption bug emulation)
  *   - P1/JOYP, LCDC, STAT, LY, LYC, DMA, timer, APU, and boot register
@@ -866,6 +870,23 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
         cupid_gb_huc1_write(gb, address, value);
         return;
     }
+    if (address < 0x8000u && gb->header.mbc_type == CUPID_GB_HUC3) {
+        cupid_gb_huc3_write(gb, address, value);
+        return;
+    }
+    if (address < 0x8000u && gb->header.mbc_type == CUPID_GB_MMM01) {
+        cupid_gb_mmm01_write(gb, address, value);
+        return;
+    }
+
+    if (address < 0x8000u && gb->header.mbc_type == CUPID_GB_CAMERA) {
+        cupid_gb_camera_mapper_write(gb, address, value);
+        return;
+    }
+    if (address < 0x8000u && gb->header.mbc_type == CUPID_GB_TPP1) {
+        cupid_gb_tpp1_write_register(gb, address, value);
+        return;
+    }
 
     if (address <= 0x3fffu && gb->header.mbc_type == CUPID_GB_MBC2) {
         if ((address & 0x0100u) == 0u) {
@@ -884,17 +905,12 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
             case CUPID_GB_MBC1:
             case CUPID_GB_MBC3:
             case CUPID_GB_MBC6:
-            case CUPID_GB_MBC7:
-            case CUPID_GB_MMM01:
                 gb->ram_enabled = (value & 0x0fu) == 0x0au;
                 break;
             case CUPID_GB_MBC5:
-                /* All data bits participate in this controller's enable decode. */
+            case CUPID_GB_MBC7:
+                /* These controllers decode the whole enable byte. */
                 gb->ram_enabled = value == 0x0au;
-                break;
-            case CUPID_GB_HUC3:
-                gb->huc3_mode = value;
-                gb->ram_enabled = ((value & 0x0fu) == 0x0au);
                 break;
             default:
                 break;
@@ -916,12 +932,6 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
                 if (gb->current_rom_bank == 0u)
                     gb->current_rom_bank = 1u;
                 break;
-            case CUPID_GB_HUC3:
-                gb->current_rom_bank = (size_t)(value & 0x7fu);
-                if (gb->current_rom_bank == 0u) {
-                    gb->current_rom_bank = 1u;
-                }
-                break;
             case CUPID_GB_MBC5:
                 if (address <= 0x2fffu) {
                     gb->mbc5_rom_bank = (uint16_t)((gb->mbc5_rom_bank & 0x0100u) | value);
@@ -931,9 +941,10 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
                 }
                 gb->current_rom_bank = (size_t)gb->mbc5_rom_bank;
                 break;
-            case CUPID_GB_MBC6:
             case CUPID_GB_MBC7:
-            case CUPID_GB_MMM01:
+                gb->current_rom_bank = value;
+                break;
+            case CUPID_GB_MBC6:
                 gb->current_rom_bank = (size_t)(value & 0x7fu);
                 if (gb->current_rom_bank == 0u) {
                     gb->current_rom_bank = 1u;
@@ -958,14 +969,6 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
                 gb->current_ram_bank = value & 7u;
                 gb->rtc_register = gb->header.has_timer && (value & 8u) ? value & 15u : 0u;
                 break;
-            case CUPID_GB_HUC3:
-                if (value <= 0x03u) {
-                    gb->current_ram_bank = (size_t)value;
-                    gb->rtc_register = 0u;
-                } else if (value >= 0x08u && value <= 0x0cu) {
-                    gb->rtc_register = value;
-                }
-                break;
             case CUPID_GB_MBC5:
                 if (gb->header.has_rumble) {
                     gb->current_ram_bank = (size_t)(value & 0x07u);
@@ -981,9 +984,10 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
                     gb->current_ram_bank = (size_t)(value & 0x0fu);
                 }
                 break;
-            case CUPID_GB_MBC6:
             case CUPID_GB_MBC7:
-            case CUPID_GB_MMM01:
+                gb->mbc7.registers_enabled = value == 0x40u;
+                break;
+            case CUPID_GB_MBC6:
                 gb->current_ram_bank = (size_t)(value & 0x03u);
                 break;
             default:
@@ -1025,6 +1029,18 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
     }
 
     if (address >= 0xa000u && address <= 0xbfffu) {
+        if (gb->header.mbc_type == CUPID_GB_TPP1) {
+            cupid_gb_tpp1_write_window(gb, address, value);
+            return;
+        }
+        if (gb->header.mbc_type == CUPID_GB_CAMERA) {
+            if (gb->camera.mapped) {
+                cupid_gb_camera_write_register(&gb->camera, address, value);
+                return;
+            }
+            if (gb->camera.busy_tcycles)
+                return;
+        }
         if (!gb->ram_enabled && gb->header.mbc_type != CUPID_GB_HUC1) {
             return;
         }
@@ -1064,18 +1080,8 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
             !cupid_gb_has_extended_mbc3(gb) && gb->current_ram_bank > 3u) {
             return;
         }
-        /* MBC7: accelerometer latch control */
         if (gb->header.mbc_type == CUPID_GB_MBC7) {
-            if (address >= 0xa000u && address <= 0xa00fu) {
-                if (value == 0x55u) {
-                    gb->mbc7_latch = true;
-                }
-            }
-            return;
-        }
-        /* HuC3: command write */
-        if (gb->header.mbc_type == CUPID_GB_HUC3 && gb->huc3_mode == 0x0bu) {
-            gb->huc3_value = value;
+            cupid_gb_mbc7_write(gb, address, value);
             return;
         }
         {

@@ -10,7 +10,7 @@ Load a native state file through File > Load State File or drop a `.s0` through 
 
 Writes use an atomic file replacement. Loading checks the complete cartridge identity and hardware model. A state captured with an active boot overlay requires the matching local boot binary. Failed validation preserves the running session and its host audio queue. A successful load replaces the emulated state, reapplies current physical input, clears queued host audio, and realigns pacing.
 
-New files use CupidGB native version 4. Version 2 and 3 files remain loadable. Interoperable BESS state imports remain pending. A filename fallback does not imply support for another state format.
+New files use CupidGB native version 4 for the base payload. SGB hardware and cartridges with additional mapper state use version 5. Version 2 through 4 files remain loadable. Interoperable BESS state imports remain pending.
 
 The version identifies the wire encoding, not a promise to preserve emulation bugs between builds. Version 3 records pending CGB DMA work, CPU speed-switch sequencing, and audio clock, held-output, envelope, sweep, and noise latches. Version 2 has no values for these latches. Its loader initializes them deterministically after validating the old payload; it never takes missing history from the target's running session. Pending DMA and speed-switch delays start cleared, while an old armed HBlank transfer retains its saved block count. Pulse clock startup follows the saved channel enable, and held pulse output follows the saved duty position. Noise gates and held output derive from the saved channel/DAC and LFSR state, with a canonical prescaler phase. The old LFSR, timer, queued PCM, partial integration, and filter state remain intact. This cannot reproduce timing history the old format did not record. Keep the original state if you need to revisit its earlier build.
 
@@ -39,7 +39,7 @@ The 128-byte header contains:
 | Offset | Bytes | Value |
 | --- | --- | --- |
 | 0 | 8 | `CUPIDGB` followed by a zero byte |
-| 8 | 4 | Format version, currently 3 |
+| 8 | 4 | Format version |
 | 12 | 4 | Complete encoded length |
 | 16 | 4 | Stable hardware model tag |
 | 20 | 4 | Cartridge byte length |
@@ -65,6 +65,8 @@ The payload follows the explicit field order in `src/gb/state.c`. Version 2 occu
 Call `cupid_gb_state_size` instead of hard-coding these lengths in a host. Adding or reordering hardware fields requires a format revision and a deliberate fixture update. The older recovery reader uses a separate frozen 300,349-byte version 1 layout.
 
 Version 4 occupies 300,572 bytes. It preserves the complete version 3 prefix and appends three active-low SGB player masks at offsets 300,568 through 300,570, then the canonical MBC5 motor boolean at 300,571. The existing `joypad` byte remains player 1. Version 2/3 imports release players 2–4 and clear the motor latch, which those versions never recorded. They preserve known player 1 input and the older payload. The loader rejects a motor asserted on an unsupported cartridge and rumble-cartridge RAM banks outside 0–7; the older core had already discarded the motor control bit before saving.
+
+Version 5 appends the sections required by the selected model and cartridge after the version 4 payload. SGB and SGB2 append 10,119 bytes for the host frame phase, pending transfer, border transition, and staged border. MMM01 appends four bytes for ROM selection, RAM and upper ROM selection, mode, and RAM mask. MBC7 appends eight bytes for the serial command, output shift, pending data count, pins and access/programming flags. Camera appends 64 bytes for its registers, capture number, clock phase, busy countdown, and register mapping. TPP1 appends 21 bytes for bank registers, mode, status, clock values, and the clock baseline. When both SGB and mapper sections apply, the SGB section comes first. Earlier snapshots seed the staged border from the visible border and reset transfer timing or missing mapper latches. MBC7 EEPROM data stays in the cartridge RAM portion of the state.
 
 Device handles, assignments, bindings, rumble callbacks and feedback duty counters are host data. They do not enter the wire format. Loading emits no motor callback; the frontend explicitly stops and resynchronizes host feedback after a timeline change. A later forward interval may resume the saved motor state.
 

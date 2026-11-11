@@ -91,6 +91,8 @@ Buttons use an active-low byte, ordered Right, Left, Up, Down, A, B, Select, Sta
 
 `cupid_gb_rumble_enabled(gb)` queries the MBC5 motor latch. `cupid_gb_set_rumble_callback(gb, callback, user_data)` registers a synchronous observer receiving the const instance, new motor state, base-speed cycle timestamp and user pointer. It fires only on a motor transition caused by a supported bus write. Do not mutate or reenter hardware from the callback. Registration survives guest reset/load and is not serialized. State decoding emits no callback: hosts must explicitly stop and resynchronize feedback after reset, loading, rewind and session changes. The hardware core does not open a controller or impose host feedback policy.
 
+`cupid_gb_mbc7_set_motion(gb, x, y)` supplies signed motion samples relative to neutral. About 112 counts correspond to one g. The cartridge copies them into its axis registers when the guest requests a sample. Native states store the sampled registers. The current host sample remains with the live instance.
+
 The direction-only scan resolves opposing direction contacts consistently; when both rows are selected, it preserves their wired-AND result. Monochrome row-switch settling and physical contact bouncing remain unimplemented. Do not interpret the immediate input API as complete electrical input timing.
 
 `cupid_gb_read_u8` and `cupid_gb_write_u8` perform normal device accesses at the current hardware phase. They apply banking and access restrictions. They are not unrestricted debugger peek/poke operations and do not execute a CPU instruction's bus schedule by themselves. Tests that need bus phases should drive CPU execution or the relevant subsystem interface deliberately.
@@ -121,7 +123,7 @@ Normal disk-state APIs recompute cartridge identity. A rejected load leaves the 
 
 `CupidGbStateContext` caches cartridge identity for trusted in-memory rewind. It binds to one owner, ROM pointer, ROM size, and model. Discard it after cartridge/model changes or any in-place ROM patch. Binding checks cannot detect a patch that preserves the pointer and size. Never use the cached context to validate an untrusted disk file.
 
-The codec checks a complete word-array range before reading or writing its explicit little-endian elements. It accepts unaligned state buffers without host-endian loads or structure dumps. New snapshots use version 4, extending the frozen version 2/3 payloads with independent SGB input and an MBC5 motor latch. Version 2 and 3 files remain loadable with deterministic defaults for absent fields. Query the current size instead of assuming a particular version's length. Identity, integrity, final-offset, and hardware-domain checks apply to every accepted version.
+The codec checks a complete word-array range before reading or writing its little-endian elements. It accepts unaligned state buffers. New snapshots use version 4 or 5 depending on the hardware and cartridge. Version 2 through 4 files remain loadable with deterministic defaults for absent fields. Query the size for each loaded cartridge and model. Identity, integrity, final-offset, and hardware-domain checks apply to every accepted version.
 
 The core supplies snapshot bytes. The host supplies compression, history limits, storage, and UI. Convert rewind age from base T-cycles using the selected model clock, not a fixed rate. The complete wire-format and continuation contract is in [save states and rewind](save-states.md).
 

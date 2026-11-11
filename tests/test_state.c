@@ -144,6 +144,10 @@ static void assert_hardware_equal(const CupidGb *a, const CupidGb *b) {
     assert(a->joypad == b->joypad && a->boot_rom_enabled == b->boot_rom_enabled);
     assert(a->sgb.command_write_index == b->sgb.command_write_index);
     assert(a->sgb.ready_for_write == b->sgb.ready_for_write);
+    assert(a->sgb.transfer.frame_dots == b->sgb.transfer.frame_dots);
+    assert(a->sgb.transfer.destination == b->sgb.transfer.destination);
+    assert(a->sgb.transfer.frames_remaining == b->sgb.transfer.frames_remaining);
+    assert(a->sgb.transfer.border_transition == b->sgb.transfer.border_transition);
 #define SAME_ARRAY(field) assert(memcmp(a->field, b->field, sizeof(a->field)) == 0)
     SAME_ARRAY(video_ram);
     SAME_ARRAY(cartridge_ram);
@@ -164,6 +168,9 @@ static void assert_hardware_equal(const CupidGb *a, const CupidGb *b) {
     SAME_ARRAY(sgb.border_map);
     SAME_ARRAY(sgb.border_palettes);
     SAME_ARRAY(sgb.freeze_buffer);
+    SAME_ARRAY(sgb.transfer.tiles);
+    SAME_ARRAY(sgb.transfer.map);
+    SAME_ARRAY(sgb.transfer.palettes);
     SAME_ARRAY(apu.buf);
 #undef SAME_ARRAY
 }
@@ -223,9 +230,9 @@ static void test_resume(void) {
                 prepare_phase(a, phase);
                 size_t length;
                 uint8_t *state = encode(a, &length);
-                /* Model and power phase do not change the current portable wire shape. */
+                const bool sgb = model == CUPID_GB_MODEL_SGB || model == CUPID_GB_MODEL_SGB2;
                 assert(length == cupid_gb_state_size(b) && length > 300518);
-                assert(state[8] == 4);
+                assert(state[8] == (sgb ? 5 : 4));
                 uint8_t *rom_pointer = b->rom;
                 strcpy(b->save_path, "host-session-save.sav");
                 assert(cupid_gb_load_state(b, state, length) == CUPID_GB_STATE_OK);
@@ -313,7 +320,7 @@ static void test_controller_state_versions(void) {
     cupid_gb_write_u8(source, 0x4000, 0x0d);
     size_t length;
     uint8_t *bytes = encode(source, &length);
-    assert(length == 300572 && bytes[300568] == source->joypad_extra[0] &&
+    assert(length == 310691 && bytes[300568] == source->joypad_extra[0] &&
            bytes[300569] == source->joypad_extra[1] && bytes[300570] == source->joypad_extra[2] &&
            bytes[300571] == 1);
     unsigned callbacks = 0;
@@ -414,6 +421,13 @@ static void test_v2_import(void) {
             expected->stop_divider_hold_cycles = 0;
             expected->speed_switch_alignment = 0;
             cupid_gb_apu_import_legacy(expected);
+            if (expected->model == CUPID_GB_MODEL_SGB) {
+                expected->sgb.transfer.frame_dots = 0;
+                memcpy(expected->sgb.transfer.tiles, expected->sgb.border_tiles,
+                       sizeof(expected->sgb.transfer.tiles));
+                memcpy(expected->sgb.freeze_buffer, expected->frame_buffer,
+                       sizeof(expected->sgb.freeze_buffer));
+            }
             for (unsigned trusted = 0; trusted < 2; ++trusted) {
                 /* A live target's unrelated oscillator and DMA history must never
                  * supply fields absent from the old file. */
@@ -848,7 +862,7 @@ static void test_rejection(void) {
     damaged[length] = 0;
     rejected_unchanged(gb, damaged, length + 1, CUPID_GB_STATE_INVALID);
     memcpy(damaged, valid, length);
-    damaged[8] = 5;
+    damaged[8] = 6;
     update_integrity(damaged, length);
     rejected_unchanged(gb, damaged, length, CUPID_GB_STATE_UNSUPPORTED_VERSION);
     memcpy(damaged, valid, length);
@@ -893,6 +907,155 @@ static void test_rejection(void) {
     free(valid);
     cupid_gb_cleanup(gb);
     free(gb);
+}
+
+static void test_sgb_transfer_resume(void) {
+    const size_t v4_length = 300572;
+    CupidGb *source = calloc(1, sizeof(*source)), *target = calloc(1, sizeof(*target));
+    assert(source && target);
+    prepare(source, CUPID_GB_MODEL_SGB2, false);
+    prepare(target, CUPID_GB_MODEL_SGB2, false);
+    cupid_gb_write_u8(source, 0xff40, 0);
+    source->sgb.transfer.destination = CUPID_SGB_TRANSFER_PALETTES;
+    source->sgb.transfer.frames_remaining = 1;
+    source->sgb.transfer.frame_dots = CUPID_SGB_FRAME_DOTS - 1;
+    source->sgb.transfer.border_transition = 33;
+    source->sgb.transfer.tiles[4096] = 0xa5;
+    source->sgb.transfer.map[0] = 0x0c80;
+    source->sgb.transfer.palettes[63] = 0x1234;
+    source->sgb.border_map[0] = 0x007f;
+    source->sgb.border_palettes[63] = 0x7fff;
+    source->frame_buffer[0] = 1;
+    source->frame_buffer[1] = 2;
+    source->sgb.freeze_buffer[0] = 3;
+
+    size_t length;
+    uint8_t *bytes = encode(source, &length);
+    assert(length == 310691 && bytes[8] == 5);
+    assert(bytes[v4_length + 7 + 4096] == 0xa5);
+    assert(bytes[v4_length + 7 + 8192] == 0x80 && bytes[v4_length + 7 + 8193] == 0x0c);
+    assert(bytes[length - 2] == 0x34 && bytes[length - 1] == 0x12);
+    assert(cupid_gb_load_state(target, bytes, length) == CUPID_GB_STATE_OK);
+    assert_hardware_equal(source, target);
+    cupid_gb_tick_ppu_dots(source, 1);
+    cupid_gb_tick_ppu_dots(target, 1);
+    assert_encoded_equal(source, target);
+    assert(target->sgb.ram_palettes[0] == 0x4080 && target->sgb.border_map[0] == 0x0c80 &&
+           target->sgb.border_tiles[4096] == 0xa5 && target->sgb.border_palettes[63] == 0x1234);
+    assert(target->sgb.transfer.border_transition == 32 && target->sgb.freeze_buffer[0] == 3);
+
+    const uint8_t invalid[][2] = {{0, 0xff}, {4, 6}, {4, 0}, {5, 4}, {6, 105}};
+    for (unsigned i = 0; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
+        size_t offset = v4_length + invalid[i][0];
+        uint8_t original = bytes[offset];
+        bytes[offset] = invalid[i][1];
+        update_integrity(bytes, length);
+        rejected_unchanged(target, bytes, length, CUPID_GB_STATE_INVALID);
+        bytes[offset] = original;
+    }
+
+    /* A legacy state had visible border data but no unfinished transfer. */
+    put_u32(bytes + 8, 4);
+    put_u32(bytes + 12, (uint32_t)v4_length);
+    update_integrity(bytes, v4_length);
+    assert(cupid_gb_load_state(target, bytes, v4_length) == CUPID_GB_STATE_OK);
+    assert(!target->sgb.transfer.destination && !target->sgb.transfer.frames_remaining &&
+           !target->sgb.transfer.frame_dots && !target->sgb.transfer.border_transition);
+    assert(target->sgb.transfer.map[0] == 0x007f && target->sgb.transfer.tiles[4096] != 0xa5 &&
+           target->sgb.transfer.palettes[63] == 0x7fff && target->sgb.freeze_buffer[0] == 1);
+
+    free(bytes);
+    cupid_gb_cleanup(source);
+    cupid_gb_cleanup(target);
+    free(source);
+    free(target);
+}
+
+static void test_v5_sgb_mapper_sections(void) {
+    const size_t mapper_offset = 310691;
+    const uint8_t types[] = {0x0b, 0x22, 0xfc, 0xbc};
+    uint8_t rom[32768] = {0};
+    rom[0x146] = 3;
+    for (unsigned mapper = 0; mapper < sizeof(types); ++mapper) {
+        CupidGb *source = calloc(1, sizeof(*source)), *target = calloc(1, sizeof(*target));
+        assert(source && target);
+        rom[0x147] = types[mapper];
+        if (types[mapper] == 0xbc) {
+            rom[0x149] = 0xc1;
+            rom[0x14a] = 0x65;
+            rom[0x152] = 1;
+        }
+        cupid_gb_set_model(source, CUPID_GB_MODEL_SGB2);
+        cupid_gb_set_model(target, CUPID_GB_MODEL_SGB2);
+        assert(cupid_gb_load_rom(source, rom, sizeof(rom)));
+        assert(cupid_gb_load_rom(target, rom, sizeof(rom)));
+        source->sgb.transfer.palettes[63] = 0x1234;
+        uint8_t wire[64] = {0};
+        size_t mapper_length;
+        if (types[mapper] == 0x0b) {
+            source->mmm01_rom_select = 0x37;
+            source->mmm01_bank_select = 0x19;
+            source->mmm01_mode = 0x45;
+            source->mmm01_ram_mask = 2;
+            const uint8_t expected[] = {0x37, 0x19, 0x45, 0x02};
+            mapper_length = sizeof(expected);
+            memcpy(wire, expected, mapper_length);
+        } else if (types[mapper] == 0x22) {
+            source->mbc7.command = 0x513;
+            source->mbc7.output = 0x1234;
+            source->mbc7.data_bits = 7;
+            source->mbc7.pins = 0x82;
+            source->mbc7.registers_enabled = true;
+            source->mbc7.programming_enabled = true;
+            const uint8_t expected[] = {0x13, 0x05, 0x34, 0x12, 7, 0x82, 1, 1};
+            mapper_length = sizeof(expected);
+            memcpy(wire, expected, mapper_length);
+        } else if (types[mapper] == 0xfc) {
+            source->camera.registers[0] = 5;
+            source->camera.registers[53] = 0x95;
+            source->camera.clock_phase = 7;
+            source->camera.mapped = true;
+            source->camera.busy_tcycles = 1024;
+            source->camera.capture_number = UINT32_C(0x12345678);
+            wire[0] = 5;
+            wire[53] = 0x95;
+            wire[54] = 7;
+            wire[55] = 1;
+            wire[57] = 4;
+            wire[60] = 0x78;
+            wire[61] = 0x56;
+            wire[62] = 0x34;
+            wire[63] = 0x12;
+            mapper_length = sizeof(wire);
+        } else {
+            source->tpp1.rom_bank = 0x4321;
+            source->tpp1.ram_bank = 3;
+            source->tpp1.mode = 5;
+            source->tpp1.status = 0x0b;
+            const uint8_t live[] = {10, 20, 30, 40};
+            const uint8_t latched[] = {11, 21, 31, 41};
+            memcpy(source->tpp1.live, live, sizeof(live));
+            memcpy(source->tpp1.latched, latched, sizeof(latched));
+            source->tpp1.rtc_base_time = INT64_C(0x0123456789abcdef);
+            const uint8_t expected[] = {0x21, 0x43, 3,    5,    0x0b, 10,   20,
+                                        30,   40,   11,   21,   31,   41,   0xef,
+                                        0xcd, 0xab, 0x89, 0x67, 0x45, 0x23, 0x01};
+            mapper_length = sizeof(expected);
+            memcpy(wire, expected, mapper_length);
+        }
+        size_t length;
+        uint8_t *bytes = encode(source, &length);
+        assert(length == mapper_offset + mapper_length && bytes[8] == 5 &&
+               bytes[mapper_offset - 2] == 0x34 && bytes[mapper_offset - 1] == 0x12);
+        assert(memcmp(bytes + mapper_offset, wire, mapper_length) == 0);
+        assert(cupid_gb_load_state(target, bytes, length) == CUPID_GB_STATE_OK);
+        assert_encoded_equal(source, target);
+        free(bytes);
+        cupid_gb_cleanup(source);
+        cupid_gb_cleanup(target);
+        free(source);
+        free(target);
+    }
 }
 
 static void test_sgb_sample_phase_and_legacy_filter(void) {
@@ -1117,8 +1280,11 @@ static void test_mapper_snapshots(void) {
             cupid_gb_write_u8(a, 0x6000, 0);
             cupid_gb_write_u8(a, 0x6000, 1);
         } else if (controllers[i] == CUPID_GB_MBC7) {
+            cupid_gb_write_u8(a, 0x4000, 0x40);
+            cupid_gb_write_u8(a, 0xa010, 0xaa);
+            assert(!a->mbc7_latch && cupid_gb_read_u8(a, 0xa020) == 0xd0);
             cupid_gb_write_u8(a, 0xa000, 0x55);
-            assert(a->mbc7_latch);
+            assert(a->mbc7_latch && cupid_gb_read_u8(a, 0xa020) == 0);
         } else if (controllers[i] == CUPID_GB_HUC1) {
             cupid_gb_write_u8(a, 0x0000, 0x0e);
             assert(a->huc1_ir_mode);
@@ -1393,6 +1559,8 @@ int main(int argc, char **argv) {
     test_lcd_interrupt_edge_resume();
     test_pixel_pipeline_resume();
     test_first_halt_poll_resume();
+    test_sgb_transfer_resume();
+    test_v5_sgb_mapper_sections();
     test_sgb_sample_phase_and_legacy_filter();
     print_fixture(argc == 3 ? argv[2] : NULL);
     puts("Portable state checks passed.");

@@ -12,7 +12,9 @@
 static bool ordinary_cartridge_ram(const CupidGb *gb) {
     if (!gb->cartridge_ram_size || gb->cartridge_ram_size > CUPID_GB_MAX_RAM_SIZE)
         return false;
-    if (gb->header.mbc_type == CUPID_GB_MBC7 || gb->header.mbc_type == CUPID_GB_HUC3)
+    /* These cartridge windows can expose device registers or generated data. */
+    if (gb->header.mbc_type == CUPID_GB_MBC7 || gb->header.mbc_type == CUPID_GB_HUC3 ||
+        gb->header.mbc_type == CUPID_GB_CAMERA || gb->header.mbc_type == CUPID_GB_TPP1)
         return false;
     if (gb->header.mbc_type == CUPID_GB_HUC1 && gb->huc1_ir_mode)
         return false;

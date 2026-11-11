@@ -46,8 +46,9 @@ CupidGbStateResult cupid_gb_load_state_with_context(CupidGb *gb, const uint8_t *
  * ROMs, boot ROMs, and save paths are session resources and are never included in state data.
  * Restoring an active boot overlay requires the same boot ROM to be available in the target.
  * The target's current boot-overlay enabled flag need not match the saved flag.
- * New snapshots use version 4. Versions 2 and 3 import additional pads released
- * and the motor off: their writers discarded motor history. Version 2 also
+ * SGB hardware and MMM01, MBC7, Camera, and TPP1 cartridges use version 5 for
+ * additional latches. Other sessions write version 4. Versions 2 and 3 import additional pads
+ * released and the motor off: their writers discarded motor history. Version 2 also
  * initializes audio and DMA latches; missing phase history cannot be recovered.
  */
 size_t cupid_gb_state_size(const CupidGb *gb);

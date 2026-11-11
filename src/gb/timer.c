@@ -1,6 +1,7 @@
 #include "cupid/gb/timer.h"
 
 #include "cupid/gb/apu.h"
+#include "cupid/gb/camera.h"
 #include "cupid/gb/cpu.h"
 #include "cupid/gb/ppu.h"
 
@@ -126,6 +127,10 @@ static void clock_cpu_domain(CupidGb *gb) {
     if (gb->cpu.stopped) {
         return;
     }
+
+    /* The camera is clocked by PHI, which stops during HALT and STOP. */
+    if (gb->header.mbc_type == CUPID_GB_CAMERA && !gb->cpu.halted)
+        cupid_gb_camera_tick(&gb->camera, 4);
 
     gb->tima_reload_just_happened = false;
     if (gb->tima_overflow_delay != 0u && --gb->tima_overflow_delay == 0u) {

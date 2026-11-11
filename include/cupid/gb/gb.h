@@ -162,8 +162,18 @@ typedef enum CupidGbMbcType {
     CUPID_GB_MMM01,
     CUPID_GB_HUC1,
     CUPID_GB_HUC3,
-    CUPID_GB_MBC_UNKNOWN
+    CUPID_GB_MBC_UNKNOWN,
+    CUPID_GB_CAMERA,
+    CUPID_GB_TPP1
 } CupidGbMbcType;
+
+typedef struct CupidGbCamera {
+    uint8_t registers[0x36];
+    uint8_t clock_phase;
+    bool mapped;
+    uint32_t busy_tcycles;
+    uint32_t capture_number;
+} CupidGbCamera;
 
 /* MBC3 real-time clock registers */
 typedef struct CupidGbRtc {
@@ -172,6 +182,16 @@ typedef struct CupidGbRtc {
     uint8_t latch_prev;           /* last value written to latch port */
     int64_t base_time;            /* system clock snapshot for elapsed-time calc */
 } CupidGbRtc;
+
+typedef struct CupidGbTpp1 {
+    uint16_t rom_bank;
+    uint8_t ram_bank;
+    uint8_t mode;
+    uint8_t status;  /* Rumble strength, RTC running, and RTC overflow. */
+    uint8_t live[4]; /* Weeks, packed weekday/hour, minutes, seconds. */
+    uint8_t latched[4];
+    int64_t rtc_base_time;
+} CupidGbTpp1;
 
 typedef struct CupidGbCpu {
     uint8_t a;
@@ -239,6 +259,18 @@ typedef struct CupidGbPixels {
     bool initialized, active, window_armed, window_active, window_used, lyc_irq;
 } CupidGbPixels;
 
+typedef struct CupidGbMbc7 {
+    uint16_t command;
+    uint16_t output;
+    uint8_t data_bits;
+    uint8_t pins;
+    bool registers_enabled;
+    bool programming_enabled;
+    /* Live host input in sensor counts relative to neutral. */
+    int16_t motion_x;
+    int16_t motion_y;
+} CupidGbMbc7;
+
 struct CupidGb;
 typedef void (*CupidGbSerialOutputCallback)(const struct CupidGb *gb, uint8_t transmitted,
                                             void *user_data);
@@ -273,6 +305,7 @@ typedef struct CupidGb {
     bool mbc1_ram_banking_mode;
     /* MBC3 real-time clock */
     CupidGbRtc rtc;
+    CupidGbTpp1 tpp1;
     uint8_t rtc_register; /* 0 = normal RAM; 0x08-0x0C = RTC reg */
     /* MBC5 9-bit ROM bank */
     uint16_t mbc5_rom_bank;
@@ -281,14 +314,18 @@ typedef struct CupidGb {
     uint16_t mbc7_sensor_x;
     uint16_t mbc7_sensor_y;
     bool mbc7_latch;
+    CupidGbMbc7 mbc7;
     /* MMM01 */
     bool mmm01_locked;
-    uint8_t mmm01_bank_base;
+    uint8_t mmm01_bank_base; /* Retained for the legacy native state prefix. */
+    uint8_t mmm01_rom_select, mmm01_bank_select, mmm01_mode, mmm01_ram_mask;
+    bool mmm01_menu_first; /* Immutable physical ROM dump layout. */
     /* HuC1 */
     bool huc1_ir_mode;
     /* HuC3 */
     uint8_t huc3_mode;
     uint8_t huc3_value;
+    CupidGbCamera camera;
     bool serial_master_clock;
     uint64_t elapsed_cycles; /* Base-speed T-cycles, including LCD-off execution. */
     uint8_t serial_bits_remaining;

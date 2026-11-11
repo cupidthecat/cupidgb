@@ -39,7 +39,9 @@ add_library(cupidgb_core STATIC
     src/common/log.c src/common/sha256.c src/core/emulator.c src/core/system.c
     src/compat/native_v1.c src/gb/battery.c
     src/gb/gb.c src/gb/state.c src/gb/cpu.c src/gb/ppu.c src/gb/pixels.c src/gb/apu.c
-    src/gb/timer.c src/gb/cartridge.c src/gb/input.c src/gb/debugger.c src/gb/sgb.c src/gbc/cgb.c
+    src/gb/timer.c src/gb/cartridge.c src/gb/camera.c src/gb/mbc7.c src/gb/input.c src/gb/debugger.c src/gb/sgb.c
+    src/gbc/cgb.c
+    src/gb/tpp1.c
 )
 target_include_directories(cupidgb_core PUBLIC include)
 if(NOT MSVC)
@@ -140,7 +142,7 @@ if(CUPIDGB_BUILD_QT)
 endif()
 if(CUPIDGB_ENABLE_TESTS)
     enable_testing()
-    foreach(test_name IN ITEMS smoke gb serial ppu stat apu cpu_timing dma state battery native_v1_recovery sgb input cartridge debugger sha256)
+    foreach(test_name IN ITEMS smoke gb serial ppu stat apu cpu_timing dma state battery native_v1_recovery sgb input cartridge camera mbc7 tpp1 debugger sha256)
         add_executable(cupidgb_${test_name} tests/test_${test_name}.c)
         target_link_libraries(cupidgb_${test_name} PRIVATE cupidgb_core)
         # Tests use assert for setup and checks, including in Release builds.

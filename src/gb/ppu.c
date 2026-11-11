@@ -287,7 +287,13 @@ static void tick_ppu(CupidGb *gb, uint32_t dots, uint8_t *midpoint) {
     if (!gb)
         return;
     CupidGbPixels *p = &gb->pixels;
-    if (!cupid_gb_lcd_enabled(gb)) {
+    const bool lcd_enabled = cupid_gb_lcd_enabled(gb);
+    const bool stopped = gb->cpu.stopped && gb->model != CUPID_GB_MODEL_CGB;
+    const bool sgb = gb->sgb.enabled;
+    if (sgb) {
+        cupid_gb_sgb_clock(gb, dots, !lcd_enabled || stopped);
+    }
+    if (!lcd_enabled) {
         const bool previous_lyc_irq = p->lyc_irq;
         memset(p, 0, sizeof(*p));
         p->lyc_irq = previous_lyc_irq;
@@ -302,7 +308,7 @@ static void tick_ppu(CupidGb *gb, uint32_t dots, uint8_t *midpoint) {
         cupid_gb_update_stat_irq(gb);
         return;
     }
-    if (gb->cpu.stopped && gb->model != CUPID_GB_MODEL_CGB)
+    if (stopped)
         return;
     if (!p->initialized) {
         p->initialized = true;
@@ -369,6 +375,9 @@ static void tick_ppu(CupidGb *gb, uint32_t dots, uint8_t *midpoint) {
                 /* LY changes before VBlank's interrupt request. Keeping this phase
                  * explicit avoids treating a following DI as an instruction exception. */
                 gb->frame_ready = true;
+                if (sgb) {
+                    cupid_gb_sgb_vblank(gb, dots - 1);
+                }
                 cupid_gb_set_ppu_mode(gb, CUPID_GB_PPU_MODE_VBLANK);
                 cupid_gb_request_interrupt(gb, CUPID_GB_INTERRUPT_VBLANK);
                 if (!gb->stat_irq_line && (gb->io_registers[CUPID_GB_IO_STAT] & 0x20))
