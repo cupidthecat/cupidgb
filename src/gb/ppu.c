@@ -1,3 +1,4 @@
+
 #include "cupid/gb/ppu.h"
 
 #include "cupid/gb/cpu.h"
@@ -226,6 +227,7 @@ void cupid_gb_run_dma_transfer(CupidGb *gb, uint8_t source_high) {
     gb->dma_index = 0;
     gb->dma_start_delay = 1;
     gb->dma_phase = 2;
+    gb->oam_vram_row = UINT16_MAX;
     gb->dma_active = false;
     gb->dma_restart_pending = restarting;
     gb->dma_restart_delay = 0;
@@ -270,6 +272,7 @@ void cupid_gb_tick_dma_tcycles(CupidGb *gb, unsigned cycles) {
             gb->object_attribute_memory[gb->dma_index] = value;
         }
         ++gb->dma_index;
+        gb->oam_vram_row = UINT16_MAX;
     }
     gb->dma_phase = (uint8_t)phase;
 }
@@ -297,6 +300,7 @@ static void tick_ppu(CupidGb *gb, uint32_t dots, uint8_t *midpoint) {
     if (!lcd_enabled) {
         const bool previous_lyc_irq = p->lyc_irq;
         memset(p, 0, sizeof(*p));
+        gb->object_fetch_stage = CUPID_GB_OBJECT_IDLE;
         p->lyc_irq = previous_lyc_irq;
         gb->ppu_counter = 0;
         gb->ppu_lcd_warmup_lines = 0;

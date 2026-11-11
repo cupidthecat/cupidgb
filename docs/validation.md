@@ -1,6 +1,6 @@
 # Validation record
 
-This record starts with the desktop and timing checks on 2026-11-04 and includes later work through 2026-11-08. Results apply to each stated build, input set, and scope. They do not establish complete hardware or frontend parity. The comparison source revision is `ea667ad79aa28409f034b1fd6da7304e1844750d`.
+This record starts with the desktop and timing checks on 2026-11-04 and includes later work through 2026-11-11. Results apply to each stated build, input set, and scope. They do not establish complete hardware or frontend parity. The comparison source revision is `ea667ad79aa28409f034b1fd6da7304e1844750d`.
 
 Earlier sections retain the results and assumptions of their original builds. A result without a recorded model clock does not qualify the corrected SGB clock. Use the current model-clock reports when comparing physical speed across profiles.
 
@@ -750,3 +750,22 @@ After a five-second warmup, guest progress ranges from 99.965% to 100.025%. Widg
 A separate 60-second run uses the refreshed installed production executable, local firmware, normal audio and default rewind. Tetris reaches 99.978% post-warmup guest progress with zero audio idle/errors, paint p95/maximum 17.91/37.85 ms, and a 66.68 MiB peak working set. This control covers ordinary-cartridge routing; it does not establish every game's performance. Sustained Linux audio remains blocked by the previously recorded host stalls.
 
 Private probe and fixture receipts are retained under `input-audio-20261111/motion`, including `oracle-results.json`, `audit-and-headless-verdict.json`, and `native/post-classifier/final-native-verdict.json`. ROMs, boot binaries, EEPROM saves and captures remain outside public commits.
+
+
+## Shared video bus and object-fetch timing
+
+The 2026-11-11 integration passes 39 CTest checks on Windows with Qt 6.8.3, 39 on Linux with Qt 6.4.2, and 26 Linux core checks with ASan/UBSan and leak detection. These include the boot-entry repair found during review: entering firmware aborts the old object countdown as well as its stage. The regression reproduces the retained countdown before the repair and checks saving/loading after boot entry across all four stages. All production C/C++ files remain below 2,000 lines.
+
+The first parallel Linux desktop run aborted inside PulseAudio during a short command-line workflow. The preserved preceding build and current build both passed standalone CLI controls. Full serial desktop runs then passed, including the final build. The failed log remains retained. This result does not resolve the sustained Linux audio stalls recorded above.
+
+Private paired probes compare equivalent hardware, deterministic synthetic cartridges and the pinned revision. All 12,288 retained contention cases match complete VRAM, all 160 OAM bytes, guest time and transfer status. The set combines 6,912 primary cases with 5,376 cases using additional source pages. It covers both CGB speeds, VRAM banks, LCD state, source classes, destination wrapping, warmup and overlapping transfers. This closes those reproduced cases, not every possible bus collision.
+
+Another 18,816 observations after actual CPU steps and 6,400 observations through interrupt acknowledgment match the compared CPU, timer, audio phase/count, DMA, LCD, VRAM and valid OAM fields. An expanded 125,440-observation sweep preserves all valid OAM, DMA, timer, audio and LCD matches without introducing a new field mismatch. It retains 128 CPU and 1,152 VRAM differences that already existed. Palette-tail differences remain separate; no full-state equality claim includes them.
+
+A per-dot screen checks 4,032 cases across matched monochrome, Pocket, color and SGB2 profiles. It covers clipped sprites, eight scroll offsets, overlapping objects and both heights. Background, OAM-word and sprite-data transactions and pixel emission match; color cases also compare emitted 15-bit pixels. Controlled tile/flag writes on either alignment edge establish when the word is sampled. A later held scan verifies that the sprite word replaces both retained OAM bus bytes. Raw unused-OAM readback matches all 1,536 profile/address cases, and all 2,457,600 reachable redirected reads match. No out-of-bounds OAM storage access is reproduced.
+
+The composed V9 implementation passes 292 snapshot continuations spanning initial discarded pixels, pending alignment/word reads, data countdowns, mid-fetch window writes and older busy imports. Comparisons use an un-serialized continuation branch. Ordinary and trusted state paths preserve the retained row; changing that row in a naturally captured normal-speed state changes future OAM. Fast-profile checks establish wire preservation and continuation, without claiming the same whole-machine-cycle mutation witness. Frozen V3/V4 fixture assertions still pass, and malformed row, stage, selected-object and boolean fields leave the target unchanged.
+
+The external screen remains 177 explicit passes and four bounded cases out of 181. Failed intermediate grid and external results remain preserved alongside the corrected results. The paired artifact receipts precede the separately tested boot-entry lifecycle repair. Private receipts retain source/artifact hashes, full outputs and commands outside version control.
+
+Complete FIFO/window timing remains open: the checked CGB window restart is still one dot early. Sampled STOP OAM/palette gates, broader hardware revisions, remaining bus conflicts, all-game compatibility and sustained playback qualification also remain open. Current-writer continuation checks do not reconstruct missing timing history in older files.

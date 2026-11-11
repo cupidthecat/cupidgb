@@ -14,6 +14,7 @@
 
 enum {
     STATE_HEADER_SIZE = 128,
+    STATE_VERSION_V9 = 9,
     STATE_VERSION_V8 = 8,
     STATE_VERSION_V7 = 7,
     STATE_VERSION_V6 = 6,
@@ -29,6 +30,7 @@ enum {
     STATE_V6_TAIL_SIZE = STATE_LCD_PHASE_SIZE + STATE_DMA_BUS_SIZE,
     STATE_V7_TAIL_SIZE = STATE_V6_TAIL_SIZE + 1,
     STATE_V8_TAIL_SIZE = STATE_V7_TAIL_SIZE + 11,
+    STATE_V9_TAIL_SIZE = STATE_V8_TAIL_SIZE + 6,
     STATE_MMM01_EXTENSION_SIZE = 4,
     STATE_MBC7_EXTENSION_SIZE = 8,
     STATE_CAMERA_EXTENSION_SIZE = 64,
@@ -727,6 +729,49 @@ static void state_input_and_display(StateIo *io, CupidGb *gb) {
         io->invalid = true;
 }
 
+static bool oam_vram_row_used(const CupidGb *gb) {
+    return gb->model == CUPID_GB_MODEL_CGB && gb->dma_active && gb->dma_index &&
+           gb->dma_index <= 160 && (gb->dma_source_base & 0xe000u) == 0x8000u;
+}
+
+static void state_video_bus(StateIo *io, CupidGb *gb) {
+    /* Restart, warmup and completed transfers clear or bypass the retained row
+     * before another shared read can use it. Saving must not alter the live latch. */
+    uint16_t row = !io->input && !oam_vram_row_used(gb) ? UINT16_MAX : gb->oam_vram_row;
+    word(io, &row);
+    word(io, &gb->oam_search_word);
+    boolean(io, &gb->stop_ppu_vram_blocked);
+    const bool invalid_stage =
+        !io->input && (unsigned)gb->object_fetch_stage > CUPID_GB_OBJECT_LEGACY;
+    uint8_t stage = io->input ? 0 : (uint8_t)gb->object_fetch_stage;
+    byte(io, &stage);
+    const bool native_busy = stage == CUPID_GB_OBJECT_WAIT_BACKGROUND ||
+                             stage == CUPID_GB_OBJECT_READ_WORD ||
+                             (stage == CUPID_GB_OBJECT_IDLE && gb->pixels.object_delay);
+    const CupidGbPixels *p = &gb->pixels;
+    /* Check the selected slot before shifting. Malformed files may contain an
+     * index beyond either the selected objects or the fixed ten-slot array. */
+    const bool invalid_native =
+        native_busy &&
+        (p->object_index >= p->object_count || p->object_index >= 10 ||
+         !(p->fetched_objects & (1u << p->object_index)) || !p->active || p->line >= 144 ||
+         p->x >= CUPID_GB_SCREEN_WIDTH || !p->count || p->delay > 7 ||
+         ((stage == CUPID_GB_OBJECT_READ_WORD || stage == CUPID_GB_OBJECT_IDLE) && p->phase != 6));
+    if ((row != UINT16_MAX && row > 0x1fffu) || (!oam_vram_row_used(gb) && row != UINT16_MAX) ||
+        invalid_stage || invalid_native || stage > CUPID_GB_OBJECT_LEGACY ||
+        ((stage == CUPID_GB_OBJECT_WAIT_BACKGROUND || stage == CUPID_GB_OBJECT_READ_WORD) &&
+         gb->pixels.object_delay) ||
+        (stage == CUPID_GB_OBJECT_IDLE && gb->pixels.object_delay > 5) ||
+        (stage == CUPID_GB_OBJECT_LEGACY &&
+         (!gb->pixels.object_delay || gb->pixels.object_delay > 11))) {
+        io->invalid = true;
+    }
+    if (io->input) {
+        gb->oam_vram_row = row;
+        gb->object_fetch_stage = (CupidGbObjectFetchStage)stage;
+    }
+}
+
 static bool valid_v5_sections(const CupidGb *gb, unsigned sections) {
     return (!(sections & STATE_SECTION_SGB) || valid_sgb_extension(&gb->sgb.transfer)) &&
            (!(sections & STATE_SECTION_MMM01) || valid_mmm01_extension(gb)) &&
@@ -848,7 +893,7 @@ size_t cupid_gb_state_size(const CupidGb *gb) {
     if (!ready(gb)) {
         return 0;
     }
-    return extended_wire_size(state_sections(gb)) + STATE_V8_TAIL_SIZE;
+    return extended_wire_size(state_sections(gb)) + STATE_V9_TAIL_SIZE;
 }
 
 static void put_u32(uint8_t *data, uint32_t value) {
@@ -880,7 +925,7 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
         return CUPID_GB_STATE_NO_ROM;
     }
     const unsigned sections = state_sections(gb);
-    const size_t size = extended_wire_size(sections) + STATE_V8_TAIL_SIZE;
+    const size_t size = extended_wire_size(sections) + STATE_V9_TAIL_SIZE;
     if (!data || capacity < size) {
         return CUPID_GB_STATE_BUFFER_TOO_SMALL;
     }
@@ -890,7 +935,7 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
     }
     memset(data, 0, STATE_HEADER_SIZE);
     memcpy(data, state_magic, sizeof(state_magic));
-    put_u32(data + 8, STATE_VERSION_V8);
+    put_u32(data + 8, STATE_VERSION_V9);
     put_u32(data + 12, (uint32_t)size);
     put_u32(data + 16, (uint32_t)gb->model);
     put_u32(data + 20, (uint32_t)gb->rom_size);
@@ -916,6 +961,7 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
     if (gb->dma_phase > 3u)
         io.invalid = true;
     state_input_and_display(&io, (CupidGb *)gb);
+    state_video_bus(&io, (CupidGb *)gb);
     if (io.invalid || io.offset != size) {
         return CUPID_GB_STATE_INVALID;
     }
@@ -935,13 +981,14 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
         return CUPID_GB_STATE_INVALID;
     }
     const uint32_t version = get_u32(data + 8);
-    if (version < STATE_VERSION_V2 || version > STATE_VERSION_V8) {
+    if (version < STATE_VERSION_V2 || version > STATE_VERSION_V9) {
         return CUPID_GB_STATE_UNSUPPORTED_VERSION;
     }
     const size_t prefix_size = version == STATE_VERSION_V2   ? STATE_WIRE_SIZE_V2
                                : version == STATE_VERSION_V3 ? STATE_WIRE_SIZE_V3
                                                              : STATE_WIRE_SIZE_V4;
-    const size_t tail_size = version >= STATE_VERSION_V8   ? STATE_V8_TAIL_SIZE
+    const size_t tail_size = version >= STATE_VERSION_V9   ? STATE_V9_TAIL_SIZE
+                             : version == STATE_VERSION_V8 ? STATE_V8_TAIL_SIZE
                              : version == STATE_VERSION_V7 ? STATE_V7_TAIL_SIZE
                              : version == STATE_VERSION_V6 ? STATE_V6_TAIL_SIZE
                                                            : 0;
@@ -1051,6 +1098,17 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
         candidate->display_cycles_since_frame = 0;
         candidate->lcd_repeat_countdown = 0;
         candidate->display_frame_type = CUPID_GB_FRAME_NORMAL;
+    }
+    if (version >= STATE_VERSION_V9) {
+        state_video_bus(&io, candidate);
+    } else {
+        /* Absent bus history belongs to neither the file nor the live session. */
+        candidate->oam_vram_row = UINT16_MAX;
+        candidate->oam_search_word = 0;
+        candidate->stop_ppu_vram_blocked = false;
+        /* Finish an older in-flight object using its captured address/countdown. */
+        candidate->object_fetch_stage =
+            candidate->pixels.object_delay ? CUPID_GB_OBJECT_LEGACY : CUPID_GB_OBJECT_IDLE;
     }
     if (io.invalid || io.offset != length || candidate->boot_rom_enabled != (flags != 0) ||
         !valid_hardware_prefix(candidate, version) || !valid_v5_sections(candidate, sections)) {

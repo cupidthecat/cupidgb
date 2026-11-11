@@ -297,6 +297,14 @@ typedef struct CupidGbSerialLink {
 typedef void (*CupidGbRumbleCallback)(const struct CupidGb *gb, bool enabled, uint64_t base_cycles,
                                       void *user_data);
 
+/* Alignment and word sampling are independent of the data-byte countdown. */
+typedef enum CupidGbObjectFetchStage {
+    CUPID_GB_OBJECT_IDLE,
+    CUPID_GB_OBJECT_WAIT_BACKGROUND,
+    CUPID_GB_OBJECT_READ_WORD,
+    CUPID_GB_OBJECT_LEGACY
+} CupidGbObjectFetchStage;
+
 typedef struct CupidGb {
     CupidGbCpu cpu;
     CupidGbModel model;
@@ -428,6 +436,10 @@ typedef struct CupidGb {
     CupidGbSerialLink serial_link;
     CupidGbRumbleCallback rumble_callback;
     void *rumble_user_data;
+    uint16_t oam_vram_row;      /* Retained source-bus row; UINT16_MAX releases the latch. */
+    uint16_t oam_search_word;   /* Last word sampled by the shared OAM port. */
+    bool stop_ppu_vram_blocked; /* STOP holds the sampled PPU access gate until wake. */
+    CupidGbObjectFetchStage object_fetch_stage;
 } CupidGb;
 
 /* Optional host observation for one hardware step. This output is not stored

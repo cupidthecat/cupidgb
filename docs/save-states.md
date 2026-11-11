@@ -10,7 +10,7 @@ Load a native state file through File > Load State File or drop a `.s0` through 
 
 Writes use an atomic file replacement. Loading checks the complete cartridge identity and hardware model. A state captured with an active boot overlay requires the matching local boot binary. Failed validation preserves the running session and its host audio queue. A successful load replaces the emulated state, reapplies current physical input, clears queued host audio, and realigns pacing.
 
-New files use CupidGB native version 8. Versions 2 through 7 remain loadable. Interoperable BESS state imports remain pending.
+New files use CupidGB native version 9. Versions 2 through 8 remain loadable. Interoperable BESS state imports remain pending.
 
 The version identifies the wire encoding, not a promise to preserve emulation bugs between builds. Version 3 records pending CGB DMA work, CPU speed-switch sequencing, and audio clock, held-output, envelope, sweep, and noise latches. Version 2 has no values for these latches. Its loader initializes them deterministically after validating the old payload; it never takes missing history from the target's running session. Pending DMA and speed-switch delays start cleared, while an old armed HBlank transfer retains its saved block count. Pulse clock startup follows the saved channel enable, and held pulse output follows the saved duty position. Noise gates and held output derive from the saved channel/DAC and LFSR state, with a canonical prescaler phase. The old LFSR, timer, queued PCM, partial integration, and filter state remain intact. This cannot reproduce timing history the old format did not record. Keep the original state if you need to revisit its earlier build.
 
@@ -79,6 +79,12 @@ Cheat collections, global enable, color correction, and memory-search history ar
 Device handles, assignments, bindings, rumble callbacks, feedback duty counters, serial link endpoints, and the printer feed are host data outside the wire format. Loading emits no motor callback. The frontend stops and resynchronizes host feedback and resets the printer protocol after a timeline change. A later forward interval may resume the saved motor state.
 
 Loading first verifies version, length, integrity, cartridge/model/boot identity, and field domains. It decodes into a separate candidate that retains the current session's ROM ownership and immutable metadata. Only a completely validated candidate replaces the live state.
+
+Version 9 appends six bytes after the V8 tail: a little-endian retained CGB VRAM row, a little-endian OAM search word, the sampled STOP VRAM access gate, and the object fetch stage. The row uses `FFFF` when no active CGB VRAM-source OAM transfer can use it; assigned rows range from `0000` through `1FFF`. HALT, STOP and LCD power state do not invalidate an active row. Saving canonicalizes unused row bytes without changing the running machine. The search word retains OAM Y/X or sprite tile/flags history across scanlines, LCD transitions and DMA restarts. It is never reconstructed from selected objects. Older snapshots initialize the row to `FFFF`, the search word to zero and the STOP gate to false.
+
+The object stage stores idle, background wait, pending OAM word read, or legacy completion. New stages use an object-data countdown no larger than five; background wait and pending word read require zero. A legacy completion retains the older countdown from one through eleven and the saved object address, then returns to the current scheduler. Older snapshots with an in-flight object import through that completion stage; idle snapshots import idle.
+
+Pixel queues and fetch phases recorded by older formats remain intact. Current execution uses the current fetch timing; importing an older snapshot cannot recover bus or scheduling history that the file did not record. Exact continuation comparisons require the same qualified build and inputs.
 
 ## Validation scope
 

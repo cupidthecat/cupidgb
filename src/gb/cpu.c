@@ -386,6 +386,8 @@ bool cupid_gb_service_interrupt(CupidGb *gb) {
     const uint16_t return_address = gb->cpu.pc;
     gb->cpu.ime = false;
     gb->cpu.ime_delay = 0;
+    /* Entry releases one pending OAM transfer slot without advancing the LCD clock. */
+    cupid_gb_tick_dma(gb);
     cupid_gb_tick(gb, 2);
     cupid_gb_trigger_oam_bug_write(gb, gb->cpu.sp);
     cupid_gb_interrupt_tail(gb, return_address);
@@ -1328,6 +1330,15 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode, CupidGbCpuBus *
                 /* EI matures for STOP's control signals after IRQ dispatch was
                  * already decided. It must not acquire the IME0 reset hold. */
                 gb->stop_divider_hold_cycles = gb->cpu.ime || gb->cpu.ime_delay ? 0 : 4;
+                const bool lcd = cupid_gb_lcd_enabled(gb);
+                const unsigned mode = gb->io_registers[CUPID_GB_IO_STAT] & 3u;
+                bool vram_blocked = lcd && gb->pixels.line < 144u && mode == 3u;
+                /* The initial normal-speed color line exposes mode 3 before
+                 * its VRAM read lock settles five dots after the transition. */
+                if (gb->model == CUPID_GB_MODEL_CGB && !gb->double_speed && gb->ppu_lcd_startup &&
+                    gb->pixels.dot < 83u)
+                    vram_blocked = false;
+                gb->stop_ppu_vram_blocked = !vram_blocked;
                 gb->cpu.stopped = true;
                 cupid_cgb_hdma_sleep(gb);
             }
@@ -1353,6 +1364,7 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode, CupidGbCpuBus *
                 gb->io_registers[0x4du] = (uint8_t)(gb->double_speed ? 0x80u : 0);
             }
             if (switching || held) {
+                gb->stop_ppu_vram_blocked = false;
                 gb->cpu.stopped = false;
                 cupid_cgb_hdma_wake(gb);
                 cupid_gb_tick_dma(gb);

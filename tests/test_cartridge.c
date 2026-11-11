@@ -486,7 +486,7 @@ static void test_mmm01_menu_and_lock(void) {
         const size_t length = cupid_gb_state_size(&gb);
         uint8_t *state = malloc(length);
         assert(state && cupid_gb_save_state(&gb, state, length, NULL) == CUPID_GB_STATE_OK);
-        assert(state[8] == 8);
+        assert(state[8] == 9);
         assert(cupid_gb_load_rom(&gb, rom, size));
         assert(cupid_gb_load_state(&gb, state, length) == CUPID_GB_STATE_OK);
         assert(cupid_gb_read_u8(&gb, 0) == menu_offset);
