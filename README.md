@@ -35,7 +35,7 @@ Physical controller/motion qualification, advanced debugger commands/watchpoints
 
 ## Build
 
-Requirements: CMake 3.21 or newer, C11/C++17 compilers, Qt 6.4 or newer with Widgets and Multimedia, SDL2 2.24 or newer, and Python 3.9 or newer for tests. Core-only builds need neither Qt nor SDL2.
+Requirements: CMake 3.21 or newer, C11/C++17 compilers, Qt 6.4 or newer with Widgets, Multimedia, and PrintSupport, SDL2 2.24 or newer, and Python 3.9 or newer for tests. Core-only builds need neither Qt nor SDL2.
 
 Release builds enable interprocedural optimization when the compiler and linker support it. Other configurations and sanitizer builds retain ordinary compilation. Use `-DCUPIDGB_ENABLE_IPO=OFF` to disable it. On Linux, optional OpenSSL 3 development files enable faster large state hashes. Windows uses its system hashing API. Both retain portable hashing as a fallback.
 

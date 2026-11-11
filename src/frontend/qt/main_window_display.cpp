@@ -119,6 +119,24 @@ void MainWindow::setFrameBlending(FrameBlending mode) {
     blendingActions_[size_t(mode)]->setChecked(true);
 }
 
+QSize MainWindow::logicalWindowSize(const QSize &nativeSize, int scale) const {
+    scale = std::clamp(scale, 1, 8);
+    const int chromeHeight = menuBar()->sizeHint().height() + statusBar()->sizeHint().height();
+    return {std::max(nativeSize.width() * scale, menuBar()->sizeHint().width()),
+            nativeSize.height() * scale + chromeHeight};
+}
+
+void MainWindow::resizeWindowCentered(const QSize &windowSize, const QRect &previousGeometry) {
+    const bool preserveCenter = isVisible();
+    // A changed child minimum must reach QMainWindow before an explicit shrink.
+    // The geometry snapshot predates any intermediate growth from that update.
+    layout()->activate();
+    resize(windowSize);
+    if (preserveCenter)
+        move(previousGeometry.topLeft() + QPoint((previousGeometry.width() - width()) / 2,
+                                                 (previousGeometry.height() - height()) / 2));
+}
+
 void MainWindow::resizeDisplay(int scale) {
     scale = std::clamp(scale, 1, 8);
     if (isFullScreen()) {
@@ -127,9 +145,8 @@ void MainWindow::resizeDisplay(int scale) {
             fullscreen->setChecked(false);
     }
     const QSize source = image_.isNull() ? QSize(160, 144) : image_.size();
-    const int chromeHeight = menuBar()->sizeHint().height() + statusBar()->sizeHint().height();
-    resize(std::max(source.width() * scale, menuBar()->sizeHint().width()),
-           source.height() * scale + chromeHeight);
+    displayNativeSize_ = source;
+    resizeWindowCentered(logicalWindowSize(source, scale), QRect(pos(), size()));
     for (size_t i = 0; i < windowSizeActions_.size(); ++i)
         windowSizeActions_[i]->setChecked(int(i) + 1 == scale);
 }
@@ -139,6 +156,22 @@ void MainWindow::present(bool completedFrame) {
         return;
     const auto &gb = emulator_->gb;
     const bool sgb = cupid_gb_sgb_active(&gb);
+    const QSize nativeSize = sgb && borderAction_->isChecked()
+                                 ? QSize(CUPID_SGB_SCREEN_WIDTH, CUPID_SGB_SCREEN_HEIGHT)
+                                 : QSize(160, 144);
+    bool resizeWindow = false;
+    QRect previousWindowGeometry;
+    int defaultScale = 2;
+    if (nativeSize != displayNativeSize_) {
+        defaultScale = std::clamp(settings_.value("video/defaultScale", 2).toInt(), 1, 8);
+        // Preserve custom and fullscreen geometry. The previous native size
+        // survives cartridge closure because closing does not resize the window.
+        resizeWindow =
+            !isFullScreen() && size() == logicalWindowSize(displayNativeSize_, defaultScale);
+        if (resizeWindow)
+            previousWindowGeometry = QRect(pos(), size());
+        displayNativeSize_ = nativeSize;
+    }
     if (sgb) {
         image_ = QImage(CUPID_SGB_SCREEN_WIDTH, CUPID_SGB_SCREEN_HEIGHT, QImage::Format_RGB32);
         cupid_gb_sgb_render_argb(&gb, reinterpret_cast<uint32_t *>(image_.bits()),
@@ -177,6 +210,8 @@ void MainWindow::present(bool completedFrame) {
         sgb && frameBlending_ == FrameBlending::Accurate ? FrameBlending::Simple : frameBlending_;
     display_->image = blendDisplayFrames(image_, previousDisplayFrame_, mode, gb.lcd_frame_odd);
     display_->setMinimumSize(image_.size());
+    if (resizeWindow)
+        resizeWindowCentered(logicalWindowSize(nativeSize, defaultScale), previousWindowGeometry);
     ++presentedImages_;
     display_->update();
 }

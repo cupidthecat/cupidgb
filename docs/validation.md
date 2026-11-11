@@ -621,17 +621,27 @@ A separate correctness control imports an explicit 8 KiB zero-filled battery bef
 
 ### Native desktop playback
 
-Three Windows Qt 6.8.3 runs used local firmware, recorded inputs, fresh storage, normal audio, default rewind, Balanced correction, and neutral temperature. Each ran for 60 seconds. The final GB/GBC images show active play; the SGB2 image shows the stage introduction after its recorded input sequence. The table records the last 55 seconds after warmup. All three had zero audio errors and zero audio idle events.
+Final Windows Qt 6.8.3 sessions used local firmware, recorded inputs, fresh storage, normal audio, default rewind, Balanced correction, and neutral temperature. Tetris and Mario Deluxe ran from the installed folder with only system directories on PATH; every loaded Qt DLL came from that folder. The SGB2 result below uses the final centered border-window sizing. Each session lasted 60 seconds; the table records the last 55 seconds after warmup. All had zero audio errors and zero audio idle events.
 
 | Input | Nominal guest progress | Widget paint p95 / maximum | Peak working set |
 | --- | ---: | ---: | ---: |
-| Tetris, DMG | 100.006% | 17.72 / 19.88 ms | 68.28 MiB |
-| Mario Deluxe, CGB | 99.982% | 17.78 / 27.92 ms | 88.90 MiB |
-| Donkey Kong, SGB2 | 100.008% | 17.66 / 20.16 ms | 118.58 MiB |
+| Tetris, DMG | 100.006% | 17.68 / 36.83 ms | 67.46 MiB |
+| Mario Deluxe, CGB | 99.983% | 17.65 / 20.63 ms | 88.71 MiB |
+| Donkey Kong, SGB2 | 100.006% | 17.82 / 36.61 ms | 121.04 MiB |
 
-The SGB2 border comparison matched all 34,304 pixels after Balanced/neutral correction on both hosts. The viewport was at a different gameplay time and is excluded from that border comparison.
+The final GB/GBC images show active play. The 60-second SGB2 image shows the stage introduction after its recorded input sequence. A separate 36-second capture shows active first-stage gameplay with the full border at the corrected default size. All 34,304 corrected border pixels match the pinned color oracle. The viewport is at a different gameplay time and is excluded from that pixel comparison.
 
-The first Linux Qt 6.8.3 native runs did not sustain playback. The SGB2 run reported 34.31% guest progress, five audio idle events, and a 16.64-second maximum paint gap. Tetris reported 20.74%, six idle events, and a 25.07-second gap. Mario Deluxe timed out during process shutdown. A clean 20-second SGB2 rerun and a preserved preceding build both reached exactly 56,165,564 guest cycles and 590,539 audio frames, with about 55.81% post-warmup progress and five idle events. This reproduces the failure before the current frontend split. A shutdown sample found Qt's PulseAudio backend waiting in `pa_threaded_mainloop_wait`; host audio readiness also failed transiently. These failed captures remain private evidence and are not counted as successful Linux gameplay. Sink teardown now uses a reset to discard obsolete timeline audio rather than a blocking drain; this change does not establish sustained playback on the stalled host sink.
+Default-size workflow checks exercise handheld/border changes, ROM/model transitions, visible centering at 1x/2x/3x, never-shown positioning, custom/fullscreen preservation, and explicit 1x shrinking after close. Layout activation occurs only on a resize operation, so an old minimum cannot clamp the new size and steady frames do not repeat layout work. Close/restore position policies remain unchanged.
+
+### Linux host timing limit
+
+The Linux Xcb frontend rendered the SGB2 border and processed inputs, but sustained native audio qualification remains blocked on this host. Qt 6.8.3 and system Qt 6.4.2 both stalled; a preserved preceding build reproduced the problem. A shutdown sample found a PulseAudio drain wait. Sink teardown now resets obsolete timeline audio rather than requesting that drain. This repairs the close/pause behavior without qualifying sustained playback.
+
+Read-only probes found clock-rate settings of tick 10833 microseconds plus 33.333 ppm, with monotonic time advancing 8.333% faster than the raw clock. An independent 10-second Pulse playback also developed reported latency from 37 to 842 ms. A fresh boot briefly returned to tick 10000/frequency zero. The unchanged production binary then completed a 20-second SGB2 menu/input capture at 99.974% post-warmup guest progress, zero idle/errors, and paint p95/maximum 17.84/18.94 ms. Its border pixels also match the oracle.
+
+The rate changed again automatically, including settings near 10% above raw time. A user-authorized standard-rate trial was overwritten during playback and failed; its immediate pre-trial tick/frequency values were restored and independently verified. Bounded syscall traces found wall-clock steps from the time service but did not identify a tick/frequency writer. No time service was stopped or reconfigured. The cause of the recurring rate changes remains unverified.
+
+A private 125 ms backend-buffer probe did not recover playback. A separately rebuilt raw-pacing prototype also failed, with 24 post-warmup idle events. Neither was admitted. Production retains the 50 ms managed queue and 30 ms priming policy, with guest execution waiting on audio backpressure. The short standard-clock capture establishes only that bounded workflow; it does not establish sustained Linux gameplay or universal full-speed support.
 
 The fresh 880-input library scan used 420 guest intervals per input. All 350 DMG inputs and 526 of 530 CGB inputs reached the limit and emitted VBlank and PCM output. The same four MBC5 inputs stopped with core errors; no new failing input appeared. All input hashes remained unchanged. Bounded counts were MBC5 483, MBC1 271, MBC3 81, MBC5 rumble 13, ROM-only 12, MBC2 11, and one each for MBC7, HuC3, Camera, MBC1 multicart, and an unknown-header fallback. HuC1, MMM01, MBC30, and TPP1 had no commercial entries in this library; their generated and paired tests remain separate evidence. A startup limit does not qualify complete gameplay, every bank transition, or every mapper peripheral.
 

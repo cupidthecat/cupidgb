@@ -4,8 +4,10 @@ bool MainWindow::modelSmokeTest(const QString &directory) {
     QByteArray rom(32768, char(0));
     rom[0x100] = char(0x18);
     rom[0x101] = char(0xfe);
-    const auto writeFixture = [&](const QString &name, uint8_t color, uint8_t licensee) {
+    const auto writeFixture = [&](const QString &name, uint8_t color, uint8_t licensee,
+                                  uint8_t sgb = 0) {
         rom[0x143] = char(color);
+        rom[0x146] = char(sgb);
         rom[0x14b] = char(licensee);
         uint8_t checksum = 0;
         for (int i = 0x134; i <= 0x14c; ++i)
@@ -20,7 +22,8 @@ bool MainWindow::modelSmokeTest(const QString &directory) {
     const QString plain = writeFixture("model-plain.gb", 0, 0);
     const QString licensed = writeFixture("model-licensed.gb", 0, 1);
     const QString colorOnly = writeFixture("model-color-only.gbc", 0xc0, 1);
-    if (plain.isEmpty() || licensed.isEmpty() || colorOnly.isEmpty())
+    const QString enhanced = writeFixture("model-enhanced.gb", 0, 1, 3);
+    if (plain.isEmpty() || licensed.isEmpty() || colorOnly.isEmpty() || enhanced.isEmpty())
         return smokeFailure(__FILE__, __LINE__);
     const bool hadModel = settings_.contains("emulation/model");
     const QVariant savedModel = settings_.value("emulation/model");
@@ -79,6 +82,133 @@ bool MainWindow::modelSmokeTest(const QString &directory) {
         if (!saved.openRom(plain) || saved.emulator_->gb.model != CUPID_GB_MODEL_CGB)
             return smokeFailure(__FILE__, __LINE__);
     }
+    const QVariant savedScale = settings_.value("video/defaultScale", 2);
+    const QVariant savedBorder = settings_.value("video/sgbBorder", true);
+    settings_.setValue("video/defaultScale", 2);
+    settings_.setValue("video/sgbBorder", true);
+    settings_.setValue("emulation/model", int(CUPID_GB_MODEL_DMG_ABC));
+    {
+        MainWindow hidden(true);
+        const QPoint hiddenPosition = hidden.pos();
+        hidden.resizeDisplay(3);
+        if (hidden.pos() != hiddenPosition)
+            return smokeFailure(__FILE__, __LINE__);
+        MainWindow sized(true);
+        sized.show();
+        QApplication::processEvents();
+        const QRect available = sized.screen()->availableGeometry();
+        sized.move(available.center() - QPoint(sized.width() / 2, sized.height() / 2));
+        QApplication::processEvents();
+        const auto doubledCenter = [&] {
+            return QPoint(sized.x() * 2 + sized.width(), sized.y() * 2 + sized.height());
+        };
+        const auto centerPreserved = [&](const QPoint &previous) {
+            const QPoint difference = doubledCenter() - previous;
+            return std::abs(difference.x()) <= 2 && std::abs(difference.y()) <= 2;
+        };
+        if (!sized.openRom(enhanced))
+            return smokeFailure(__FILE__, __LINE__);
+        sized.setPaused(true);
+        const QSize handheldSize = sized.size();
+        const QPoint handheldCenter = doubledCenter();
+        settings_.setValue("emulation/model", int(CUPID_GB_MODEL_SGB2));
+        if (!sized.restart() || sized.image_.size() != QSize(256, 224) ||
+            !centerPreserved(handheldCenter))
+            return smokeFailure(__FILE__, __LINE__);
+        sized.setPaused(true);
+        const QSize automaticBorderedSize = sized.size();
+        const QPoint borderedCenter = doubledCenter();
+        sized.resizeDisplay(3);
+        if (!centerPreserved(borderedCenter))
+            return smokeFailure(__FILE__, __LINE__);
+        const QPoint enlargedCenter = doubledCenter();
+        sized.resizeDisplay(2);
+        if (sized.size() != automaticBorderedSize ||
+            sized.size() != sized.logicalWindowSize(QSize(256, 224), 2) ||
+            sized.size().height() <= handheldSize.height() || !centerPreserved(enlargedCenter))
+            return smokeFailure(__FILE__, __LINE__);
+        sized.borderAction_->trigger();
+        if (sized.image_.size() != QSize(160, 144) || sized.size() != handheldSize)
+            return smokeFailure(__FILE__, __LINE__);
+        sized.resizeDisplay(2);
+        if (sized.size() != handheldSize)
+            return smokeFailure(__FILE__, __LINE__);
+        sized.borderAction_->trigger();
+        if (sized.size() != automaticBorderedSize)
+            return smokeFailure(__FILE__, __LINE__);
+        settings_.setValue("video/defaultScale", 1);
+        sized.resizeDisplay(1);
+        const QPoint smallBorderedCenter = doubledCenter();
+        sized.borderAction_->trigger();
+        if (sized.size() != sized.logicalWindowSize(QSize(160, 144), 1) ||
+            !centerPreserved(smallBorderedCenter))
+            return smokeFailure(__FILE__, __LINE__);
+        const QPoint smallHandheldCenter = doubledCenter();
+        sized.borderAction_->trigger();
+        if (sized.size() != sized.logicalWindowSize(QSize(256, 224), 1) ||
+            !centerPreserved(smallHandheldCenter))
+            return smokeFailure(__FILE__, __LINE__);
+        settings_.setValue("video/defaultScale", 2);
+        sized.resizeDisplay(2);
+        settings_.setValue("emulation/model", int(CUPID_GB_MODEL_DMG_ABC));
+        if (!sized.openRom(enhanced) || sized.size() != handheldSize)
+            return smokeFailure(__FILE__, __LINE__);
+        sized.setPaused(true);
+        settings_.setValue("emulation/model", int(CUPID_GB_MODEL_SGB2));
+        if (!sized.openRom(enhanced) || sized.size() != automaticBorderedSize)
+            return smokeFailure(__FILE__, __LINE__);
+        sized.setPaused(true);
+        const QSize customSize = automaticBorderedSize + QSize(73, 61);
+        sized.resize(customSize);
+        const QPoint customPosition = sized.pos();
+        sized.borderAction_->trigger();
+        if (sized.size() != customSize || sized.pos() != customPosition)
+            return smokeFailure(__FILE__, __LINE__);
+        sized.borderAction_->trigger();
+        if (sized.size() != customSize || sized.pos() != customPosition)
+            return smokeFailure(__FILE__, __LINE__);
+        settings_.setValue("emulation/model", int(CUPID_GB_MODEL_DMG_ABC));
+        if (!sized.restart() || sized.size() != customSize || sized.pos() != customPosition)
+            return smokeFailure(__FILE__, __LINE__);
+        sized.setPaused(true);
+        settings_.setValue("emulation/model", int(CUPID_GB_MODEL_SGB2));
+        if (!sized.restart() || sized.size() != customSize || sized.pos() != customPosition)
+            return smokeFailure(__FILE__, __LINE__);
+        sized.setPaused(true);
+        auto *fullscreen = sized.findChild<QAction *>("fullscreen");
+        if (!fullscreen)
+            return smokeFailure(__FILE__, __LINE__);
+        fullscreen->trigger();
+        const QPoint fullscreenPosition = sized.pos();
+        sized.borderAction_->trigger();
+        if (!sized.isFullScreen() || !fullscreen->isChecked() || sized.pos() != fullscreenPosition)
+            return smokeFailure(__FILE__, __LINE__);
+        settings_.setValue("emulation/model", int(CUPID_GB_MODEL_DMG_ABC));
+        if (!sized.restart() || !sized.isFullScreen() || !fullscreen->isChecked() ||
+            sized.pos() != fullscreenPosition)
+            return smokeFailure(__FILE__, __LINE__);
+        sized.setPaused(true);
+        fullscreen->trigger();
+        sized.resizeDisplay(2);
+        settings_.setValue("video/sgbBorder", true);
+        sized.applyDisplaySettings();
+        settings_.setValue("emulation/model", int(CUPID_GB_MODEL_SGB2));
+        if (!sized.restart() || sized.size() != automaticBorderedSize || !sized.closeRom())
+            return smokeFailure(__FILE__, __LINE__);
+        const QPoint beforeEmptyShrink = doubledCenter();
+        sized.resizeDisplay(1);
+        if (sized.size() != sized.logicalWindowSize(QSize(160, 144), 1) ||
+            !centerPreserved(beforeEmptyShrink))
+            return smokeFailure(__FILE__, __LINE__);
+        // Explicit scaling while empty uses the handheld canvas, and the next
+        // cartridge must compare against that new size rather than stale SGB dimensions.
+        sized.resizeDisplay(2);
+        if (!sized.openRom(enhanced) || sized.size() != automaticBorderedSize)
+            return smokeFailure(__FILE__, __LINE__);
+        sized.setPaused(true);
+    }
+    settings_.setValue("video/defaultScale", savedScale);
+    settings_.setValue("video/sgbBorder", savedBorder);
     if (hadModel)
         settings_.setValue("emulation/model", savedModel);
     else

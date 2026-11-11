@@ -63,6 +63,8 @@ class MainWindow final : public QMainWindow {
     void buildColorMenus(QMenu *view);
     void applyDisplaySettings();
     void setFrameBlending(FrameBlending mode);
+    QSize logicalWindowSize(const QSize &nativeSize, int scale) const;
+    void resizeWindowCentered(const QSize &windowSize, const QRect &previousGeometry);
     void resizeDisplay(int scale);
     void updateRecentMenu();
     void configure();
@@ -202,6 +204,7 @@ class MainWindow final : public QMainWindow {
     std::unique_ptr<ColorTable> sgbColorTable_;
     FrameBlending frameBlending_ = FrameBlending::Accurate;
     QImage image_;
+    QSize displayNativeSize_{160, 144};
     QImage previousDisplayFrame_;
     QImage currentDisplayFrame_;
     QMenu *recentMenu_ = nullptr;
