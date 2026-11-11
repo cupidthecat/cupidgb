@@ -631,7 +631,7 @@ Final Windows Qt 6.8.3 sessions used local firmware, recorded inputs, fresh stor
 
 The final GB/GBC images show active play. The 60-second SGB2 image shows the stage introduction after its recorded input sequence. A separate 36-second capture shows active first-stage gameplay with the full border at the corrected default size. All 34,304 corrected border pixels match the pinned color oracle. The viewport is at a different gameplay time and is excluded from that pixel comparison.
 
-Default-size workflow checks exercise handheld/border changes, ROM/model transitions, visible centering at 1x/2x/3x, never-shown positioning, custom/fullscreen preservation, and explicit 1x shrinking after close. Layout activation occurs only on a resize operation, so an old minimum cannot clamp the new size and steady frames do not repeat layout work. Close/restore position policies remain unchanged.
+Default-size workflow checks exercise handheld/border changes, ROM/model transitions, visible centering at 1x/2x/3x, never-shown positioning, custom/fullscreen preservation, and explicit 1x shrinking after close. Layout activation occurs only on a resize operation, so an old minimum cannot clamp the new size and steady frames do not repeat layout work. Close/restore position policies remain unchanged. A packaged native Windows audio workflow caught a one-pixel chrome discrepancy that offscreen tests missed. Window chrome now comes from the complete main-window minimum-size hint, retaining exact size and center assertions. The refreshed Windows bundle passes the native audio workflow with no SDK on PATH. The installed Linux system-Qt build passes the native Xcb UI workflow; that UI-only check does not require host audio.
 
 ### Linux host timing limit
 

@@ -1,5 +1,7 @@
 #include "main_window_internal.h"
 
+#include <QDebug>
+
 bool MainWindow::modelSmokeTest(const QString &directory) {
     QByteArray rom(32768, char(0));
     rom[0x100] = char(0x18);
@@ -139,10 +141,28 @@ bool MainWindow::modelSmokeTest(const QString &directory) {
         settings_.setValue("video/defaultScale", 1);
         sized.resizeDisplay(1);
         const QPoint smallBorderedCenter = doubledCenter();
+        const QRect smallBorderedGeometry(sized.pos(), sized.size());
+        const QSize smallBorderedMinimum = sized.minimumSize();
+        const QSize smallBorderedHint = sized.minimumSizeHint();
+        const QSize smallBorderedLayoutMinimum = sized.layout()->minimumSize();
         sized.borderAction_->trigger();
         if (sized.size() != sized.logicalWindowSize(QSize(160, 144), 1) ||
-            !centerPreserved(smallBorderedCenter))
+            !centerPreserved(smallBorderedCenter)) {
+            qWarning() << "Window sizing before border hide:" << smallBorderedGeometry << "minimum"
+                       << smallBorderedMinimum << "minimum hint" << smallBorderedHint
+                       << "layout minimum" << smallBorderedLayoutMinimum;
+            qWarning() << "Window sizing after border hide:" << QRect(sized.pos(), sized.size())
+                       << "expected" << sized.logicalWindowSize(QSize(160, 144), 1)
+                       << "center before/after" << smallBorderedCenter << doubledCenter() << "DPR"
+                       << sized.devicePixelRatioF() << "minimum" << sized.minimumSize()
+                       << "minimum hint" << sized.minimumSizeHint() << "layout minimum"
+                       << sized.layout()->minimumSize() << "layout geometry"
+                       << sized.layout()->geometry() << "display minimum/actual"
+                       << sized.display_->minimumSize() << sized.display_->size()
+                       << "menu/status hints" << sized.menuBar()->sizeHint()
+                       << sized.statusBar()->sizeHint();
             return smokeFailure(__FILE__, __LINE__);
+        }
         const QPoint smallHandheldCenter = doubledCenter();
         sized.borderAction_->trigger();
         if (sized.size() != sized.logicalWindowSize(QSize(256, 224), 1) ||

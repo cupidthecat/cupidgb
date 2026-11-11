@@ -121,7 +121,8 @@ void MainWindow::setFrameBlending(FrameBlending mode) {
 
 QSize MainWindow::logicalWindowSize(const QSize &nativeSize, int scale) const {
     scale = std::clamp(scale, 1, 8);
-    const int chromeHeight = menuBar()->sizeHint().height() + statusBar()->sizeHint().height();
+    // Native menu layout can reserve more height than the bars' size hints.
+    const int chromeHeight = minimumSizeHint().height() - display_->minimumHeight();
     return {std::max(nativeSize.width() * scale, menuBar()->sizeHint().width()),
             nativeSize.height() * scale + chromeHeight};
 }
