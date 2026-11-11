@@ -206,18 +206,36 @@ bool MainWindow::debuggerSmokeTest(const QString &directory) {
         return smokeFailure(__FILE__, __LINE__);
     auto *const conditionSession = emulator_.get();
     debuggerWindow_->submitCommand("continue");
+    emulator_->gb.frame_ready = true;
     const QByteArray beforeConditionError = captureState();
     const uint64_t conditionCycles = emulator_->gb.elapsed_cycles;
     if (paused_ || !runFrame() || !paused_ || emulator_.get() != conditionSession ||
         emulator_->gb.cpu.pc != 0x158 || emulator_->gb.elapsed_cycles != conditionCycles ||
         debugger_->last_stop != CUPID_GB_DEBUG_STOP_ERROR || debuggerTimer_.isActive() ||
-        !debuggerWindow_->isVisible() || captureState() != beforeConditionError ||
+        !emulator_->gb.frame_ready || !debuggerWindow_->isVisible() ||
+        captureState() != beforeConditionError ||
         !debuggerWindow_->outputText().contains("Breakpoint condition evaluation failed."))
         return smokeFailure(__FILE__, __LINE__);
     const QString beforeErrorInspection = debuggerWindow_->outputText();
     debuggerWindow_->submitCommand("print pc");
     if (debuggerWindow_->outputText() == beforeErrorInspection ||
         captureState() != beforeConditionError || !loadDebuggerSymbols(symbolsPath))
+        return smokeFailure(__FILE__, __LINE__);
+    debuggerWindow_->submitCommand("delete all");
+    debuggerWindow_->submitCommand("set pc $0155");
+    debuggerWindow_->submitCommand("set sp $fffe");
+    debuggerWindow_->submitCommand("break $0160 if Inner != 0");
+    if (!loadDebuggerSymbols(withoutInnerPath) || debugger_->symbol_count != 1)
+        return smokeFailure(__FILE__, __LINE__);
+    const QByteArray beforeNextConditionError = captureState();
+    const uint64_t beforeNextConditionCycles = emulator_->gb.elapsed_cycles;
+    debuggerWindow_->submitCommand("next");
+    if (!complete() || !paused_ || emulator_->gb.cpu.pc != 0x160 ||
+        emulator_->gb.elapsed_cycles <= beforeNextConditionCycles ||
+        debugger_->last_stop != CUPID_GB_DEBUG_STOP_ERROR || debuggerHistory_.size() != 1 ||
+        !debuggerWindow_->outputText().contains("Breakpoint condition evaluation failed.") ||
+        !debuggerBackstep() || emulator_->gb.cpu.pc != 0x155 ||
+        captureState() != beforeNextConditionError || !loadDebuggerSymbols(symbolsPath))
         return smokeFailure(__FILE__, __LINE__);
     debuggerWindow_->submitCommand("delete all");
     debuggerWindow_->submitCommand("break Inner");
@@ -360,8 +378,9 @@ bool MainWindow::debuggerSmokeTest(const QString &directory) {
     debuggerWindow_->submitCommand("set pc $0150");
     const QByteArray beforeIllegal = captureState();
     debuggerWindow_->submitCommand("step");
-    if (!complete() || !emulator_->gb.cpu.halted || !debuggerBackstep() ||
-        captureState() != beforeIllegal)
+    if (!complete() || !emulator_->gb.cpu.halted ||
+        debugger_->last_stop != CUPID_GB_DEBUG_STOP_ERROR || debuggerHistory_.size() != 1 ||
+        !debuggerBackstep() || captureState() != beforeIllegal)
         return smokeFailure(__FILE__, __LINE__);
     const QString captureDirectory = qEnvironmentVariable("CUPIDGB_UI_CAPTURE_DIR");
     if (!captureDirectory.isEmpty()) {

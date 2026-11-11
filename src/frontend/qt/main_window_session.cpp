@@ -66,7 +66,6 @@ bool MainWindow::runFrame() {
         return false;
     if (audioConverter_)
         audioConverter_->setInputRate(double(rate) * speedSteps_ / 16);
-    gb.frame_ready = false;
     const uint64_t startCycles = gb.elapsed_cycles;
     // Presentation events also cover LCD-off intervals. Keep a guest-clock bound
     // for a stalled or temporarily frozen display pipeline.
@@ -88,6 +87,10 @@ bool MainWindow::runFrame() {
                 return true;
             }
         }
+        // A before-instruction debugger stop must retain a pending frame latch.
+        // Clear it only when this call actually proceeds into guest execution.
+        if (!steps)
+            gb.frame_ready = false;
         if (!cupid_emulator_step(emulator_.get())) {
             setPaused(true);
             reportError("CPU execution stopped. The cartridge remains open for inspection.");

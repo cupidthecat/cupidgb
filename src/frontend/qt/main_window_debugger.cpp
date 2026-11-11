@@ -257,12 +257,16 @@ void MainWindow::debuggerSlice() {
             stopDebugger("Debugger stopped: instruction history could not be captured.");
             return;
         }
+        const uint64_t previousSteps = debugger_->steps;
         const auto result = cupid_gb_debugger_step(debugger_.get(), &emulator_->gb);
+        const bool conditionError =
+            result == CUPID_GB_DEBUG_STOP_ERROR && debugger_->steps == previousSteps;
         if (emulator_->gb.sgb.player_count != controllerPlayerCount_)
             refreshControllerPlayerCount();
-        if (result == CUPID_GB_DEBUG_STOP_BREAKPOINT || result == CUPID_GB_DEBUG_STOP_NO_ROM) {
-            // A breakpoint stops before execution. Do not offer a fictitious
-            // backstep for an instruction that did not run.
+        if (result == CUPID_GB_DEBUG_STOP_BREAKPOINT || result == CUPID_GB_DEBUG_STOP_NO_ROM ||
+            conditionError) {
+            // These stops precede execution. Keep a failed hardware-step
+            // attempt, but do not offer a fictitious instruction Backstep.
             debuggerHistoryBytes_ -=
                 debuggerHistory_.back().capacity() + qsizetype(sizeof(QByteArray));
             debuggerHistory_.pop_back();
@@ -271,7 +275,8 @@ void MainWindow::debuggerSlice() {
         drainDebuggerAudio();
         updatePrinter();
         if (result != CUPID_GB_DEBUG_STOP_NONE) {
-            stopDebugger(QString::fromUtf8(cupid_gb_debugger_stop_name(result)));
+            stopDebugger(conditionError ? "Breakpoint condition evaluation failed."
+                                        : QString::fromUtf8(cupid_gb_debugger_stop_name(result)));
             return;
         }
         if (debuggerCommandSteps_ >= 1000000) {
