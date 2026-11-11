@@ -29,12 +29,36 @@ jobs:
         if: runner.os == 'Linux'
         timeout-minutes: 10
         run: |
+          mirror=
+          probe=$(mktemp)
+          trap 'rm -f "$probe"' EXIT
+          for candidate in https://archive.ubuntu.com/ubuntu/ https://mirrors.mit.edu/ubuntu/; do
+            verified=true
+            for pocket in noble noble-updates noble-backports noble-security; do
+              if ! curl --fail --silent --show-error --location --proto '=https' \
+                        --proto-redir '=https' --connect-timeout 3 --max-time 10 \
+                        --output "$probe" "${candidate}dists/${pocket}/InRelease" ||
+                 ! gpgv --keyring /usr/share/keyrings/ubuntu-archive-keyring.gpg "$probe"; then
+                verified=false
+                break
+              fi
+            done
+            if [ "$verified" = true ]; then
+              mirror=$candidate
+              break
+            fi
+          done
+          if [ -z "$mirror" ]; then
+            echo '::error::No reachable signed Ubuntu archive mirror'
+            exit 1
+          fi
+          echo "Using Ubuntu archive mirror: $mirror"
           for source in /etc/apt/sources.list /etc/apt/sources.list.d/*.list \
                         /etc/apt/sources.list.d/*.sources; do
             if [ -f "$source" ]; then
               sudo sed -i \
-                -e 's|https\?://azure\.archive\.ubuntu\.com/ubuntu/|https://archive.ubuntu.com/ubuntu/|g' \
-                -e 's|mirror+file:/etc/apt/apt-mirrors\.txt|https://archive.ubuntu.com/ubuntu/|g' \
+                -e "s#https\?://\(azure\.archive\|archive\|security\)\.ubuntu\.com/ubuntu/#$mirror#g" \
+                -e "s#mirror+file:/etc/apt/apt-mirrors\.txt#$mirror#g" \
                 "$source"
             fi
           done
@@ -69,12 +93,36 @@ jobs:
       - name: Hashing dependency
         timeout-minutes: 10
         run: |
+          mirror=
+          probe=$(mktemp)
+          trap 'rm -f "$probe"' EXIT
+          for candidate in https://archive.ubuntu.com/ubuntu/ https://mirrors.mit.edu/ubuntu/; do
+            verified=true
+            for pocket in noble noble-updates noble-backports noble-security; do
+              if ! curl --fail --silent --show-error --location --proto '=https' \
+                        --proto-redir '=https' --connect-timeout 3 --max-time 10 \
+                        --output "$probe" "${candidate}dists/${pocket}/InRelease" ||
+                 ! gpgv --keyring /usr/share/keyrings/ubuntu-archive-keyring.gpg "$probe"; then
+                verified=false
+                break
+              fi
+            done
+            if [ "$verified" = true ]; then
+              mirror=$candidate
+              break
+            fi
+          done
+          if [ -z "$mirror" ]; then
+            echo '::error::No reachable signed Ubuntu archive mirror'
+            exit 1
+          fi
+          echo "Using Ubuntu archive mirror: $mirror"
           for source in /etc/apt/sources.list /etc/apt/sources.list.d/*.list \
                         /etc/apt/sources.list.d/*.sources; do
             if [ -f "$source" ]; then
               sudo sed -i \
-                -e 's|https\?://azure\.archive\.ubuntu\.com/ubuntu/|https://archive.ubuntu.com/ubuntu/|g' \
-                -e 's|mirror+file:/etc/apt/apt-mirrors\.txt|https://archive.ubuntu.com/ubuntu/|g' \
+                -e "s#https\?://\(azure\.archive\|archive\|security\)\.ubuntu\.com/ubuntu/#$mirror#g" \
+                -e "s#mirror+file:/etc/apt/apt-mirrors\.txt#$mirror#g" \
                 "$source"
             fi
           done
