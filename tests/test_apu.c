@@ -85,7 +85,7 @@ static void test_power_cycle_resets_sound_but_preserves_stream(bool color) {
     cupid_gb_write_u8(&gb, 0xff16, 0xc0);
     cupid_gb_write_u8(&gb, 0xff18, 0xff);
     cupid_gb_write_u8(&gb, 0xff19, 0x87);
-    cupid_gb_tick_apu(&gb, 107);
+    cupid_gb_tick_apu(&gb, 95); /* Sample before the duty wrap, including trigger delay. */
     assert(gb.apu.ch2_duty_pos != 0);
     uint32_t count = gb.apu.buf_write;
     uint32_t fraction = gb.apu.sample_acc;
@@ -963,7 +963,77 @@ static void test_audio_chunk_splitting(void) {
     }
 }
 
+static void test_color_pulse_phantom_trigger(void) {
+    for (unsigned channel = 0; channel < 2; ++channel) {
+        for (unsigned speed = 0; speed < 2; ++speed) {
+            CupidGb gb = {0};
+            gb.model = CUPID_GB_MODEL_CGB;
+            gb.cgb_mode = true;
+            gb.double_speed = speed != 0;
+            unsigned base = channel ? 0xff16 : 0xff11;
+            uint16_t *timer = channel ? &gb.apu.ch2_timer : &gb.apu.ch1_timer;
+            uint8_t *index = channel ? &gb.apu.ch2_duty_pos : &gb.apu.ch1_duty_pos;
+            CupidGbPulseTiming *timing = &gb.apu.pulse_timing[channel];
+            cupid_gb_write_u8(&gb, 0xff26, 0x80);
+            cupid_gb_write_u8(&gb, base, 0);
+            cupid_gb_write_u8(&gb, base + 1, 0xf0);
+            cupid_gb_write_u8(&gb, base + 2, 0);
+            cupid_gb_write_u8(&gb, base + 3, 0x83);
+            assert(*index == 0); /* Cold power has no pending frequency-counter edge. */
+            assert(timing->output_blocked);
+            *timer = 402;
+            *index = 6;
+            timing->start_delay = 0;
+            timing->edge_age = 4;
+            cupid_gb_write_u8(&gb, base + 3, 0x83);
+            assert(*index == 7);
+            assert(!timing->output_blocked);
+            assert(((cupid_gb_apu_read_pcm12(&gb) >> (channel * 4)) & 15) == 15);
+            /* Bit 2 gates the phantom edge; a real reload suppresses a second edge. */
+            *timer = 402;
+            *index = 6;
+            timing->start_delay = 0;
+            cupid_gb_write_u8(&gb, base + 3, 0x87);
+            assert(*index == 6);
+            timing->edge_age = 0;
+            cupid_gb_write_u8(&gb, base + 3, 0x83);
+            assert(*index == 6);
+            assert(timing->edge_age == 0);
+            /* Inactive channels retain the last reload until their clock restarts. */
+            cupid_gb_write_u8(&gb, base + 1, 0);
+            cupid_gb_tick_apu(&gb, 8);
+            assert(timing->edge_age == 0);
+            cupid_gb_write_u8(&gb, base + 2, 0xfe);
+            assert(*timer == 4104);
+            cupid_gb_write_u8(&gb, base + 3, 3);
+            assert(*timer == 4104);
+            cupid_gb_write_u8(&gb, base + 1, 0xf0);
+            cupid_gb_write_u8(&gb, base + 3, 0x83);
+            assert(*index == 6);
+            assert(timing->output_blocked);
+            /* A suppressed retrigger at the maximum frequency has four extra base clocks. */
+            cupid_gb_write_u8(&gb, base + 2, 0xff);
+            cupid_gb_write_u8(&gb, base + 3, 0x87);
+            assert(timing->start_delay == 10);
+            assert(*timer == 12);
+            /* A retrigger retains reload writes but clears the prior real duty edge. */
+            cupid_gb_write_u8(&gb, 0xff26, 0);
+            cupid_gb_write_u8(&gb, 0xff26, 0x80);
+            cupid_gb_write_u8(&gb, base + 1, 0xf0);
+            cupid_gb_write_u8(&gb, base + 2, 0xfc);
+            cupid_gb_write_u8(&gb, base + 3, 0x87);
+            cupid_gb_tick_apu(&gb, 24);
+            assert(*index == 1 && timing->edge_age == 0);
+            cupid_gb_write_u8(&gb, base + 3, 0x87);
+            cupid_gb_write_u8(&gb, base + 3, 3);
+            assert(*index == 1);
+            assert(*timer == 4112);
+        }
+    }
+}
+
 int main(void) {
+    test_color_pulse_phantom_trigger();
     test_color_pulse_clock_and_held_duty();
     test_color_envelope_edges();
     test_color_frequency_reload_window();

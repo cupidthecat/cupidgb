@@ -73,23 +73,45 @@ static void pulse_latch_wave(CupidGbApu *apu, unsigned channel) {
     apu->pulse_timing[channel].output_high = ((cupid_gb_duty_mask[duty] >> index) & 1u) != 0;
 }
 
-static void color_pulse_trigger(CupidGb *gb, unsigned channel, bool was_active) {
+static void color_pulse_trigger(CupidGb *gb, unsigned channel, bool was_active,
+                                uint16_t previous_timer, uint16_t previous_frequency) {
     CupidGbApu *apu = &gb->apu;
     CupidGbPulseTiming *timing = &apu->pulse_timing[channel];
     uint16_t *timer = channel ? &apu->ch2_timer : &apu->ch1_timer;
+    uint8_t *index = channel ? &apu->ch2_duty_pos : &apu->ch1_duty_pos;
+    uint16_t frequency = channel ? apu->ch2_freq : apu->ch1_freq;
     bool dac = channel ? apu->ch2_dac : apu->ch1_dac;
+    bool reloaded = timing->edge_age < 2;
+    /* The stored countdown is two base dots beyond the 2 MHz counter. Removing
+     * that offset and the remaining trigger delay exposes its 1 MHz gate phase. */
+    int phase = ((int)previous_timer - timing->start_delay - (was_active ? 4 : 2)) / 4;
+    /* A zero timer is the cold-power sentinel, before the counter has ever run. */
+    bool phantom = previous_timer != 0 && !(frequency & 0x400) && !(phase & 0x400) &&
+                   (!was_active || !reloaded);
+    unsigned extra_delay = 0;
+    if (phantom) {
+        *index = (uint8_t)((*index + 1) & 7);
+        timing->output_blocked = false;
+    } else if (was_active && frequency == 0x7ff && previous_frequency != 0x7ff &&
+               timing->output_blocked) {
+        extra_delay = 4;
+    }
     /* The trigger path settles against the power-relative audio divider. An
      * active retrigger takes one 1 MHz tick less than an inactive start. The
      * final two base clocks overlap the ordinary frequency-counter reload. */
-    timing->start_delay = (uint8_t)((was_active ? 6u : 10u) + (apu->clock_phase & 2u));
+    timing->start_delay =
+        (uint8_t)((was_active ? 6u : 10u) + (apu->clock_phase & 2u) + extra_delay);
     *timer = (uint16_t)(*timer + timing->start_delay - 2u);
     timing->clock_started = dac;
-    timing->edge_age = 4;
+    if (!reloaded) {
+        timing->edge_age = 4;
+    }
     timing->envelope_clock = false;
     timing->envelope_locked = false;
     timing->envelope_lock_pending = false;
     if (!was_active) {
-        timing->output_blocked = true;
+        timing->output_blocked = !phantom;
+        timing->output_high = false;
     } else if (!timing->output_blocked) {
         pulse_latch_wave(apu, channel);
     }
@@ -101,11 +123,13 @@ static bool color_pulse_tick(CupidGbApu *apu, unsigned channel) {
     uint8_t *index = channel ? &apu->ch2_duty_pos : &apu->ch1_duty_pos;
     uint16_t frequency = channel ? apu->ch2_freq : apu->ch1_freq;
     bool active = channel ? apu->ch2_on : apu->ch1_on;
-    if (timing->edge_age < 4) {
-        ++timing->edge_age;
-    }
+    /* A stopped channel preserves the last reload window; register writes can
+     * still reload that held counter before a later trigger restarts its clock. */
     if (!active || !timing->clock_started) {
         return false;
+    }
+    if (timing->edge_age < 4) {
+        ++timing->edge_age;
     }
     if (timing->start_delay) {
         --timing->start_delay;
@@ -209,13 +233,15 @@ static void color_pulse_frequency_write(CupidGbApu *apu, unsigned channel, uint1
     uint16_t *timer = channel ? &apu->ch2_timer : &apu->ch1_timer;
     uint8_t *index = channel ? &apu->ch2_duty_pos : &apu->ch1_duty_pos;
     bool active = channel ? apu->ch2_on : apu->ch1_on;
-    if (!active || timing->edge_age > 2) {
+    if (timing->edge_age > 2) {
         return;
     }
     /* The high frequency bits also gate the duty clock. Removing the high-bank
      * input during its reload window cancels that phase advance, while the
-     * already latched digital sample survives until the next frequency edge. */
-    if (high_write && !trigger && old_frequency >= 0x700 && frequency < 0x700) {
+     * already latched digital sample survives until the next frequency edge. A fresh
+     * trigger clears eligibility for that cancellation while its delay remains. */
+    if (active && !timing->start_delay && high_write && !trigger && old_frequency >= 0x700 &&
+        frequency < 0x700) {
         *index = (uint8_t)((*index + 7u) & 7u);
         timing->output_blocked = false;
     }
@@ -885,7 +911,7 @@ static void cupid_gb_apu_integrate(CupidGb *gb, uint32_t sample_rate, uint32_t c
  *
  * @param gb Pointer to the Game Boy state.
  */
-static void cupid_gb_apu_trigger_ch1(CupidGb *gb) {
+static void cupid_gb_apu_trigger_ch1(CupidGb *gb, uint16_t previous_frequency) {
     CupidGbApu *apu = &gb->apu;
     const bool was_active = apu->ch1_on;
     uint8_t nr10 = gb->io_registers[0x10u];
@@ -901,9 +927,10 @@ static void cupid_gb_apu_trigger_ch1(CupidGb *gb) {
     if (gb->model != CUPID_GB_MODEL_CGB) {
         apu->ch1_freq = (uint16_t)(((uint16_t)(nr14 & 0x07u) << 8u) | (uint16_t)nr13);
     }
+    uint16_t previous_timer = apu->ch1_timer;
     apu->ch1_timer = (uint16_t)((2048u - (uint32_t)apu->ch1_freq) * 4u);
     if (gb->model == CUPID_GB_MODEL_CGB) {
-        color_pulse_trigger(gb, 0, was_active);
+        color_pulse_trigger(gb, 0, was_active, previous_timer, previous_frequency);
     }
     apu->ch1_vol = (uint8_t)((nr12 >> 4u) & 0x0fu);
     apu->ch1_env_add = (nr12 & 0x08u) != 0u;
@@ -957,7 +984,7 @@ static void cupid_gb_apu_trigger_ch1(CupidGb *gb) {
  *
  * @param gb Pointer to the Game Boy state.
  */
-static void cupid_gb_apu_trigger_ch2(CupidGb *gb) {
+static void cupid_gb_apu_trigger_ch2(CupidGb *gb, uint16_t previous_frequency) {
     CupidGbApu *apu = &gb->apu;
     const bool was_active = apu->ch2_on;
     uint8_t nr22 = gb->io_registers[0x17u];
@@ -970,9 +997,10 @@ static void cupid_gb_apu_trigger_ch2(CupidGb *gb) {
     }
 
     apu->ch2_freq = (uint16_t)(((uint16_t)(nr24 & 0x07u) << 8u) | (uint16_t)nr23);
+    uint16_t previous_timer = apu->ch2_timer;
     apu->ch2_timer = (uint16_t)((2048u - (uint32_t)apu->ch2_freq) * 4u);
     if (gb->model == CUPID_GB_MODEL_CGB) {
-        color_pulse_trigger(gb, 1, was_active);
+        color_pulse_trigger(gb, 1, was_active, previous_timer, previous_frequency);
     }
     apu->ch2_vol = (uint8_t)((nr22 >> 4u) & 0x0fu);
     apu->ch2_env_add = (nr22 & 0x08u) != 0u;
@@ -1254,7 +1282,7 @@ void cupid_gb_apu_on_write(CupidGb *gb, uint8_t off, uint8_t val) {
 
             length_reloaded = apu->ch1_len == 0u;
             if (trigger) {
-                cupid_gb_apu_trigger_ch1(gb);
+                cupid_gb_apu_trigger_ch1(gb, old_frequency);
                 if (!cupid_gb_apu_next_step_clocks_length(apu) && apu->ch1_len_en &&
                     length_reloaded) {
                     cupid_gb_apu_clock_length_once_u8(&apu->ch1_len, &apu->ch1_on);
@@ -1311,7 +1339,7 @@ void cupid_gb_apu_on_write(CupidGb *gb, uint8_t off, uint8_t val) {
 
             length_reloaded = apu->ch2_len == 0u;
             if (trigger) {
-                cupid_gb_apu_trigger_ch2(gb);
+                cupid_gb_apu_trigger_ch2(gb, old_frequency);
                 if (!cupid_gb_apu_next_step_clocks_length(apu) && apu->ch2_len_en &&
                     length_reloaded) {
                     cupid_gb_apu_clock_length_once_u8(&apu->ch2_len, &apu->ch2_on);
