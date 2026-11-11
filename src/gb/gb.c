@@ -234,6 +234,10 @@ void cupid_gb_init(CupidGb *gb) {
     const bool huc3_ir_input = gb->huc3_ir_input;
     const CupidGbCheats *cheats = gb->cheats;
     memset(gb, 0, sizeof(*gb));
+    gb->oam_vram_row = UINT16_MAX;
+    gb->oam_search_word = 0;
+    gb->stop_ppu_vram_blocked = false;
+    gb->object_fetch_stage = CUPID_GB_OBJECT_IDLE;
     gb->model = model;
     gb->rom = rom;
     gb->serial_output_callback = serial_output_callback;
@@ -428,6 +432,12 @@ void cupid_gb_enter_boot_rom(CupidGb *gb) {
     gb->cartridge_bus_expiry = 0;
     gb->cartridge_bus_data = 0xffu;
     gb->cpu.pc = 0x0000u; /* start executing boot ROM from address 0 */
+    gb->oam_vram_row = UINT16_MAX;
+    gb->oam_search_word = 0;
+    gb->stop_ppu_vram_blocked = false;
+    gb->object_fetch_stage = CUPID_GB_OBJECT_IDLE;
+    /* Boot entry aborts an in-flight object transaction, including legacy imports. */
+    gb->pixels.object_delay = 0;
     gb->cpu.ime = false;
     gb->cpu.ime_delay = 0u;
     gb->cpu.halted = false;
@@ -451,6 +461,7 @@ void cupid_gb_enter_boot_rom(CupidGb *gb) {
     gb->speed_switch_toggle_cycles = 0;
     gb->speed_switch_freeze_cycles = 0;
     gb->stop_divider_hold_cycles = 0;
+    gb->stop_ppu_vram_blocked = false;
     gb->speed_switch_alignment = 0;
     memset(gb->io_registers, 0x00u, sizeof(gb->io_registers));
     gb->io_registers[0x00u] = 0xcfu; /* P1: no buttons selected */
@@ -1376,6 +1387,7 @@ static bool cupid_gb_step_internal(CupidGb *gb, CupidGbStepTrace *trace) {
     if (gb->cpu.stopped) {
         cupid_gb_tick(gb, CUPID_GB_HALT_CYCLES);
         if ((cupid_gb_read_u8(gb, 0xff00u) & 0x0fu) != 0x0fu) {
+            gb->stop_ppu_vram_blocked = false;
             gb->cpu.stopped = false;
             cupid_cgb_hdma_wake(gb);
             cupid_gb_tick_dma(gb);
@@ -1395,7 +1407,8 @@ static bool cupid_gb_step_internal(CupidGb *gb, CupidGbStepTrace *trace) {
             gb->cpu.halted = false;
             gb->speed_switch_halt_cycles = 0;
             cupid_cgb_hdma_wake(gb);
-            cupid_gb_tick_dma(gb);
+            if (!gb->cpu.ime)
+                cupid_gb_tick_dma(gb);
         }
         if (pending && cupid_gb_service_interrupt(gb)) {
             if (trace)

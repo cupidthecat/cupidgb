@@ -29,7 +29,7 @@ Emulation > Settings controls hardware, the optional boot-ROM directory, input, 
 
 Emulation > Controllers selects devices and configures buttons, axes, hats, player assignments, dead zones, hold controls, shortcuts and cartridge rumble. Recognized controllers have a default layout; generic joysticks need layout verification. See [the controller guide](docs/controllers.md) for capture, focus, menus, reconnects and SGB input. Physical devices and motion input remain unqualified.
 
-Battery data uses `.sav` beside the cartridge. State slots use `.s0` through `.s9`, with the zero key selecting slot 10. Archive storage names include the archive extension, such as `game.zip.sav`. New states use CupidGB native version 8. Versions 2 through 7 remain loadable with defaults for fields those versions did not record. File > Recover Battery from Older State can export supported battery data from version 1. Keep backups of saves you need to preserve.
+Battery data uses `.sav` beside the cartridge. State slots use `.s0` through `.s9`, with the zero key selecting slot 10. Archive storage names include the archive extension, such as `game.zip.sav`. New states use CupidGB native version 9. Versions 2 through 8 remain loadable with defaults for fields those versions did not record. File > Recover Battery from Older State can export supported battery data from version 1. Keep backups of saves you need to preserve.
 
 Physical controller/motion qualification, advanced debugger commands/watchpoints, paired cable sessions and other accessories, custom cheat expressions, state interchange, individual hardware revisions, uncommon cartridge behavior, and advanced display/audio features remain incomplete. [The parity checklist](docs/parity.md) records the full scope.
 

@@ -197,6 +197,13 @@ static void advance_base_time(CupidGb *gb, unsigned dots) {
         cupid_gb_huc3_tick_infrared(gb, dots);
 }
 
+/* The source bus is shared only while both engines can consume it. Callers
+ * retain ownership of oscillator, divider, audio, and DMA credit totals. */
+static bool shared_vram_dma(const CupidGb *gb) {
+    return (gb->dma_active || gb->dma_start_delay) && (gb->dma_source_base & 0xe000u) == 0x8000u &&
+           cupid_gb_lcd_enabled(gb) && !gb->cpu.halted && !gb->cpu.stopped;
+}
+
 static void switch_clock_segment(CupidGb *gb, unsigned cycles, unsigned *half_dot) {
     const unsigned frozen =
         cycles < gb->speed_switch_freeze_cycles ? cycles : gb->speed_switch_freeze_cycles;
@@ -206,11 +213,30 @@ static void switch_clock_segment(CupidGb *gb, unsigned cycles, unsigned *half_do
         gb->speed_switch_alignment = (uint8_t)((gb->speed_switch_alignment + ticks) & 7u);
     const unsigned dots = (*half_dot + ticks) / 2u;
     *half_dot = (*half_dot + ticks) & 1u;
-    if (dots) {
-        advance_base_time(gb, dots);
-        cupid_gb_tick_ppu_dots(gb, (uint16_t)dots);
+    if (frozen == cycles)
+        return;
+    /* A partly frozen segment still releases its complete CPU-side DMA budget;
+     * only the LCD oscillator loses the frozen prefix. A completely frozen
+     * segment has no video or DMA edge. */
+    if (shared_vram_dma(gb)) {
+        unsigned credit = cycles - frozen;
+        for (unsigned dot = 0; dot < dots; ++dot) {
+            advance_base_time(gb, 1u);
+            cupid_gb_tick_ppu_dots(gb, 1u);
+            const unsigned part = gb->double_speed && credit >= 2u ? 2u : 1u;
+            cupid_gb_tick_dma_tcycles(gb, part);
+            credit -= part;
+        }
+        /* The oscillator-only prefix remains in the end-of-span DMA flush;
+         * it must not reach an earlier resumed fetch ahead of that flush. */
+        cupid_gb_tick_dma_tcycles(gb, credit + frozen);
+    } else {
+        if (dots) {
+            advance_base_time(gb, dots);
+            cupid_gb_tick_ppu_dots(gb, (uint16_t)dots);
+        }
+        cupid_gb_tick_dma_tcycles(gb, cycles);
     }
-    cupid_gb_tick_dma_tcycles(gb, cycles - frozen);
 }
 
 static void tick_switch_cycle(CupidGb *gb) {
@@ -278,10 +304,22 @@ void cupid_gb_tick(CupidGb *gb, uint16_t cycles) {
                 gb->speed_switch_alignment ^= 4u;
         }
         const uint16_t dots = gb->double_speed ? 2u : 4u;
-        advance_base_time(gb, dots);
-        cupid_gb_tick_ppu_dots(gb, dots);
+        const bool shared = (gb->dma_active || gb->dma_start_delay) &&
+                            (gb->dma_source_base & 0xe000u) == 0x8000u &&
+                            cupid_gb_lcd_enabled(gb) && !gb->cpu.halted && !gb->cpu.stopped;
+        if (shared) {
+            for (unsigned dot = 0; dot < dots; ++dot) {
+                advance_base_time(gb, 1u);
+                cupid_gb_tick_ppu_dots(gb, 1u);
+                cupid_gb_tick_dma_tcycles(gb, gb->double_speed ? 2u : 1u);
+            }
+        } else {
+            advance_base_time(gb, dots);
+            cupid_gb_tick_ppu_dots(gb, dots);
+        }
         cupid_gb_tick_apu(gb, dots);
-        cupid_gb_tick_dma(gb);
+        if (!shared)
+            cupid_gb_tick_dma(gb);
     }
 }
 
@@ -324,9 +362,16 @@ void cupid_gb_tick_color_dma_slot(CupidGb *gb, bool cpu_boundary) {
     }
     if (cupid_gb_lcd_enabled(gb))
         gb->speed_switch_alignment ^= 4u;
-    clock_lcd_dot(gb);
-    clock_lcd_dot(gb);
-    cupid_gb_tick_dma_tcycles(gb, gb->double_speed ? 4u : 2u);
+    const bool shared = (gb->dma_active || gb->dma_start_delay) &&
+                        (gb->dma_source_base & 0xe000u) == 0x8000u && cupid_gb_lcd_enabled(gb) &&
+                        !gb->cpu.halted && !gb->cpu.stopped;
+    for (unsigned dot = 0; dot < 2; ++dot) {
+        clock_lcd_dot(gb);
+        if (shared)
+            cupid_gb_tick_dma_tcycles(gb, gb->double_speed ? 2u : 1u);
+    }
+    if (!shared)
+        cupid_gb_tick_dma_tcycles(gb, gb->double_speed ? 4u : 2u);
 }
 
 void cupid_gb_acknowledge_interrupt(CupidGb *gb, uint8_t mask) {
@@ -339,16 +384,25 @@ void cupid_gb_acknowledge_interrupt(CupidGb *gb, uint8_t mask) {
     const unsigned half = gb->double_speed ? 1u : 2u;
     if (gb->double_speed && cupid_gb_lcd_enabled(gb))
         gb->speed_switch_alignment ^= 4u;
-    for (unsigned dot = 0; dot < half; ++dot)
+    const bool shared = shared_vram_dma(gb);
+    for (unsigned dot = 0; dot < half; ++dot) {
         clock_lcd_dot(gb);
-    cupid_gb_tick_dma_tcycles(gb, 2u);
+        if (shared)
+            cupid_gb_tick_dma_tcycles(gb, gb->double_speed ? 2u : 1u);
+    }
+    if (!shared)
+        cupid_gb_tick_dma_tcycles(gb, 2u);
     gb->interrupt_flags &= (uint8_t)~mask;
     clock_cpu_domain(gb);
     if (gb->double_speed)
         gb->speed_phase = !gb->speed_phase;
-    for (unsigned dot = 0; dot < half; ++dot)
+    for (unsigned dot = 0; dot < half; ++dot) {
         clock_lcd_dot(gb);
-    cupid_gb_tick_dma_tcycles(gb, 2u);
+        if (shared)
+            cupid_gb_tick_dma_tcycles(gb, gb->double_speed ? 2u : 1u);
+    }
+    if (!shared)
+        cupid_gb_tick_dma_tcycles(gb, 2u);
 }
 
 static uint8_t stat_transient(const CupidGb *gb, uint8_t value, uint8_t previous,
@@ -373,7 +427,14 @@ static void bus_clock_dot(CupidGb *gb, unsigned phase) {
         clock_lcd_dot(gb);
     else
         cupid_gb_sync_stat_half(gb);
-    cupid_gb_tick_dma_tcycles(gb, 1u);
+    /* Pixel work consumes whole dots. Retain the first half's source-bus
+     * credit until that dot's fetch, then release the pair after the fetch. */
+    if (gb->double_speed && shared_vram_dma(gb)) {
+        if (!(phase & 1u))
+            cupid_gb_tick_dma_tcycles(gb, 2u);
+    } else {
+        cupid_gb_tick_dma_tcycles(gb, 1u);
+    }
 }
 
 static void bus_clock_domain(CupidGb *gb, unsigned phase) {
@@ -534,19 +595,9 @@ void cupid_gb_interrupt_tail(CupidGb *gb, uint16_t return_address) {
     uint8_t enabled = 0, selected = 0, low_old_if = 0;
 
     for (unsigned phase = 9; phase <= 20; ++phase) {
-        if (cupid_gb_lcd_enabled(gb))
-            gb->speed_switch_alignment =
-                (uint8_t)((gb->speed_switch_alignment + (gb->double_speed ? 1u : 2u)) & 7u);
-        /* Odd double-speed T-cycles fall between LCD dots. This local phase is
-         * fully consumed before returning; native states need no half-dot field. */
-        if (!gb->double_speed || !(phase & 1u)) {
-            clock_lcd_dot(gb);
-        } else {
-            /* CGB LCD-start comparison settles on the first half-dot. No
-             * oscillator or sample clock advances until the complete dot. */
-            cupid_gb_sync_stat_half(gb);
-        }
-        cupid_gb_tick_dma_tcycles(gb, 1u);
+        /* These stack slots share the same full-dot and half-dot source-bus
+         * edges as an ordinary delayed register write. */
+        bus_clock_dot(gb, phase & 3u);
         if (high.early == phase) {
             interrupt_write_early(gb, &high);
         }

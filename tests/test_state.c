@@ -249,7 +249,7 @@ static void test_resume(void) {
                 size_t length;
                 uint8_t *state = encode(a, &length);
                 assert(length == cupid_gb_state_size(b) && length > 300518);
-                assert(state[8] == 8);
+                assert(state[8] == 9);
                 uint8_t *rom_pointer = b->rom;
                 strcpy(b->save_path, "host-session-save.sav");
                 assert(cupid_gb_load_state(b, state, length) == CUPID_GB_STATE_OK);
@@ -337,7 +337,7 @@ static void test_controller_state_versions(void) {
     cupid_gb_write_u8(source, 0x4000, 0x0d);
     size_t length;
     uint8_t *bytes = encode(source, &length);
-    assert(length == 310707 && bytes[300568] == source->joypad_extra[0] &&
+    assert(length == 310713 && bytes[300568] == source->joypad_extra[0] &&
            bytes[300569] == source->joypad_extra[1] && bytes[300570] == source->joypad_extra[2] &&
            bytes[300571] == 1);
     unsigned callbacks = 0;
@@ -844,10 +844,10 @@ static void test_rejection(void) {
     damaged[length - 1] ^= 1;
     rejected_unchanged(gb, damaged, length, CUPID_GB_STATE_INVALID);
     memcpy(damaged, valid, length);
-    damaged[length - 1] = 5;
+    damaged[length - 7] = 5;
     update_integrity(damaged, length);
     rejected_unchanged(gb, damaged, length, CUPID_GB_STATE_INVALID);
-    const size_t input_offsets[] = {length - 11, length - 10, length - 10};
+    const size_t input_offsets[] = {length - 17, length - 16, length - 16};
     const uint8_t input_values[] = {1, 1, 0x10};
     for (unsigned field = 0; field < sizeof(input_values); ++field) {
         memcpy(damaged, valid, length);
@@ -855,7 +855,7 @@ static void test_rejection(void) {
         update_integrity(damaged, length);
         rejected_unchanged(gb, damaged, length, CUPID_GB_STATE_INVALID);
     }
-    const size_t counter_offsets[] = {length - 9, length - 5};
+    const size_t counter_offsets[] = {length - 15, length - 11};
     const uint32_t counter_values[] = {140448, 67485};
     for (unsigned field = 0; field < sizeof(counter_values) / sizeof(counter_values[0]); ++field) {
         memcpy(damaged, valid, length);
@@ -911,7 +911,7 @@ static void test_rejection(void) {
     damaged[length] = 0;
     rejected_unchanged(gb, damaged, length + 1, CUPID_GB_STATE_INVALID);
     memcpy(damaged, valid, length);
-    damaged[8] = 9;
+    damaged[8] = 10;
     update_integrity(damaged, length);
     rejected_unchanged(gb, damaged, length, CUPID_GB_STATE_UNSUPPORTED_VERSION);
     memcpy(damaged, valid, length);
@@ -980,10 +980,10 @@ static void test_sgb_transfer_resume(void) {
 
     size_t length;
     uint8_t *bytes = encode(source, &length);
-    assert(length == 310707 && bytes[8] == 8);
+    assert(length == 310713 && bytes[8] == 9);
     assert(bytes[v4_length + 7 + 4096] == 0xa5);
     assert(bytes[v4_length + 7 + 8192] == 0x80 && bytes[v4_length + 7 + 8193] == 0x0c);
-    assert(bytes[length - 18] == 0x34 && bytes[length - 17] == 0x12);
+    assert(bytes[length - 24] == 0x34 && bytes[length - 23] == 0x12);
     assert(cupid_gb_load_state(target, bytes, length) == CUPID_GB_STATE_OK);
     assert_hardware_equal(source, target);
     cupid_gb_tick_ppu_dots(source, 1);
@@ -1050,7 +1050,7 @@ static void test_lcd_frame_phase_resume(void) {
         assert(source->lcd_first_frame == handheld);
         size_t length;
         uint8_t *state = encode(source, &length);
-        const size_t phase_offset = length - 16;
+        const size_t phase_offset = length - 22;
         assert(state[phase_offset] == handheld && state[phase_offset + 1] == handheld);
         assert(cupid_gb_load_state(target, state, length) == CUPID_GB_STATE_OK);
         assert(target->lcd_frame_odd == handheld && target->lcd_first_frame == handheld);
@@ -1159,12 +1159,12 @@ static void test_v5_sgb_mapper_sections(void) {
         }
         size_t length;
         uint8_t *bytes = encode(source, &length);
-        assert(length == mapper_offset + mapper_length + 16 && bytes[8] == 8 &&
+        assert(length == mapper_offset + mapper_length + 22 && bytes[8] == 9 &&
                bytes[mapper_offset - 2] == 0x34 && bytes[mapper_offset - 1] == 0x12);
         assert(memcmp(bytes + mapper_offset, wire, mapper_length) == 0);
         assert(cupid_gb_load_state(target, bytes, length) == CUPID_GB_STATE_OK);
         assert_encoded_equal(source, target);
-        const size_t v5_length = length - 16;
+        const size_t v5_length = length - 22;
         put_u32(bytes + 8, 5);
         put_u32(bytes + 12, (uint32_t)v5_length);
         update_integrity(bytes, v5_length);
@@ -1256,8 +1256,8 @@ static void print_fixture(const char *path) {
     gb->dma_active = true;
     size_t length;
     uint8_t *bytes = encode(gb, &length);
-    assert(length == 300588 && bytes[8] == 8 && !bytes[length - 16] && !bytes[length - 15]);
-    length -= 16;
+    assert(length == 300594 && bytes[8] == 9 && !bytes[length - 22] && !bytes[length - 21]);
+    length -= 22;
     put_u32(bytes + 8, 4);
     put_u32(bytes + 12, (uint32_t)length);
     update_integrity(bytes, length);
@@ -1702,7 +1702,7 @@ static void test_input_and_display_history(void) {
             }
             // Older tails did not record row release or presentation counters.
             for (unsigned version = 6; version <= 7; ++version) {
-                const size_t old_length = length - (version == 7 ? 11 : 12);
+                const size_t old_length = length - (version == 7 ? 17 : 18);
                 put_u32(state + 8, version);
                 put_u32(state + 12, (uint32_t)old_length);
                 update_integrity(state, old_length);
@@ -1739,11 +1739,18 @@ static void test_input_and_display_history(void) {
     free(b);
 }
 
+#include "test_state_video_bus.h"
+
 int main(int argc, char **argv) {
     assert(argc == 1 || (argc == 3 && strcmp(argv[1], "--write-fixture") == 0));
     test_sha256();
     test_resume();
     test_input_and_display_history();
+    test_boot_entry_object_abort();
+    test_video_bus_history();
+    test_vram_row_continuation();
+    test_stop_video_gate_continuation();
+    test_object_fetch_stage_history();
     test_word_array_wire_encoding();
     test_v2_import();
     test_controller_state_versions();
