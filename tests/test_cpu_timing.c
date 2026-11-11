@@ -894,6 +894,56 @@ static void test_register_indirect_bus_phase(void) {
     cupid_gb_cleanup(&gb);
 }
 
+static void test_immediate_cartridge_bus_phase(void) {
+    CupidGb gb = {0};
+    const uint8_t byte_loads[] = {0x06, 0x0e, 0x16, 0x1e, 0x26, 0x2e, 0x3e};
+    uint8_t *registers[] = {&gb.cpu.b, &gb.cpu.c, &gb.cpu.d, &gb.cpu.e,
+                            &gb.cpu.h, &gb.cpu.l, &gb.cpu.a};
+    const uint8_t alu_opcodes[] = {0xc6, 0xce, 0xd6, 0xde, 0xe6, 0xee, 0xf6, 0xfe};
+    const uint8_t alu_results[] = {0x22, 0x22, 0xfe, 0xfe, 0x10, 0x02, 0x12, 0x10};
+    const uint8_t alu_flags[] = {0, 0, 0x70, 0x70, 0x20, 0, 0, 0x70};
+    cupid_gb_set_model(&gb, CUPID_GB_MODEL_CGB);
+    for (unsigned fast = 0; fast < 2; ++fast) {
+        const unsigned machine_cycle = fast ? 2 : 4;
+        for (unsigned pair = 0; pair < 4; ++pair) {
+            prepare(&gb, (uint8_t)(0x01 + 0x10 * pair), 0);
+            gb.double_speed = fast != 0;
+            gb.rom[0x101] = 0x34;
+            gb.rom[0x102] = 0x12;
+            step_cycles(&gb, 3 * machine_cycle);
+            const uint16_t values[] = {(uint16_t)(gb.cpu.b * 256u + gb.cpu.c),
+                                       (uint16_t)(gb.cpu.d * 256u + gb.cpu.e),
+                                       (uint16_t)(gb.cpu.h * 256u + gb.cpu.l), gb.cpu.sp};
+            assert(values[pair] == 0x1234 && gb.cpu.pc == 0x103);
+            assert(cupid_gb_sample_cartridge_bus(&gb) == 0x12);
+            assert(gb.cartridge_bus_expiry - gb.elapsed_cycles * 2 ==
+                   CUPID_GB_CARTRIDGE_BUS_HALF_DOTS - 2 * machine_cycle);
+        }
+        for (unsigned i = 0; i < sizeof(byte_loads); ++i) {
+            prepare(&gb, byte_loads[i], 0);
+            gb.double_speed = fast != 0;
+            gb.rom[0x101] = 0x12;
+            step_cycles(&gb, 2 * machine_cycle);
+            assert(*registers[i] == 0x12 && gb.cpu.pc == 0x102);
+            assert(cupid_gb_sample_cartridge_bus(&gb) == 0x12);
+            assert(gb.cartridge_bus_expiry - gb.elapsed_cycles * 2 ==
+                   CUPID_GB_CARTRIDGE_BUS_HALF_DOTS - 2 * machine_cycle);
+        }
+        for (unsigned i = 0; i < sizeof(alu_opcodes); ++i) {
+            prepare(&gb, alu_opcodes[i], 0);
+            gb.double_speed = fast != 0;
+            gb.cpu.a = 0x10;
+            gb.rom[0x101] = 0x12;
+            step_cycles(&gb, 2 * machine_cycle);
+            assert(gb.cpu.a == alu_results[i] && gb.cpu.f == alu_flags[i]);
+            assert(gb.cpu.pc == 0x102 && cupid_gb_sample_cartridge_bus(&gb) == 0x12);
+            assert(gb.cartridge_bus_expiry - gb.elapsed_cycles * 2 ==
+                   CUPID_GB_CARTRIDGE_BUS_HALF_DOTS - 2 * machine_cycle);
+        }
+    }
+    cupid_gb_cleanup(&gb);
+}
+
 int main(void) {
     test_conditional_control_flow();
     test_unconditional_control_flow();
@@ -920,6 +970,7 @@ int main(void) {
     test_lcd_enable_during_read_modify_write();
     test_lcd_enable_during_stack_writes();
     test_register_indirect_bus_phase();
+    test_immediate_cartridge_bus_phase();
     puts("CPU control-flow timing checks passed.");
     return 0;
 }

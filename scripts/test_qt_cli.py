@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""Exercise session model selection through the desktop command-line entry point."""
+"""Exercise cartridge loading and model selection through the desktop entry point."""
 
 import json
 import os
 from pathlib import Path
+import shutil
+import stat
 import subprocess
 import sys
 import tempfile
+import zipfile
 
 from test_rom_runner import make_rom
 
@@ -20,6 +23,18 @@ def cartridge(color=0, licensed=False):
         checksum = (checksum - byte - 1) & 255
     rom[0x14D] = checksum
     return rom
+
+
+def archive_executable():
+    for name in ("7zz", "7z"):
+        executable = shutil.which(name)
+        if executable:
+            return executable
+    if sys.platform == "win32" and os.environ.get("ProgramFiles"):
+        installed = Path(os.environ["ProgramFiles"]) / "7-Zip" / "7z.exe"
+        if installed.is_file():
+            return str(installed)
+    return None
 
 
 def main():
@@ -72,6 +87,9 @@ def main():
         assert result["requested_model"] == "auto" and result["hardware_model"] == "cgb"
         result = run(plain)
         assert result["requested_model"] is None
+        unsupported = root / "advance.gba"
+        unsupported.write_bytes(plain.read_bytes())
+        run(unsupported, expected=1)
         for requested in ("dmg", "dmg0", "mgb", "sgb", "sgb2"):
             run(color, "--model", requested, expected=1)
         for options in (("--model", "invalid"), ("--model", "cgb-e"),
@@ -80,6 +98,65 @@ def main():
                                      env=environment, capture_output=True, timeout=8)
             assert process.returncode != 0
             assert b"core initialized" not in (process.stdout + process.stderr).lower()
+
+        archive_tool = archive_executable()
+        if archive_tool:
+            archive = root / "-color archive.zip"
+            with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as compressed:
+                compressed.writestr("manual.gbc/", "")
+                compressed.writestr("manual.txt", "Documentation")
+                compressed.writestr("folder/Caf\u00e9 [A].GBC", color.read_bytes())
+            assert run(archive, "--model", "auto")["hardware_model"] == "cgb"
+            assert not (root / "folder").exists()
+
+            seven_zip = root / "color.7z"
+            subprocess.run([archive_tool, "a", str(seven_zip), str(color)], check=True,
+                           capture_output=True, timeout=10)
+            assert run(seven_zip, "--model", "auto")["hardware_model"] == "cgb"
+
+            battery = make_rom(bytes((0x3E, 0x42, 0xEA, 0, 0xA0, 0x18, 0xFE)))
+            battery[0x147] = 9  # ROM + RAM + battery.
+            battery[0x149] = 2  # 8 KiB RAM.
+            battery[0x14D] = (-sum(battery[0x134:0x14D]) - 25) & 255
+            archive_battery = root / "game.zip"
+            raw_save = root / "game.sav"
+            raw_save.write_bytes(bytes([0xFF]) * 8192)
+            with zipfile.ZipFile(archive_battery, "w", zipfile.ZIP_DEFLATED) as compressed:
+                compressed.writestr("game.gb", battery)
+            run(archive_battery)
+            assert (root / "game.zip.sav").read_bytes() == bytes([0x42]) + bytes(8191)
+            assert raw_save.read_bytes() == bytes([0xFF]) * 8192
+
+            for name, contents in (
+                ("ambiguous", {"one.gb": plain.read_bytes(), "other.gbc": color.read_bytes()}),
+                ("empty", {"notes.txt": b"No cartridge"}),
+                ("large", {"too-big.gb": bytes(8 * 1024 * 1024 + 1)}),
+            ):
+                invalid = root / (name + ".zip")
+                with zipfile.ZipFile(invalid, "w", zipfile.ZIP_DEFLATED) as compressed:
+                    for member, data in contents.items():
+                        compressed.writestr(member, data)
+                run(invalid, expected=1)
+
+            corrupt = root / "bad-crc.zip"
+            with zipfile.ZipFile(corrupt, "w") as compressed:
+                compressed.writestr("cart.gb", plain.read_bytes())
+            raw = bytearray(corrupt.read_bytes())
+            raw[30 + len("cart.gb") + 0x150] ^= 1
+            corrupt.write_bytes(raw)
+            run(corrupt, expected=1)
+
+            link = root / "link.zip"
+            with zipfile.ZipFile(link, "w") as compressed:
+                member = zipfile.ZipInfo("symlink.gb")
+                member.create_system = 3
+                member.external_attr = stat.S_IFLNK << 16
+                compressed.writestr(member, b"/" + b"elsewhere/" * 40 + b"game.gb")
+            run(link, expected=1)
+            print("Qt archive loading and rejection checks passed.")
+        else:
+            assert not os.environ.get("CUPIDGB_REQUIRE_ARCHIVE_TESTS"), "7-Zip is missing"
+            print("Qt archive checks skipped because 7-Zip is unavailable.")
     print("Qt command-line model selection checks passed.")
 
 

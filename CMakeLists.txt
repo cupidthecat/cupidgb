@@ -41,7 +41,9 @@ add_library(cupidgb_core STATIC
     src/gb/gb.c src/gb/state.c src/gb/cpu.c src/gb/ppu.c src/gb/pixels.c src/gb/apu.c
     src/gb/timer.c src/gb/cartridge.c src/gb/camera.c src/gb/mbc7.c src/gb/input.c src/gb/debugger.c src/gb/sgb.c
     src/gbc/cgb.c
+    src/gb/printer.c
     src/gb/tpp1.c
+    src/gb/huc3.c
 )
 target_include_directories(cupidgb_core PUBLIC include)
 if(NOT MSVC)
@@ -78,7 +80,7 @@ endif()
 add_executable(cupidgb_rom_runner tools/rom_runner.c)
 target_link_libraries(cupidgb_rom_runner PRIVATE cupidgb_core)
 if(CUPIDGB_BUILD_QT)
-    find_package(Qt6 6.4 REQUIRED COMPONENTS Widgets Multimedia)
+    find_package(Qt6 6.4 REQUIRED COMPONENTS Widgets Multimedia PrintSupport)
     find_package(SDL2 2.24 REQUIRED CONFIG)
     if(MSVC)
         get_target_property(cupidgb_sdl_target SDL2::SDL2 ALIASED_TARGET)
@@ -108,8 +110,11 @@ if(CUPIDGB_BUILD_QT)
     endif()
     add_executable(cupidgb
         src/frontend/qt/main.cpp
+        src/frontend/qt/cartridge_file.cpp
         src/frontend/qt/main_window.cpp
         src/frontend/qt/main_window.h
+        src/frontend/qt/main_window_printer.cpp
+        src/frontend/qt/printer_window.cpp
         src/frontend/qt/guest_clock_pacer.cpp
         src/frontend/qt/audio_converter.cpp
         src/frontend/qt/wave_recorder.cpp
@@ -118,7 +123,8 @@ if(CUPIDGB_BUILD_QT)
         src/frontend/qt/inspector_renderer.cpp
         src/frontend/qt/inspectors_window.cpp
     )
-    target_link_libraries(cupidgb PRIVATE cupidgb_core cupidgb_controllers Qt6::Widgets Qt6::Multimedia)
+    target_link_libraries(cupidgb PRIVATE cupidgb_core cupidgb_controllers Qt6::Widgets
+        Qt6::Multimedia Qt6::PrintSupport)
     if(WIN32)
         add_custom_command(TARGET cupidgb POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -142,7 +148,7 @@ if(CUPIDGB_BUILD_QT)
 endif()
 if(CUPIDGB_ENABLE_TESTS)
     enable_testing()
-    foreach(test_name IN ITEMS smoke gb serial ppu stat apu cpu_timing dma state battery native_v1_recovery sgb input cartridge camera mbc7 tpp1 debugger sha256)
+    foreach(test_name IN ITEMS smoke gb serial printer ppu stat apu cpu_timing dma state battery native_v1_recovery sgb input cartridge camera mbc7 tpp1 huc3 debugger sha256)
         add_executable(cupidgb_${test_name} tests/test_${test_name}.c)
         target_link_libraries(cupidgb_${test_name} PRIVATE cupidgb_core)
         # Tests use assert for setup and checks, including in Release builds.

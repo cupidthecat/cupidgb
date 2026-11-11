@@ -1,6 +1,8 @@
+#include "cupid/gb/debugger.h"
 #include "cupid/gb/gb.h"
 #include "cupid/gb/input.h"
 #include "cupid/gb/ppu.h"
+#include "cupid/gb/state.h"
 #include "cupid/gb/timer.h"
 
 #include <assert.h>
@@ -105,6 +107,113 @@ static void test_general_transfer_clocks_and_blocks(void) {
         assert(gb->apu.buf_write == duration * UINT32_C(44100) / 4194304u);
         assert(cupid_gb_read_u8(gb, 0xff55) == 0xff);
         release(gb);
+    }
+}
+
+static void test_open_bus_dma_decay(void) {
+    for (unsigned fast = 0; fast < 2; ++fast) {
+        CupidGb *gb = hardware(CUPID_GB_MODEL_CGB, true, fast != 0, 0);
+        addresses(gb);
+        cupid_gb_write_u8(gb, 0xff51, 0x7f);
+        cupid_gb_write_u8(gb, 0xff52, 0xf0);
+        cupid_gb_write_u8(gb, 0xff55, 1);
+        assert(cupid_gb_step(gb));
+        /* The last ROM byte drives the bus. Two subsequent source slots have no driver
+         * but still see that byte. The six-dot hold expires before the third. */
+        for (unsigned i = 0; i < 32; ++i)
+            assert(gb->video_ram[0x800 + i] == (i < 18 ? 0 : 0xff));
+        release(gb);
+    }
+}
+
+static void test_cartridge_bus_read_and_resume(void) {
+    uint8_t rom[32768] = {0};
+    rom[0x100] = 0xfa; /* LD A,($A800) */
+    rom[0x102] = 0xa8;
+    rom[0x143] = 0x80;
+    rom[0x147] = 0x1a; /* MBC5 + RAM */
+    rom[0x149] = 2;
+    for (unsigned i = 0x134; i < 0x14d; ++i)
+        rom[0x14d] = (uint8_t)(rom[0x14d] - rom[i] - 1);
+
+    for (unsigned fast = 0; fast < 2; ++fast) {
+        CupidGb *gb = calloc(1, sizeof(*gb));
+        assert(gb);
+        cupid_gb_set_model(gb, CUPID_GB_MODEL_CGB);
+        assert(cupid_gb_load_rom(gb, rom, sizeof(rom)));
+        gb->double_speed = fast != 0;
+        cupid_gb_write_u8(gb, 0xff40, 0);
+        assert(!gb->ram_enabled && cupid_gb_step(gb));
+        assert(gb->cpu.a == 0xa8 && gb->cpu.pc == 0x103);
+        assert(gb->elapsed_cycles == (fast ? 8u : 16u));
+
+        /* A write to disabled RAM still drives the cartridge pins. Accesses on the
+         * separate WRAM bus and passive debugger reads cannot replace the held value. */
+        cupid_gb_write_u8(gb, 0xa800, 0x5c);
+        cupid_gb_write_u8(gb, 0xc000, 0x99);
+        assert(cupid_gb_read_bus_u8(gb, 0xc000) == 0x99);
+        assert(cupid_gb_read_u8(gb, 0xa800) == 0xff);
+        assert(cupid_gb_debug_peek(gb, 0x100) == 0xfa);
+        assert(cupid_gb_read_bus_u8(gb, 0xa800) == 0x5c);
+        cupid_gb_tick(gb, 1);
+        const size_t length = cupid_gb_state_size(gb);
+        uint8_t *snapshot = malloc(length);
+        assert(snapshot && cupid_gb_save_state(gb, snapshot, length, NULL) == CUPID_GB_STATE_OK);
+
+        cupid_gb_tick(gb, fast ? 2 : 1);
+        assert(cupid_gb_read_bus_u8(gb, 0xa800) == 0xff);
+        assert(cupid_gb_load_state(gb, snapshot, length) == CUPID_GB_STATE_OK);
+        assert(cupid_gb_read_bus_u8(gb, 0xa800) == 0x5c);
+        cupid_gb_tick(gb, 1);
+        assert(cupid_gb_read_bus_u8(gb, 0xa800) == (fast ? 0x5c : 0xff));
+        if (fast)
+            cupid_gb_tick(gb, 1);
+        assert(cupid_gb_read_bus_u8(gb, 0xa800) == 0xff);
+
+        cupid_gb_write_u8(gb, 0x0000, 0x0a);
+        cupid_gb_write_u8(gb, 0xa800, 0x72);
+        assert(gb->ram_enabled && cupid_gb_read_bus_u8(gb, 0xa800) == 0x72);
+        free(snapshot);
+        release(gb);
+    }
+}
+
+static void test_mode_3_destination_conflict(void) {
+    static const struct {
+        uint16_t offset;
+        uint8_t value;
+    } writes[] = {{0x000, 0x80}, {0x002, 0x8d}, {0x800, 0xd7}, {0x803, 0x2e}, {0x804, 0x0b},
+                  {0x807, 0x62}, {0x808, 0x3f}, {0x80b, 0x96}, {0x80c, 0x73}, {0x80f, 0xca},
+                  {0x813, 0xfe}, {0x817, 0x32}, {0x81b, 0x66}, {0x81f, 0x9a}};
+
+    for (unsigned fast = 0; fast < 2; ++fast) {
+        for (unsigned bank = 0; bank < 2; ++bank) {
+            CupidGb *gb = hardware(CUPID_GB_MODEL_CGB, true, fast != 0, 0);
+            uint8_t expected[0x4000];
+            for (unsigned i = 0; i < sizeof(expected); ++i)
+                expected[i] = (uint8_t)(i * 17 + (i >> 13) * 0x51 + 9);
+            memcpy(gb->video_ram, expected, sizeof(expected));
+            for (unsigned i = 0; i < 32; ++i)
+                cupid_gb_write_u8(gb, (uint16_t)(0xc000 + i), (uint8_t)(i * 13 + 7));
+
+            /* At this fetch phase, address contention redirects several bytes into tile data
+             * before 8800. The blocked CPU VRAM port lets the writes reach both banks. */
+            for (unsigned i = 0; i < sizeof(writes) / sizeof(writes[0]); ++i) {
+                expected[writes[i].offset] = writes[i].value;
+                expected[0x2000 + writes[i].offset] = writes[i].value;
+            }
+            cupid_gb_write_u8(gb, 0xff4f, (uint8_t)bank);
+            lcd_phase(gb, 600);
+            assert((cupid_gb_read_u8(gb, 0xff41) & 3) == CUPID_GB_PPU_MODE_TRANSFER);
+            addresses(gb);
+            cupid_gb_write_u8(gb, 0xff55, 1);
+            assert(cupid_gb_step(gb));
+            assert(gb->elapsed_cycles == (fast ? 68u : 72u));
+            assert(cupid_gb_read_u8(gb, 0xff55) == 0xff);
+            assert(!gb->hdma_running);
+            assert(memcmp(gb->video_ram, expected, sizeof(expected)) == 0);
+            release(gb);
+        }
     }
 }
 
@@ -221,6 +330,9 @@ static void test_non_color_transfer_registers_are_inaccessible(void) {
 int main(void) {
     test_start_boundary_and_latched_opcode();
     test_general_transfer_clocks_and_blocks();
+    test_mode_3_destination_conflict();
+    test_open_bus_dma_decay();
+    test_cartridge_bus_read_and_resume();
     test_hblank_delay_and_next_block();
     test_lcd_disable_requests_only_nonzero_mode();
     test_halt_and_stop_wake_permission();

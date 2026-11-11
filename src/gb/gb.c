@@ -26,6 +26,7 @@
 #include "cupid/gb/camera.h"
 #include "cupid/gb/cartridge.h"
 #include "cupid/gb/cpu.h"
+#include "cupid/gb/huc3.h"
 #include "cupid/gb/input.h"
 #include "cupid/gb/mbc7.h"
 #include "cupid/gb/ppu.h"
@@ -33,35 +34,6 @@
 #include "cupid/gb/timer.h"
 #include "cupid/gb/tpp1.h"
 #include "cupid/gbc/cgb.h"
-
-// Serial transfer (memory-map helper)
-
-/**
- * @brief Handles a write to the SC (serial control) register at 0xFF02.
- *
- * Commits the old clock phase, applies the writable control bits, and
- * establishes the remaining byte length for a disconnected serial port.
- *
- * @param gb    Pointer to the Game Boy state.
- * @param value The value being written to SC.
- *
- * @note The memory-map dispatcher has already checked that @p gb is valid.
- */
-static void cupid_gb_handle_serial_transfer(CupidGb *gb, uint8_t value) {
-    /* A control access begins a new byte count but also drives the old clock
-     * low. An active internal transfer therefore contributes its outgoing bit
-     * before the newly written clock selection takes effect. */
-    bool old_bit = gb->serial_master_clock && (gb->io_registers[2] & 0x81u) == 0x81u;
-    if (old_bit)
-        gb->io_registers[1] = (uint8_t)(2u * gb->io_registers[1] + 1u);
-    gb->serial_master_clock = false;
-
-    uint8_t writable = gb->cgb_mode ? 0x83u : 0x81u;
-    gb->io_registers[2] = (uint8_t)((value & writable) | (uint8_t)~writable);
-    gb->serial_bits_remaining = (value & 0x80u) ? (uint8_t)(8u - old_bit) : 0u;
-    if (value & 0x80u)
-        gb->serial_tx_latch = gb->io_registers[1];
-}
 
 // Init
 
@@ -241,6 +213,7 @@ void cupid_gb_init(CupidGb *gb) {
     uint8_t *rom;
     CupidGbSerialOutputCallback serial_output_callback;
     void *serial_output_user_data;
+    CupidGbSerialLink serial_link;
     CupidGbRumbleCallback rumble_callback;
     void *rumble_user_data;
 
@@ -252,18 +225,22 @@ void cupid_gb_init(CupidGb *gb) {
     rom = gb->rom;
     serial_output_callback = gb->serial_output_callback;
     serial_output_user_data = gb->serial_output_user_data;
+    serial_link = gb->serial_link;
     rumble_callback = gb->rumble_callback;
     rumble_user_data = gb->rumble_user_data;
     const int16_t motion_x = gb->mbc7.motion_x;
     const int16_t motion_y = gb->mbc7.motion_y;
+    const bool huc3_ir_input = gb->huc3_ir_input;
     memset(gb, 0, sizeof(*gb));
     gb->model = model;
     gb->rom = rom;
     gb->serial_output_callback = serial_output_callback;
     gb->serial_output_user_data = serial_output_user_data;
+    gb->serial_link = serial_link;
     gb->rumble_callback = rumble_callback;
     gb->rumble_user_data = rumble_user_data;
     cupid_gb_mbc7_set_motion(gb, motion_x, motion_y);
+    gb->huc3_ir_input = huc3_ir_input;
 
     if (gb->rom == 0) {
         gb->rom = malloc(CUPID_GB_MAX_ROM_SIZE);
@@ -282,6 +259,7 @@ void cupid_gb_init(CupidGb *gb) {
     gb->io_registers[0x05u] = 0x00u;
     gb->io_registers[0x06u] = 0x00u;
     gb->io_registers[0x07u] = 0x00u;
+    gb->io_registers[0x56u] = 0x00u;
     gb->io_registers[CUPID_GB_IO_BGP] = 0xfcu;
     gb->io_registers[CUPID_GB_IO_OBP0] = 0xffu;
     gb->io_registers[CUPID_GB_IO_OBP1] = 0xffu;
@@ -444,6 +422,8 @@ void cupid_gb_enter_boot_rom(CupidGb *gb) {
     gb->cpu.h = 0u;
     gb->cpu.l = 0u;
     gb->cpu.sp = 0u;
+    gb->cartridge_bus_expiry = 0;
+    gb->cartridge_bus_data = 0xffu;
     gb->cpu.pc = 0x0000u; /* start executing boot ROM from address 0 */
     gb->cpu.ime = false;
     gb->cpu.ime_delay = 0u;
@@ -502,6 +482,8 @@ void cupid_gb_enter_boot_rom(CupidGb *gb) {
     /* Activate boot ROM overlay */
     gb->boot_rom_enabled = true;
     gb->frame_ready = false;
+    gb->lcd_frame_odd = false;
+    gb->lcd_first_frame = false;
     gb->ppu_lcd_startup = false;
     gb->ppu_lcd_warmup_lines = 0u;
     gb->stat_irq_delay = 0u;
@@ -528,6 +510,7 @@ void cupid_gb_cleanup(CupidGb *gb) {
     gb->rom = 0;
     gb->serial_output_callback = NULL;
     gb->serial_output_user_data = NULL;
+    gb->serial_link = (CupidGbSerialLink){0};
     gb->rumble_callback = NULL;
     gb->rumble_user_data = NULL;
     gb->mbc5_rumble_on = false;
@@ -540,6 +523,12 @@ void cupid_gb_set_serial_output_callback(CupidGb *gb, CupidGbSerialOutputCallbac
     }
     gb->serial_output_callback = callback;
     gb->serial_output_user_data = callback ? user_data : NULL;
+}
+
+void cupid_gb_set_serial_link(CupidGb *gb, CupidGbSerialLink link) {
+    if (gb) {
+        gb->serial_link = link.launch || link.sample ? link : (CupidGbSerialLink){0};
+    }
 }
 
 void cupid_gb_set_rumble_callback(CupidGb *gb, CupidGbRumbleCallback callback, void *user_data) {
@@ -558,12 +547,99 @@ bool cupid_gb_rumble_enabled(const CupidGb *gb) {
 
 // Memory map: read
 
+enum { CARTRIDGE_WINDOW_FLOATING = 0x100 };
+
+static uint16_t read_cartridge_window(const CupidGb *gb, uint16_t address) {
+    if (gb->header.mbc_type == CUPID_GB_TPP1) {
+        if ((gb->tpp1.mode == 2u || gb->tpp1.mode == 3u) && !gb->cartridge_ram_size)
+            return CARTRIDGE_WINDOW_FLOATING;
+        return cupid_gb_tpp1_read(gb, address);
+    }
+    if (gb->header.mbc_type == CUPID_GB_CAMERA) {
+        if (gb->camera.mapped)
+            return cupid_gb_camera_read_register(&gb->camera, address);
+        if (gb->cartridge_ram_size && gb->camera.busy_tcycles)
+            return 0;
+        if (gb->cartridge_ram_size && !gb->current_ram_bank && address >= 0xa100u &&
+            address < 0xaf00u)
+            return cupid_gb_camera_read_tile(&gb->camera, address - 0xa100u);
+    } else if (gb->header.mbc_type == CUPID_GB_HUC3) {
+        if (gb->huc3_mode != CUPID_GB_HUC3_SRAM_READ_ONLY && gb->huc3_mode != CUPID_GB_HUC3_SRAM)
+            return cupid_gb_huc3_read_window(gb);
+    } else if (!gb->ram_enabled && gb->header.mbc_type != CUPID_GB_HUC1) {
+        return gb->header.mbc_type == CUPID_GB_MBC7 ? 0xffu : CARTRIDGE_WINDOW_FLOATING;
+    }
+    /* MBC2: built-in 512x4-bit RAM, only bottom nibble valid */
+    if (gb->header.mbc_type == CUPID_GB_MBC2) {
+        size_t offset = (size_t)(address - 0xa000u) & 0x01ffu;
+        return (uint8_t)(gb->cartridge_ram[offset] | 0xf0u);
+    }
+    /* MBC3: RTC register reads when selected */
+    if (gb->header.mbc_type == CUPID_GB_MBC3 && gb->rtc_register >= 0x08u) {
+        if (gb->rtc_register > 0x0cu)
+            return CARTRIDGE_WINDOW_FLOATING;
+        const uint8_t latched[] = {gb->rtc.ls, gb->rtc.lm, gb->rtc.lh, gb->rtc.ldl, gb->rtc.ldh};
+        const uint8_t masks[] = {0x3f, 0x3f, 0x1f, 0xff, 0xc1};
+        unsigned selected = gb->rtc_register - 0x08u;
+        return latched[selected] & masks[selected];
+    }
+    /* Ordinary timer-equipped MBC3 wiring leaves banks 4-7 disconnected;
+     * the extended controller connects them to additional SRAM. */
+    if (gb->header.mbc_type == CUPID_GB_MBC3 && gb->header.has_timer &&
+        !cupid_gb_has_extended_mbc3(gb) && gb->current_ram_bank > 3u) {
+        return 0xffu;
+    }
+    if (gb->header.mbc_type == CUPID_GB_MBC7)
+        return cupid_gb_mbc7_read(gb, address);
+    /* HuC1: IR mode returns 0xC0 (no IR signal) */
+    if (gb->header.mbc_type == CUPID_GB_HUC1 && gb->huc1_ir_mode) {
+        return 0xc0u;
+    }
+    {
+        size_t offset = cupid_gb_effective_ram_bank(gb) * 0x2000u + (size_t)(address - 0xa000u);
+        /* Every configured SRAM size is a power of two. Missing address
+         * lines mirror a small chip throughout the cartridge window. */
+        if (gb->cartridge_ram_size)
+            offset &= gb->cartridge_ram_size - 1u;
+        if (offset < gb->cartridge_ram_size) {
+            return gb->cartridge_ram[offset];
+        }
+    }
+    return CARTRIDGE_WINDOW_FLOATING;
+}
+
+static uint8_t read_program(const CupidGb *gb, uint16_t address) {
+    const bool lower_bank = address < 0x4000u;
+    if (lower_bank && gb->boot_rom_enabled && gb->boot_rom_size > 0u) {
+        if (address < 0x100u && address < gb->boot_rom_size)
+            return gb->boot_rom[address];
+        if (gb->boot_rom_size > 0x100u && address >= 0x200u && address < 0x900u)
+            return gb->boot_rom[address];
+    }
+    const size_t bank = cupid_gb_effective_rom_bank(gb, lower_bank);
+    const size_t offset = bank * 0x4000u + (address & 0x3fffu);
+    return offset < gb->rom_size ? gb->rom[offset] : 0xffu;
+}
+
+static bool on_cgb_cartridge_bus(const CupidGb *gb, uint16_t address) {
+    return (address < 0x8000u || (address >= 0xa000u && address < 0xc000u)) &&
+           gb->model == CUPID_GB_MODEL_CGB;
+}
+
+static void drive_cartridge_bus(CupidGb *gb, uint8_t value, bool half_dot) {
+    gb->cartridge_bus_data = value;
+    gb->cartridge_bus_expiry =
+        gb->elapsed_cycles * 2u + half_dot + CUPID_GB_CARTRIDGE_BUS_HALF_DOTS;
+}
+
+uint8_t cupid_gb_sample_cartridge_bus(const CupidGb *gb) {
+    return gb->elapsed_cycles * 2u < gb->cartridge_bus_expiry ? gb->cartridge_bus_data : 0xffu;
+}
+
 /**
- * @brief Reads one byte from the full 0x0000–0xFFFF Game Boy address space.
+ * @brief Reads one byte from the data and I/O regions of the Game Boy address space.
  *
  * Implements the complete DMG/CGB memory map, including:
- *   - Boot ROM overlay (0x0000–0x00FF, and 0x0200–0x08FF for CGB)
- *   - ROM banks via MBC bank-switching logic
  *   - VRAM (with Mode 3 lock)
  *   - Cartridge RAM / RTC / MBC7 sensor / HuC registers
  *   - WRAM and echo RAM
@@ -575,53 +651,18 @@ bool cupid_gb_rumble_enabled(const CupidGb *gb) {
  *
  * @param gb      Pointer to the Game Boy state.
  * @param address The 16-bit address to read.
+ * @param bus     The same instance for a guest access, or NULL for inspection.
  *
- * @return The byte at @p address, or 0xFF if the address is open-bus,
- *         locked during DMA, or @p gb is NULL.
+ * @return The mapped byte, the held cartridge-bus value for a floating CGB
+ *         guest access, or 0xFF if the address cannot drive a value.
  */
-uint8_t cupid_gb_read_u8(const CupidGb *gb, uint16_t address) {
+static uint8_t read_data_bus(const CupidGb *gb, uint16_t address, CupidGb *bus) {
     static const uint8_t apu_read_masks[0x20] = {
         0x80u, 0x3fu, 0x00u, 0xffu, 0xbfu, 0xffu, 0x3fu, 0x00u, 0xffu, 0xbfu, 0x7fu,
         0xffu, 0x9fu, 0xffu, 0xbfu, 0xffu, 0xffu, 0x00u, 0x00u, 0xbfu, 0x00u, 0x00u,
         0x70u, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu, 0xffu};
 
     if (gb == 0) {
-        return 0xffu;
-    }
-
-    if (gb->dma_active && address >= 0xfe00u && address <= 0xfeffu) {
-        return 0xffu;
-    }
-
-    if (address <= 0x3fffu) {
-        /* Boot ROM overlay: intercept reads while the boot ROM is mapped */
-        if (gb->boot_rom_enabled && gb->boot_rom_size > 0u) {
-            /* DMG boot ROM: 0x0000-0x00FF (256 bytes) */
-            if (address <= 0x00ffu && address < gb->boot_rom_size) {
-                return gb->boot_rom[address];
-            }
-            /* CGB boot ROM: also 0x0200-0x08FF */
-            if (gb->boot_rom_size > 0x0100u && address >= 0x0200u && address <= 0x08ffu) {
-                return gb->boot_rom[address];
-            }
-        }
-
-        size_t bank = cupid_gb_effective_rom_bank(gb, true);
-        size_t offset = bank * 0x4000u + (size_t)address;
-
-        if (offset < gb->rom_size) {
-            return gb->rom[offset];
-        }
-        return 0xffu;
-    }
-
-    if (address <= 0x7fffu) {
-        size_t bank = cupid_gb_effective_rom_bank(gb, false);
-        size_t offset = bank * 0x4000u + (size_t)(address - 0x4000u);
-
-        if (offset < gb->rom_size) {
-            return gb->rom[offset];
-        }
         return 0xffu;
     }
 
@@ -638,62 +679,13 @@ uint8_t cupid_gb_read_u8(const CupidGb *gb, uint16_t address) {
     }
 
     if (address >= 0xa000u && address <= 0xbfffu) {
-        if (gb->header.mbc_type == CUPID_GB_TPP1)
-            return cupid_gb_tpp1_read(gb, address);
-        if (gb->header.mbc_type == CUPID_GB_CAMERA) {
-            if (gb->camera.mapped)
-                return cupid_gb_camera_read_register(&gb->camera, address);
-            if (gb->cartridge_ram_size && gb->camera.busy_tcycles)
-                return 0;
-            if (gb->cartridge_ram_size && !gb->current_ram_bank && address >= 0xa100u &&
-                address < 0xaf00u)
-                return cupid_gb_camera_read_tile(&gb->camera, address - 0xa100u);
-        } else if (gb->header.mbc_type == CUPID_GB_HUC3) {
-            /* Mode zero leaves SRAM readable, while mode A also allows writes. */
-            const uint8_t mode = gb->huc3_mode & 0x0fu;
-            if (mode != 0u && mode != 0x0au)
-                return 0xffu;
-        } else if (!gb->ram_enabled && gb->header.mbc_type != CUPID_GB_HUC1) {
-            return 0xffu;
+        const uint16_t value = read_cartridge_window(gb, address);
+        if (bus && gb->model == CUPID_GB_MODEL_CGB) {
+            if (value == CARTRIDGE_WINDOW_FLOATING)
+                return cupid_gb_sample_cartridge_bus(gb);
+            drive_cartridge_bus(bus, (uint8_t)value, false);
         }
-        /* MBC2: built-in 512x4-bit RAM, only bottom nibble valid */
-        if (gb->header.mbc_type == CUPID_GB_MBC2) {
-            size_t offset = (size_t)(address - 0xa000u) & 0x01ffu;
-            return (uint8_t)(gb->cartridge_ram[offset] | 0xf0u);
-        }
-        /* MBC3: RTC register reads when selected */
-        if (gb->header.mbc_type == CUPID_GB_MBC3 && gb->rtc_register >= 0x08u) {
-            if (gb->rtc_register > 0x0cu)
-                return 0xffu;
-            const uint8_t latched[] = {gb->rtc.ls, gb->rtc.lm, gb->rtc.lh, gb->rtc.ldl,
-                                       gb->rtc.ldh};
-            const uint8_t masks[] = {0x3f, 0x3f, 0x1f, 0xff, 0xc1};
-            unsigned selected = gb->rtc_register - 0x08u;
-            return latched[selected] & masks[selected];
-        }
-        /* Ordinary timer-equipped MBC3 wiring leaves banks 4-7 disconnected;
-         * the extended controller connects them to additional SRAM. */
-        if (gb->header.mbc_type == CUPID_GB_MBC3 && gb->header.has_timer &&
-            !cupid_gb_has_extended_mbc3(gb) && gb->current_ram_bank > 3u) {
-            return 0xffu;
-        }
-        if (gb->header.mbc_type == CUPID_GB_MBC7)
-            return cupid_gb_mbc7_read(gb, address);
-        /* HuC1: IR mode returns 0xC0 (no IR signal) */
-        if (gb->header.mbc_type == CUPID_GB_HUC1 && gb->huc1_ir_mode) {
-            return 0xc0u;
-        }
-        {
-            size_t offset = cupid_gb_effective_ram_bank(gb) * 0x2000u + (size_t)(address - 0xa000u);
-            /* Every configured SRAM size is a power of two. Missing address
-             * lines mirror a small chip throughout the cartridge window. */
-            if (gb->cartridge_ram_size)
-                offset &= gb->cartridge_ram_size - 1u;
-            if (offset < gb->cartridge_ram_size) {
-                return gb->cartridge_ram[offset];
-            }
-        }
-        return 0xffu;
+        return value == CARTRIDGE_WINDOW_FLOATING ? 0xffu : (uint8_t)value;
     }
 
     if (address >= 0xc000u && address <= 0xdfffu) {
@@ -705,6 +697,8 @@ uint8_t cupid_gb_read_u8(const CupidGb *gb, uint16_t address) {
     }
 
     if (address >= 0xfe00u && address <= 0xfe9fu) {
+        if (gb->dma_active)
+            return 0xffu;
         uint8_t mode = (uint8_t)(gb->io_registers[CUPID_GB_IO_STAT] & 0x03u);
 
         if (cupid_gb_lcd_enabled(gb) &&
@@ -801,6 +795,23 @@ uint8_t cupid_gb_read_u8(const CupidGb *gb, uint16_t address) {
     return 0xffu;
 }
 
+uint8_t cupid_gb_read_u8(const CupidGb *gb, uint16_t address) {
+    if (gb && address < 0x8000u)
+        return read_program(gb, address);
+    return read_data_bus(gb, address, NULL);
+}
+
+uint8_t cupid_gb_read_bus_u8(CupidGb *gb, uint16_t address) {
+    /* Keep the common instruction fetch out of the slower I/O and RAM map. */
+    if (gb && address < 0x8000u) {
+        const uint8_t value = read_program(gb, address);
+        if (gb->model == CUPID_GB_MODEL_CGB)
+            drive_cartridge_bus(gb, value, false);
+        return value;
+    }
+    return read_data_bus(gb, address, gb);
+}
+
 // MBC3 real-time clock helpers
 
 /**
@@ -861,6 +872,9 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
     if (gb == 0) {
         return;
     }
+
+    if (on_cgb_cartridge_bus(gb, address))
+        drive_cartridge_bus(gb, value, half_dot);
 
     if (gb->dma_active && address >= 0xfe00u && address <= 0xfeffu) {
         return;
@@ -1033,6 +1047,10 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
             cupid_gb_tpp1_write_window(gb, address, value);
             return;
         }
+        if (gb->header.mbc_type == CUPID_GB_HUC3 && gb->huc3_mode != CUPID_GB_HUC3_SRAM) {
+            cupid_gb_huc3_write_window(gb, value);
+            return;
+        }
         if (gb->header.mbc_type == CUPID_GB_CAMERA) {
             if (gb->camera.mapped) {
                 cupid_gb_camera_write_register(&gb->camera, address, value);
@@ -1145,7 +1163,7 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
             return;
         }
         if (address == 0xff02u) {
-            cupid_gb_handle_serial_transfer(gb, value);
+            cupid_gb_serial_apply_control_write(gb, value);
         } else if (address == 0xff04u) {
             cupid_gb_timer_apply_div_reset(gb);
         } else if (address == 0xff40u) {
@@ -1156,10 +1174,14 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
 
             gb->io_registers[CUPID_GB_IO_LCDC] = value;
             if ((value & 0x80u) == 0u) {
-                if (lcd_was_enabled)
+                if (lcd_was_enabled) {
                     cupid_cgb_hdma_lcd_off(gb, previous_mode);
+                    if (!gb->sgb.enabled)
+                        gb->lcd_frame_odd = !gb->lcd_frame_odd;
+                }
                 gb->ppu_counter = 0u;
                 gb->frame_ready = false;
+                gb->lcd_first_frame = false;
                 gb->ppu_lcd_warmup_lines = 0u;
                 gb->ppu_lcd_startup = false;
                 gb->ppu_line_boundary_hold = false;
@@ -1297,7 +1319,7 @@ static bool cupid_gb_step_internal(CupidGb *gb, CupidGbStepTrace *trace) {
         trace->address = gb->cpu.pc;
     }
     opcode = cupid_gb_fetch_u8(gb);
-    cupid_cgb_run_pending_dma(gb, opcode);
+    cupid_cgb_run_pending_dma(gb);
     if (trace)
         trace->opcode = opcode;
 

@@ -29,7 +29,7 @@ int main(int argc, char **argv) {
     parser.addOption({"report", "Write bounded frontend measurements as JSON.", "path"});
     parser.addOption(
         {"input-trace", "Apply frame-number and active-low hexadecimal input masks.", "path"});
-    parser.addPositionalArgument("rom", "Optional .gb or .gbc cartridge path.");
+    parser.addPositionalArgument("rom", "Optional cartridge or compressed cartridge archive.");
     parser.process(app);
     const bool smoke = parser.isSet("smoke-test");
     const bool audioCheck = parser.isSet("audio-check");

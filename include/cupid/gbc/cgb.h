@@ -26,6 +26,6 @@ void cupid_cgb_hdma_sleep(struct CupidGb *gb);
 void cupid_cgb_hdma_wake(struct CupidGb *gb);
 /* The opcode has already been fetched. DMA may replace its backing memory,
  * but execution must retain that latched byte while all other clocks run. */
-void cupid_cgb_run_pending_dma(struct CupidGb *gb, uint8_t opcode);
+void cupid_cgb_run_pending_dma(struct CupidGb *gb);
 
 #endif

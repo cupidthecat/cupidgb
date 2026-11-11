@@ -3,6 +3,7 @@
 #include "cupid/common/sha256.h"
 #include "cupid/gb/apu.h"
 #include "cupid/gb/camera.h"
+#include "cupid/gb/huc3.h"
 #include "cupid/gb/mbc7.h"
 #include "cupid/gb/tpp1.h"
 
@@ -12,6 +13,7 @@
 
 enum {
     STATE_HEADER_SIZE = 128,
+    STATE_VERSION_V6 = 6,
     STATE_VERSION_V5 = 5,
     STATE_VERSION_V4 = 4,
     STATE_VERSION_V3 = 3,
@@ -19,10 +21,14 @@ enum {
     STATE_WIRE_SIZE_V2 = 300518,
     STATE_WIRE_SIZE_V3 = STATE_WIRE_SIZE_V2 + 50,
     STATE_WIRE_SIZE_V4 = STATE_WIRE_SIZE_V3 + 4,
+    STATE_LCD_PHASE_SIZE = 2,
+    STATE_DMA_BUS_SIZE = 2,
+    STATE_V6_TAIL_SIZE = STATE_LCD_PHASE_SIZE + STATE_DMA_BUS_SIZE,
     STATE_MMM01_EXTENSION_SIZE = 4,
     STATE_MBC7_EXTENSION_SIZE = 8,
     STATE_CAMERA_EXTENSION_SIZE = 64,
     STATE_TPP1_EXTENSION_SIZE = 21,
+    STATE_HUC3_EXTENSION_SIZE = 25,
     STATE_SGB_EXTENSION_SIZE =
         7 + 8192 +
         2 * (CUPID_SGB_TILE_WIDTH * CUPID_SGB_TILE_HEIGHT + CUPID_SGB_BORDER_PALETTE_COLORS)
@@ -34,8 +40,9 @@ enum {
     STATE_SECTION_MBC7 = 1u << 2,
     STATE_SECTION_CAMERA = 1u << 3,
     STATE_SECTION_TPP1 = 1u << 4,
+    STATE_SECTION_HUC3 = 1u << 5,
     STATE_SECTIONS_ALL = STATE_SECTION_SGB | STATE_SECTION_MMM01 | STATE_SECTION_MBC7 |
-                         STATE_SECTION_CAMERA | STATE_SECTION_TPP1
+                         STATE_SECTION_CAMERA | STATE_SECTION_TPP1 | STATE_SECTION_HUC3
 };
 
 static const uint8_t state_magic[8] = {'C', 'U', 'P', 'I', 'D', 'G', 'B', 0};
@@ -490,6 +497,8 @@ static unsigned state_sections(const CupidGb *gb) {
         sections |= STATE_SECTION_CAMERA;
     } else if (gb->header.mbc_type == CUPID_GB_TPP1) {
         sections |= STATE_SECTION_TPP1;
+    } else if (gb->header.mbc_type == CUPID_GB_HUC3) {
+        sections |= STATE_SECTION_HUC3;
     }
     return sections;
 }
@@ -510,6 +519,9 @@ static size_t extended_wire_size(unsigned sections) {
     }
     if (sections & STATE_SECTION_TPP1) {
         size += STATE_TPP1_EXTENSION_SIZE;
+    }
+    if (sections & STATE_SECTION_HUC3) {
+        size += STATE_HUC3_EXTENSION_SIZE;
     }
     return size;
 }
@@ -623,6 +635,28 @@ static bool valid_tpp1_extension(const CupidGbTpp1 *device) {
            device->rtc_base_time >= 0;
 }
 
+static void state_extension_huc3(StateIo *io, CupidGbHuc3 *device) {
+    signed_quad_word(io, &device->rtc_base_time);
+    word(io, &device->minutes);
+    word(io, &device->days);
+    word(io, &device->alarm_minutes);
+    word(io, &device->alarm_days);
+    word(io, &device->ir_warmup);
+    word(io, &device->ir_decay);
+    byte(io, &device->index);
+    byte(io, &device->flags);
+    boolean(io, &device->alarm_enabled);
+    boolean(io, &device->ir_output);
+    boolean(io, &device->ir_detected);
+}
+
+static bool valid_huc3_extension(const CupidGb *gb) {
+    const CupidGbHuc3 *device = &gb->huc3;
+    return gb->huc3_mode <= 0x0fu && gb->huc3_value <= 0x0fu && device->flags <= 0x0fu &&
+           device->rtc_base_time >= 0 && device->ir_warmup <= CUPID_GB_HUC3_IR_WARMUP_LIMIT &&
+           device->ir_decay <= CUPID_GB_HUC3_IR_DECAY_LIMIT;
+}
+
 static void state_extension_v5(StateIo *io, CupidGb *gb, unsigned sections) {
     if (sections & STATE_SECTION_SGB) {
         state_extension_sgb(io, gb);
@@ -639,6 +673,37 @@ static void state_extension_v5(StateIo *io, CupidGb *gb, unsigned sections) {
     if (sections & STATE_SECTION_TPP1) {
         state_extension_tpp1(io, &gb->tpp1);
     }
+    if (sections & STATE_SECTION_HUC3) {
+        state_extension_huc3(io, &gb->huc3);
+    }
+}
+
+static void state_lcd_phase(StateIo *io, CupidGb *gb) {
+    boolean(io, &gb->lcd_frame_odd);
+    boolean(io, &gb->lcd_first_frame);
+}
+
+static void state_dma_bus(StateIo *io, CupidGb *gb) {
+    const uint64_t now = gb->elapsed_cycles * 2u;
+    const uint64_t remaining = gb->cartridge_bus_expiry > now ? gb->cartridge_bus_expiry - now : 0;
+    if (!io->input && remaining > CUPID_GB_CARTRIDGE_BUS_HALF_DOTS) {
+        io->invalid = true;
+        return;
+    }
+
+    uint8_t half_dots = (uint8_t)remaining;
+    uint8_t data = half_dots ? gb->cartridge_bus_data : 0xffu;
+    bytes(io, &half_dots, 1);
+    bytes(io, &data, 1);
+    if (io->input) {
+        if (half_dots > CUPID_GB_CARTRIDGE_BUS_HALF_DOTS || (!half_dots && data != 0xffu) ||
+            (gb->model != CUPID_GB_MODEL_CGB && half_dots)) {
+            io->invalid = true;
+            return;
+        }
+        gb->cartridge_bus_expiry = half_dots ? now + half_dots : 0;
+        gb->cartridge_bus_data = data;
+    }
 }
 
 static bool valid_v5_sections(const CupidGb *gb, unsigned sections) {
@@ -646,7 +711,8 @@ static bool valid_v5_sections(const CupidGb *gb, unsigned sections) {
            (!(sections & STATE_SECTION_MMM01) || valid_mmm01_extension(gb)) &&
            (!(sections & STATE_SECTION_MBC7) || valid_mbc7_extension(&gb->mbc7)) &&
            (!(sections & STATE_SECTION_CAMERA) || valid_camera_extension(gb)) &&
-           (!(sections & STATE_SECTION_TPP1) || valid_tpp1_extension(&gb->tpp1));
+           (!(sections & STATE_SECTION_TPP1) || valid_tpp1_extension(&gb->tpp1)) &&
+           (!(sections & STATE_SECTION_HUC3) || valid_huc3_extension(gb));
 }
 
 static bool ready(const CupidGb *gb) {
@@ -761,9 +827,7 @@ size_t cupid_gb_state_size(const CupidGb *gb) {
     if (!ready(gb)) {
         return 0;
     }
-    /* Ordinary snapshots retain the version 4 byte layout. Version 5
-     * adds only the sections required by this hardware and cartridge. */
-    return extended_wire_size(state_sections(gb));
+    return extended_wire_size(state_sections(gb)) + STATE_V6_TAIL_SIZE;
 }
 
 static void put_u32(uint8_t *data, uint32_t value) {
@@ -795,7 +859,7 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
         return CUPID_GB_STATE_NO_ROM;
     }
     const unsigned sections = state_sections(gb);
-    const size_t size = extended_wire_size(sections);
+    const size_t size = extended_wire_size(sections) + STATE_V6_TAIL_SIZE;
     if (!data || capacity < size) {
         return CUPID_GB_STATE_BUFFER_TOO_SMALL;
     }
@@ -805,7 +869,7 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
     }
     memset(data, 0, STATE_HEADER_SIZE);
     memcpy(data, state_magic, sizeof(state_magic));
-    put_u32(data + 8, sections ? STATE_VERSION_V5 : STATE_VERSION_V4);
+    put_u32(data + 8, STATE_VERSION_V6);
     put_u32(data + 12, (uint32_t)size);
     put_u32(data + 16, (uint32_t)gb->model);
     put_u32(data + 20, (uint32_t)gb->rom_size);
@@ -824,6 +888,8 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
     state_extension_v3(&io, (CupidGb *)gb);
     state_extension_v4(&io, (CupidGb *)gb);
     state_extension_v5(&io, (CupidGb *)gb, sections);
+    state_lcd_phase(&io, (CupidGb *)gb);
+    state_dma_bus(&io, (CupidGb *)gb);
     if (io.invalid || io.offset != size) {
         return CUPID_GB_STATE_INVALID;
     }
@@ -843,16 +909,17 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
         return CUPID_GB_STATE_INVALID;
     }
     const uint32_t version = get_u32(data + 8);
-    if (version < STATE_VERSION_V2 || version > STATE_VERSION_V5) {
+    if (version < STATE_VERSION_V2 || version > STATE_VERSION_V6) {
         return CUPID_GB_STATE_UNSUPPORTED_VERSION;
     }
     const size_t prefix_size = version == STATE_VERSION_V2   ? STATE_WIRE_SIZE_V2
                                : version == STATE_VERSION_V3 ? STATE_WIRE_SIZE_V3
                                                              : STATE_WIRE_SIZE_V4;
+    const size_t device_size = length - (version == STATE_VERSION_V6 ? STATE_V6_TAIL_SIZE : 0);
     if (length != get_u32(data + 12) ||
-        (version == STATE_VERSION_V5
-             ? length <= prefix_size || length > extended_wire_size(STATE_SECTIONS_ALL)
-             : length != prefix_size)) {
+        (version >= STATE_VERSION_V5
+             ? device_size < prefix_size || device_size > extended_wire_size(STATE_SECTIONS_ALL)
+             : device_size != prefix_size)) {
         return CUPID_GB_STATE_INVALID;
     }
     uint8_t digest[32];
@@ -874,8 +941,14 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
     if (memcmp(digest, data + 32, sizeof(digest))) {
         return CUPID_GB_STATE_WRONG_ROM;
     }
-    const unsigned sections = version == STATE_VERSION_V5 ? state_sections(gb) : 0;
-    if (version == STATE_VERSION_V5 && (!sections || length != extended_wire_size(sections))) {
+    unsigned sections = version >= STATE_VERSION_V5 ? state_sections(gb) : 0;
+    /* Older SGB states already used this version for the border hardware. */
+    if (version == STATE_VERSION_V5 && sections == (STATE_SECTION_SGB | STATE_SECTION_HUC3) &&
+        device_size == extended_wire_size(STATE_SECTION_SGB)) {
+        sections = STATE_SECTION_SGB;
+    }
+    if ((version == STATE_VERSION_V5 && !sections) ||
+        (version >= STATE_VERSION_V5 && device_size != extended_wire_size(sections))) {
         return CUPID_GB_STATE_INVALID;
     }
     uint32_t boot_length = get_u32(data + 24), flags = get_u32(data + 28);
@@ -918,6 +991,16 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
         candidate->mbc5_rumble_on = false;
     }
     state_extension_v5(&io, candidate, sections);
+    if (version >= STATE_VERSION_V6) {
+        state_lcd_phase(&io, candidate);
+        state_dma_bus(&io, candidate);
+    } else {
+        candidate->cartridge_bus_expiry = 0;
+        candidate->cartridge_bus_data = 0xffu;
+        candidate->lcd_frame_odd = false;
+        candidate->lcd_first_frame =
+            candidate->model == CUPID_GB_MODEL_CGB && candidate->ppu_lcd_startup;
+    }
     if (io.invalid || io.offset != length || candidate->boot_rom_enabled != (flags != 0) ||
         !valid_hardware_prefix(candidate, version) || !valid_v5_sections(candidate, sections)) {
         free(candidate);
@@ -941,6 +1024,9 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
     }
     if (candidate->header.mbc_type == CUPID_GB_TPP1 && !(sections & STATE_SECTION_TPP1)) {
         candidate->tpp1 = (CupidGbTpp1){.rom_bank = 1};
+    }
+    if (candidate->header.mbc_type == CUPID_GB_HUC3 && !(sections & STATE_SECTION_HUC3)) {
+        candidate->huc3 = (CupidGbHuc3){0};
     }
     if (version == STATE_VERSION_V2) {
         /* Earlier states have no pending-DMA or power-relative audio history.

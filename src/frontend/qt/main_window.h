@@ -1,6 +1,7 @@
 #pragma once
 
 #include "controller_manager.h"
+#include "display_pipeline.h"
 #include "guest_clock_pacer.h"
 
 #include <QElapsedTimer>
@@ -32,6 +33,8 @@ class AudioConverter;
 class WaveRecorder;
 class DebuggerWindow;
 class InspectorsWindow;
+class PrinterWindow;
+struct CupidGbPrinter;
 
 class MainWindow final : public QMainWindow {
   public:
@@ -53,6 +56,7 @@ class MainWindow final : public QMainWindow {
   private:
     void buildMenus();
     void applyDisplaySettings();
+    void setFrameBlending(FrameBlending mode);
     void resizeDisplay(int scale);
     void updateRecentMenu();
     void configure();
@@ -103,6 +107,10 @@ class MainWindow final : public QMainWindow {
     void ensureDebugger();
     void openDebugger();
     void openInspectors();
+    void setPrinterConnected(bool connected);
+    void resetPrinter();
+    void updatePrinter();
+    bool printerSmokeTest(const QString &romPath, const QString &directory);
     void refreshDebugger();
     void debuggerCommand(const QString &command);
     bool loadDebuggerSymbols(const QString &path);
@@ -133,6 +141,12 @@ class MainWindow final : public QMainWindow {
     uint64_t debuggerSessionId_ = 0;
     QAction *debuggerAction_ = nullptr;
     QAction *inspectorsAction_ = nullptr;
+    QMenu *connectionsMenu_ = nullptr;
+    QAction *printerAction_ = nullptr;
+    QAction *disconnectAction_ = nullptr;
+    PrinterWindow *printerWindow_ = nullptr;
+    CupidGbPrinter *printer_ = nullptr;
+    uint64_t printerGeneration_ = 0;
     DisplayWidget *display_ = nullptr;
     std::unique_ptr<AudioBuffer> audioBuffer_;
     std::unique_ptr<QAudioSink> audio_;
@@ -160,6 +174,7 @@ class MainWindow final : public QMainWindow {
     uint64_t observedBatteryGeneration_ = 0;
     bool batteryDirty_ = false;
     std::array<QRgb, 4> displayPalette_{};
+    FrameBlending frameBlending_ = FrameBlending::Accurate;
     QImage image_;
     QImage previousDisplayFrame_;
     QImage currentDisplayFrame_;
@@ -175,7 +190,7 @@ class MainWindow final : public QMainWindow {
     std::array<QAction *, 3> scalingActions_{};
     std::array<QAction *, 5> paletteActions_{};
     std::array<QAction *, 8> windowSizeActions_{};
-    QAction *blendingAction_ = nullptr;
+    std::array<QAction *, 3> blendingActions_{};
     QAction *borderAction_ = nullptr;
     std::array<QAction *, 10> saveSlotActions_{};
     std::array<QAction *, 10> loadSlotActions_{};

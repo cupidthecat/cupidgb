@@ -21,7 +21,7 @@ jobs:
           cache: true
       - name: Linux desktop dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev libsdl2-dev
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev libsdl2-dev 7zip
       - name: Windows controller SDK
         if: runner.os == 'Windows'
         shell: pwsh
@@ -38,6 +38,8 @@ jobs:
       - name: Build
         run: cmake --build build --config Release --parallel 4
       - name: Test
+        env:
+          CUPIDGB_REQUIRE_ARCHIVE_TESTS: '1'
         run: ctest --test-dir build -C Release --output-on-failure
   sanitized-core:
     runs-on: ubuntu-24.04

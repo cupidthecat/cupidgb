@@ -12,4 +12,6 @@ File > Recover Battery from Older State validates a native version 1 snapshot's 
 
 MBC7 files store the 256 EEPROM bytes in address order. An oversized file from an older CupidGB build is accepted when its length matches the RAM size declared by that cartridge header. Only the first 256 bytes contain usable EEPROM data. Camera cartridges persist their banked SRAM as a RAM-only file.
 
-Battery-enabled TPP1 cartridges append a 20-byte clock trailer to SRAM. It stores the `TPP1` signature, version, status, Unix timestamp, and four live clock bytes. Loading also accepts exact SRAM-only data. Other clock and flash devices remain pending.
+Battery-enabled TPP1 cartridges append a 20-byte clock trailer to SRAM. It stores the `TPP1` signature, version, status, Unix timestamp, and four live clock bytes. Loading also accepts exact SRAM-only data.
+
+HuC3 files append 17 bytes to SRAM for the Unix timestamp, current minute and day counters, alarm time, and alarm flags. CupidGB also accepts SRAM-only HuC3 files from earlier builds. Those files start with a fresh clock baseline. Flash persistence remains pending.

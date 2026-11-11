@@ -8,7 +8,7 @@
  * and MBC controllers.
  *
  * Implements ROM-only, MBC1 (including multicart), MBC2, MBC3/MBC30,
- * MBC5, MBC7, MMM01, and HuC1 banking. MBC6 and HuC3 remain partial.
+ * MBC5, MBC7, MMM01, HuC1, and HuC3 banking. MBC6 remains partial.
  */
 
 #include "cupid/gb/cartridge.h"
@@ -22,6 +22,7 @@
 #include "cupid/common/log.h"
 #include "cupid/gb/battery.h"
 #include "cupid/gb/gb.h"
+#include "cupid/gb/huc3.h"
 #include "cupid/gb/mbc7.h"
 
 #ifdef _WIN32
@@ -376,7 +377,7 @@ void cupid_gb_huc3_write(CupidGb *gb, uint16_t address, uint8_t value) {
 
     if (address < 0x2000u) {
         gb->huc3_mode = value & 0x0fu;
-        gb->ram_enabled = gb->huc3_mode == 0x0au;
+        gb->ram_enabled = gb->huc3_mode == CUPID_GB_HUC3_SRAM;
     } else if (address < 0x4000u) {
         gb->current_rom_bank = value & 0x7fu;
     } else if (address < 0x6000u) {
@@ -643,10 +644,11 @@ bool cupid_gb_parse_header(const uint8_t *rom_data, size_t rom_size,
             break;
     }
 
-    /* Detect MBC3 real-time clock */
+    /* Detect an RTC integrated into the cartridge controller. */
     switch (header->cartridge_type) {
         case 0x0fu: /* MBC3+TIMER+BATTERY */
         case 0x10u: /* MBC3+TIMER+RAM+BATTERY */
+        case 0xfeu: /* HuC3 */
             header->has_timer = true;
             break;
         default:
@@ -773,6 +775,19 @@ bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size) {
         return false;
     }
 
+    /* Detect a native Advance header before interpreting its bytes as GB metadata. */
+    static const uint8_t advance_logo_prefix[] = {0x24, 0xff, 0xae, 0x51};
+    if (rom_data[0xb2] == 0x96 &&
+        !memcmp(rom_data + 4, advance_logo_prefix, sizeof(advance_logo_prefix))) {
+        unsigned checksum = 0x19;
+        for (unsigned i = 0xa0; i <= 0xbd; ++i)
+            checksum += rom_data[i];
+        if (!(checksum & 0xff)) {
+            cupid_log_error("Game Boy Advance cartridges are unsupported.");
+            return false;
+        }
+    }
+
     if (!cupid_gb_parse_header(rom_data, rom_size, &header)) {
         cupid_log_error("Failed to parse Game Boy cartridge header.");
         return false;
@@ -885,8 +900,10 @@ bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size) {
     gb->huc1_ir_mode = false;
     gb->huc3_mode = 0u;
     gb->huc3_value = 0u;
-    if (gb->header.mbc_type == CUPID_GB_HUC3)
+    if (gb->header.mbc_type == CUPID_GB_HUC3) {
         gb->current_rom_bank = HUC3_STARTUP_BANK;
+        cupid_gb_huc3_advance(&gb->huc3, (int64_t)time(NULL));
+    }
 
     /* MBC2 has 512x4-bit built-in RAM regardless of header RAM size */
     if (gb->header.mbc_type == CUPID_GB_MBC2) {

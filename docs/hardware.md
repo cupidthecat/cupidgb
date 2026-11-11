@@ -34,7 +34,7 @@ The core decodes ROM-only, MBC1, MBC2, MBC3, MBC5, MMM01, MBC6, MBC7, HuC1, HuC3
 | MBC6 | Partial mapping; flash behavior remains pending |
 | MBC7 | Dual access gates, motion latches, 256-byte serial EEPROM, battery files, and mid-command continuation. Physical motion input remains pending |
 | HuC1 | Independent six-bit ROM and three-bit RAM selection, RAM access outside infrared mode, and disconnected infrared register behavior; transport and startup mapping qualification remain pending |
-| HuC3 | ROM bank zero after selection, 16 SRAM banks, read-only and read/write modes. Clock commands and infrared remain incomplete |
+| HuC3 | ROM bank zero after selection, 16 SRAM banks, read-only and read/write modes, nibble commands, clock and alarm persistence, and timed infrared register input and output. Host infrared transport and alarm notification remain pending |
 | Camera | ROM/SRAM banking, shutter timing, generated sensor pixels, tile conversion, and capture continuation. Analog gain is approximate. Host camera input remains pending |
 | TPP1 | Extended header, mirrored bank registers, read-only and writable SRAM, RTC commands and persistence, and four guest rumble levels. Host feedback uses an on/off latch |
 
@@ -44,7 +44,7 @@ Physical ROM bank population follows the actual file length, rounded to the next
 
 Two-KiB SRAM mirrors across the eight-KiB RAM window. Ordinary timer-equipped MBC3 RAM banks 4 through 7 are disconnected; the wider RAM wiring applies to extended inputs larger than 2 MiB ROM or 32 KiB RAM. These rules have targeted regression coverage, but do not qualify every undocumented board or decaying open-bus behavior.
 
-The frontend saves battery SRAM, MBC3 and TPP1 clock data, and MBC7 EEPROM to `.sav` files. See [battery saves](battery-saves.md) for the supported encodings.
+The frontend saves battery SRAM, MBC3, TPP1 and HuC3 clock data, and MBC7 EEPROM to `.sav` files. See [battery saves](battery-saves.md) for the supported encodings.
 
 ## CPU, memory, and timing
 

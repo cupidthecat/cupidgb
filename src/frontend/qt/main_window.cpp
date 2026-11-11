@@ -1,10 +1,10 @@
 #include "main_window.h"
 #include "audio_converter.h"
+#include "cartridge_file.h"
 #include "controller_dialog.h"
 #include "cupid/compat/native_v1.h"
 #include "cupid/gb/battery.h"
 #include "debugger_window.h"
-#include "display_pipeline.h"
 #include "inspectors_window.h"
 #include "wave_recorder.h"
 
@@ -79,6 +79,18 @@ constexpr std::array<const char *, 8> buttonNames = {"Right", "Left", "Up",     
 constexpr std::array<const char *, 5> specialNames = {"Turbo", "Rewind", "Slow motion", "Rapid A",
                                                       "Rapid B"};
 constexpr std::array<int, 5> defaultSpecialKeys = {Qt::Key_Space, Qt::Key_Tab, Qt::Key_Shift, 0, 0};
+constexpr std::array<const char *, 3> frameBlendingNames = {"Disabled", "Simple", "Accurate"};
+
+FrameBlending configuredFrameBlending(const QSettings &settings) {
+    bool valid = false;
+    const int mode = settings.value("video/blendingMode").toInt(&valid);
+    if (valid && mode >= 0 && mode < int(frameBlendingNames.size()))
+        return FrameBlending(mode);
+    if (settings.contains("video/blending"))
+        return settings.value("video/blending").toBool() ? FrameBlending::Simple
+                                                         : FrameBlending::Disabled;
+    return FrameBlending::Accurate;
+}
 
 // LCD geometry stays at 70,224 base cycles; elapsed time follows the model oscillator.
 qint64 nominalFrameNanoseconds(const CupidGb *gb, unsigned speedSteps = 16) {
@@ -407,6 +419,7 @@ MainWindow::~MainWindow() {
     stopAudio();
     if (recorder_ && !recorder_->finish())
         qCritical("Cannot finalize audio recording: %s", qPrintable(recorder_->errorString()));
+    setPrinterConnected(false);
     if (emulator_) {
         flushBattery();
         cupid_emulator_shutdown(emulator_.get());
@@ -422,7 +435,7 @@ void MainWindow::buildMenus() {
         setPaused(true);
         const QString path = QFileDialog::getOpenFileName(
             this, "Open ROM", settings_.value("files/lastDirectory").toString(),
-            "Game Boy cartridges (*.gb *.gbc *.sgb);;All files (*)");
+            "Game Boy cartridges (*.gb *.gbc *.sgb *.zip *.7z *.rar);;All files (*)");
         if (path.isEmpty() || !openRom(path))
             setPaused(wasPaused);
     });
@@ -557,13 +570,20 @@ void MainWindow::buildMenus() {
             applyDisplaySettings();
         });
     }
-    blendingAction_ = view->addAction("Simple Frame &Blending");
-    blendingAction_->setCheckable(true);
-    blendingAction_->setObjectName("video/blending");
-    connect(blendingAction_, &QAction::triggered, this, [this](bool enabled) {
-        settings_.setValue("video/blending", enabled);
-        applyDisplaySettings();
-    });
+    auto *blending = view->addMenu("Frame &Blending");
+    auto *blendingGroup = new QActionGroup(this);
+    for (size_t i = 0; i < blendingActions_.size(); ++i) {
+        auto *action = blending->addAction(frameBlendingNames[i]);
+        action->setObjectName(QString("video/blendingMode/%1").arg(i));
+        action->setCheckable(true);
+        blendingGroup->addAction(action);
+        blendingActions_[i] = action;
+        connect(action, &QAction::triggered, this, [this, i] {
+            settings_.setValue("video/blendingMode", int(i));
+            setFrameBlending(FrameBlending(i));
+            present();
+        });
+    }
     borderAction_ = view->addAction("Show &SGB Border");
     borderAction_->setCheckable(true);
     borderAction_->setObjectName("video/sgbBorder");
@@ -607,6 +627,17 @@ void MainWindow::buildMenus() {
     auto *controllers = emulation->addAction("&Controllers…");
     registerShortcut(controllers, "controllers");
     connect(controllers, &QAction::triggered, this, [this] { configureControllers(); });
+    connectionsMenu_ = emulation->addMenu("&Connect");
+    auto *accessories = new QActionGroup(connectionsMenu_);
+    disconnectAction_ = connectionsMenu_->addAction("&None");
+    printerAction_ = connectionsMenu_->addAction("Game Boy &Printer");
+    for (auto *action : {disconnectAction_, printerAction_}) {
+        action->setCheckable(true);
+        accessories->addAction(action);
+    }
+    disconnectAction_->setChecked(true);
+    connect(disconnectAction_, &QAction::triggered, this, [this] { setPrinterConnected(false); });
+    connect(printerAction_, &QAction::triggered, this, [this] { setPrinterConnected(true); });
     auto *tools = menuBar()->addMenu("&Tools");
     debuggerAction_ = tools->addAction("&Debugger", QKeySequence("Ctrl+C"));
     registerShortcut(debuggerAction_, "debugger");
@@ -659,15 +690,27 @@ void MainWindow::applyDisplaySettings() {
         if (value.isValid())
             custom[i] = value.rgb();
     }
-    displayPalette_ = monochromeColors(MonochromePalette(palette), custom);
-    blendingAction_->setChecked(settings_.value("video/blending", false).toBool());
-    borderAction_->setChecked(settings_.value("video/sgbBorder", true).toBool());
-    previousDisplayFrame_ = {};
-    currentDisplayFrame_ = {};
+    const auto colors = monochromeColors(MonochromePalette(palette), custom);
+    const bool showBorder = settings_.value("video/sgbBorder", true).toBool();
+    const bool borderChanged = emulator_ && cupid_gb_sgb_active(&emulator_->gb) &&
+                               !image_.isNull() &&
+                               (image_.width() == CUPID_SGB_SCREEN_WIDTH) != showBorder;
+    if (displayPalette_ != colors || borderChanged) {
+        previousDisplayFrame_ = {};
+        currentDisplayFrame_ = {};
+    }
+    displayPalette_ = colors;
+    setFrameBlending(configuredFrameBlending(settings_));
+    borderAction_->setChecked(showBorder);
     if (emulator_)
         present();
     else
         display_->update();
+}
+
+void MainWindow::setFrameBlending(FrameBlending mode) {
+    frameBlending_ = mode;
+    blendingActions_[size_t(mode)]->setChecked(true);
 }
 
 void MainWindow::resizeDisplay(int scale) {
@@ -716,18 +759,10 @@ bool MainWindow::openRom(const QString &path) {
         reportError("Battery save files cannot be opened as cartridges.");
         return false;
     }
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly)) {
-        reportError("Cannot open ROM: " + file.errorString());
-        return false;
-    }
-    if (file.size() < 0x150 || file.size() > CUPID_GB_MAX_ROM_SIZE) {
-        reportError("Cartridge size must be between 336 bytes and 8 MiB.");
-        return false;
-    }
-    const QByteArray data = file.readAll();
-    if (data.size() != file.size()) {
-        reportError("Could not read the complete cartridge: " + file.errorString());
+    QString error;
+    const QByteArray data = readCartridgeFile(path, error);
+    if (data.isEmpty()) {
+        reportError(error);
         return false;
     }
     auto candidate = std::make_unique<CupidEmulator>();
@@ -754,7 +789,7 @@ bool MainWindow::openRom(const QString &path) {
     }
     const QString absolute = QFileInfo(path).absoluteFilePath();
     const QFileInfo info(absolute);
-    const QString save = info.dir().filePath(info.completeBaseName() + ".sav");
+    const QString save = info.dir().filePath(cartridgeStorageName(info) + ".sav");
     const QString canonicalSave = QFileInfo(save).canonicalFilePath();
 #ifdef _WIN32
     constexpr auto pathCase = Qt::CaseInsensitive;
@@ -831,9 +866,12 @@ bool MainWindow::openRom(const QString &path) {
     const bool sameCartridge = emulator_ && romData_ == data &&
                                romPath_.compare(absolute, pathCase) == 0 &&
                                emulator_->gb.model == candidate->gb.model;
+    if (!sameCartridge)
+        setPrinterConnected(false);
     if (emulator_)
         cupid_emulator_shutdown(emulator_.get());
     emulator_ = std::move(candidate);
+    resetPrinter();
     cupid_gb_set_rumble_callback(
         &emulator_->gb,
         [](const CupidGb *gb, bool enabled, uint64_t cycles, void *user) {
@@ -932,6 +970,7 @@ void MainWindow::watchBattery() {
 bool MainWindow::closeRom() {
     if (!flushBattery() || !stopRecording())
         return false;
+    setPrinterConnected(false);
     ++sessionId_;
     resetControllerRumble();
     resetDebuggerTimeline(true);
@@ -1489,6 +1528,7 @@ bool MainWindow::runFrame() {
         pumpAudio();
     }
     present(gb.frame_ready);
+    updatePrinter();
     finishControllerRumble();
     advanceControls();
     watchBattery();
@@ -1549,6 +1589,7 @@ bool MainWindow::restoreState(const QByteArray &bytes, bool reportFailure, bool 
         return false;
     }
     ++timelineId_;
+    resetPrinter();
     resetControllerRumble();
     controllerPlayerCount_ =
         cupid_gb_sgb_active(&emulator_->gb) ? emulator_->gb.sgb.player_count : 1;
@@ -1556,7 +1597,7 @@ bool MainWindow::restoreState(const QByteArray &bytes, bool reportFailure, bool 
 }
 
 QString MainWindow::slotPath(int slot, bool legacy) const {
-    const QFileInfo info(romPath_);
+    const QFileInfo info(savePath_);
     return info.dir().filePath(info.completeBaseName() +
                                QString(legacy ? ".sn%1" : ".s%1").arg(slot));
 }
@@ -1814,8 +1855,9 @@ void MainWindow::present(bool completedFrame) {
     if (!emulator_)
         return;
     const auto &gb = emulator_->gb;
-    if (cupid_gb_sgb_active(&gb)) {
-        image_ = QImage(CUPID_SGB_SCREEN_WIDTH, CUPID_SGB_SCREEN_HEIGHT, QImage::Format_ARGB32);
+    const bool sgb = cupid_gb_sgb_active(&gb);
+    if (sgb) {
+        image_ = QImage(CUPID_SGB_SCREEN_WIDTH, CUPID_SGB_SCREEN_HEIGHT, QImage::Format_RGB32);
         cupid_gb_sgb_render_argb(&gb, reinterpret_cast<uint32_t *>(image_.bits()),
                                  size_t(image_.width() * image_.height()));
         if (!borderAction_->isChecked())
@@ -1832,14 +1874,18 @@ void MainWindow::present(bool completedFrame) {
                 pixels[i] = displayPalette_[gb.frame_buffer[i] & 3];
         }
     }
-    // Repaints and settings dialogs must not turn one guest frame into repeated
-    // blend inputs. Only completed LCD frames advance temporal presentation.
-    if (completedFrame)
+    // Only completed LCD frames advance blend history. A restored VBlank frame
+    // may seed it once so the next guest frame has a valid predecessor.
+    if (completedFrame) {
         previousDisplayFrame_ = currentDisplayFrame_;
-    currentDisplayFrame_ = image_;
-    display_->image = blendingAction_->isChecked()
-                          ? blendDisplayFrames(currentDisplayFrame_, previousDisplayFrame_)
-                          : currentDisplayFrame_;
+        currentDisplayFrame_ = image_;
+    } else if (currentDisplayFrame_.isNull() && gb.frame_ready) {
+        currentDisplayFrame_ = image_;
+    }
+    // SGB sends the image to the TV without the handheld LCD's row polarity.
+    const auto mode =
+        sgb && frameBlending_ == FrameBlending::Accurate ? FrameBlending::Simple : frameBlending_;
+    display_->image = blendDisplayFrames(image_, previousDisplayFrame_, mode, gb.lcd_frame_odd);
     display_->setMinimumSize(image_.size());
     ++presentedImages_;
     display_->update();
@@ -2183,6 +2229,7 @@ void MainWindow::debuggerSlice() {
         }
         ++debuggerCommandSteps_;
         drainDebuggerAudio();
+        updatePrinter();
         if (result != CUPID_GB_DEBUG_STOP_NONE) {
             stopDebugger(QString::fromUtf8(cupid_gb_debugger_stop_name(result)));
             return;
@@ -2212,6 +2259,7 @@ bool MainWindow::debuggerBackstep() {
         return false;
     }
     ++timelineId_;
+    resetPrinter();
     resetControllerRumble();
     controllerPlayerCount_ =
         cupid_gb_sgb_active(&emulator_->gb) ? emulator_->gb.sgb.player_count : 1;
@@ -2527,6 +2575,7 @@ void MainWindow::refreshActions() {
         action->setEnabled(bool(emulator_));
     debuggerAction_->setEnabled(bool(emulator_));
     inspectorsAction_->setEnabled(bool(emulator_));
+    connectionsMenu_->setEnabled(bool(emulator_));
     refreshDebugger();
 }
 
@@ -2629,10 +2678,12 @@ void MainWindow::configure() {
         for (auto *color : customColors)
             color->setEnabled(index == int(MonochromePalette::Custom));
     });
-    auto *blending = new QCheckBox("Mix consecutive frames in linear light");
+    auto *blending = new QComboBox;
     blending->setObjectName("frameBlending");
-    blending->setChecked(settings_.value("video/blending", false).toBool());
-    form->addRow("Simple frame blending", blending);
+    for (const char *name : frameBlendingNames)
+        blending->addItem(name);
+    blending->setCurrentIndex(int(configuredFrameBlending(settings_)));
+    form->addRow("Frame blending", blending);
     auto *border = new QCheckBox("Show the Super Game Boy border");
     border->setObjectName("sgbBorder");
     border->setChecked(settings_.value("video/sgbBorder", true).toBool());
@@ -2793,7 +2844,7 @@ void MainWindow::configure() {
         const int oldScale = settings_.value("video/defaultScale", 2).toInt();
         settings_.setValue("video/defaultScale", windowScale->currentData());
         settings_.setValue("video/palette", palette->currentIndex());
-        settings_.setValue("video/blending", blending->isChecked());
+        settings_.setValue("video/blendingMode", blending->currentIndex());
         settings_.setValue("video/sgbBorder", border->isChecked());
         for (size_t i = 0; i < colorNames.size(); ++i)
             settings_.setValue(QString("video/customPalette/%1").arg(i), colorNames[i]);
@@ -3315,36 +3366,55 @@ bool MainWindow::smokeTest() {
     }
     if (captureState() != displayState)
         return smokeFailure(__LINE__);
+    const auto accurateBlend = size_t(FrameBlending::Accurate);
+    const auto simpleBlend = size_t(FrameBlending::Simple);
+    const auto disabledBlend = size_t(FrameBlending::Disabled);
+    if (!blendingActions_[accurateBlend]->isChecked())
+        return smokeFailure(__LINE__);
+    settings_.setValue("video/blending", false);
+    applyDisplaySettings();
+    if (!blendingActions_[disabledBlend]->isChecked())
+        return smokeFailure(__LINE__);
+    settings_.setValue("video/blending", true);
+    applyDisplaySettings();
+    if (!blendingActions_[simpleBlend]->isChecked())
+        return smokeFailure(__LINE__);
+    settings_.remove("video/blending");
+    applyDisplaySettings();
     if (!settingsDialog([&](QDialog &dialog) {
             auto *scaling = dialog.findChild<QComboBox *>("displayScaling");
             auto *palette = dialog.findChild<QComboBox *>("monochromePalette");
             auto *color = dialog.findChild<QLineEdit *>("customPalette/0");
-            auto *blend = dialog.findChild<QCheckBox *>("frameBlending");
-            if (!scaling || !palette || !color || !blend)
+            auto *blend = dialog.findChild<QComboBox *>("frameBlending");
+            if (!scaling || !palette || !color || !blend ||
+                blend->currentIndex() != int(FrameBlending::Accurate))
                 return smokeFailure(__LINE__);
             scaling->setCurrentIndex(int(DisplayScaling::Fill));
             palette->setCurrentIndex(int(MonochromePalette::Custom));
             color->setText("#123456");
-            blend->setChecked(true);
+            blend->setCurrentIndex(int(FrameBlending::Disabled));
             dialog.findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Cancel)->click();
             return true;
         }) ||
         display_->scaling != DisplayScaling::Integer ||
-        settings_.contains("video/customPalette/0") ||
-        settings_.value("video/blending", false).toBool())
+        settings_.contains("video/customPalette/0") || settings_.contains("video/blendingMode") ||
+        !blendingActions_[accurateBlend]->isChecked())
         return smokeFailure(__LINE__);
     if (!settingsDialog([&](QDialog &dialog) {
             auto *palette = dialog.findChild<QComboBox *>("monochromePalette");
             auto *color = dialog.findChild<QLineEdit *>("customPalette/0");
-            if (!palette || !color)
+            auto *blend = dialog.findChild<QComboBox *>("frameBlending");
+            if (!palette || !color || !blend)
                 return smokeFailure(__LINE__);
             palette->setCurrentIndex(int(MonochromePalette::Custom));
+            blend->setCurrentIndex(int(FrameBlending::Simple));
             color->setText("#123456");
             dialog.findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Ok)->click();
             return !dialog.isVisible();
         }) ||
         settings_.value("video/customPalette/0").toString() != "#123456" ||
-        captureState() != displayState)
+        settings_.value("video/blendingMode").toInt() != int(FrameBlending::Simple) ||
+        !blendingActions_[simpleBlend]->isChecked() || captureState() != displayState)
         return smokeFailure(__LINE__);
     if (!settingsDialog([&](QDialog &dialog) {
             auto *color = dialog.findChild<QLineEdit *>("customPalette/0");
@@ -3373,13 +3443,19 @@ bool MainWindow::smokeTest() {
     if (image_.pixel(0, 0) != QColor("#123456").rgb())
         return smokeFailure(__LINE__);
     paletteActions_[1]->trigger();
-    blendingAction_->trigger();
     std::fill(std::begin(emulator_->gb.frame_buffer), std::end(emulator_->gb.frame_buffer), 3);
     present(true);
     std::fill(std::begin(emulator_->gb.frame_buffer), std::end(emulator_->gb.frame_buffer), 0);
     present(true);
     if (image_.pixel(0, 0) != qRgb(255, 255, 255) ||
         display_->image.pixel(0, 0) != qRgb(186, 186, 186))
+        return smokeFailure(__LINE__);
+    blendingActions_[accurateBlend]->trigger();
+    const int darkerRow = emulator_->gb.lcd_frame_odd ? 0 : 1;
+    if (!blendingActions_[accurateBlend]->isChecked() ||
+        settings_.value("video/blendingMode").toInt() != int(FrameBlending::Accurate) ||
+        display_->image.pixel(0, darkerRow) != qRgb(155, 155, 155) ||
+        display_->image.pixel(0, darkerRow ^ 1) != qRgb(212, 212, 212))
         return smokeFailure(__LINE__);
     const QImage blendedFrame = display_->image;
     present();
@@ -3388,14 +3464,15 @@ bool MainWindow::smokeTest() {
         return smokeFailure(__LINE__);
     const QImage frameBeforeAdvance = currentDisplayFrame_;
     if (!runFrame() || previousDisplayFrame_ != frameBeforeAdvance ||
-        display_->image != blendDisplayFrames(image_, frameBeforeAdvance))
+        display_->image != blendDisplayFrames(image_, frameBeforeAdvance, FrameBlending::Accurate,
+                                              emulator_->gb.lcd_frame_odd))
         return smokeFailure(__LINE__);
     resetRewind();
     rememberFrame();
     if (!runFrame() || !runFrame() || !rewindFrame() || !previousDisplayFrame_.isNull() ||
         display_->image != image_ || !restoreState(displayState, false))
         return smokeFailure(__LINE__);
-    blendingAction_->trigger();
+    blendingActions_[disabledBlend]->trigger();
     paletteActions_[0]->trigger();
     auto changeMappings = [](QDialog &dialog) {
         auto *button = dialog.findChild<QKeySequenceEdit *>("input/4");
@@ -3611,10 +3688,20 @@ bool MainWindow::smokeTest() {
     // must retain those overlays, including their palette-selected colors.
     emulator_->gb.sgb.border_tiles[0] = 0xff;
     emulator_->gb.sgb.border_palettes[1] = 0x001f;
-    present();
-    if (image_.pixel(CUPID_SGB_VIEWPORT_X, CUPID_SGB_VIEWPORT_Y) != qRgb(255, 0, 0))
+    present(true);
+    if (image_.pixel(CUPID_SGB_VIEWPORT_X, CUPID_SGB_VIEWPORT_Y) != qRgb(255, 0, 0) ||
+        !previousDisplayFrame_.isNull() || display_->image != image_)
         return smokeFailure(__LINE__);
     const QImage bordered = image_;
+    blendingActions_[accurateBlend]->trigger();
+    emulator_->gb.sgb.border_palettes[1] = 0x0000;
+    present(true);
+    if (display_->image != blendDisplayFrames(image_, bordered, FrameBlending::Simple, false) ||
+        display_->image.pixel(CUPID_SGB_VIEWPORT_X, CUPID_SGB_VIEWPORT_Y) != qRgb(186, 0, 0))
+        return smokeFailure(__LINE__);
+    blendingActions_[disabledBlend]->trigger();
+    emulator_->gb.sgb.border_palettes[1] = 0x001f;
+    present();
     borderAction_->trigger();
     if (image_.size() != QSize(160, 144) || display_->minimumSize() != image_.size() ||
         image_ != bordered.copy(CUPID_SGB_VIEWPORT_X, CUPID_SGB_VIEWPORT_Y, 160, 144))
@@ -3672,8 +3759,9 @@ bool MainWindow::smokeTest() {
     if (!debuggerSmokeTest(directory.path()))
         return smokeFailure(__LINE__);
     if (!pacingSmokeTest(path) || !modelSmokeTest(directory.path()) ||
-        !controllerSmokeTest(directory.path()) || display_->collectPaintIntervals ||
-        !display_->paintIntervals.empty() || display_->lastPaintAt)
+        !printerSmokeTest(path, directory.path()) || !controllerSmokeTest(directory.path()) ||
+        display_->collectPaintIntervals || !display_->paintIntervals.empty() ||
+        display_->lastPaintAt)
         return smokeFailure(__LINE__);
     qInfo("CupidGB Qt workflow smoke test passed");
     return !failed_;
