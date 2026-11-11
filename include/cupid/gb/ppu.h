@@ -42,6 +42,9 @@ void cupid_gb_reset_ppu(CupidGb *gb);
 void cupid_gb_sync_lcd_startup(CupidGb *gb);
 void cupid_gb_run_dma_transfer(CupidGb *gb, uint8_t source_high);
 void cupid_gb_tick_dma(CupidGb *gb);
+/* Advance after the elapsed CPU segment and its LCD work, including partial M-cycles. */
+void cupid_gb_tick_dma_tcycles(CupidGb *gb, unsigned cycles);
+bool cupid_gb_oam_dma_blocks_bus(const CupidGb *gb);
 void cupid_gb_tick_ppu(CupidGb *gb, uint16_t cycles);
 /* Advances LCD dots without advancing the CPU, timer, DMA, or audio clocks. */
 void cupid_gb_tick_ppu_dots(CupidGb *gb, uint16_t dots);

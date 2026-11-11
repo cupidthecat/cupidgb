@@ -25,6 +25,7 @@
 #include "cupid/gb/apu.h"
 #include "cupid/gb/camera.h"
 #include "cupid/gb/cartridge.h"
+#include "cupid/gb/cheats.h"
 #include "cupid/gb/cpu.h"
 #include "cupid/gb/huc3.h"
 #include "cupid/gb/input.h"
@@ -231,6 +232,7 @@ void cupid_gb_init(CupidGb *gb) {
     const int16_t motion_x = gb->mbc7.motion_x;
     const int16_t motion_y = gb->mbc7.motion_y;
     const bool huc3_ir_input = gb->huc3_ir_input;
+    const CupidGbCheats *cheats = gb->cheats;
     memset(gb, 0, sizeof(*gb));
     gb->model = model;
     gb->rom = rom;
@@ -241,6 +243,7 @@ void cupid_gb_init(CupidGb *gb) {
     gb->rumble_user_data = rumble_user_data;
     cupid_gb_mbc7_set_motion(gb, motion_x, motion_y);
     gb->huc3_ir_input = huc3_ir_input;
+    gb->cheats = cheats;
 
     if (gb->rom == 0) {
         gb->rom = malloc(CUPID_GB_MAX_ROM_SIZE);
@@ -513,6 +516,7 @@ void cupid_gb_cleanup(CupidGb *gb) {
     gb->serial_link = (CupidGbSerialLink){0};
     gb->rumble_callback = NULL;
     gb->rumble_user_data = NULL;
+    gb->cheats = NULL;
     gb->mbc5_rumble_on = false;
 }
 
@@ -656,7 +660,7 @@ uint8_t cupid_gb_sample_cartridge_bus(const CupidGb *gb) {
  * @return The mapped byte, the held cartridge-bus value for a floating CGB
  *         guest access, or 0xFF if the address cannot drive a value.
  */
-static uint8_t read_data_bus(const CupidGb *gb, uint16_t address, CupidGb *bus) {
+static uint8_t read_data_bus(const CupidGb *gb, uint16_t address, CupidGb *bus, bool *floating) {
     static const uint8_t apu_read_masks[0x20] = {
         0x80u, 0x3fu, 0x00u, 0xffu, 0xbfu, 0xffu, 0x3fu, 0x00u, 0xffu, 0xbfu, 0x7fu,
         0xffu, 0x9fu, 0xffu, 0xbfu, 0xffu, 0xffu, 0x00u, 0x00u, 0xbfu, 0x00u, 0x00u,
@@ -680,6 +684,8 @@ static uint8_t read_data_bus(const CupidGb *gb, uint16_t address, CupidGb *bus) 
 
     if (address >= 0xa000u && address <= 0xbfffu) {
         const uint16_t value = read_cartridge_window(gb, address);
+        if (floating)
+            *floating = value == CARTRIDGE_WINDOW_FLOATING;
         if (bus && gb->model == CUPID_GB_MODEL_CGB) {
             if (value == CARTRIDGE_WINDOW_FLOATING)
                 return cupid_gb_sample_cartridge_bus(gb);
@@ -697,7 +703,7 @@ static uint8_t read_data_bus(const CupidGb *gb, uint16_t address, CupidGb *bus) 
     }
 
     if (address >= 0xfe00u && address <= 0xfe9fu) {
-        if (gb->dma_active)
+        if (cupid_gb_oam_dma_blocks_bus(gb))
             return 0xffu;
         uint8_t mode = (uint8_t)(gb->io_registers[CUPID_GB_IO_STAT] & 0x03u);
 
@@ -796,20 +802,29 @@ static uint8_t read_data_bus(const CupidGb *gb, uint16_t address, CupidGb *bus) 
 }
 
 uint8_t cupid_gb_read_u8(const CupidGb *gb, uint16_t address) {
-    if (gb && address < 0x8000u)
-        return read_program(gb, address);
-    return read_data_bus(gb, address, NULL);
+    const uint8_t value = gb && address < 0x8000u ? read_program(gb, address)
+                                                  : read_data_bus(gb, address, NULL, NULL);
+    return gb && gb->cheats ? cupid_gb_cheats_apply(gb, address, value) : value;
 }
 
 uint8_t cupid_gb_read_bus_u8(CupidGb *gb, uint16_t address) {
     /* Keep the common instruction fetch out of the slower I/O and RAM map. */
     if (gb && address < 0x8000u) {
-        const uint8_t value = read_program(gb, address);
+        uint8_t value = read_program(gb, address);
+        if (gb->cheats)
+            value = cupid_gb_cheats_apply(gb, address, value);
         if (gb->model == CUPID_GB_MODEL_CGB)
             drive_cartridge_bus(gb, value, false);
         return value;
     }
-    return read_data_bus(gb, address, gb);
+    if (!gb || !gb->cheats)
+        return read_data_bus(gb, address, gb, NULL);
+    bool floating = false;
+    uint8_t value = read_data_bus(gb, address, gb, &floating);
+    value = cupid_gb_cheats_apply(gb, address, value);
+    if (gb->model == CUPID_GB_MODEL_CGB && address >= 0xa000u && address < 0xc000u && !floating)
+        drive_cartridge_bus(gb, value, false);
+    return value;
 }
 
 // MBC3 real-time clock helpers
@@ -876,7 +891,7 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
     if (on_cgb_cartridge_bus(gb, address))
         drive_cartridge_bus(gb, value, half_dot);
 
-    if (gb->dma_active && address >= 0xfe00u && address <= 0xfeffu) {
+    if (cupid_gb_oam_dma_blocks_bus(gb) && address >= 0xfe00u && address <= 0xfeffu) {
         return;
     }
 
@@ -1323,22 +1338,7 @@ static bool cupid_gb_step_internal(CupidGb *gb, CupidGbStepTrace *trace) {
     if (trace)
         trace->opcode = opcode;
 
-    if (opcode == 0xf0u) {
-        uint8_t n = cupid_gb_fetch_u8(gb);
-
-        /* The data read is the start of M3, after the opcode and immediate
-         * fetches. DIV has the same read phase as the other I/O registers. */
-        cupid_gb_tick(gb, 2u);
-        gb->cpu.a = cupid_gb_read_u8(gb, (uint16_t)(0xff00u + n));
-        cycles = 1u;
-    } else if (opcode == 0xe0u) {
-        uint8_t n = cupid_gb_fetch_u8(gb);
-
-        cupid_gb_cpu_write(gb, (uint16_t)(0xff00u + n), gb->cpu.a, 2u, &bus);
-        cycles = 1u;
-    } else {
-        cycles = cupid_gb_execute_unprefixed(gb, opcode, &bus);
-    }
+    cycles = cupid_gb_execute_unprefixed(gb, opcode, &bus);
 
     if (cycles > 0u) {
         cupid_gb_cpu_finish(gb, cycles, &bus);

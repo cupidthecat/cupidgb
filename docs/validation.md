@@ -585,3 +585,70 @@ Four 60-second runs used Qt 6.8.3, local boot firmware, recorded inputs, default
 | WSLg Xcb, Mario Deluxe | 100.012% | 17.61 / 19.12 ms | 115.58 MiB |
 
 Windows process CPU samples reached 4.30 and 6.42 seconds, and Linux user-plus-system CPU totals were 9.59 and 11.65 seconds. Native audio-required workflow smokes passed on Windows and WSLg Xcb. Guest progress uses the emulated clock. Widget paint events measure host UI delivery. Physical display refresh and longer gameplay remain unmeasured.
+
+## Memory tools, display color, and bus phases
+
+This checkpoint uses comparison revision `ea667ad79aa28409f034b1fd6da7304e1844750d`. CupidGB implements the behavior independently. Private fixtures and receipts remain outside the repository.
+
+The CPU comparison matched all 3,448 records for the remaining immediate load/store and relative branch phases, all 256 CB instructions, four flag combinations, and DMG, CGB, and double-speed CGB. Records include read/write timestamps and architectural state. The previous build differed on every timestamp record and 40 architectural results. Two independent 181-case test-suite sweeps each reported 177 passes and four bounded cases.
+
+Standalone OAM DMA matched 13,608 observations across models, source regions, short clock segments, and CPU access locks. Primed concurrent DMA probes matched all timing records. The 6,912-case overlap grid matched all OAM records and 6,848 VRAM records; 64 mode-3 boundary cases remain. The 5,376-case restart grid matched both complete memories. A further 5,376-case VRAM/high-source grid matched all VRAM records and 4,660 OAM records. Its remaining 716 OAM differences require PPU fetch/address conflict modeling. The historical unprimed 192-case overlap grid still matches 80 VRAM and 80 OAM results because the initial held cartridge bus differs. These results leave concurrent DMA parity incomplete. A separate 66-record final-tail restart probe matches the source cursor, phase, OAM read lock, and copied bytes on DMG and normal/double-speed CGB. Restarting after byte 160 begins a fresh request; restarting before that byte keeps the initial destination locked.
+
+Native states now write V7 with one OAM phase byte after the unchanged V6 payload. V2 through V6 import remains supported. Historical V4 size and digest checks pass. Host cheats, memory search, and display settings remain outside the state wire format.
+
+Cheat comparisons matched 823 traces covering all 256 bank prefixes, 512 generated conditional codes, controller bank selection, duplicates, global enable, and RAM regions. Canonical cheat-file bytes matched. Search comparisons matched 56 candidate-count and address/bank/value hashes. Component tests cover all eleven conditions and all three value widths, changing types, physical banks, writes, and region ends. Two-byte freeze rules deliberately map each byte separately across a physical bank boundary; this corrects an invalid second-byte address in the comparison frontend.
+
+Qt workflow checks cover editing, import/export, per-rule and global enable, automatic saving, failed writes, protected cartridge/battery/state paths, reset retention, and native state restore. A failed automatic write leaves the active collection available for export. Custom expressions and decimal arithmetic search remain pending.
+
+The color pipeline matched all 32,768 input colors, seven modes, 21 temperature positions, and both CGB and SGB profiles: 9,633,792 colors, or 28,901,376 output bytes. Windows and Linux output bytes matched. Inspector numeric values remain raw; palette previews use the selected correction. This does not qualify every display filter or hardware variant.
+
+The complete builds passed 36 of 36 checks on Windows/MSVC and Linux/GCC with Qt 6.8.3. Linux ASan/UBSan passed all 24 core checks. An earlier private state-sanitizer run hit a clock-baseline assertion once without a sanitizer diagnostic; a focused rerun and the complete sanitizer suite passed. Its cause remains unconfirmed.
+
+### Bounded core throughput
+
+Each sample executes 3,600 guest intervals, approximately 60.274 guest seconds. The core measurement at `8106f93`, before the later pulse-trigger correction, compares with `3b896f3`. Hosts ran sequentially, discarded one warmup pair, then measured five alternating pairs. Tetris guest counters and complete PCM/PPM captures match on both hosts. Mario Deluxe retains the same guest cycles, VBlank count, audio frame count, and final image, but the corrected fresh SRAM produces 63 additional instructions and different startup PCM.
+
+| Host and input | Previous median wall time | Current median wall time | Change |
+| --- | ---: | ---: | ---: |
+| Linux, Tetris | 7.511 s | 7.702 s | +2.5% |
+| Linux, Mario Deluxe | 8.506 s | 8.462 s | -0.5% |
+| Windows, Tetris | 7.713 s | 7.693 s | -0.3% |
+| Windows, Mario Deluxe | 9.553 s | 9.443 s | -1.2% |
+
+Linux process CPU medians changed from 6.934 to 7.111 seconds and 7.855 to 7.814 seconds. Windows process CPU counters varied widely between repeats, so their median changes do not establish an improvement. Current bounded core rates span 6.38 to 7.83 times nominal guest speed. These uncapped core samples do not measure desktop frame pacing or qualify other games.
+
+A separate correctness control imports an explicit 8 KiB zero-filled battery before boot. This restores every baseline Mario signature and byte-identical PCM/PPM, isolating the startup difference to the fresh-storage correction. It was not used for performance claims. An isolated inactive-DMA call guard preserved output but increased Linux runtime by 6.4% and 2.5% in its two screening inputs; it was excluded from the implementation.
+
+### Native desktop playback
+
+Final Windows Qt 6.8.3 sessions used local firmware, recorded inputs, fresh storage, normal audio, default rewind, Balanced correction, and neutral temperature. Tetris and Mario Deluxe ran from the installed folder with only system directories on PATH; every loaded Qt DLL came from that folder. The SGB2 result below uses the final centered border-window sizing. Each session lasted 60 seconds; the table records the last 55 seconds after warmup. All had zero audio errors and zero audio idle events.
+
+| Input | Nominal guest progress | Widget paint p95 / maximum | Peak working set |
+| --- | ---: | ---: | ---: |
+| Tetris, DMG | 100.006% | 17.68 / 36.83 ms | 67.46 MiB |
+| Mario Deluxe, CGB | 99.983% | 17.65 / 20.63 ms | 88.71 MiB |
+| Donkey Kong, SGB2 | 100.000% | 17.80 / 34.41 ms | 119.61 MiB |
+
+The final GB/GBC images show active play. The 60-second SGB2 image shows the stage introduction after its recorded input sequence. A separate 36-second capture shows active first-stage gameplay with the full border at the corrected default size. That run reached 99.973% post-warmup guest progress, zero audio idle/errors, and paint p95/maximum 17.81/37.38 ms. Both SGB2 captures use the refreshed installed binary after the native window-chrome correction. All 34,304 corrected border pixels match the pinned color oracle. The viewport is at a different gameplay time and is excluded from that pixel comparison.
+
+Default-size workflow checks exercise handheld/border changes, ROM/model transitions, visible centering at 1x/2x/3x, never-shown positioning, custom/fullscreen preservation, and explicit 1x shrinking after close. Layout activation occurs only on a resize operation, so an old minimum cannot clamp the new size and steady frames do not repeat layout work. Close/restore position policies remain unchanged. A packaged native Windows audio workflow caught a one-pixel chrome discrepancy that offscreen tests missed. Window chrome now comes from the complete main-window minimum-size hint, retaining exact size and center assertions. The refreshed Windows bundle passes the native audio workflow with no SDK on PATH. The installed Linux system-Qt build passes the native Xcb UI workflow; that UI-only check does not require host audio.
+
+### Linux host timing limit
+
+The Linux Xcb frontend rendered the SGB2 border and processed inputs, but sustained native audio qualification remains blocked on this host. Qt 6.8.3 and system Qt 6.4.2 both stalled; a preserved preceding build reproduced the problem. A shutdown sample found a PulseAudio drain wait. Sink teardown now resets obsolete timeline audio rather than requesting that drain. This repairs the close/pause behavior without qualifying sustained playback.
+
+Read-only probes found clock-rate settings of tick 10833 microseconds plus 33.333 ppm, with monotonic time advancing 8.333% faster than the raw clock. An independent 10-second Pulse playback also developed reported latency from 37 to 842 ms. A fresh boot briefly returned to tick 10000/frequency zero. The unchanged production binary then completed a 20-second SGB2 menu/input capture at 99.974% post-warmup guest progress, zero idle/errors, and paint p95/maximum 17.84/18.94 ms. Its border pixels also match the oracle.
+
+The rate changed again automatically, including settings near 10% above raw time. A user-authorized standard-rate trial was overwritten during playback and failed; its immediate pre-trial tick/frequency values were restored and independently verified. Bounded syscall traces found wall-clock steps from the time service but did not identify a tick/frequency writer. No time service was stopped or reconfigured. The cause of the recurring rate changes remains unverified.
+
+A private 125 ms backend-buffer probe did not recover playback. A separately rebuilt raw-pacing prototype also failed, with 24 post-warmup idle events. Neither was admitted. Production retains the 50 ms managed queue and 30 ms priming policy, with guest execution waiting on audio backpressure. The short standard-clock capture establishes only that bounded workflow; it does not establish sustained Linux gameplay or universal full-speed support.
+
+The fresh 880-input library scan used 420 guest intervals per input. All 350 DMG inputs and 526 of 530 CGB inputs reached the limit and emitted VBlank and PCM output. The same four MBC5 inputs stopped with core errors; no new failing input appeared. All input hashes remained unchanged. Bounded counts were MBC5 483, MBC1 271, MBC3 81, MBC5 rumble 13, ROM-only 12, MBC2 11, and one each for MBC7, HuC3, Camera, MBC1 multicart, and an unknown-header fallback. HuC1, MMM01, MBC30, and TPP1 had no commercial entries in this library; their generated and paired tests remain separate evidence. A startup limit does not qualify complete gameplay, every bank transition, or every mapper peripheral.
+
+Fresh traces for the four failing library inputs matched the complete instruction-address/opcode sequence and terminal illegal opcode in the pinned build: 94, 357,821, 197,367, and 1,417 records. The initial comparison isolated 800 accumulator differences in the fourth input to fresh SRAM initialized at zero. Fresh cartridge storage now starts at erased `FF` after mapper-specific sizes are resolved. All four complete address/opcode/accumulator/stack-pointer traces are now byte-identical. Twenty-two mapper/header regressions cover the cold bytes and explicit battery/state restoration. All 24 core checks pass again on Windows, Linux, and Linux ASan/UBSan; frozen legacy state fixtures remain unchanged. These traces cover their recorded registers and paths, rather than every hardware state field.
+
+### Color pulse retriggers
+
+The pulse repair matches 50,420 paired records: 30,912 trigger-boundary observations, 19,200 register-only timeline rows, 220 power-cycle samples, 48 inactive reload/write rows, and 40 repeat-write rows. The initial trigger grids matched only 10,744 and 10,616 rows before correction. Scope is the pinned CGB-E profile, both pulse channels and CPU speeds, with aligned two-base-dot observations. Cold starts, trigger bit 2, retained inactive reloads, suppression, and maximum-frequency extra delay have regressions. Windows, Linux, and Linux ASan/UBSan pass all 24 core checks; no state field or format changed.
+
+A deterministic 3,600-interval Tetris replay retains identical PCM and pixels. Mario Deluxe retains guest cycles, instruction count, VBlank count, audio frame count, and final pixels, while its PCM changes after the corrected pulse edges. These are bounded comparisons, not a complete commercial audio or hardware-revision qualification.

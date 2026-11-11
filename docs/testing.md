@@ -46,6 +46,8 @@ C++/C integration checks exercise shared hardware records, initialization/reset,
 
 The serial and printer targets use generated transfers to check both clock directions, interrupt timing, reply bytes, compressed packets and image output. The Qt smoke sends a job over the emulated serial registers and checks the resulting feed, PNG, and PDF output. The command-line workflow checks direct cartridge loading and archive selection and rejection. Set `CUPIDGB_REQUIRE_ARCHIVE_TESTS=1` to fail if 7-Zip is unavailable.
 
+The cheat core target checks code formats, bank selection, comparisons, duplicate priority, cloning and `.cht` bytes. The search target checks physical regions, all preset conditions, byte/word data, overlapping words, type changes, and bank-boundary writes. Qt workflows exercise actual rule editing and toggles, file persistence and invalid imports, save-state continuity, blocked save destinations, search-to-rule creation, and state-file protection. Color tests hash the complete RGB555 domain for every correction mode and temperature.
+
 Release tests explicitly keep their assertions enabled. Run the GCC/Clang sanitizer configuration as a separate check, with leak detection where available. Preserve the failing command and complete diagnostic when a sanitizer reports a defect.
 
 ## Qt workflow checks

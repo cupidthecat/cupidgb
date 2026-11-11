@@ -25,6 +25,83 @@ static uint8_t *make_rom(size_t size, uint8_t type, uint8_t rom_code, uint8_t ra
     return rom;
 }
 
+static void assert_fresh_storage(const CupidGb *gb, size_t expected_size) {
+    assert(gb->cartridge_ram_size == expected_size && gb->battery_write_generation == 0);
+    for (size_t offset = 0; offset < expected_size; ++offset)
+        assert(gb->cartridge_ram[offset] == 0xff);
+    if (expected_size < CUPID_GB_MAX_RAM_SIZE)
+        assert(gb->cartridge_ram[expected_size] == 0);
+}
+
+static void test_fresh_storage_and_restore(void) {
+    const struct {
+        uint8_t type, ram_code;
+        size_t size;
+    } variants[] = {{0x00, 0, 0},      {0x08, 1, 0x800},    {0x09, 4, 0x20000}, {0x02, 2, 0x2000},
+                    {0x03, 3, 0x8000}, {0x05, 0, 512},      {0x06, 4, 512},     {0x0c, 2, 0x2000},
+                    {0x0d, 3, 0x8000}, {0x10, 2, 0x2000},   {0x12, 2, 0x2000},  {0x13, 3, 0x8000},
+                    {0x1a, 2, 0x2000}, {0x1b, 4, 0x20000},  {0x1d, 2, 0x2000},  {0x1e, 3, 0x8000},
+                    {0x20, 2, 0x2000}, {0x22, 4, 256},      {0xfc, 4, 0x20000}, {0xfe, 2, 0x2000},
+                    {0xff, 2, 0x2000}, {0xbc, 0xc1, 0x2000}};
+
+    CupidGb *gb = calloc(1, sizeof(*gb));
+    assert(gb);
+    for (size_t variant = 0; variant < sizeof(variants) / sizeof(*variants); ++variant) {
+        uint8_t *rom = make_rom(0x8000, variants[variant].type, 0, variants[variant].ram_code);
+        if (variants[variant].type == 0xbc) {
+            rom[0x14a] = 0x65;
+            rom[0x152] = 1;
+            rom[0x153] = 8;
+            uint8_t checksum = 0;
+            for (unsigned i = 0x134; i <= 0x14c; ++i)
+                checksum = (uint8_t)(checksum - rom[i] - 1);
+            rom[0x14d] = checksum;
+        }
+        assert(cupid_gb_load_rom(gb, rom, 0x8000));
+        assert_fresh_storage(gb, variants[variant].size);
+        const size_t ram_size = gb->cartridge_ram_size;
+        uint8_t *expected = malloc(ram_size ? ram_size : 1);
+        assert(expected);
+        for (size_t offset = 0; offset < ram_size; ++offset) {
+            const uint8_t pattern = (uint8_t)(offset * 13u + 7u);
+            expected[offset] = gb->header.mbc_type == CUPID_GB_MBC2 ? pattern & 15u : pattern;
+        }
+        memcpy(gb->cartridge_ram, expected, ram_size);
+        const size_t state_size = cupid_gb_state_size(gb);
+        uint8_t *state = malloc(state_size);
+        assert(state && cupid_gb_save_state(gb, state, state_size, NULL) == CUPID_GB_STATE_OK);
+        const size_t battery_size = cupid_gb_battery_size(gb);
+        uint8_t *battery = malloc(battery_size ? battery_size : 1);
+        assert(battery);
+        if (battery_size)
+            assert(cupid_gb_save_battery_at(gb, battery, battery_size, NULL, 1700000000) ==
+                   CUPID_GB_BATTERY_OK);
+
+        /* Frontend reset/reopen restores the battery after loading the ROM.
+         * The cold fill must leave that explicit persistent image intact. */
+        assert(cupid_gb_load_rom(gb, rom, 0x8000));
+        assert_fresh_storage(gb, ram_size);
+        if (battery_size) {
+            assert(cupid_gb_load_battery_at(gb, battery, battery_size, 1700000000) ==
+                   CUPID_GB_BATTERY_OK);
+            assert(memcmp(gb->cartridge_ram, expected, ram_size) == 0);
+        }
+        assert(cupid_gb_load_rom(gb, rom, 0x8000));
+        assert_fresh_storage(gb, ram_size);
+        assert(cupid_gb_load_state(gb, state, state_size) == CUPID_GB_STATE_OK);
+        assert(memcmp(gb->cartridge_ram, expected, ram_size) == 0);
+        gb->boot_rom_size = 0x100;
+        cupid_gb_enter_boot_rom(gb);
+        assert(memcmp(gb->cartridge_ram, expected, ram_size) == 0);
+        free(battery);
+        free(state);
+        free(expected);
+        free(rom);
+    }
+    cupid_gb_cleanup(gb);
+    free(gb);
+}
+
 static void test_physical_rom_address_lines(void) {
     CupidGb gb = {0};
     /* File population determines connected address lines; the size byte is
@@ -409,7 +486,7 @@ static void test_mmm01_menu_and_lock(void) {
         const size_t length = cupid_gb_state_size(&gb);
         uint8_t *state = malloc(length);
         assert(state && cupid_gb_save_state(&gb, state, length, NULL) == CUPID_GB_STATE_OK);
-        assert(state[8] == 6);
+        assert(state[8] == 7);
         assert(cupid_gb_load_rom(&gb, rom, size));
         assert(cupid_gb_load_state(&gb, state, length) == CUPID_GB_STATE_OK);
         assert(cupid_gb_read_u8(&gb, 0) == menu_offset);
@@ -424,6 +501,7 @@ static void test_mmm01_menu_and_lock(void) {
 }
 
 int main(void) {
+    test_fresh_storage_and_restore();
     test_physical_rom_address_lines();
     test_reject_advance_cartridge();
     test_multicart_wiring();

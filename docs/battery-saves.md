@@ -1,5 +1,7 @@
 # Battery saves
 
+Fresh cartridge storage starts at erased `FF`, after controller-specific RAM or EEPROM sizes are resolved. Loading a battery or native state replaces that cold data with the saved bytes. The Qt reset/reopen workflow restores the battery after loading the cartridge; entering the boot overlay leaves existing storage intact. The cold fill does not count as a guest battery write.
+
 CupidGB stores battery files beside the cartridge with a `.sav` extension. Validation runs use disposable copies of cartridges so existing saves remain untouched.
 
 RAM-only files contain exactly the configured cartridge RAM bytes. Timer-equipped MBC3 cartridges append 48 bytes: ten little-endian 32-bit register values followed by a little-endian 64-bit Unix timestamp. The first five values are live seconds, minutes, hours, day low, and day high; the next five are their latched copies. Loading also accepts a 44-byte trailer with a 32-bit timestamp, or exact RAM-only data. Other sizes and register values that exceed one byte are rejected before either RAM or the clock changes.

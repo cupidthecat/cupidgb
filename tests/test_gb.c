@@ -718,7 +718,7 @@ static void test_battery_save_ignored_for_invalid_untitled_rom(void) {
     CupidGb gb = {0};
     char rom_path[1024];
     uint8_t persisted[8192];
-    uint8_t zeroes[8192] = {0};
+    uint8_t erased[8192];
     FILE *file;
 
     build_test_rom(rom, sizeof(rom));
@@ -727,6 +727,7 @@ static void test_battery_save_ignored_for_invalid_untitled_rom(void) {
     rom[0x0149] = 0x02u; /* 8 KiB RAM */
     rom[0x014d] = 0x00u; /* intentionally invalid */
     memset(persisted, 0x5a, sizeof(persisted));
+    memset(erased, 0xff, sizeof(erased));
 
     file = open_test_file(rom_path, sizeof(rom_path));
     assert(file != NULL);
@@ -743,7 +744,7 @@ static void test_battery_save_ignored_for_invalid_untitled_rom(void) {
 
     cupid_gb_load_save(&gb);
 
-    assert(memcmp(gb.cartridge_ram, zeroes, sizeof(zeroes)) == 0);
+    assert(memcmp(gb.cartridge_ram, erased, sizeof(erased)) == 0);
 
     assert(remove(gb.save_path) == 0);
     assert(remove(rom_path) == 0);
@@ -2297,18 +2298,18 @@ static void test_ppu_dma_transfer(void) {
     cupid_gb_write_u8(&gb, 0xff46u, 0xc0u);
 
     cupid_gb_tick(&gb, 1u);
-    assert(!gb.dma_active);
-    assert(gb.dma_start_delay == 1u);
+    assert(gb.dma_active);
+    assert(gb.dma_start_delay == 0u && gb.dma_index == 0u);
 
     cupid_gb_tick(&gb, 1u);
     assert(gb.dma_active);
     assert(gb.dma_start_delay == 0u);
-    assert(gb.dma_index == 0u);
+    assert(gb.dma_index == 1u);
     assert(cupid_gb_read_u8(&gb, 0xfe00u) == 0xffu);
 
     cupid_gb_tick(&gb, 1u);
     assert(gb.dma_active);
-    assert(gb.dma_index == 1u);
+    assert(gb.dma_index == 2u);
     assert(cupid_gb_read_u8(&gb, 0xfe00u) == 0xffu);
 
     cupid_gb_tick(&gb, 159u);

@@ -937,6 +937,10 @@ void cupid_cgb_run_pending_dma(CupidGb *gb) {
         const bool driven = source < 0x8000u || (source >= 0xa000u && source < 0xe000u);
         const uint8_t bus_value =
             driven ? cupid_gb_read_bus_u8(gb, source) : cupid_gb_sample_cartridge_bus(gb);
+        const unsigned oam_address = source & 0xffu;
+        if ((gb->dma_active || gb->dma_start_delay) && (gb->double_speed || gb->dma_phase == 2u) &&
+            oam_address < 160u)
+            gb->object_attribute_memory[oam_address] = bus_value;
         cupid_gb_tick_color_dma_slot(gb, gb->double_speed || !(slot & 1u));
         ++slot;
         /* A fetch on the shared VRAM port can pull destination address lines low.

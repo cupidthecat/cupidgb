@@ -388,16 +388,18 @@ static void test_double_speed_clock_domains(void) {
         for (unsigned i = 0; i < sizeof(gb.object_attribute_memory); ++i)
             gb.work_ram[i] = (uint8_t)(i + 1u);
         cupid_gb_run_dma_transfer(&gb, 0xc0);
+        /* Startup finishes at CPU T2 and the first byte arrives at T6.
+         * Whole-machine-cycle observations see those edges at T4 and T8. */
         cupid_gb_tick(&gb, 1);
-        assert(gb.elapsed_cycles == 2 && gb.dma_start_delay == 1 && !gb.dma_active);
-        cupid_gb_tick(&gb, 1);
-        assert(gb.elapsed_cycles == 4 && gb.dma_active && gb.dma_index == 0);
+        assert(gb.elapsed_cycles == 2 && !gb.dma_start_delay && gb.dma_active && !gb.dma_index);
         for (unsigned i = 0; i < sizeof(gb.object_attribute_memory); ++i) {
             cupid_gb_tick(&gb, 1);
-            assert(gb.elapsed_cycles == 6u + i * 2u);
+            assert(gb.elapsed_cycles == 4u + i * 2u);
             assert(gb.object_attribute_memory[i] == (uint8_t)(i + 1u));
         }
-        assert(!gb.dma_active && gb.dma_index == 160);
+        assert(gb.dma_active && gb.dma_index == 160);
+        cupid_gb_tick(&gb, 1);
+        assert(!gb.dma_active);
         assert(gb.elapsed_cycles == 324 && gb.speed_phase == (phase != 0));
     }
     cupid_gb_cleanup(&gb);
@@ -944,6 +946,116 @@ static void test_immediate_cartridge_bus_phase(void) {
     cupid_gb_cleanup(&gb);
 }
 
+static void prepare_late_oam_operand(CupidGb *gb, uint8_t opcode, uint8_t flags) {
+    prepare(gb, opcode, flags);
+    cupid_gb_write_u8(gb, 0xfdff, opcode);
+    gb->cpu.pc = 0xfdff;
+    cupid_gb_write_u8(gb, 0xff40, 0x91);
+    for (unsigned cycles = 0; cycles < 17556; ++cycles) {
+        if (gb->io_registers[CUPID_GB_IO_LY] == 1 && gb->pixels.active && gb->pixels.x >= 156) {
+            assert(cupid_gb_read_u8(gb, 0xfe00) == 0xff);
+            return;
+        }
+        cupid_gb_tick_ppu(gb, 1);
+    }
+    assert(false);
+}
+
+static void test_late_immediate_memory_phases(void) {
+    CupidGb gb = {0};
+    const uint8_t opcodes[] = {0x36, 0xe0, 0xf0, 0xcb};
+    for (unsigned i = 0; i < sizeof(opcodes); ++i) {
+        prepare_late_oam_operand(&gb, opcodes[i], 0);
+        gb.object_attribute_memory[0] = 0x80;
+        gb.cpu.h = 0xc0;
+        gb.cpu.l = 0;
+        gb.cpu.a = 0x5a;
+        gb.high_ram[0] = 0xa5;
+        gb.cpu.b = 0x81;
+        if (opcodes[i] == 0xcb)
+            gb.object_attribute_memory[0] = 0; /* RLC B */
+        step_cycles(&gb, opcodes[i] == 0xcb ? 8 : 12);
+        if (opcodes[i] == 0x36)
+            assert(gb.work_ram[0] == 0x80);
+        else if (opcodes[i] == 0xe0)
+            assert(gb.high_ram[0] == 0x5a);
+        else if (opcodes[i] == 0xf0)
+            assert(gb.cpu.a == 0xa5);
+        else
+            assert(gb.cpu.b == 3 && gb.cpu.f == 0x10);
+        assert(gb.cpu.pc == 0xfe01);
+    }
+
+    const uint8_t stores[] = {0x08, 0xea};
+    for (unsigned i = 0; i < sizeof(stores); ++i) {
+        prepare_late_oam_operand(&gb, stores[i], 0);
+        gb.cpu.pc = 0xfdfe;
+        cupid_gb_write_u8(&gb, 0xfdfe, stores[i]);
+        cupid_gb_write_u8(&gb, 0xfdff, 0);
+        gb.object_attribute_memory[0] = 0xc0;
+        gb.cpu.a = 0x5a;
+        gb.cpu.sp = 0x1234;
+        step_cycles(&gb, i ? 16 : 20);
+        assert(gb.cpu.pc == 0xfe01);
+        assert(gb.work_ram[0] == (i ? 0x5a : 0x34));
+        if (!i)
+            assert(gb.work_ram[1] == 0x12);
+    }
+    cupid_gb_cleanup(&gb);
+}
+
+static void test_relative_displacement_bus_phase(void) {
+    CupidGb gb = {0};
+    const uint8_t flags[] = {0, 0x80, 0, 0x10};
+    prepare_late_oam_operand(&gb, 0x18, 0);
+    gb.object_attribute_memory[0] = 4;
+    step_cycles(&gb, 12);
+    assert(gb.cpu.pc == 0xfe05);
+    for (unsigned condition = 0; condition < 4; ++condition) {
+        const uint8_t opcode = (uint8_t)(0x20 + condition * 8);
+        prepare_late_oam_operand(&gb, opcode, flags[condition]);
+        gb.object_attribute_memory[0] = 4;
+        step_cycles(&gb, 12);
+        assert(gb.cpu.pc == 0xfe05);
+        prepare_late_oam_operand(&gb, opcode, flags[condition] ^ 0x90);
+        gb.object_attribute_memory[0] = 4;
+        step_cycles(&gb, 8);
+        assert(gb.cpu.pc == 0xfe01);
+    }
+    cupid_gb_cleanup(&gb);
+}
+
+static void test_cb_memory_bus_phases(void) {
+    CupidGb gb = {0};
+    cupid_gb_set_model(&gb, CUPID_GB_MODEL_CGB);
+    for (unsigned fast = 0; fast < 2; ++fast) {
+        for (unsigned group = 0; group < 32; ++group) {
+            prepare(&gb, 0xcb, 0);
+            gb.double_speed = fast != 0;
+            gb.rom[0x101] = (uint8_t)(group * 8 + 6);
+            gb.cpu.h = 0xff;
+            gb.cpu.l = 4;
+            gb.div_counter = 62;
+            const bool bit_test = group >= 8 && group < 16;
+            step_cycles(&gb, (bit_test ? 3 : 4) * (fast ? 2 : 4));
+            /* All CB memory forms read DIV at M3. BIT leaves it running;
+             * the other groups reset it with their M4 write. */
+            assert(gb.io_registers[4] == (bit_test ? 1 : 0));
+            assert(gb.div_counter == 1 && gb.cpu.pc == 0x102);
+            if (bit_test)
+                assert(gb.cpu.f == (group == 8 ? 0x20 : 0xa0));
+        }
+        prepare(&gb, 0xcb, 0);
+        gb.double_speed = fast != 0;
+        gb.rom[0x101] = 0x46; /* BIT 0,(HL), with undriven cartridge input. */
+        gb.cpu.h = 0xa0;
+        gb.cpu.l = 0;
+        step_cycles(&gb, 3 * (fast ? 2 : 4));
+        assert(gb.cpu.f == 0xa0);
+    }
+    cupid_gb_cleanup(&gb);
+}
+
 int main(void) {
     test_conditional_control_flow();
     test_unconditional_control_flow();
@@ -971,6 +1083,9 @@ int main(void) {
     test_lcd_enable_during_stack_writes();
     test_register_indirect_bus_phase();
     test_immediate_cartridge_bus_phase();
+    test_late_immediate_memory_phases();
+    test_relative_displacement_bus_phase();
+    test_cb_memory_bus_phases();
     puts("CPU control-flow timing checks passed.");
     return 0;
 }

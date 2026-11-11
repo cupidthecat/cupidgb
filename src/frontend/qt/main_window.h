@@ -1,5 +1,6 @@
 #pragma once
 
+#include "color_pipeline.h"
 #include "controller_manager.h"
 #include "display_pipeline.h"
 #include "guest_clock_pacer.h"
@@ -11,12 +12,14 @@
 #include <QTimer>
 #include <array>
 #include <deque>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <vector>
 
 extern "C" {
 #include "cupid/core/emulator.h"
+#include "cupid/gb/cheats.h"
 #include "cupid/gb/debugger.h"
 #include "cupid/gb/state.h"
 }
@@ -27,6 +30,7 @@ class QCloseEvent;
 class QMenu;
 class QMediaDevices;
 class QIODevice;
+class QSlider;
 class DisplayWidget;
 class AudioBuffer;
 class AudioConverter;
@@ -34,6 +38,7 @@ class WaveRecorder;
 class DebuggerWindow;
 class InspectorsWindow;
 class PrinterWindow;
+class CheatsWindow;
 struct CupidGbPrinter;
 
 class MainWindow final : public QMainWindow {
@@ -55,8 +60,11 @@ class MainWindow final : public QMainWindow {
 
   private:
     void buildMenus();
+    void buildColorMenus(QMenu *view);
     void applyDisplaySettings();
     void setFrameBlending(FrameBlending mode);
+    QSize logicalWindowSize(const QSize &nativeSize, int scale) const;
+    void resizeWindowCentered(const QSize &windowSize, const QRect &previousGeometry);
     void resizeDisplay(int scale);
     void updateRecentMenu();
     void configure();
@@ -125,11 +133,28 @@ class MainWindow final : public QMainWindow {
     bool debuggerSmokeTest(const QString &directory);
     bool pacingSmokeTest(const QString &path);
     bool modelSmokeTest(const QString &directory);
+    void openCheats(bool search = false);
+    void refreshCheats(bool newSession = false);
+    bool mutateCheats(const std::function<bool(CupidGbCheats *)> &operation);
+    bool loadCheatFile(const QString &path, bool replace = false);
+    bool exportCheatFile(const QString &path);
+    bool cheatDestinationProtected(const QString &path, const QString &rom,
+                                   const QString &battery) const;
+    bool writeSearchMemory(const std::function<bool(CupidGb &)> &operation);
+    bool cheatSmokeTest(const QString &path, const QString &directory);
 
     QSettings settings_;
     QString bootDirectoryOverride_;
     const std::optional<int> modelOverride_;
     std::unique_ptr<CupidEmulator> emulator_;
+    using CheatCollection = std::unique_ptr<CupidGbCheats, decltype(&cupid_gb_cheats_destroy)>;
+    CheatCollection cheats_{nullptr, cupid_gb_cheats_destroy};
+    CheatsWindow *cheatsWindow_ = nullptr;
+    QString cheatPath_;
+    QString cheatSaveWarning_;
+    QAction *cheatsAction_ = nullptr;
+    QAction *cheatSearchAction_ = nullptr;
+    QAction *enableCheatsAction_ = nullptr;
     std::unique_ptr<CupidGbDebugger> debugger_;
     std::unique_ptr<CupidGbStateContext> debuggerContext_;
     DebuggerWindow *debuggerWindow_ = nullptr;
@@ -174,8 +199,12 @@ class MainWindow final : public QMainWindow {
     uint64_t observedBatteryGeneration_ = 0;
     bool batteryDirty_ = false;
     std::array<QRgb, 4> displayPalette_{};
+    ColorSettings colorSettings_;
+    std::unique_ptr<ColorTable> cgbColorTable_;
+    std::unique_ptr<ColorTable> sgbColorTable_;
     FrameBlending frameBlending_ = FrameBlending::Accurate;
     QImage image_;
+    QSize displayNativeSize_{160, 144};
     QImage previousDisplayFrame_;
     QImage currentDisplayFrame_;
     QMenu *recentMenu_ = nullptr;
@@ -191,6 +220,8 @@ class MainWindow final : public QMainWindow {
     std::array<QAction *, 5> paletteActions_{};
     std::array<QAction *, 8> windowSizeActions_{};
     std::array<QAction *, 3> blendingActions_{};
+    std::array<QAction *, 7> colorCorrectionActions_{};
+    QSlider *colorTemperatureSlider_ = nullptr;
     QAction *borderAction_ = nullptr;
     std::array<QAction *, 10> saveSlotActions_{};
     std::array<QAction *, 10> loadSlotActions_{};

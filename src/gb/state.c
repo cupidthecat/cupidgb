@@ -13,6 +13,7 @@
 
 enum {
     STATE_HEADER_SIZE = 128,
+    STATE_VERSION_V7 = 7,
     STATE_VERSION_V6 = 6,
     STATE_VERSION_V5 = 5,
     STATE_VERSION_V4 = 4,
@@ -24,6 +25,7 @@ enum {
     STATE_LCD_PHASE_SIZE = 2,
     STATE_DMA_BUS_SIZE = 2,
     STATE_V6_TAIL_SIZE = STATE_LCD_PHASE_SIZE + STATE_DMA_BUS_SIZE,
+    STATE_V7_TAIL_SIZE = STATE_V6_TAIL_SIZE + 1,
     STATE_MMM01_EXTENSION_SIZE = 4,
     STATE_MBC7_EXTENSION_SIZE = 8,
     STATE_CAMERA_EXTENSION_SIZE = 64,
@@ -827,7 +829,7 @@ size_t cupid_gb_state_size(const CupidGb *gb) {
     if (!ready(gb)) {
         return 0;
     }
-    return extended_wire_size(state_sections(gb)) + STATE_V6_TAIL_SIZE;
+    return extended_wire_size(state_sections(gb)) + STATE_V7_TAIL_SIZE;
 }
 
 static void put_u32(uint8_t *data, uint32_t value) {
@@ -859,7 +861,7 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
         return CUPID_GB_STATE_NO_ROM;
     }
     const unsigned sections = state_sections(gb);
-    const size_t size = extended_wire_size(sections) + STATE_V6_TAIL_SIZE;
+    const size_t size = extended_wire_size(sections) + STATE_V7_TAIL_SIZE;
     if (!data || capacity < size) {
         return CUPID_GB_STATE_BUFFER_TOO_SMALL;
     }
@@ -869,7 +871,7 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
     }
     memset(data, 0, STATE_HEADER_SIZE);
     memcpy(data, state_magic, sizeof(state_magic));
-    put_u32(data + 8, STATE_VERSION_V6);
+    put_u32(data + 8, STATE_VERSION_V7);
     put_u32(data + 12, (uint32_t)size);
     put_u32(data + 16, (uint32_t)gb->model);
     put_u32(data + 20, (uint32_t)gb->rom_size);
@@ -890,6 +892,10 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
     state_extension_v5(&io, (CupidGb *)gb, sections);
     state_lcd_phase(&io, (CupidGb *)gb);
     state_dma_bus(&io, (CupidGb *)gb);
+    uint8_t dma_phase = gb->dma_active || gb->dma_start_delay ? gb->dma_phase : 0;
+    bytes(&io, &dma_phase, 1);
+    if (gb->dma_phase > 3u)
+        io.invalid = true;
     if (io.invalid || io.offset != size) {
         return CUPID_GB_STATE_INVALID;
     }
@@ -909,13 +915,16 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
         return CUPID_GB_STATE_INVALID;
     }
     const uint32_t version = get_u32(data + 8);
-    if (version < STATE_VERSION_V2 || version > STATE_VERSION_V6) {
+    if (version < STATE_VERSION_V2 || version > STATE_VERSION_V7) {
         return CUPID_GB_STATE_UNSUPPORTED_VERSION;
     }
     const size_t prefix_size = version == STATE_VERSION_V2   ? STATE_WIRE_SIZE_V2
                                : version == STATE_VERSION_V3 ? STATE_WIRE_SIZE_V3
                                                              : STATE_WIRE_SIZE_V4;
-    const size_t device_size = length - (version == STATE_VERSION_V6 ? STATE_V6_TAIL_SIZE : 0);
+    const size_t tail_size = version >= STATE_VERSION_V7   ? STATE_V7_TAIL_SIZE
+                             : version == STATE_VERSION_V6 ? STATE_V6_TAIL_SIZE
+                                                           : 0;
+    const size_t device_size = length - tail_size;
     if (length != get_u32(data + 12) ||
         (version >= STATE_VERSION_V5
              ? device_size < prefix_size || device_size > extended_wire_size(STATE_SECTIONS_ALL)
@@ -1001,10 +1010,32 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
         candidate->lcd_first_frame =
             candidate->model == CUPID_GB_MODEL_CGB && candidate->ppu_lcd_startup;
     }
+    if (version >= STATE_VERSION_V7) {
+        bytes(&io, &candidate->dma_phase, 1);
+        if (candidate->dma_phase > 3u ||
+            (!candidate->dma_active && !candidate->dma_start_delay && candidate->dma_phase))
+            io.invalid = true;
+    } else {
+        candidate->dma_phase = 2;
+    }
     if (io.invalid || io.offset != length || candidate->boot_rom_enabled != (flags != 0) ||
         !valid_hardware_prefix(candidate, version) || !valid_v5_sections(candidate, sections)) {
         free(candidate);
         return CUPID_GB_STATE_INVALID;
+    }
+    /* Older payloads retained whole-M-cycle counters. Restore a deterministic
+     * source-slot phase and project pending restarts into the new warmup state. */
+    if (version < STATE_VERSION_V7) {
+        if (candidate->dma_restart_pending) {
+            candidate->dma_source_base = candidate->dma_restart_source_base;
+            candidate->dma_index = 0;
+            candidate->dma_start_delay = 1;
+            candidate->dma_active = false;
+            candidate->dma_restart_delay = 0;
+        } else if (candidate->dma_start_delay) {
+            candidate->dma_start_delay = 1;
+            candidate->dma_active = false;
+        }
     }
     if (!(sections & STATE_SECTION_SGB)) {
         import_legacy_sgb(candidate);

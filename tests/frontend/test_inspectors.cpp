@@ -110,6 +110,18 @@ void testMapsAndAttributes() {
     assert(forced.pixel(0, 0) == qRgb(0, 0, 255));
     const auto raw = inspectorMap(*gb, InspectorMap::Low, InspectorTileAddressing::Unsigned, {});
     assert(raw.pixel(0, 0) == qRgb(170, 170, 170));
+    auto colors = std::make_unique<ColorTable>();
+    colors->fill(qRgb(9, 17, 25));
+    const auto corrected =
+        inspectorMap(*gb, InspectorMap::Background, InspectorTileAddressing::Automatic,
+                     {InspectorPalette::Automatic, 0}, colors.get());
+    const auto correctedRaw =
+        inspectorMap(*gb, InspectorMap::Low, InspectorTileAddressing::Unsigned, {}, colors.get());
+    assert(corrected.pixel(0, 0) == qRgb(9, 17, 25));
+    assert(correctedRaw == raw);
+    assert(inspectorTiles(*gb, 1, {InspectorPalette::Background, 3}, colors.get()).pixel(0, 0) ==
+           qRgb(9, 17, 25));
+    assert(inspectorObject(*gb, 0, colors.get()).image.pixel(0, 0) == qRgb(9, 17, 25));
     const auto info = inspectorMapCell(*gb, InspectorMap::Background, 0, 0);
     assert(info.contains("Bank 1") && info.contains("Palette 3") && info.contains("Priority 1"));
     assert(inspectorMapCell(*gb, InspectorMap::Background, -1, 0).isEmpty());

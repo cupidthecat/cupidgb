@@ -207,6 +207,7 @@ static void switch_clock_segment(CupidGb *gb, unsigned cycles, unsigned *half_do
         advance_base_time(gb, dots);
         cupid_gb_tick_ppu_dots(gb, (uint16_t)dots);
     }
+    cupid_gb_tick_dma_tcycles(gb, cycles - frozen);
 }
 
 static void tick_switch_cycle(CupidGb *gb) {
@@ -230,7 +231,6 @@ static void tick_switch_cycle(CupidGb *gb) {
             gb->speed_switch_halt_cycles -= 4;
         }
     }
-    cupid_gb_tick_dma(gb);
     if (divider_speed)
         gb->speed_phase = !gb->speed_phase;
 
@@ -266,7 +266,6 @@ void cupid_gb_tick(CupidGb *gb, uint16_t cycles) {
             continue;
         }
         clock_cpu_domain(gb);
-        cupid_gb_tick_dma(gb);
 
         /* Each CPU machine cycle occupies two LCD dots in double speed.
          * Batching pairs of cycles would move reads and interrupts by two dots. */
@@ -279,6 +278,7 @@ void cupid_gb_tick(CupidGb *gb, uint16_t cycles) {
         advance_base_time(gb, dots);
         cupid_gb_tick_ppu_dots(gb, dots);
         cupid_gb_tick_apu(gb, dots);
+        cupid_gb_tick_dma(gb);
     }
 }
 
@@ -296,10 +296,10 @@ uint8_t cupid_gb_tick_halt(CupidGb *gb) {
     }
 
     clock_cpu_domain(gb);
-    cupid_gb_tick_dma(gb);
     const uint8_t middle = cupid_gb_tick_ppu_halt(gb);
     advance_base_time(gb, 4u);
     cupid_gb_tick_apu(gb, 4u);
+    cupid_gb_tick_dma(gb);
     /* Monochrome hardware polls after the first two LCD dots. Timer and serial
      * divider transitions occupy the third T-cycle, beyond that polling point. */
     return (uint8_t)((middle & (uint8_t)~0x0cu) | (before & 0x0cu));
@@ -316,7 +316,6 @@ void cupid_gb_tick_color_dma_slot(CupidGb *gb, bool cpu_boundary) {
         return;
     if (cpu_boundary) {
         clock_cpu_domain(gb);
-        cupid_gb_tick_dma(gb);
         if (gb->double_speed)
             gb->speed_phase = !gb->speed_phase;
     }
@@ -324,6 +323,7 @@ void cupid_gb_tick_color_dma_slot(CupidGb *gb, bool cpu_boundary) {
         gb->speed_switch_alignment ^= 4u;
     clock_lcd_dot(gb);
     clock_lcd_dot(gb);
+    cupid_gb_tick_dma_tcycles(gb, gb->double_speed ? 4u : 2u);
 }
 
 void cupid_gb_acknowledge_interrupt(CupidGb *gb, uint8_t mask) {
@@ -338,13 +338,14 @@ void cupid_gb_acknowledge_interrupt(CupidGb *gb, uint8_t mask) {
         gb->speed_switch_alignment ^= 4u;
     for (unsigned dot = 0; dot < half; ++dot)
         clock_lcd_dot(gb);
+    cupid_gb_tick_dma_tcycles(gb, 2u);
     gb->interrupt_flags &= (uint8_t)~mask;
     clock_cpu_domain(gb);
-    cupid_gb_tick_dma(gb);
     if (gb->double_speed)
         gb->speed_phase = !gb->speed_phase;
     for (unsigned dot = 0; dot < half; ++dot)
         clock_lcd_dot(gb);
+    cupid_gb_tick_dma_tcycles(gb, 2u);
 }
 
 static uint8_t stat_transient(const CupidGb *gb, uint8_t value, uint8_t previous,
@@ -369,12 +370,12 @@ static void bus_clock_dot(CupidGb *gb, unsigned phase) {
         clock_lcd_dot(gb);
     else
         cupid_gb_sync_stat_half(gb);
+    cupid_gb_tick_dma_tcycles(gb, 1u);
 }
 
 static void bus_clock_domain(CupidGb *gb, unsigned phase) {
     if (phase == 2) {
         clock_cpu_domain(gb);
-        cupid_gb_tick_dma(gb);
         if (gb->double_speed)
             gb->speed_phase = !gb->speed_phase;
     }
@@ -424,6 +425,8 @@ static unsigned bus_clock_span(CupidGb *gb, unsigned phase, unsigned cycles) {
                 cupid_gb_sync_stat_half(gb);
             }
         }
+        if (!frozen)
+            cupid_gb_tick_dma_tcycles(gb, 1u);
         if (phase == 2) {
             /* A speed switch can suppress LCD dots without suppressing the
              * divider's APU clocks. A borrowed first T-cycle has no such event. */
@@ -436,7 +439,6 @@ static unsigned bus_clock_span(CupidGb *gb, unsigned phase, unsigned cycles) {
                 clock_cpu_domain(gb);
                 cupid_gb_tick_apu(gb, divider_speed ? 2u : 4u);
             }
-            cupid_gb_tick_dma(gb);
             if (divider_speed)
                 gb->speed_phase = !gb->speed_phase;
             gb->double_speed = lcd_speed;
@@ -541,6 +543,7 @@ void cupid_gb_interrupt_tail(CupidGb *gb, uint16_t return_address) {
              * oscillator or sample clock advances until the complete dot. */
             cupid_gb_sync_stat_half(gb);
         }
+        cupid_gb_tick_dma_tcycles(gb, 1u);
         if (high.early == phase) {
             interrupt_write_early(gb, &high);
         }
@@ -578,7 +581,6 @@ void cupid_gb_interrupt_tail(CupidGb *gb, uint16_t return_address) {
         }
         if ((phase & 3u) == 2u) {
             clock_cpu_domain(gb);
-            cupid_gb_tick_dma(gb);
             if (gb->double_speed) {
                 gb->speed_phase = !gb->speed_phase;
             }
@@ -636,7 +638,9 @@ void cupid_gb_cpu_write(CupidGb *gb, uint16_t address, uint8_t value, uint16_t l
     cupid_gb_tick(gb, (uint16_t)(leading_mcycles - 1u));
     const uint8_t previous = gb->io_registers[CUPID_GB_IO_LCDC];
     clock_lcd_dot(gb);
+    cupid_gb_tick_dma_tcycles(gb, 1u);
     clock_lcd_dot(gb);
+    cupid_gb_tick_dma_tcycles(gb, 1u);
     /* LCD control lines settle before the ordinary write boundary. Background
      * enable is already visible after two dots; the complete value follows one
      * dot later. Keep the CPU-cycle total unchanged while exposing those edges. */
@@ -647,8 +651,9 @@ void cupid_gb_cpu_write(CupidGb *gb, uint16_t address, uint8_t value, uint16_t l
         cupid_gb_write_u8(gb, address, (uint8_t)(previous | (value & 1u)));
     }
     clock_cpu_domain(gb);
-    cupid_gb_tick_dma(gb);
     clock_lcd_dot(gb);
+    cupid_gb_tick_dma_tcycles(gb, 1u);
     cupid_gb_write_u8(gb, address, value);
     clock_lcd_dot(gb);
+    cupid_gb_tick_dma_tcycles(gb, 1u);
 }

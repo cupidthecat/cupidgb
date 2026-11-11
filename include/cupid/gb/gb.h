@@ -281,6 +281,7 @@ typedef struct CupidGbHuc3 {
 } CupidGbHuc3;
 
 struct CupidGb;
+typedef struct CupidGbCheats CupidGbCheats;
 typedef void (*CupidGbSerialOutputCallback)(const struct CupidGb *gb, uint8_t transmitted,
                                             void *user_data);
 typedef void (*CupidGbSerialLaunchCallback)(const struct CupidGb *gb, bool outgoing,
@@ -300,6 +301,7 @@ typedef struct CupidGb {
     CupidGbCpu cpu;
     CupidGbModel model;
     CupidGbCartridgeHeader header;
+    const CupidGbCheats *cheats; /* Borrowed host configuration, outside native snapshots. */
     uint8_t *rom;
     size_t rom_size;
     uint8_t video_ram[0x4000];
@@ -364,6 +366,7 @@ typedef struct CupidGb {
     uint8_t dma_restart_delay;
     bool dma_active;
     bool dma_restart_pending;
+    uint8_t dma_phase; /* CPU T-cycle phase of the four-cycle OAM source slot. */
     uint16_t ppu_counter;
     bool cgb_mode;
     bool cgb_object_priority_x; /* Latched independently of FF6C readback after boot. */
