@@ -52,7 +52,7 @@ Qt's debugger window presents commands and views through callbacks. MainWindow o
 | `src/gb/battery.c`, `src/gb/state.c` | Explicit battery and execution-state codecs |
 | `src/compat/native_v1.c` | Frozen older-state battery recovery |
 | `src/frontend/qt/main_window.cpp` | Desktop session lifecycle and menu actions |
-| `src/frontend/qt/main_window_audio.cpp`, `main_window_input.cpp`, `main_window_session.cpp` | Host audio, input/controller routing, pacing, rewind and state files |
+| `src/frontend/qt/main_window_audio.cpp`, `main_window_input.cpp`, `main_window_motion.cpp`, `main_window_session.cpp` | Host audio, input/controller routing, motion, pacing, rewind and state files |
 | `src/frontend/qt/main_window_display.cpp`, `main_window_debugger.cpp`, `main_window_telemetry.cpp` | Display settings/presentation, debugger integration and bounded runtime reports |
 | `src/frontend/qt/main_window_*tests.cpp` | Generated native Qt workflow checks |
 | `src/gb/cheats.c`, `src/frontend/qt/cheats_window.cpp`, `cheat_search.cpp` | Read interception and file codec, native cheat controls, physical RAM searches |

@@ -45,6 +45,7 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QMimeData>
+#include <QMouseEvent>
 #include <QMutex>
 #include <QMutexLocker>
 #include <QPainter>
@@ -69,6 +70,7 @@
 extern "C" {
 #include "cupid/gb/apu.h"
 #include "cupid/gb/input.h"
+#include "cupid/gb/mbc7.h"
 #include "cupid/gb/state.h"
 #include "cupid/gbc/cgb.h"
 }
@@ -175,6 +177,7 @@ class DisplayWidget final : public QWidget {
         setMinimumSize(160, 144);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
         setFocusPolicy(Qt::StrongFocus);
+        setMouseTracking(true);
         paintClock.start();
     }
 

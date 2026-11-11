@@ -7,21 +7,110 @@
 #include <algorithm>
 #include <cmath>
 #include <type_traits>
+#include <utility>
 
 namespace cupid::input {
+
+namespace {
+
+bool validMotionAxis(const std::optional<MotionAxis> &axis) {
+    return !axis ||
+           (axis->kind >= MotionAxis::Unassigned && axis->kind <= MotionAxis::Controller &&
+            axis->control >= 0 && axis->control <= 4095 &&
+            (axis->kind != MotionAxis::Controller || axis->control < SDL_CONTROLLER_AXIS_MAX));
+}
+
+MotionAxis resolvedMotionAxis(const ControllerProfile &profile, const DeviceInfo &device, bool y) {
+    const auto &selection = y ? profile.motionY : profile.motionX;
+    if (selection)
+        return *selection;
+    const int control = y ? SDL_CONTROLLER_AXIS_LEFTY : SDL_CONTROLLER_AXIS_LEFTX;
+    if (device.mapped)
+        return device.controllerAxisMask & (1u << control)
+                   ? MotionAxis{MotionAxis::Controller, control}
+                   : MotionAxis{};
+    return control < device.axes ? MotionAxis{MotionAxis::Raw, control} : MotionAxis{};
+}
+
+bool sameMotionAxis(MotionAxis first, MotionAxis second, const DeviceInfo &device) {
+    if (first.kind == MotionAxis::Unassigned || second.kind == MotionAxis::Unassigned)
+        return false;
+    if (first.kind == second.kind && first.control == second.control)
+        return true;
+    auto *controller = SDL_GameControllerFromInstanceID(device.instance);
+    if (!controller)
+        return false;
+    const auto physical = [&](MotionAxis axis) {
+        SDL_GameControllerButtonBind binding{};
+        if (axis.kind == MotionAxis::Raw) {
+            binding.bindType = SDL_CONTROLLER_BINDTYPE_AXIS;
+            binding.value.axis = axis.control;
+        } else if (axis.control >= 0 && axis.control < SDL_CONTROLLER_AXIS_MAX) {
+            binding =
+                SDL_GameControllerGetBindForAxis(controller, SDL_GameControllerAxis(axis.control));
+        }
+        return binding;
+    };
+    const auto a = physical(first), b = physical(second);
+    if (a.bindType != b.bindType)
+        return false;
+    switch (a.bindType) {
+        case SDL_CONTROLLER_BINDTYPE_AXIS:
+            return a.value.axis == b.value.axis;
+        case SDL_CONTROLLER_BINDTYPE_BUTTON:
+            return a.value.button == b.value.button;
+        case SDL_CONTROLLER_BINDTYPE_HAT:
+            return a.value.hat.hat == b.value.hat.hat &&
+                   a.value.hat.hat_mask == b.value.hat.hat_mask;
+        default:
+            return false;
+    }
+}
+
+std::optional<int16_t> motionAxisValue(MotionAxis axis, const DeviceInfo &device,
+                                       const InputState &state) {
+    if (axis.kind == MotionAxis::Unassigned || axis.control < 0)
+        return {};
+    if (axis.kind == MotionAxis::Controller &&
+        (!device.mapped || axis.control >= SDL_CONTROLLER_AXIS_MAX ||
+         !(device.controllerAxisMask & (1u << axis.control))))
+        return {};
+    const auto &values = axis.kind == MotionAxis::Raw ? state.axes : state.controllerAxes;
+    return size_t(axis.control) < values.size()
+               ? std::optional<int16_t>(values[size_t(axis.control)])
+               : std::nullopt;
+}
+
+bool motionAxisBinding(const Binding &binding, const ControllerProfile &profile,
+                       const DeviceInfo &device) {
+    if (binding.kind != Binding::Axis && binding.kind != Binding::ControllerAxis)
+        return false;
+    const MotionAxis axis{binding.kind == Binding::Axis ? MotionAxis::Raw : MotionAxis::Controller,
+                          binding.control};
+    return sameMotionAxis(axis, resolvedMotionAxis(profile, device, false), device) ||
+           sameMotionAxis(axis, resolvedMotionAxis(profile, device, true), device);
+}
+
+} // namespace
 
 bool Binding::operator==(const Binding &other) const {
     return kind == other.kind && control == other.control && direction == other.direction;
 }
 
+bool MotionAxis::operator==(const MotionAxis &other) const {
+    return kind == other.kind && control == other.control;
+}
+
 bool ControllerProfile::operator==(const ControllerProfile &other) const {
     return player == other.player && pressThreshold == other.pressThreshold &&
            releaseThreshold == other.releaseThreshold && enabled == other.enabled &&
-           bindings == other.bindings;
+           bindings == other.bindings && motionX == other.motionX && motionY == other.motionY;
 }
 
 bool ControllerOutput::operator==(const ControllerOutput &other) const {
-    return buttons == other.buttons && held == other.held && rapid == other.rapid;
+    return buttons == other.buttons && held == other.held && rapid == other.rapid &&
+           motionAvailable == other.motionAvailable && motionX == other.motionX &&
+           motionY == other.motionY;
 }
 
 QByteArray ControllerConfiguration::save() const {
@@ -40,11 +129,17 @@ QByteArray ControllerConfiguration::save() const {
                                             {"direction", binding.direction}});
             actions.insert(action.key(), bindings);
         }
-        savedProfiles.insert(it.key(), QJsonObject{{"player", profile.player},
-                                                   {"press", profile.pressThreshold},
-                                                   {"release", profile.releaseThreshold},
-                                                   {"enabled", profile.enabled},
-                                                   {"bindings", actions}});
+        QJsonObject saved{{"player", profile.player},
+                          {"press", profile.pressThreshold},
+                          {"release", profile.releaseThreshold},
+                          {"enabled", profile.enabled},
+                          {"bindings", actions}};
+        for (const auto &entry : {std::make_pair("motionX", profile.motionX),
+                                  std::make_pair("motionY", profile.motionY)})
+            if (entry.second)
+                saved.insert(entry.first, QJsonObject{{"kind", int(entry.second->kind)},
+                                                      {"control", entry.second->control}});
+        savedProfiles.insert(it.key(), saved);
     }
     root.insert("profiles", savedProfiles);
     return QJsonDocument(root).toJson(QJsonDocument::Compact);
@@ -89,6 +184,25 @@ ControllerConfiguration ControllerConfiguration::load(const QByteArray &bytes, b
         profile.pressThreshold = object.value("press").toInt(-1);
         profile.releaseThreshold = object.value("release").toInt(-1);
         profile.enabled = object.value("enabled").toBool(true);
+        for (const auto &entry : {std::make_pair("motionX", &profile.motionX),
+                                  std::make_pair("motionY", &profile.motionY)}) {
+            if (!object.contains(entry.first))
+                continue;
+            const auto value = object.value(entry.first);
+            if (!value.isObject())
+                return reject();
+            const auto axis = value.toObject();
+            const int kind = axis.value("kind").toInt(-1);
+            const int control = axis.value("control").toInt(-1);
+            if (kind < MotionAxis::Unassigned || kind > MotionAxis::Controller)
+                return reject();
+            *entry.second = MotionAxis{MotionAxis::Kind(kind), control};
+            if (!validMotionAxis(*entry.second))
+                return reject();
+        }
+        if (profile.motionX && profile.motionY && profile.motionX->kind != MotionAxis::Unassigned &&
+            *profile.motionX == *profile.motionY)
+            return reject();
         if (it.key().isEmpty() || it.key().size() > 2048 || profile.player < 0 ||
             profile.player > 3 || profile.pressThreshold < 1 || profile.pressThreshold > 32766 ||
             profile.releaseThreshold < 0 || profile.releaseThreshold > profile.pressThreshold ||
@@ -186,6 +300,18 @@ const ControllerConfiguration &ControllerManager::configuration() const {
 
 void ControllerManager::configure(const ControllerConfiguration &configuration,
                                   const QMap<SDL_JoystickID, int> &players) {
+    for (const auto &profile : configuration.profiles)
+        if (!validMotionAxis(profile.motionX) || !validMotionAxis(profile.motionY) ||
+            (profile.motionX && profile.motionY &&
+             profile.motionX->kind != MotionAxis::Unassigned &&
+             *profile.motionX == *profile.motionY))
+            return;
+    for (const auto &[id, state] : states_) {
+        (void)id;
+        const auto saved = configuration.profiles.constFind(state.info.persistentKey);
+        if (saved != configuration.profiles.cend() && !motionAxesValid(saved.value(), state.info))
+            return;
+    }
     stopRumble();
     configuration_ = configuration;
     players_ = players;
@@ -210,7 +336,31 @@ ControllerProfile ControllerManager::profile(const DeviceInfo &device) const {
                    : state != states_.end()                ? state->second.fallback
                                                            : defaults(device);
     profile.player = players_.value(device.instance, profile.player);
+    profile.motionX = resolvedMotionAxis(profile, device, false);
+    profile.motionY = resolvedMotionAxis(profile, device, true);
     return profile;
+}
+
+bool ControllerManager::motionAxesValid(const ControllerProfile &profile,
+                                        const DeviceInfo &device) {
+    if (!validMotionAxis(profile.motionX) || !validMotionAxis(profile.motionY))
+        return false;
+    const auto x = resolvedMotionAxis(profile, device, false);
+    const auto y = resolvedMotionAxis(profile, device, true);
+    const auto available = [&](MotionAxis axis) {
+        return axis.kind == MotionAxis::Unassigned ||
+               (axis.kind == MotionAxis::Raw && axis.control < device.axes) ||
+               (axis.kind == MotionAxis::Controller && device.mapped &&
+                (device.controllerAxisMask & (1u << axis.control)));
+    };
+    return available(x) && available(y) && !sameMotionAxis(x, y, device);
+}
+
+int16_t ControllerManager::motionCounts(int16_t raw) {
+    // The positive hardware center is quantized after adding the scaled offset.
+    // Fractional negative offsets therefore round down, including a raw value of +1.
+    const int32_t scaled = -int32_t(raw) * 112;
+    return int16_t(scaled >= 0 ? scaled / 32768 : -((-scaled + 32767) / 32768));
 }
 
 QStringList ControllerManager::gameplayActions() {
@@ -232,6 +382,8 @@ ControllerProfile ControllerManager::defaults(const DeviceInfo &device) {
     for (const auto &action : actions)
         profile.bindings.insert(action, {});
     const bool mapped = device.mapped;
+    profile.motionX = resolvedMotionAxis(profile, device, false);
+    profile.motionY = resolvedMotionAxis(profile, device, true);
     const auto button = mapped ? Binding::ControllerButton : Binding::Button;
     const auto axis = mapped ? Binding::ControllerAxis : Binding::Axis;
     const int buttons[] = {SDL_CONTROLLER_BUTTON_DPAD_RIGHT, SDL_CONTROLLER_BUTTON_DPAD_LEFT,
@@ -398,6 +550,14 @@ bool ControllerManager::eligible(const State &state) const {
     return selected(state);
 }
 
+bool ControllerManager::motionReady(const State &state) const {
+    const auto selectedProfile = profile(state.info);
+    return eligible(state) && selectedProfile.player >= 0 && selectedProfile.player < 4 &&
+           motionAxesValid(selectedProfile, state.info) &&
+           (motionAxisValue(*selectedProfile.motionX, state.info, state.physical) ||
+            motionAxisValue(*selectedProfile.motionY, state.info, state.physical));
+}
+
 bool ControllerManager::selected(const State &state) const {
     if (configuration_.preferredDevice.isEmpty())
         return true;
@@ -420,7 +580,11 @@ void ControllerManager::evaluate(SDL_JoystickID id, bool shortcuts, bool navigat
         navigationDown.resize(action.value().size());
         bool navigationHeld = false;
         for (int i = 0; i < action.value().size(); ++i) {
-            down[i] = eligible(state) &&
+            const bool direction = action.key() == "right" || action.key() == "left" ||
+                                   action.key() == "up" || action.key() == "down";
+            const bool motion = motionEnabled_ && direction &&
+                                motionAxisBinding(action.value()[i], selected, state.info);
+            down[i] = !motion && eligible(state) &&
                       bindingDown(action.value()[i], state.physical, selected, down[i]);
             pressed |= down[i];
             navigationDown[i] =
@@ -443,6 +607,20 @@ void ControllerManager::evaluate(SDL_JoystickID id, bool shortcuts, bool navigat
 
 void ControllerManager::aggregate() {
     ControllerOutput result;
+    if (motionEnabled_)
+        for (const auto &[id, state] : states_)
+            if (motionReady(state)) {
+                (void)id;
+                const auto selectedProfile = profile(state.info);
+                result.motionAvailable = true;
+                result.motionX = motionCounts(
+                    motionAxisValue(*selectedProfile.motionX, state.info, state.physical)
+                        .value_or(0));
+                result.motionY = motionCounts(
+                    motionAxisValue(*selectedProfile.motionY, state.info, state.physical)
+                        .value_or(0));
+                break;
+            }
     const auto actions = gameplayActions();
     for (const auto &[id, state] : states_) {
         (void)id;
@@ -485,6 +663,22 @@ void ControllerManager::setDeliveryEnabled(bool enabled) {
 
 bool ControllerManager::deliveryEnabled() const {
     return delivery_ && configuration_.enabled && backend_.inputAllowed();
+}
+
+void ControllerManager::setMotionEnabled(bool enabled) {
+    if (motionEnabled_ == enabled)
+        return;
+    motionEnabled_ = enabled;
+    for (auto &[id, state] : states_) {
+        state.bindingDown.clear();
+        state.actions.clear();
+        evaluate(id, false);
+    }
+    aggregate();
+}
+
+bool ControllerManager::motionEnabled() const {
+    return motionEnabled_;
 }
 
 void ControllerManager::setFocused(bool focused) {

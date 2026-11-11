@@ -14,6 +14,50 @@
 
 using namespace cupid::input;
 
+namespace {
+QString motionAxisName(const MotionAxis &axis) {
+    if (axis.kind == MotionAxis::Unassigned)
+        return "Unassigned";
+    if (axis.kind == MotionAxis::Raw)
+        return QString("Joystick axis %1").arg(axis.control);
+    static const char *names[] = {"Left stick horizontal",  "Left stick vertical",
+                                  "Right stick horizontal", "Right stick vertical",
+                                  "Left trigger",           "Right trigger"};
+    return axis.control >= 0 && axis.control < SDL_CONTROLLER_AXIS_MAX
+               ? QString::fromLatin1(names[axis.control])
+               : QString("Controller axis %1").arg(axis.control);
+}
+
+void addMotionAxis(QComboBox *combo, const QString &name, const MotionAxis &axis) {
+    combo->addItem(name, int(axis.kind));
+    combo->setItemData(combo->count() - 1, axis.control, Qt::UserRole + 1);
+}
+
+MotionAxis selectedMotionAxis(const QComboBox *combo) {
+    bool validKind = false, validControl = false;
+    const int kind = combo->currentData().toInt(&validKind);
+    const int control = combo->currentData(Qt::UserRole + 1).toInt(&validControl);
+    if (!validKind || !validControl || kind < MotionAxis::Unassigned ||
+        kind > MotionAxis::Controller)
+        return {MotionAxis::Raw, -1};
+    return {MotionAxis::Kind(kind), control};
+}
+
+void selectMotionAxis(QComboBox *combo, const MotionAxis &axis) {
+    for (int index = 0; index < combo->count(); ++index) {
+        if (combo->itemData(index).toInt() == int(axis.kind) &&
+            combo->itemData(index, Qt::UserRole + 1).toInt() == axis.control) {
+            combo->setCurrentIndex(index);
+            return;
+        }
+    }
+    // Retain a saved choice until the user replaces it. Quietly substituting a
+    // different axis would change the profile merely by opening this dialog.
+    addMotionAxis(combo, motionAxisName(axis) + " (unavailable)", axis);
+    combo->setCurrentIndex(combo->count() - 1);
+}
+} // namespace
+
 ControllerDialog::ControllerDialog(ControllerManager &manager,
                                    const QList<QPair<QString, QString>> &shortcuts, QWidget *parent)
     : QDialog(parent), manager_(manager), draft_(manager.configuration()),
@@ -66,12 +110,28 @@ ControllerDialog::ControllerDialog(ControllerManager &manager,
     release_ = new QSpinBox;
     release_->setObjectName("controllerReleaseThreshold");
     release_->setRange(0, 32766);
+    motionX_ = new QComboBox;
+    motionX_->setObjectName("controllerMotionX");
+    motionY_ = new QComboBox;
+    motionY_->setObjectName("controllerMotionY");
+    const QString motionTip =
+        "Choose a controller stick or a joystick axis. Joystick axis numbers match the live "
+        "preview below. Leave an axis unassigned to disable that tilt direction.";
+    motionX_->setToolTip(motionTip);
+    motionY_->setToolTip(motionTip);
     form->addRow("Configure device", devices_);
     form->addRow(identity_);
     form->addRow(deviceEnabled_);
     form->addRow("Player", player_);
-    form->addRow("Axis press threshold", press_);
-    form->addRow("Axis release threshold", release_);
+    form->addRow("Gameplay axis press threshold", press_);
+    form->addRow("Gameplay axis release threshold", release_);
+    form->addRow("Tilt horizontal axis", motionX_);
+    form->addRow("Tilt vertical axis", motionY_);
+    auto *motionHelp =
+        new QLabel("These axes control tilt when the loaded cartridge supports it. Gameplay axis "
+                   "thresholds do not change tilt.");
+    motionHelp->setWordWrap(true);
+    form->addRow(motionHelp);
     layout->addLayout(form);
     bindings_ = new QTableWidget;
     bindings_->setObjectName("controllerBindings");
@@ -127,10 +187,27 @@ ControllerDialog::ControllerDialog(ControllerManager &manager,
             status_->setText("The release threshold must not exceed the press threshold.");
             return;
         }
+        const auto connected = manager_.backend().devices();
+        for (const auto &device : connected)
+            motionErrors_.remove(device.info.persistentKey);
+        for (const auto &device : connected) {
+            const auto profile =
+                draft_.profiles.value(device.info.persistentKey, manager_.profile(device.info));
+            if (!ControllerManager::motionAxesValid(profile, device.info))
+                motionErrors_[device.info.persistentKey] = device.info.name;
+        }
+        if (!motionErrors_.isEmpty()) {
+            status_->setText("Tilt axes for " + motionErrors_.cbegin().value() +
+                             " must be available and use different controls. Leave either axis "
+                             "unassigned to disable it.");
+            return;
+        }
         accept();
     });
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
     connect(devices_, &QComboBox::currentIndexChanged, this, [this] { selectDevice(); });
+    for (auto *axis : {motionX_, motionY_})
+        connect(axis, &QComboBox::currentIndexChanged, this, [this] { saveDevice(); });
     connect(captureButton, &QPushButton::clicked, this, [this] { beginCapture(); });
     connect(skip, &QPushButton::clicked, this, [this] {
         cancelCapture();
@@ -156,6 +233,7 @@ ControllerDialog::ControllerDialog(ControllerManager &manager,
             press_->setValue(16384);
             release_->setValue(14336);
             deviceEnabled_->setChecked(true);
+            refreshMotionAxes(state);
             refreshBindings();
         }
     });
@@ -194,6 +272,16 @@ void ControllerDialog::saveDevice() {
     profile.player = player_->currentData().toInt();
     profile.pressThreshold = press_->value();
     profile.releaseThreshold = std::min(release_->value(), press_->value());
+    profile.motionX = selectedMotionAxis(motionX_);
+    profile.motionY = selectedMotionAxis(motionY_);
+    DeviceState state;
+    const bool connected = manager_.backend().state(current_, &state);
+    if (connected)
+        currentInfo_ = state.info;
+    if (!ControllerManager::motionAxesValid(profile, currentInfo_))
+        motionErrors_[currentKey_] = currentInfo_.name;
+    else if (connected)
+        motionErrors_.remove(currentKey_);
     players_[current_] = profile.player;
 }
 
@@ -254,10 +342,15 @@ void ControllerDialog::selectDevice() {
         currentKey_.clear();
         identity_->setText("No device selected.");
         bindings_->setEnabled(false);
+        motionX_->clear();
+        motionY_->clear();
+        motionX_->setEnabled(false);
+        motionY_->setEnabled(false);
         return;
     }
     bindings_->setEnabled(true);
     currentKey_ = state.info.persistentKey;
+    currentInfo_ = state.info;
     if (!draft_.profiles.contains(currentKey_))
         draft_.profiles[currentKey_] = manager_.profile(state.info);
     const auto &profile = draft_.profiles[currentKey_];
@@ -266,6 +359,7 @@ void ControllerDialog::selectDevice() {
     player_->setCurrentIndex(players_.value(current_, profile.player));
     press_->setValue(profile.pressThreshold);
     release_->setValue(profile.releaseThreshold);
+    refreshMotionAxes(state);
     selecting_ = false;
     identity_->setText(
         QString("Axes: %1; buttons: %2; hats: %3. %4\n%5")
@@ -280,6 +374,32 @@ void ControllerDialog::selectDevice() {
                      : "Layout and default player are saved for this device identity."));
     refreshBindings();
     refreshPreview();
+}
+
+void ControllerDialog::refreshMotionAxes(const DeviceState &state) {
+    const bool previousSelecting = selecting_;
+    selecting_ = true;
+    for (auto *combo : {motionX_, motionY_}) {
+        combo->clear();
+        combo->setEnabled(true);
+        addMotionAxis(combo, "Unassigned", {});
+        if (state.info.mapped) {
+            for (int axis = 0; axis < SDL_CONTROLLER_AXIS_MAX; ++axis)
+                if (state.info.controllerAxisMask & (uint32_t(1) << axis)) {
+                    const MotionAxis selection{MotionAxis::Controller, axis};
+                    addMotionAxis(combo, motionAxisName(selection), selection);
+                }
+        }
+        for (int axis = 0; axis < state.info.axes; ++axis) {
+            const MotionAxis selection{MotionAxis::Raw, axis};
+            addMotionAxis(combo, motionAxisName(selection), selection);
+        }
+    }
+    const auto profile = draft_.profiles.value(currentKey_, manager_.profile(state.info));
+    const auto defaults = ControllerManager::defaults(state.info);
+    selectMotionAxis(motionX_, profile.motionX.value_or(defaults.motionX.value_or(MotionAxis{})));
+    selectMotionAxis(motionY_, profile.motionY.value_or(defaults.motionY.value_or(MotionAxis{})));
+    selecting_ = previousSelecting;
 }
 
 void ControllerDialog::refreshBindings() {

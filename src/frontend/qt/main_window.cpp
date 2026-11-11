@@ -53,7 +53,9 @@ MainWindow::MainWindow(bool isolated, bool automated, bool audioCheck,
     controllers_->configure(cupid::input::ControllerConfiguration::load(
         settings_.value("controllers/configuration").toByteArray(), &validControllers));
     controllers_->outputChanged = [this](const cupid::input::ControllerOutput &output) {
+        const auto previous = controllerOutput_;
         controllerOutput_ = output;
+        controllerMotionChanged(previous);
         reconcileControllerInput();
     };
     controllers_->shortcutPressed = [this](const QString &id) {
@@ -342,6 +344,15 @@ void MainWindow::buildMenus() {
     auto *controllers = emulation->addAction("&Controllers…");
     registerShortcut(controllers, "controllers");
     connect(controllers, &QAction::triggered, this, [this] { configureControllers(); });
+    auto *motion = emulation->addMenu("Motion-Controlled &Games");
+    mouseMotionAction_ = motion->addAction("Allow &mouse control");
+    mouseMotionAction_->setObjectName("input/allowMouseMotion");
+    mouseMotionAction_->setCheckable(true);
+    mouseMotionAction_->setChecked(settings_.value("input/allowMouseMotion", false).toBool());
+    connect(mouseMotionAction_, &QAction::toggled, this, [this](bool enabled) {
+        settings_.setValue("input/allowMouseMotion", enabled);
+        releaseMouseInput();
+    });
     connectionsMenu_ = emulation->addMenu("&Connect");
     auto *accessories = new QActionGroup(connectionsMenu_);
     disconnectAction_ = connectionsMenu_->addAction("&None");
@@ -575,6 +586,13 @@ bool MainWindow::openRom(const QString &path) {
     if (emulator_)
         cupid_emulator_shutdown(emulator_.get());
     emulator_ = std::move(candidate);
+    {
+        // Device reclassification can emit output immediately. Clear old host
+        // keys and gate every callback before routing input into the new core.
+        QScopedValueRollback<bool> operation(stateOperation_, true);
+        releaseKeys();
+        controllers_->setMotionEnabled(emulator_->gb.header.mbc_type == CUPID_GB_MBC7);
+    }
     cheats_ = std::move(candidateCheats);
     cheatPath_ = cheatPath;
     if (!sameCheatSession)
@@ -595,6 +613,7 @@ bool MainWindow::openRom(const QString &path) {
         },
         this);
     resetControllerRumble();
+    resetMotionInput();
     previousDisplayFrame_ = {};
     currentDisplayFrame_ = {};
     resetRewind();
@@ -684,6 +703,7 @@ void MainWindow::watchBattery() {
 bool MainWindow::closeRom() {
     if (!flushBattery() || !stopRecording())
         return false;
+    resetMotionInput();
     setPrinterConnected(false);
     ++sessionId_;
     resetControllerRumble();
@@ -696,6 +716,8 @@ bool MainWindow::closeRom() {
     if (emulator_)
         cupid_emulator_shutdown(emulator_.get());
     emulator_.reset();
+    if (controllers_)
+        controllers_->setMotionEnabled(false);
     cheats_.reset();
     cheatPath_.clear();
     cheatSaveWarning_.clear();

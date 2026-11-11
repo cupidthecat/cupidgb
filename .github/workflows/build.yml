@@ -53,28 +53,42 @@ jobs:
             exit 1
           fi
           echo "Using Ubuntu archive mirror: $mirror"
-          for source in /etc/apt/sources.list /etc/apt/sources.list.d/*.list \
-                        /etc/apt/sources.list.d/*.sources; do
-            if [ -f "$source" ]; then
-              sudo sed -i \
-                -e "s#https\?://\(azure\.archive\|archive\|security\)\.ubuntu\.com/ubuntu/#$mirror#g" \
-                -e "s#mirror+file:/etc/apt/apt-mirrors\.txt#$mirror#g" \
-                "$source"
-            fi
-          done
           apt_state=$(mktemp -d /tmp/cupidgb-apt.XXXXXX)
           chmod 755 "$apt_state"
-          mkdir -p "$apt_state/lists/partial"
+          mkdir -p "$apt_state/lists/partial" "$apt_state/empty-sources"
+          native_arch=$(dpkg --print-architecture)
+          printf '%s\n' 'Types: deb' "URIs: $mirror" \
+            'Suites: noble noble-updates noble-backports noble-security' \
+            'Components: main restricted universe multiverse' "Architectures: $native_arch" \
+            'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg' > "$apt_state/ubuntu.sources"
+          chmod 444 "$apt_state/ubuntu.sources"
+          echo 'Controlled Ubuntu source before update:'
+          cat "$apt_state/ubuntu.sources"
+          source_hash=$(sha256sum "$apt_state/ubuntu.sources")
+          echo "$source_hash"
           sudo chown _apt:root "$apt_state/lists/partial"
           sudo chmod 700 "$apt_state/lists/partial"
           apt_options=(-o Acquire::Retries=2 -o Acquire::http::Timeout=20
-                       -o Acquire::https::Timeout=20 -o Dir::State::lists="$apt_state/lists")
+                       -o Acquire::https::Timeout=20 -o Dir::State::lists="$apt_state/lists"
+                       -o Dir::Etc::sourcelist="$apt_state/ubuntu.sources"
+                       -o Dir::Etc::sourceparts="$apt_state/empty-sources")
           sudo apt-get "${apt_options[@]}" -o APT::Update::Error-Mode=any update
-          native_arch=$(dpkg --print-architecture)
+          echo 'Controlled Ubuntu source after update:'
+          cat "$apt_state/ubuntu.sources"
+          actual_source_hash=$(sha256sum "$apt_state/ubuntu.sources")
+          echo "$actual_source_hash"
+          if [ "$actual_source_hash" != "$source_hash" ]; then
+            echo '::error::The controlled Ubuntu source changed during update'
+            exit 1
+          fi
           echo "APT native architecture: $native_arch"
           echo 'APT architecture, index and cache configuration:'
           sudo apt-config "${apt_options[@]}" dump | grep -E \
             '^(APT::Architectures?(::| )|Dir::(State|Cache) |Dir::State::lists |Dir::Cache::(pkgcache|srcpkgcache) |Dir::Etc::(sourcelist|sourceparts) |Binary::(apt-get|apt-cache)::(APT::Architectures?(::| )|Dir::(State|Cache)(::| )))'
+          echo 'Configured binary index targets, including missing Release data:'
+          sudo apt-get "${apt_options[@]}" indextargets --no-release-info \
+            --format '$(IDENTIFIER) | $(ARCHITECTURE) | $(COMPONENT) | $(FILENAME)' \
+            'Identifier: Packages'
           echo 'Active binary package index targets:'
           sudo apt-get "${apt_options[@]}" indextargets \
             --format '$(IDENTIFIER) | $(ARCHITECTURE) | $(COMPONENT) | $(FILENAME)' \
@@ -91,7 +105,7 @@ jobs:
             universe_count=0
             while IFS= read -r -d '' index; do
               echo "Universe package headers from $index:"
-              sudo "$apt_helper" cat-file "$index" | awk \
+              sudo "$apt_helper" "${apt_options[@]}" cat-file "$index" | awk \
                 '/^Package: (qt6-base-dev|qt6-multimedia-dev|libsdl2-dev)$/ { print; count++ }
                  END { printf "Matching Package headers: %d\n", count }'
               universe_count=$((universe_count + 1))
@@ -158,28 +172,42 @@ jobs:
             exit 1
           fi
           echo "Using Ubuntu archive mirror: $mirror"
-          for source in /etc/apt/sources.list /etc/apt/sources.list.d/*.list \
-                        /etc/apt/sources.list.d/*.sources; do
-            if [ -f "$source" ]; then
-              sudo sed -i \
-                -e "s#https\?://\(azure\.archive\|archive\|security\)\.ubuntu\.com/ubuntu/#$mirror#g" \
-                -e "s#mirror+file:/etc/apt/apt-mirrors\.txt#$mirror#g" \
-                "$source"
-            fi
-          done
           apt_state=$(mktemp -d /tmp/cupidgb-apt.XXXXXX)
           chmod 755 "$apt_state"
-          mkdir -p "$apt_state/lists/partial"
+          mkdir -p "$apt_state/lists/partial" "$apt_state/empty-sources"
+          native_arch=$(dpkg --print-architecture)
+          printf '%s\n' 'Types: deb' "URIs: $mirror" \
+            'Suites: noble noble-updates noble-backports noble-security' \
+            'Components: main restricted universe multiverse' "Architectures: $native_arch" \
+            'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg' > "$apt_state/ubuntu.sources"
+          chmod 444 "$apt_state/ubuntu.sources"
+          echo 'Controlled Ubuntu source before update:'
+          cat "$apt_state/ubuntu.sources"
+          source_hash=$(sha256sum "$apt_state/ubuntu.sources")
+          echo "$source_hash"
           sudo chown _apt:root "$apt_state/lists/partial"
           sudo chmod 700 "$apt_state/lists/partial"
           apt_options=(-o Acquire::Retries=2 -o Acquire::http::Timeout=20
-                       -o Acquire::https::Timeout=20 -o Dir::State::lists="$apt_state/lists")
+                       -o Acquire::https::Timeout=20 -o Dir::State::lists="$apt_state/lists"
+                       -o Dir::Etc::sourcelist="$apt_state/ubuntu.sources"
+                       -o Dir::Etc::sourceparts="$apt_state/empty-sources")
           sudo apt-get "${apt_options[@]}" -o APT::Update::Error-Mode=any update
-          native_arch=$(dpkg --print-architecture)
+          echo 'Controlled Ubuntu source after update:'
+          cat "$apt_state/ubuntu.sources"
+          actual_source_hash=$(sha256sum "$apt_state/ubuntu.sources")
+          echo "$actual_source_hash"
+          if [ "$actual_source_hash" != "$source_hash" ]; then
+            echo '::error::The controlled Ubuntu source changed during update'
+            exit 1
+          fi
           echo "APT native architecture: $native_arch"
           echo 'APT architecture, index and cache configuration:'
           sudo apt-config "${apt_options[@]}" dump | grep -E \
             '^(APT::Architectures?(::| )|Dir::(State|Cache) |Dir::State::lists |Dir::Cache::(pkgcache|srcpkgcache) |Dir::Etc::(sourcelist|sourceparts) |Binary::(apt-get|apt-cache)::(APT::Architectures?(::| )|Dir::(State|Cache)(::| )))'
+          echo 'Configured binary index targets, including missing Release data:'
+          sudo apt-get "${apt_options[@]}" indextargets --no-release-info \
+            --format '$(IDENTIFIER) | $(ARCHITECTURE) | $(COMPONENT) | $(FILENAME)' \
+            'Identifier: Packages'
           echo 'Active binary package index targets:'
           sudo apt-get "${apt_options[@]}" indextargets \
             --format '$(IDENTIFIER) | $(ARCHITECTURE) | $(COMPONENT) | $(FILENAME)' \
@@ -196,7 +224,7 @@ jobs:
             universe_count=0
             while IFS= read -r -d '' index; do
               echo "Universe package headers from $index:"
-              sudo "$apt_helper" cat-file "$index" | awk \
+              sudo "$apt_helper" "${apt_options[@]}" cat-file "$index" | awk \
                 '/^Package: (qt6-base-dev|qt6-multimedia-dev|libsdl2-dev)$/ { print; count++ }
                  END { printf "Matching Package headers: %d\n", count }'
               universe_count=$((universe_count + 1))

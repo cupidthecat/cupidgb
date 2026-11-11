@@ -20,6 +20,245 @@
 using namespace cupid::input;
 using namespace controller_test;
 
+static void checkMotionWorkflow() {
+    for (int value = -32768; value <= 32767; ++value) {
+        const uint16_t latch = uint16_t(0x81d0 + 112.0 * (-value / 32768.0));
+        check(ControllerManager::motionCounts(int16_t(value)) == int(latch) - 0x81d0,
+              "every signed axis value preserves final hardware-latch quantization");
+    }
+    check(ControllerManager::motionCounts(1) == -1 && ControllerManager::motionCounts(-1) == 0 &&
+              ControllerManager::motionCounts(32767) == -112 &&
+              ControllerManager::motionCounts(-32768) == 112,
+          "fractional tilt floors negative offsets and preserves asymmetric endpoints");
+    DeviceInfo limited;
+    auto limitedProfile = ControllerManager::defaults(limited);
+    check(limitedProfile.motionX == MotionAxis{} && limitedProfile.motionY == MotionAxis{} &&
+              ControllerManager::motionAxesValid(limitedProfile, limited),
+          "button-only device defaults leave unavailable axes unassigned");
+    limited.axes = 1;
+    limitedProfile = ControllerManager::defaults(limited);
+    check(limitedProfile.motionX == MotionAxis{MotionAxis::Raw, 0} &&
+              limitedProfile.motionY == MotionAxis{},
+          "one-axis raw controller keeps only its available default");
+    limited.mapped = true;
+    limited.controllerAxisMask = 1u << SDL_CONTROLLER_AXIS_LEFTY;
+    limitedProfile = ControllerManager::defaults(limited);
+    check(limitedProfile.motionX == MotionAxis{} &&
+              limitedProfile.motionY ==
+                  MotionAxis{MotionAxis::Controller, SDL_CONTROLLER_AXIS_LEFTY},
+          "mapped defaults honor available normalized-axis capabilities");
+
+    ControllerManager manager;
+    QString error;
+    check(manager.backend().start(&error), "start motion workflow backend");
+    manager.setFocused(true);
+    Device mapped(0x70), raw(0x71, false);
+    check(waitFor([&] {
+              DeviceState state;
+              return manager.backend().state(mapped.id, &state) &&
+                     manager.backend().state(raw.id, &state);
+          }),
+          "motion virtual devices connected");
+    DeviceState mappedState, rawState;
+    check(manager.backend().state(mapped.id, &mappedState) &&
+              manager.backend().state(raw.id, &rawState),
+          "motion device identities");
+    auto configuration = manager.configuration();
+    for (const auto &device : manager.backend().devices()) {
+        auto profile = ControllerManager::defaults(device.info);
+        profile.enabled = device.info.instance == mapped.id || device.info.instance == raw.id;
+        configuration.profiles[device.info.persistentKey] = profile;
+    }
+    const auto mappedKey = mappedState.info.persistentKey;
+    const auto rawKey = rawState.info.persistentKey;
+    configuration.profiles[mappedKey].player = 2;
+    configuration.profiles[rawKey].player = 3;
+    manager.configure(configuration);
+    const auto mappedProfile = manager.profile(mappedState.info);
+    const auto rawProfile = manager.profile(rawState.info);
+    check(mappedProfile.motionX == MotionAxis{MotionAxis::Controller, SDL_CONTROLLER_AXIS_LEFTX} &&
+              mappedProfile.motionY ==
+                  MotionAxis{MotionAxis::Controller, SDL_CONTROLLER_AXIS_LEFTY} &&
+              rawProfile.motionX == MotionAxis{MotionAxis::Raw, 0} &&
+              rawProfile.motionY == MotionAxis{MotionAxis::Raw, 1},
+          "motion defaults choose mapped left stick or raw axes zero and one");
+
+    auto legacy = QJsonDocument::fromJson(configuration.save()).object();
+    auto legacyProfiles = legacy.value("profiles").toObject();
+    for (auto it = legacyProfiles.begin(); it != legacyProfiles.end(); ++it) {
+        auto object = it.value().toObject();
+        object.remove("motionX");
+        object.remove("motionY");
+        it.value() = object;
+    }
+    legacy["profiles"] = legacyProfiles;
+    bool valid = false;
+    const auto migrated = ControllerConfiguration::load(QJsonDocument(legacy).toJson(), &valid);
+    check(valid && !migrated.profiles[mappedKey].motionX && !migrated.profiles[rawKey].motionY,
+          "legacy profile preserves absent motion selections until device resolution");
+    manager.configure(migrated);
+    check(manager.profile(mappedState.info) == mappedProfile &&
+              manager.profile(rawState.info) == rawProfile,
+          "legacy migration resolves device type without changing buttons or players");
+    manager.configure(configuration);
+    const QByteArray saved = configuration.save();
+    check(ControllerConfiguration::load(saved, &valid).save() == saved && valid,
+          "explicit motion axes survive persistence");
+
+    mapped.axis(0, 30000);
+    manager.backend().pollNow();
+    check(!(manager.output().buttons[2] & 1) && !manager.output().motionAvailable,
+          "ordinary cartridges keep axis direction bindings");
+    manager.setMotionEnabled(true);
+    check(manager.motionEnabled() && manager.output().motionAvailable &&
+              manager.output().motionX == -103 && manager.output().motionY == 0 &&
+              manager.output().buttons[2] == 0xff,
+          "motion mode replaces selected axis directions for any single-player assignment");
+    raw.axis(0, -32768);
+    manager.backend().pollNow();
+    check(manager.output().motionX == -103,
+          "lowest eligible instance owns motion regardless of later device events");
+    mapped.button(0, true);
+    mapped.hat(SDL_HAT_LEFT);
+    manager.backend().pollNow();
+    check(!(manager.output().buttons[2] & 0x10) && !(manager.output().buttons[2] & 2) &&
+              (manager.output().buttons[2] & 1),
+          "digital button and hat directions remain available beside tilt");
+    mapped.button(0, false);
+    mapped.hat(SDL_HAT_CENTERED);
+    mapped.axis(0, 1);
+    mapped.axis(1, -1);
+    manager.backend().pollNow();
+    check(manager.output().motionX == -1 && manager.output().motionY == 0,
+          "motion has no gameplay axis deadzone");
+    unsigned changes = 0;
+    manager.outputChanged = [&](const ControllerOutput &) { ++changes; };
+    mapped.axis(0, 2);
+    manager.backend().pollNow();
+    manager.backend().pollNow();
+    check(changes == 0, "unchanged quantized tilt does not emit repeated output callbacks");
+
+    manager.setFocused(false);
+    check(!manager.output().motionAvailable && manager.output().motionX == 0 &&
+              manager.output().motionY == 0,
+          "focus loss releases motion to unavailable neutral");
+    configuration.background = true;
+    manager.configure(configuration);
+    check(manager.output().motionAvailable && manager.output().motionX == -1,
+          "background opt-in resynchronizes held tilt");
+    manager.setDeliveryEnabled(false);
+    check(!manager.output().motionAvailable && manager.output().motionX == 0,
+          "delivery gate overrides background motion");
+    manager.setDeliveryEnabled(true);
+    check(manager.output().motionAvailable, "delivery resume restores physical tilt");
+    manager.setFocused(true);
+    configuration.enabled = false;
+    manager.configure(configuration);
+    check(!manager.output().motionAvailable, "global controller disable releases motion");
+    configuration.enabled = true;
+    configuration.profiles[mappedKey].enabled = false;
+    configuration.profiles[rawKey].enabled = false;
+    manager.configure(configuration);
+    check(!manager.output().motionAvailable, "disabled profiles cannot drive motion");
+    configuration.profiles[rawKey].enabled = true;
+    manager.configure(configuration);
+    check(manager.output().motionAvailable && manager.output().motionX == 112,
+          "player four raw controller can own the single cartridge sensor");
+    configuration.profiles[mappedKey].enabled = true;
+    configuration.preferredDevice = rawKey;
+    manager.configure(configuration);
+    check(manager.output().motionX == 112, "preferred device controls the motion source");
+    configuration.preferredDevice = mappedKey;
+    manager.configure(configuration);
+    check(manager.output().motionX == -1, "preferred device changes resynchronize motion");
+
+    auto invalid = configuration;
+    invalid.profiles[mappedKey].motionY = invalid.profiles[mappedKey].motionX;
+    manager.configure(invalid);
+    check(manager.configuration().save() == configuration.save(),
+          "duplicate motion selection rejects configuration transactionally");
+    ControllerConfiguration::load(invalid.save(), &valid);
+    check(!valid, "duplicate persisted motion selectors are rejected");
+    invalid = configuration;
+    invalid.profiles[mappedKey].motionY = MotionAxis{MotionAxis::Raw, 0};
+    check(!ControllerManager::motionAxesValid(invalid.profiles[mappedKey], mappedState.info),
+          "mapped and raw selectors cannot alias the same physical axis");
+    manager.configure(invalid);
+    check(manager.configuration().save() == configuration.save(),
+          "physical axis alias rejection leaves active configuration untouched");
+    invalid = configuration;
+    invalid.profiles[mappedKey].motionX =
+        MotionAxis{MotionAxis::Controller, SDL_CONTROLLER_AXIS_MAX};
+    ControllerConfiguration::load(invalid.save(), &valid);
+    check(!valid, "invalid normalized motion axis index rejected");
+    invalid = configuration;
+    invalid.profiles[mappedKey].motionX = MotionAxis{MotionAxis::Raw, 200};
+    check(!ControllerManager::motionAxesValid(invalid.profiles[mappedKey], mappedState.info),
+          "saved unavailable raw axis is invalid for the connected device");
+    manager.configure(invalid);
+    check(manager.configuration().save() == configuration.save(),
+          "unavailable motion selection rejects configuration without changing live input");
+
+    configuration.profiles[mappedKey].motionX = MotionAxis{};
+    configuration.profiles[mappedKey].motionY = MotionAxis{};
+    manager.configure(configuration);
+    check(!manager.output().motionAvailable && manager.output().motionX == 0 &&
+              manager.output().motionY == 0,
+          "unassigning both axes releases motion");
+    configuration.profiles[mappedKey].motionY =
+        MotionAxis{MotionAxis::Controller, SDL_CONTROLLER_AXIS_LEFTY};
+    manager.configure(configuration);
+    mapped.axis(1, -16384);
+    manager.backend().pollNow();
+    check(manager.output().motionAvailable && manager.output().motionX == 0 &&
+              manager.output().motionY == 56,
+          "one unassigned axis remains neutral while its peer drives tilt");
+    configuration.profiles[mappedKey].motionX = MotionAxis{MotionAxis::Raw, 2};
+    configuration.profiles[mappedKey].motionY =
+        MotionAxis{MotionAxis::Controller, SDL_CONTROLLER_AXIS_RIGHTY};
+    configuration.profiles[mappedKey].bindings["right"] = {{Binding::Axis, 2, 1}};
+    configuration.profiles[mappedKey].bindings["left"] = {
+        {Binding::ControllerAxis, SDL_CONTROLLER_AXIS_RIGHTX, -1}};
+    manager.configure(configuration);
+    mapped.axis(2, 32767);
+    mapped.axis(3, -32768);
+    manager.backend().pollNow();
+    check(manager.output().motionX == -112 && manager.output().motionY == 112 &&
+              (manager.output().buttons[2] & 3) == 3,
+          "custom raw and mapped motion axes suppress their directional aliases");
+    manager.setMotionEnabled(false);
+    check(!manager.output().motionAvailable && manager.output().motionX == 0 &&
+              !(manager.output().buttons[2] & 1),
+          "leaving motion mode releases tilt and restores axis directions");
+    manager.setMotionEnabled(true);
+    {
+        Device aliased(0x72);
+        check(waitFor([&] {
+                  DeviceState state;
+                  return manager.backend().state(aliased.id, &state);
+              }),
+              "mapped alias test device connected");
+        char guid[33]{}, mapping[256]{};
+        SDL_JoystickGetGUIDString(SDL_JoystickGetGUID(aliased.handle), guid, sizeof(guid));
+        SDL_snprintf(mapping, sizeof(mapping), "%s,CupidGB aliased axes,leftx:a0,lefty:a0,", guid);
+        check(SDL_GameControllerAddMapping(mapping) >= 0, "install shared physical axis mapping");
+        manager.backend().pollNow();
+        DeviceState state;
+        check(manager.backend().state(aliased.id, &state), "read remapped axis device");
+        ControllerProfile aliasProfile;
+        aliasProfile.motionX = MotionAxis{MotionAxis::Controller, SDL_CONTROLLER_AXIS_LEFTX};
+        aliasProfile.motionY = MotionAxis{MotionAxis::Controller, SDL_CONTROLLER_AXIS_LEFTY};
+        check(!ControllerManager::motionAxesValid(aliasProfile, state.info),
+              "different normalized selectors cannot share the same physical SDL axis");
+    }
+    mapped.detach();
+    check(waitFor([&] { return !manager.output().motionAvailable; }) &&
+              manager.output().motionX == 0 && manager.output().motionY == 0,
+          "preferred device disconnect releases motion instead of retaining stale tilt");
+    manager.outputChanged = {};
+    manager.backend().stop();
+}
+
 int main(int argc, char **argv) {
     QApplication app(argc, argv);
     try {
@@ -263,6 +502,7 @@ int main(int argc, char **argv) {
         second.detach();
         raw.detach();
         check(SDL_NumJoysticks() == baseline, "all virtual devices removed");
+        checkMotionWorkflow();
         std::puts("CupidGB controller workflow checks passed (virtual devices only).");
         return 0;
     } catch (const std::exception &error) {

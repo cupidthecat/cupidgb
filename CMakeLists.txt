@@ -121,6 +121,7 @@ if(CUPIDGB_BUILD_QT)
         src/frontend/qt/main_window_cheat_tests.cpp
         src/frontend/qt/main_window_audio.cpp
         src/frontend/qt/main_window_input.cpp
+        src/frontend/qt/main_window_motion.cpp
         src/frontend/qt/main_window_session.cpp
         src/frontend/qt/main_window_display.cpp
         src/frontend/qt/main_window_debugger.cpp
@@ -128,6 +129,7 @@ if(CUPIDGB_BUILD_QT)
         src/frontend/qt/main_window_controller_tests.cpp
         src/frontend/qt/main_window_debugger_tests.cpp
         src/frontend/qt/main_window_session_tests.cpp
+        src/frontend/qt/main_window_motion_tests.cpp
         src/frontend/qt/main_window_telemetry.cpp
         src/frontend/qt/main_window_printer.cpp
         src/frontend/qt/printer_window.cpp
@@ -204,8 +206,14 @@ if(CUPIDGB_ENABLE_TESTS)
         add_test(NAME cupidgb_controller_workflows COMMAND cupidgb_controller_workflows)
         set_tests_properties(cupidgb_controller_workflows PROPERTIES
             ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+        add_executable(cupidgb_controller_dialog tests/frontend/test_controller_dialog.cpp)
+        target_link_libraries(cupidgb_controller_dialog PRIVATE cupidgb_controllers)
+        add_test(NAME cupidgb_controller_dialog COMMAND cupidgb_controller_dialog)
+        set_tests_properties(cupidgb_controller_dialog PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
         if(WIN32)
-            foreach(controller_test IN ITEMS cupidgb_controller_backend cupidgb_controller_workflows)
+            foreach(controller_test IN ITEMS cupidgb_controller_backend cupidgb_controller_workflows
+                                             cupidgb_controller_dialog)
                 add_custom_command(TARGET ${controller_test} POST_BUILD
                     COMMAND ${CMAKE_COMMAND} -E copy_if_different
                         $<TARGET_FILE:SDL2::SDL2> $<TARGET_FILE_DIR:${controller_test}>)

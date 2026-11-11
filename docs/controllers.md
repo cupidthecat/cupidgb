@@ -48,7 +48,17 @@ Test rumble sends a short request to the selected device while the settings dial
 
 After a device is already disconnected, SDL may reject a stop command. CupidGB clears the host request, closes its handles and never replays that request on reconnect. A physical motor's behavior after unplugging needs device-specific validation. Software request duration is bounded; this does not prove a disconnected device's firmware obeys that duration.
 
-Synthetic feedback for other games, advanced cartridge motors, motion sensors, analog tilt, faux analog direction patterns and analog speed controls remain pending. Recognizing a sensor capability does not enable a motion stream or qualify a cartridge sensor path.
+Synthetic feedback for other games, advanced cartridge motors, physical motion-sensor streams, faux analog direction patterns and analog speed controls remain pending. Recognizing a sensor capability does not enable a physical motion stream.
+
+## Motion cartridges
+
+MBC7 games accept tilt from configured controller axes. Horizontal and vertical tilt have separate selectors in Emulation > Controllers. Defaults use the left stick on a mapped controller, or joystick axes 0 and 1 when available. Unassigned disables that component. The dialog rejects unavailable axes and two selections that use the same physical axis, including mapped/raw aliases. Cancel retains the current layout.
+
+Tilt uses the full axis range without a dead zone. Gameplay button thresholds still apply to ordinary directional bindings. During motion gameplay, the selected tilt axes do not also press directional buttons; digital buttons and hats remain available. With multiple eligible controllers, the lowest live connection ID supplies the cartridge's single sensor. Preferred-device and enabled-device settings still apply, and single-player routing accepts any saved player assignment.
+
+For a mouse, enable Emulation > Motion-Controlled Games > Allow mouse control. It starts off and affects only MBC7 cartridges. The center of the displayed handheld image is neutral. Move the pointer away from the center to tilt. Letterboxing, scaling, borders and display pixel density use the same viewport as rendering. Any mouse button acts as A and combines with the normal keyboard/controller A binding. Start the game's calibration with the pointer centered or the stick released.
+
+A changed controller sample or pointer move becomes the current tilt source. Unchanged controller polling does not replace a newer pointer position. Controller fallback with different coordinates counts as a new sample. Pause, menus, settings and cartridge changes release mouse input; mouse control always requires the active game window. Controller tilt follows the explicit background-input choice. Native state loading restores guest sensor latches while retaining current host tilt and held input. These controls provide analog input; they do not read a controller's physical accelerometer.
 
 ## Backend and validation
 
@@ -58,4 +68,4 @@ The backend owns SDL joystick/controller event streams and preserves unrelated e
 
 Regression checks use real SDL virtual devices with Qt event loops. They cover multiple and identical devices, normalized and raw input, axis boundaries, hats, transient edges, hotplug, reconnect, capture isolation, Cancel/OK, persistent settings, independent players, focus/background gates, menus, selected-line interrupts, state continuation and virtual rumble callbacks. Application smoke checks use generated cartridges, not commercial game content.
 
-Virtual success does not establish physical device drivers, Bluetooth reconnects, actual motor behavior, motion input, controller latency or sustained commercial gameplay. The development WSL environment has no exposed physical input devices. See [testing](testing.md), [the validation record](validation.md) and [build/deployment instructions](building.md) for the tested environments and exact limits.
+Virtual success does not establish physical device drivers, Bluetooth reconnects, actual motor behavior, physical motion input, controller latency or sustained commercial gameplay. The development WSL environment has no exposed physical input devices. See [testing](testing.md), [the validation record](validation.md) and [build/deployment instructions](building.md) for the tested environments and exact limits.

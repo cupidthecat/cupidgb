@@ -25,6 +25,7 @@ class ControllerDialog final : public QDialog {
     void selectDevice();
     void saveDevice();
     void refreshBindings();
+    void refreshMotionAxes(const cupid::input::DeviceState &state);
     void capture(const cupid::input::InputEvent &event);
     void beginCapture();
     void cancelCapture();
@@ -34,8 +35,11 @@ class ControllerDialog final : public QDialog {
     QMap<SDL_JoystickID, int> players_;
     SDL_JoystickID current_ = -1;
     QString currentKey_, captureAction_;
+    cupid::input::DeviceInfo currentInfo_;
+    QMap<QString, QString> motionErrors_;
     QStringList actions_;
     QComboBox *devices_ = nullptr, *player_ = nullptr, *preferred_ = nullptr;
+    QComboBox *motionX_ = nullptr, *motionY_ = nullptr;
     QCheckBox *enabled_ = nullptr, *background_ = nullptr, *deviceEnabled_ = nullptr,
               *rumble_ = nullptr;
     QSpinBox *press_ = nullptr, *release_ = nullptr;
