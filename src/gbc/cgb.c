@@ -919,26 +919,29 @@ static uint8_t cupid_cgb_dma_status(const CupidGb *gb) {
                      ((gb->hdma_blocks_remaining - 1u) & 0x7fu));
 }
 
-void cupid_cgb_run_pending_dma(CupidGb *gb, uint8_t opcode) {
+void cupid_cgb_run_pending_dma(CupidGb *gb) {
     if (!gb || gb->model != CUPID_GB_MODEL_CGB || !gb->hdma_pending)
         return;
 
     const size_t bank = gb->cgb_vram_bank ? 0x2000u : 0;
     unsigned slot = 0;
-    uint8_t bus_value = opcode;
+    gb->hdma_running = true;
     /* Every byte uses two LCD dots. Normal speed adds a final two-dot slot so
      * the complete stall ends on a CPU machine-cycle boundary in either speed. */
     cupid_gb_tick_color_dma_slot(gb, true);
     ++slot;
     while (gb->hdma_pending && gb->hdma_blocks_remaining) {
+        gb->hdma_vram_fetch = UINT16_MAX;
         const uint16_t source = gb->hdma_source++;
-        /* Invalid DMA sources do not use the CPU's WRAM echo mapping. This
-         * local bus value is an approximation until shared bus decay is modeled. */
-        if (source < 0x8000u || (source >= 0xa000u && source < 0xe000u))
-            bus_value = cupid_gb_read_u8(gb, source);
+        /* The VRAM and echo ranges have no source driver during color DMA. */
+        const bool driven = source < 0x8000u || (source >= 0xa000u && source < 0xe000u);
+        const uint8_t bus_value =
+            driven ? cupid_gb_read_bus_u8(gb, source) : cupid_gb_sample_cartridge_bus(gb);
         cupid_gb_tick_color_dma_slot(gb, gb->double_speed || !(slot & 1u));
         ++slot;
-        const size_t destination = gb->hdma_destination & 0x1fffu;
+        /* A fetch on the shared VRAM port can pull destination address lines low.
+         * Slots without a fetch leave the programmed destination unchanged. */
+        const size_t destination = gb->hdma_destination & gb->hdma_vram_fetch & 0x1fffu;
         ++gb->hdma_destination;
         gb->video_ram[bank + destination] = bus_value;
         if (cupid_gb_lcd_enabled(gb) && gb->pixels.line < 144 &&
@@ -956,6 +959,7 @@ void cupid_cgb_run_pending_dma(CupidGb *gb, uint8_t opcode) {
             }
         }
     }
+    gb->hdma_running = false;
     if (!gb->double_speed)
         cupid_gb_tick_color_dma_slot(gb, !(slot & 1u));
     gb->io_registers[0x55u] = cupid_cgb_dma_status(gb);
@@ -1000,6 +1004,10 @@ bool cupid_cgb_handle_read_register(const CupidGb *gb, uint16_t address, uint8_t
         case 0xff56u:
             *value = gb != 0 && gb->cgb_mode ? (uint8_t)(0x2eu | (gb->io_registers[0x56u] & 0xc1u))
                                              : 0xffu;
+            if (gb != 0 && gb->cgb_mode && gb->header.mbc_type == CUPID_GB_HUC3 &&
+                (gb->io_registers[0x56u] & 0xc0u) == 0xc0u && gb->huc3.ir_detected) {
+                *value &= 0xfdu;
+            }
             return true;
         case 0xff4du:
             if (gb == 0 || !gb->cgb_mode) {

@@ -546,3 +546,42 @@ The final Windows and WSLg Xcb runs used Qt 6.8.3, audio output, normal rewind c
 The WSLg processes used 10.39 and 11.74 seconds of user-plus-system CPU time. A separate 36-second SGB2 Donkey Kong Windows sample reached 100.029% of nominal guest time after warmup, with zero audio errors or idle events. The sink processed 35.877 seconds of audio across the full run. Its widget paint count was zero, so this sample covers guest execution and audio delivery. The other paint timings describe widget events. Physical display refresh was unmeasured.
 
 Native workflow smokes passed on Windows and WSLg Xcb, including state load, rewind, and audio resumption. Earlier WSLg playback stalled with its RDP audio sink while the audio queue was full. The earlier 60-second runs reached 77.90% for Tetris and 0.18% for Mario Deluxe after warmup. The previous build and an intermediate Qt 6.8.3 build also stalled in 20-second Mario Deluxe runs and advanced the same 30,830,526 guest cycles. An earlier 36-second SGB2 sample reached 45.24% overall. The final reruns above completed at nominal speed. The intermittent RDP audio stalls remain open.
+
+## Cartridge bus, peripherals, and desktop workflows
+
+The Windows MSVC and Linux GCC Release builds with Qt 6.8.3 passed all 33 CTests. Linux also passed all 23 core checks with ASan/UBSan. A Linux Qt 6.4.2 build passed the focused state, MBC7, display and desktop workflow tests.
+
+The CGB DMA matrix covers eight source regions, three destination regions, both speed modes, both VRAM banks, and LCD-off and active-fetch timing. The previous build matched 32 of 192 full VRAM dumps. The shared VRAM destination change increased that to 76. With the CGB bus hold and decay change, all 192 matched, including CPU position, DMA status, and timing. Three booted DMA diagnostics also matched their checkpoint bytes, CPU position, step counts, and clocks. The 181-case external suite produced 177 explicit passes and four bounded cases on both builds.
+
+The 19 register-immediate and ALU-immediate opcode forms now fetch at their actual machine-cycle boundaries. All 38 normal/double-speed probe records matched registers, flags, PC, elapsed clocks, and remaining bus hold. The 181-case diagnostics retained the same 177 passes and four bounded cases after this change. Other store and prefix fetch phases require further work.
+
+A separate matrix started OAM DMA from `C100` before the color transfer. Timing, CPU position, and status matched on all 192 cases. Full VRAM matched on 80 cases and full OAM matched on none. Concurrent arbitration remains open.
+
+The 880-input local library scan again reached its 420-interval limit on 876 inputs. The same four CGB inputs hit illegal opcodes. With deterministic power-on RAM and equivalent firmware, all four inputs now reach the same illegal instruction in both builds. The fourth formerly diverged when it read disabled MBC5 RAM. The preceding high address operand holds the bus at `A8` through that read. A 1,417-row trace now matches the CPU address, opcode, accumulator, and stack pointer through the final instruction. The scan qualifies bounded execution and leaves full gameplay open.
+
+HuC3 DMG and CGB probes matched SRAM modes, clock and command readback, day carry, battery bytes, and six stable infrared checkpoints. Robopon Sun reached in-game dialogue after 3,120 guest intervals on Windows and Linux with matching final image and PCM checksums. A private run wrote 1,298 nonzero SRAM bytes, and its 32,785-byte battery file round-tripped byte for byte. A restored native state reproduced the next 180 intervals and 132,904 PCM frames. The in-game Continue menu, exact infrared transition noise, and physical infrared remain unqualified.
+
+The HuC3 writer timestamps an export at the supplied host time. Internal minute-boundary arithmetic can temporarily put its baseline ahead of that time. A regression checks immediate reload at every second of the following minute and verifies that the clock, alarm, and SRAM survive.
+
+Paired serial traces matched all 155 lines, including DMG/CGB clock directions and CGB fast and double-speed transfers. Printer traces matched all 816 lines, including checksum failures, compressed data spanning packets, image output, and completion timing. The Qt workflow checks a generated printer job, its grayscale PNG, and output through Qt's PDF print backend. Physical print and commercial multiplayer remain unverified.
+
+The printer UI checks also append a second strip, start a fresh roll after closing the feed, and disconnect and reconnect with an old callback queued. PDF testing uses `QPdfWriter` with the same paged renderer as system printing. This keeps synthetic output independent of native printer discovery, which blocks in CUPS on this Linux host.
+
+The archive loader returned matching cartridge SHA-256 hashes for all 386 local ZIP inputs on Windows and Linux. Generated ZIP and 7z fixtures exercised the desktop launch path. Stored and compressed RAR fixtures produced the expected cartridge bytes on both hosts, with the RAR codec installed on Linux for the compressed case. The automated checks cover nested Unicode names, multiple cartridges, links, invalid sizes, corrupt data, and separate archive battery paths. Additional regressions reject native Game Boy Advance headers in the core and `.gba` inputs in Qt.
+
+The Accurate blend fast path skips color lookups on rows that have identical source pixels. A Linux Qt 6.4.2 microbenchmark replayed 476 Tetris frames and 458 Mario Deluxe frames and compared the output pixels in both LCD phases. Median time per frame fell from 49.04 to 7.06 microseconds for Tetris and from 48.52 to 17.18 microseconds for Mario Deluxe. The measurement covers blending only.
+
+A separate pinned-CPU Linux test used six permutations of 600-interval runs. Median process CPU time for baseline, initial bus implementation, and final ROM fast path was 1.014, 1.133, and 0.991 seconds for Tetris, and 1.127, 1.178, and 1.127 seconds for Mario Deluxe. Guest cycles, instruction counts, PCM frame counts, and image/audio checksums matched in those samples.
+
+### Audio-enabled desktop runs
+
+Four 60-second runs used Qt 6.8.3, local boot firmware, recorded inputs, default rewind, and Accurate blending. The final images showed active play. Each run had zero audio errors and zero audio idle events. The table records the 55 seconds after warmup.
+
+| Environment and input | Nominal guest progress | Widget paint p95 / maximum | Peak memory |
+| --- | ---: | ---: | ---: |
+| Windows, Tetris | 100.006% | 17.84 / 25.07 ms | 66.75 MiB |
+| Windows, Mario Deluxe | 100.007% | 17.70 / 35.03 ms | 87.98 MiB |
+| WSLg Xcb, Tetris | 100.003% | 17.30 / 19.28 ms | 93.38 MiB |
+| WSLg Xcb, Mario Deluxe | 100.012% | 17.61 / 19.12 ms | 115.58 MiB |
+
+Windows process CPU samples reached 4.30 and 6.42 seconds, and Linux user-plus-system CPU totals were 9.59 and 11.65 seconds. Native audio-required workflow smokes passed on Windows and WSLg Xcb. Guest progress uses the emulated clock. Widget paint events measure host UI delivery. Physical display refresh and longer gameplay remain unmeasured.

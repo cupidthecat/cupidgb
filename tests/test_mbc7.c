@@ -153,12 +153,12 @@ static void test_resume(CupidGb *first, CupidGb *second) {
     command(first, WRITE | 0x7f);
     shift(first, 0x6e, 8);
     const size_t size = cupid_gb_state_size(first);
-    assert(size == V4_SIZE + 8);
+    assert(size == V4_SIZE + 8 + 4);
     uint8_t *saved = malloc(size), *restored = malloc(size);
     assert(saved && restored);
     size_t written = 0;
     assert(cupid_gb_save_state(first, saved, size, &written) == CUPID_GB_STATE_OK &&
-           written == size && saved[8] == 5);
+           written == size && saved[8] == 6);
     cupid_gb_mbc7_set_motion(second, -112, 112);
     assert(cupid_gb_load_state(second, saved, size) == CUPID_GB_STATE_OK);
     assert(cupid_gb_read_u8(first, PORT) == cupid_gb_read_u8(second, PORT));

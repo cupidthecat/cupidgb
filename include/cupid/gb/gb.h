@@ -271,9 +271,28 @@ typedef struct CupidGbMbc7 {
     int16_t motion_y;
 } CupidGbMbc7;
 
+typedef struct CupidGbHuc3 {
+    int64_t rtc_base_time;
+    uint16_t minutes, days;
+    uint16_t alarm_minutes, alarm_days;
+    uint16_t ir_warmup, ir_decay;
+    uint8_t index, flags;
+    bool alarm_enabled, ir_output, ir_detected;
+} CupidGbHuc3;
+
 struct CupidGb;
 typedef void (*CupidGbSerialOutputCallback)(const struct CupidGb *gb, uint8_t transmitted,
                                             void *user_data);
+typedef void (*CupidGbSerialLaunchCallback)(const struct CupidGb *gb, bool outgoing,
+                                            void *user_data);
+typedef bool (*CupidGbSerialSampleCallback)(const struct CupidGb *gb, void *user_data);
+
+typedef struct CupidGbSerialLink {
+    CupidGbSerialLaunchCallback launch;
+    CupidGbSerialSampleCallback sample;
+    void *user_data;
+} CupidGbSerialLink;
+
 typedef void (*CupidGbRumbleCallback)(const struct CupidGb *gb, bool enabled, uint64_t base_cycles,
                                       void *user_data);
 
@@ -325,8 +344,12 @@ typedef struct CupidGb {
     /* HuC3 */
     uint8_t huc3_mode;
     uint8_t huc3_value;
+    CupidGbHuc3 huc3;
+    bool huc3_ir_input; /* Live host signal, outside native snapshots. */
     CupidGbCamera camera;
     bool serial_master_clock;
+    uint64_t cartridge_bus_expiry; /* Half-dot deadline on CGB cartridge bus. */
+    uint8_t cartridge_bus_data;
     uint64_t elapsed_cycles; /* Base-speed T-cycles, including LCD-off execution. */
     uint8_t serial_bits_remaining;
     uint8_t serial_tx_latch;
@@ -348,6 +371,7 @@ typedef struct CupidGb {
     uint8_t cgb_wram_bank;
     uint8_t cgb_bg_palette_ram[0x40];
     uint8_t cgb_obj_palette_ram[0x40];
+    uint16_t hdma_vram_fetch; /* Last fetch in the current DMA byte slot. */
     uint16_t hdma_source;
     uint16_t hdma_destination;
     uint8_t hdma_blocks_remaining;
@@ -355,6 +379,7 @@ typedef struct CupidGb {
     /* Ready CPU work is distinct from an armed HBlank request. A false active
      * flag with pending work denotes a general transfer. */
     bool hdma_pending;
+    bool hdma_running;         /* Transient during the synchronous CPU stall. */
     uint8_t hdma_hblank_delay; /* Remaining LCD dots before a block becomes ready. */
     bool hdma_allow_on_wake;   /* Sleep began outside mode 0. */
     bool double_speed;
@@ -376,6 +401,8 @@ typedef struct CupidGb {
     bool ppu_line_boundary_hold;
     bool stat_irq_line;
     bool frame_ready;
+    bool lcd_frame_odd;   /* Current handheld LCD row polarity. */
+    bool lcd_first_frame; /* CGB holds the polarity on the first VBlank after enable. */
     bool loaded;
     uint64_t battery_write_generation; /* Host dirty tracking; excluded from guest snapshots. */
     char save_path[260];
@@ -386,9 +413,10 @@ typedef struct CupidGb {
     uint8_t boot_rom[CUPID_GB_MAX_BOOT_ROM_SIZE];
     size_t boot_rom_size;  /* 0x0100 for DMG, 0x0900 for CGB */
     bool boot_rom_enabled; /* true while boot ROM is mapped */
-    /* Host observation only; never encoded in hardware snapshots. */
+    /* Host registrations are excluded from hardware snapshots. */
     CupidGbSerialOutputCallback serial_output_callback;
     void *serial_output_user_data;
+    CupidGbSerialLink serial_link;
     CupidGbRumbleCallback rumble_callback;
     void *rumble_user_data;
 } CupidGb;
@@ -419,6 +447,17 @@ void cupid_gb_cleanup(CupidGb *gb);
  * writes serial bytes to a host stream. */
 void cupid_gb_set_serial_output_callback(CupidGb *gb, CupidGbSerialOutputCallback callback,
                                          void *user_data);
+/* Internal-clock transfers launch the first bit when armed and launch each
+ * subsequent bit after sampling on the falling clock edge. Missing samples
+ * read high. The host may clock a peer from sample, but must not reenter gb.
+ * Registrations survive reset and state loading; cleanup detaches the link.
+ * Transport state, including an already launched bit, belongs to the host. */
+void cupid_gb_set_serial_link(CupidGb *gb, CupidGbSerialLink link);
+/* Read an external-clock peer's outgoing bit before delivering the incoming
+ * bit. An idle peer drives low and a peer using its own clock reads high.
+ * Clock requests shift SB only while an external-clock transfer is armed. */
+bool cupid_gb_serial_external_bit(const CupidGb *gb);
+void cupid_gb_serial_external_clock(CupidGb *gb, bool incoming);
 /* MBC5 motor transitions are observed at the current base-cycle timestamp.
  * Callbacks must not mutate or reenter the core. Registration survives resets
  * and state loading; state loading emits no callback. Resynchronize host output
@@ -438,6 +477,12 @@ bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size);
 bool cupid_gb_step(CupidGb *gb);
 bool cupid_gb_step_observed(CupidGb *gb, CupidGbStepTrace *trace);
 uint8_t cupid_gb_read_u8(const CupidGb *gb, uint16_t address);
+
+/* Guest accesses drive the cartridge bus; the const read API is passive. */
+enum { CUPID_GB_CARTRIDGE_BUS_HALF_DOTS = 12 };
+
+uint8_t cupid_gb_read_bus_u8(CupidGb *gb, uint16_t address);
+uint8_t cupid_gb_sample_cartridge_bus(const CupidGb *gb);
 void cupid_gb_write_u8(CupidGb *gb, uint16_t address, uint8_t value);
 const char *cupid_gb_cartridge_type_name(uint8_t cartridge_type);
 const char *cupid_gb_mbc_name(CupidGbMbcType mbc_type);

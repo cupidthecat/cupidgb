@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 
 QRectF displayViewport(QSize source, QSizeF available, DisplayScaling scaling,
                        qreal devicePixelRatio) {
@@ -45,30 +46,62 @@ std::array<QRgb, 4> monochromeColors(MonochromePalette palette, const std::array
     }
 }
 
-QImage blendDisplayFrames(const QImage &current, const QImage &previous) {
-    if (current.isNull() || previous.isNull() || current.size() != previous.size())
+namespace {
+using BlendTable = std::array<uint8_t, 256 * 256>;
+
+BlendTable makeBlendTable(double previousWeight) {
+    BlendTable result{};
+    std::array<double, 256> linear{};
+    for (size_t value = 0; value < linear.size(); ++value)
+        linear[value] = std::pow(double(value) / 255.0, 2.2);
+    for (size_t current = 0; current < linear.size(); ++current) {
+        for (size_t previous = 0; previous < linear.size(); ++previous) {
+            const double light =
+                linear[current] * (1.0 - previousWeight) + linear[previous] * previousWeight;
+            result[current * 256 + previous] =
+                uint8_t(std::lround(255.0 * std::pow(light, 1.0 / 2.2)));
+        }
+    }
+    return result;
+}
+
+const BlendTable &blendTable(FrameBlending mode) {
+    // Mix emitted light. Reversing the two inputs gives the complementary weight
+    // without building a third table or using floating point in the pixel loop.
+    if (mode == FrameBlending::Accurate) {
+        static const auto weighted = makeBlendTable(1.0 / 3.0);
+        return weighted;
+    }
+    static const auto midpoint = makeBlendTable(0.5);
+    return midpoint;
+}
+} // namespace
+
+QImage blendDisplayFrames(const QImage &current, const QImage &previous, FrameBlending mode,
+                          bool oddFrame) {
+    if (mode == FrameBlending::Disabled || current.isNull() || previous.isNull() ||
+        current.size() != previous.size() || current.cacheKey() == previous.cacheKey())
         return current;
-    // Mix emitted light, rather than averaging gamma-encoded bytes. The table keeps
-    // floating-point exponentiation out of the per-frame pixel loop.
-    static const auto mixed = [] {
-        std::array<uint8_t, 256 * 256> result{};
-        std::array<double, 256> linear{};
-        for (size_t value = 0; value < linear.size(); ++value)
-            linear[value] = std::pow(double(value) / 255.0, 2.2);
-        for (size_t first = 0; first < linear.size(); ++first)
-            for (size_t second = 0; second < linear.size(); ++second)
-                result[first * 256 + second] = uint8_t(std::lround(
-                    255.0 * std::pow((linear[first] + linear[second]) / 2.0, 1.0 / 2.2)));
-        return result;
-    }();
+    const auto &mixed = blendTable(mode);
     const auto first = current.convertToFormat(QImage::Format_RGB32);
     const auto second = previous.convertToFormat(QImage::Format_RGB32);
     QImage output(first.size(), QImage::Format_RGB32);
-    for (int y = 0; y < first.height(); ++y) {
+    const int width = first.width();
+    const int height = first.height();
+    const size_t rowBytes = size_t(width) * sizeof(QRgb);
+    for (int y = 0; y < height; ++y) {
         const auto *a = reinterpret_cast<const QRgb *>(first.constScanLine(y));
         const auto *b = reinterpret_cast<const QRgb *>(second.constScanLine(y));
         auto *destination = reinterpret_cast<QRgb *>(output.scanLine(y));
-        for (int x = 0; x < first.width(); ++x)
+        // Equal RGB rows produce the same bytes at either weight.
+        if (std::memcmp(a, b, rowBytes) == 0) {
+            std::memcpy(destination, a, rowBytes);
+            continue;
+        }
+        // Alternate the favored frame at each LCD row and invert it next frame.
+        if (mode == FrameBlending::Accurate && ((y & 1) != int(oddFrame)))
+            std::swap(a, b);
+        for (int x = 0; x < width; ++x)
             destination[x] = qRgb(mixed[size_t(qRed(a[x])) * 256 + qRed(b[x])],
                                   mixed[size_t(qGreen(a[x])) * 256 + qGreen(b[x])],
                                   mixed[size_t(qBlue(a[x])) * 256 + qBlue(b[x])]);

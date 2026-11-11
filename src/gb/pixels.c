@@ -53,6 +53,14 @@ static uint16_t tile_address(CupidGb *gb, bool upper) {
     return (uint16_t)((unsigned)base + (p->attributes & 8 ? 0x2000u : 0u) + row * 2 + upper);
 }
 
+static uint8_t fetch_vram(CupidGb *gb, uint16_t address) {
+    if (gb->hdma_running) {
+        gb->hdma_vram_fetch = address;
+        return 0;
+    }
+    return gb->video_ram[address];
+}
+
 static void fetch_background(CupidGb *gb) {
     CupidGbPixels *p = &gb->pixels;
     uint8_t lcdc = gb->io_registers[CUPID_GB_IO_LCDC];
@@ -69,8 +77,8 @@ static void fetch_background(CupidGb *gb) {
             break;
         }
         case 1:
-            p->tile = gb->video_ram[p->address];
-            p->attributes = gb->cgb_mode ? gb->video_ram[p->address + 0x2000] : 0;
+            p->tile = fetch_vram(gb, p->address);
+            p->attributes = gb->cgb_mode ? fetch_vram(gb, p->address + 0x2000u) : 0;
             ++p->phase;
             break;
         case 2:
@@ -78,7 +86,7 @@ static void fetch_background(CupidGb *gb) {
             ++p->phase;
             break;
         case 3:
-            p->low = gb->video_ram[p->address];
+            p->low = fetch_vram(gb, p->address);
             ++p->phase;
             break;
         case 4:
@@ -86,7 +94,7 @@ static void fetch_background(CupidGb *gb) {
             ++p->phase;
             break;
         case 5:
-            p->high = gb->video_ram[p->address];
+            p->high = fetch_vram(gb, p->address);
             ++p->phase;
             /* The completed row may enter an empty queue on this dot. */
             /* fall through */
@@ -234,9 +242,9 @@ bool cupid_gb_pixels_tick(CupidGb *gb) {
     }
     if (p->object_delay) {
         if (p->object_delay == 4)
-            p->object_low = gb->video_ram[p->object_address];
+            p->object_low = fetch_vram(gb, p->object_address);
         if (p->object_delay == 2)
-            p->object_high = gb->video_ram[p->object_address + 1];
+            p->object_high = fetch_vram(gb, p->object_address + 1u);
         if (--p->object_delay == 0)
             overlay_object(gb);
         return false;

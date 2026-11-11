@@ -29,6 +29,29 @@ typedef struct SerialCapture {
     unsigned count;
 } SerialCapture;
 
+typedef struct SerialPeer {
+    CupidGb *gb;
+    bool outgoing;
+    unsigned launches;
+    unsigned samples;
+} SerialPeer;
+
+static void launch_bit(const CupidGb *gb, bool outgoing, void *user_data) {
+    (void)gb;
+    SerialPeer *peer = user_data;
+    peer->outgoing = outgoing;
+    ++peer->launches;
+}
+
+static bool sample_peer(const CupidGb *gb, void *user_data) {
+    (void)gb;
+    SerialPeer *peer = user_data;
+    ++peer->samples;
+    const bool incoming = cupid_gb_serial_external_bit(peer->gb);
+    cupid_gb_serial_external_clock(peer->gb, peer->outgoing);
+    return incoming;
+}
+
 static void capture_byte(const CupidGb *gb, uint8_t transmitted, void *user_data) {
     SerialCapture *capture = user_data;
     assert(capture && capture->count < sizeof(capture->bytes));
@@ -91,6 +114,149 @@ static void test_external_clock(void) {
     assert((cupid_gb_read_u8(&gb, 0xff02) & 0x80) != 0);
     assert((cupid_gb_read_u8(&gb, 0xff0f) & 8) == 0);
     assert(capture.count == 0);
+
+    const uint8_t incoming = 0xc3;
+    for (unsigned i = 0; i < 8; ++i) {
+        assert(cupid_gb_serial_external_bit(&gb) == ((0x55u & (0x80u >> i)) != 0u));
+        cupid_gb_serial_external_clock(&gb, (incoming & (0x80u >> i)) != 0u);
+        assert(((cupid_gb_read_u8(&gb, 0xff02) & 0x80) == 0) == (i == 7));
+        assert(((cupid_gb_read_u8(&gb, 0xff0f) & 8) != 0) == (i == 7));
+    }
+    assert(!cupid_gb_serial_external_bit(&gb));
+    cupid_gb_serial_external_clock(&gb, false);
+    assert(cupid_gb_read_u8(&gb, 0xff01) == incoming);
+    assert(capture.count == 0);
+
+    cupid_gb_write_u8(&gb, 0xff01, 0);
+    cupid_gb_write_u8(&gb, 0xff02, 0x81);
+    assert(cupid_gb_serial_external_bit(&gb));
+    cupid_gb_serial_external_clock(&gb, true);
+    assert(cupid_gb_read_u8(&gb, 0xff01) == 0);
+}
+
+static void test_link_pair(bool cgb, bool fast, bool double_speed) {
+    CupidGb *a = calloc(1, sizeof(*a)), *b = calloc(1, sizeof(*b));
+    assert(a && b);
+    prepare(a, cgb, double_speed);
+    prepare(b, cgb, double_speed);
+    SerialPeer cable_a = {.gb = b}, cable_b = {.gb = a};
+    cupid_gb_set_serial_link(a, (CupidGbSerialLink){launch_bit, sample_peer, &cable_a});
+    cupid_gb_set_serial_link(b, (CupidGbSerialLink){launch_bit, sample_peer, &cable_b});
+
+    const uint16_t period = cgb && fast ? 4 : 128;
+    for (unsigned direction = 0; direction < 2; ++direction) {
+        CupidGb *master = direction ? b : a, *slave = direction ? a : b;
+        SerialPeer *cable = direction ? &cable_b : &cable_a;
+        const uint8_t master_byte = direction ? 0xa5 : 0x69, slave_byte = direction ? 0xc3 : 0x96;
+        uint8_t master_sb = master_byte, slave_sb = slave_byte;
+        cupid_gb_write_u8(master, 0xff0f, 0);
+        cupid_gb_write_u8(slave, 0xff0f, 0);
+        cupid_gb_write_u8(slave, 0xff01, slave_byte);
+        cupid_gb_write_u8(slave, 0xff02, fast ? 0x82 : 0x80);
+        cupid_gb_write_u8(master, 0xff01, master_byte);
+        cupid_gb_write_u8(master, 0xff02, fast ? 0x83 : 0x81);
+
+        for (unsigned i = 0; i < 8; ++i) {
+            cupid_gb_tick(slave, period);
+            cupid_gb_tick(master, (uint16_t)(period - 1));
+            assert(cable->samples == i && cable->launches == i + 1);
+            assert(cupid_gb_read_u8(master, 0xff01) == master_sb);
+            assert(cupid_gb_read_u8(slave, 0xff01) == slave_sb);
+            cupid_gb_tick(master, 1);
+            master_sb = (uint8_t)(2u * master_sb + ((slave_byte & (0x80u >> i)) != 0u));
+            slave_sb = (uint8_t)(2u * slave_sb + ((master_byte & (0x80u >> i)) != 0u));
+            assert(cupid_gb_read_u8(master, 0xff01) == master_sb);
+            assert(cupid_gb_read_u8(slave, 0xff01) == slave_sb);
+            assert(((cupid_gb_read_u8(master, 0xff0f) & 8) != 0) == (i == 7));
+            assert(((cupid_gb_read_u8(slave, 0xff0f) & 8) != 0) == (i == 7));
+            assert(((cupid_gb_read_u8(master, 0xff02) & 0x80) == 0) == (i == 7));
+            assert(((cupid_gb_read_u8(slave, 0xff02) & 0x80) == 0) == (i == 7));
+        }
+        assert(cable->launches == 8 && cable->samples == 8);
+        assert(master_sb == slave_byte && slave_sb == master_byte);
+    }
+    free(a);
+    free(b);
+}
+
+static void test_link_control_write(void) {
+    CupidGb *master = calloc(1, sizeof(*master)), *slave = calloc(1, sizeof(*slave));
+    assert(master && slave);
+    prepare(master, true, false);
+    prepare(slave, true, false);
+    SerialPeer cable = {.gb = slave};
+    cupid_gb_set_serial_link(master, (CupidGbSerialLink){launch_bit, sample_peer, &cable});
+    cupid_gb_write_u8(slave, 0xff01, 0xa5);
+    cupid_gb_write_u8(slave, 0xff02, 0x80);
+    cupid_gb_write_u8(master, 0xff01, 0x80);
+    cupid_gb_write_u8(master, 0xff02, 0x83);
+    assert(cable.launches == 1 && cable.outgoing);
+
+    /* Replacing SB changes its receive shift register. The bit already
+     * launched before the falling edge remains on the cable. */
+    cupid_gb_write_u8(master, 0xff01, 0);
+    cupid_gb_tick(master, 2);
+    cupid_gb_write_u8(master, 0xff02, 0x80);
+    assert(cable.samples == 1 && cable.launches == 2);
+    assert(cupid_gb_read_u8(master, 0xff01) == 1);
+    assert(cupid_gb_read_u8(slave, 0xff01) == 0x4b);
+    for (unsigned i = 0; i < 7; ++i) {
+        assert(cupid_gb_read_u8(master, 0xff02) & 0x80);
+        cupid_gb_serial_external_clock(master, false);
+    }
+    assert(cupid_gb_read_u8(master, 0xff01) == 0x80);
+    assert((cupid_gb_read_u8(master, 0xff02) & 0x80) == 0);
+    assert(cupid_gb_read_u8(master, 0xff0f) & 8);
+    free(master);
+    free(slave);
+}
+
+static void load_link_rom(CupidGb *gb, CupidGbModel model, uint8_t data, uint8_t control) {
+    const uint8_t program[] = {0x3e, data,    0xe0, 0x01, /* Load the outgoing byte. */
+                               0x3e, control, 0xe0, 0x02, /* Start serial. */
+                               0xf0, 0x02,    0xe6, 0x80, 0x20,
+                               0xfa,                            /* Wait for SC bit 7 to clear. */
+                               0xf0, 0x01,    0xea, 0x00, 0xc0, /* Store received SB. */
+                               0x3e, 0x01,    0xea, 0x01, 0xc0, /* Signal completion. */
+                               0x18, 0xfe};
+    uint8_t rom[32768] = {0};
+    rom[0x100] = 0xc3;
+    rom[0x101] = 0x50;
+    rom[0x102] = 0x01;
+    rom[0x143] = 0x80;
+    memcpy(rom + 0x150, program, sizeof(program));
+    for (unsigned i = 0x134; i <= 0x14c; ++i) {
+        rom[0x14d] = (uint8_t)(rom[0x14d] - rom[i] - 1u);
+    }
+    cupid_gb_set_model(gb, model);
+    assert(cupid_gb_load_rom(gb, rom, sizeof(rom)));
+    cupid_gb_write_u8(gb, 0xff0f, 0);
+}
+
+static void test_link_roms(void) {
+    CupidGb *master = calloc(1, sizeof(*master)), *slave = calloc(1, sizeof(*slave));
+    assert(master && slave);
+    SerialPeer cable = {.gb = slave};
+    cupid_gb_set_serial_link(master, (CupidGbSerialLink){launch_bit, sample_peer, &cable});
+    load_link_rom(master, CUPID_GB_MODEL_CGB, 0x23, 0x83);
+    load_link_rom(slave, CUPID_GB_MODEL_DMG_ABC, 0xd9, 0x80);
+    for (unsigned i = 0; i < 8; ++i) {
+        cupid_gb_step(slave);
+    }
+    assert(cupid_gb_read_u8(slave, 0xff02) & 0x80);
+    for (unsigned i = 0; i < 128; ++i) {
+        cupid_gb_step(master);
+        cupid_gb_step(slave);
+    }
+    assert(cupid_gb_read_u8(master, 0xc000) == 0xd9 && cupid_gb_read_u8(master, 0xc001) == 1);
+    assert(cupid_gb_read_u8(slave, 0xc000) == 0x23 && cupid_gb_read_u8(slave, 0xc001) == 1);
+    assert(cupid_gb_read_u8(master, 0xff0f) & 8);
+    assert(cupid_gb_read_u8(slave, 0xff0f) & 8);
+    assert(cable.launches == 8 && cable.samples == 8);
+    cupid_gb_cleanup(master);
+    cupid_gb_cleanup(slave);
+    free(master);
+    free(slave);
 }
 
 static void test_divider_phase_and_reset(void) {
@@ -229,13 +395,17 @@ static void test_observer_host_lifetime_and_snapshot_identity(void) {
         rom[0x14d] = (uint8_t)(rom[0x14d] - rom[i] - 1u);
     }
     SerialCapture capture = {0}, replacement = {0};
+    SerialPeer cable = {0};
     cupid_gb_set_model(observed, CUPID_GB_MODEL_CGB);
     cupid_gb_set_model(silent, CUPID_GB_MODEL_CGB);
     cupid_gb_set_serial_output_callback(observed, capture_byte, &capture);
+    cupid_gb_set_serial_link(observed,
+                             (CupidGbSerialLink){.launch = launch_bit, .user_data = &cable});
     assert(cupid_gb_load_rom(observed, rom, sizeof(rom)));
     assert(cupid_gb_load_rom(silent, rom, sizeof(rom)));
     assert(observed->serial_output_callback == capture_byte);
     assert(observed->serial_output_user_data == &capture);
+    assert(observed->serial_link.user_data == &cable);
     const size_t size = cupid_gb_state_size(observed);
     uint8_t *a = malloc(size), *b = malloc(size);
     assert(a && b);
@@ -249,7 +419,9 @@ static void test_observer_host_lifetime_and_snapshot_identity(void) {
     cupid_gb_set_serial_output_callback(observed, capture_byte, &replacement);
     assert(cupid_gb_load_state(observed, a, size) == CUPID_GB_STATE_OK);
     assert(observed->serial_output_user_data == &replacement);
+    assert(observed->serial_link.user_data == &cable && cable.launches == 24);
     send_byte(observed, 0xa5);
+    assert(cable.launches == 32);
     assert(replacement.count == 1 && replacement.bytes[0] == 0xa5);
     assert(capture.count == 3);
     a[size - 1] ^= 1;
@@ -263,8 +435,11 @@ static void test_observer_host_lifetime_and_snapshot_identity(void) {
     cupid_gb_enter_boot_rom(observed);
     assert(observed->serial_output_callback == capture_byte);
     assert(observed->serial_output_user_data == &replacement);
+    assert(observed->serial_link.launch == launch_bit && observed->serial_link.user_data == &cable);
     cupid_gb_cleanup(observed);
     assert(!observed->serial_output_callback && !observed->serial_output_user_data);
+    assert(!observed->serial_link.launch && !observed->serial_link.sample &&
+           !observed->serial_link.user_data);
     cupid_gb_cleanup(silent);
     free(a);
     free(b);
@@ -280,6 +455,11 @@ int main(void) {
     test_byte_duration(true, true, false);
     test_byte_duration(true, true, true);
     test_external_clock();
+    test_link_pair(false, false, false);
+    test_link_pair(true, true, false);
+    test_link_pair(true, true, true);
+    test_link_control_write();
+    test_link_roms();
     test_divider_phase_and_reset();
     test_control_write_completes_high_phase();
     test_div_reset_can_shift();

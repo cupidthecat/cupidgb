@@ -8,10 +8,12 @@ CupidGB uses CMake for the hardware core, command-line ROM runner, Qt desktop ap
 | --- | --- |
 | CMake | 3.21 or newer |
 | Compilers | C11 and C++17 |
-| Qt | 6.4 or newer, Widgets and Multimedia modules |
+| Qt | 6.4 or newer, Widgets, Multimedia, and Print Support modules |
 | SDL2 | 2.24 or newer for the Qt desktop controller backend |
 | Python | 3.9 or newer when tests are enabled |
 | Build tool | Ninja, Make, or the matching Visual Studio generator |
+
+Archive loading uses an optional `7z` or `7zz` executable. On Debian or Ubuntu, install `7zip` and add the distribution's RAR codec package if you use compressed RAR archives. On Windows, CupidGB can find 7-Zip on `PATH` or in the default installation folder.
 
 CMake enables both C and C++ languages even in a core-only configuration. Qt and SDL2 are discovered only when `CUPIDGB_BUILD_QT` is enabled. The core and command-line runner do not link either library. Windows uses its system hashing API for large one-shot hashes. On Linux, CMake enables the optional OpenSSL 3 Crypto backend when its development files are found; otherwise the portable SHA-256 implementation remains available. ROMs and boot ROMs are local inputs and are not distributed with the application.
 

@@ -1,12 +1,13 @@
 #include "cupid/gb/battery.h"
 #include "cupid/gb/cartridge.h"
+#include "cupid/gb/huc3.h"
 #include "cupid/gb/tpp1.h"
 
 #include <limits.h>
 #include <string.h>
 #include <time.h>
 
-enum { TPP1_TRAILER_SIZE = 20 };
+enum { TPP1_TRAILER_SIZE = 20, HUC3_TRAILER_SIZE = 17 };
 
 static const uint8_t tpp1_trailer_header[] = {'T', 'P', 'P', '1', 1, 0};
 
@@ -58,6 +59,8 @@ size_t cupid_gb_battery_size(const CupidGb *gb) {
         return 0;
     if (gb->header.mbc_type == CUPID_GB_TPP1)
         return gb->cartridge_ram_size + TPP1_TRAILER_SIZE;
+    if (gb->header.mbc_type == CUPID_GB_HUC3)
+        return gb->cartridge_ram_size + HUC3_TRAILER_SIZE;
     return gb->cartridge_ram_size + (clock_present(gb) ? 48u : 0u);
 }
 
@@ -78,6 +81,56 @@ static uint64_t read_integer(const uint8_t *source, unsigned bytes) {
     for (unsigned i = 0; i < bytes; ++i)
         value |= (uint64_t)source[i] << (i * 8);
     return value;
+}
+
+static void save_huc3_clock(const CupidGb *gb, uint8_t *trailer, int64_t host_seconds) {
+    CupidGbHuc3 clock = gb->huc3;
+    cupid_gb_huc3_advance(&clock, host_seconds);
+    /* Minute-boundary arithmetic can place the internal baseline ahead of now.
+     * Persist the export time so an immediate reload keeps the valid clock. */
+    write_integer(trailer, host_seconds > 0 ? (uint64_t)host_seconds : 0, 8);
+    write_integer(trailer + 8, clock.minutes, 2);
+    write_integer(trailer + 10, clock.days, 2);
+    write_integer(trailer + 12, clock.alarm_minutes, 2);
+    write_integer(trailer + 14, clock.alarm_days, 2);
+    trailer[16] = clock.alarm_enabled;
+}
+
+static CupidGbBatteryResult load_huc3_battery(CupidGb *gb, const uint8_t *data, size_t size,
+                                              int64_t host_seconds) {
+    const size_t ram_size = gb->cartridge_ram_size;
+    CupidGbHuc3 clock = gb->huc3;
+    bool reset_clock = true;
+    if (size == ram_size + HUC3_TRAILER_SIZE) {
+        const uint8_t *trailer = data + ram_size;
+        if (trailer[16] > 1u)
+            return CUPID_GB_BATTERY_INVALID_RTC;
+        const uint64_t stamp = read_integer(trailer, 8);
+        clock.alarm_minutes = (uint16_t)read_integer(trailer + 12, 2);
+        clock.alarm_days = (uint16_t)read_integer(trailer + 14, 2);
+        if (host_seconds >= 0 && stamp <= (uint64_t)host_seconds) {
+            clock.rtc_base_time = (int64_t)stamp;
+            clock.minutes = (uint16_t)read_integer(trailer + 8, 2);
+            clock.days = (uint16_t)read_integer(trailer + 10, 2);
+            clock.alarm_enabled = trailer[16] != 0;
+            reset_clock = false;
+        }
+    } else if (size != ram_size) {
+        return CUPID_GB_BATTERY_INVALID_SIZE;
+    }
+    if (reset_clock) {
+        /* The invalid clock indication tells the game to ask for the time. */
+        clock.rtc_base_time = host_seconds > 0 ? host_seconds : 0;
+        clock.minutes = 0x0fffu;
+        clock.days = 0xffffu;
+        clock.alarm_enabled = false;
+    } else {
+        cupid_gb_huc3_advance(&clock, host_seconds);
+    }
+    if (ram_size)
+        memmove(gb->cartridge_ram, data, ram_size);
+    gb->huc3 = clock;
+    return CUPID_GB_BATTERY_OK;
 }
 
 static void save_tpp1_clock(const CupidGb *gb, uint8_t *trailer, int64_t host_seconds) {
@@ -143,6 +196,8 @@ CupidGbBatteryResult cupid_gb_save_battery_at(const CupidGb *gb, uint8_t *data, 
         write_integer(trailer + 40, (uint64_t)host_seconds, 8);
     } else if (gb->header.mbc_type == CUPID_GB_TPP1) {
         save_tpp1_clock(gb, data + gb->cartridge_ram_size, host_seconds);
+    } else if (gb->header.mbc_type == CUPID_GB_HUC3) {
+        save_huc3_clock(gb, data + gb->cartridge_ram_size, host_seconds);
     }
     if (written)
         *written = size;
@@ -163,6 +218,8 @@ CupidGbBatteryResult cupid_gb_load_battery_at(CupidGb *gb, const uint8_t *data, 
         return CUPID_GB_BATTERY_NO_DATA;
     if (gb->header.mbc_type == CUPID_GB_TPP1)
         return load_tpp1_battery(gb, data, size, host_seconds);
+    if (gb->header.mbc_type == CUPID_GB_HUC3)
+        return load_huc3_battery(gb, data, size, host_seconds);
     const size_t ram_size = gb->cartridge_ram_size;
     const bool has_clock = clock_present(gb);
     const bool legacy_mbc7 = gb->header.mbc_type == CUPID_GB_MBC7 && size > ram_size &&

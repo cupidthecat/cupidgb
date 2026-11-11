@@ -24,7 +24,7 @@ Run the generated mapper, persistence, and SGB continuation checks together:
 
 ```sh
 ctest --test-dir build --output-on-failure \
-    -R 'cupidgb_(gb|cartridge|battery|camera|mbc7|tpp1|sgb|state)$'
+    -R 'cupidgb_(gb|cartridge|battery|camera|mbc7|huc3|tpp1|sgb|state)$'
 ```
 
 For a library scan, inventory cartridge type bytes separately from the selected hardware model. Give each ROM a fixed guest-clock budget and retain its exact result, including an execution error or incomplete boot. Run banking and peripheral probes for hardware absent from the library. Use separate gameplay and persistence checks before claiming compatibility for a title.
@@ -43,6 +43,8 @@ The workflow check uses actual native Qt controls for capture, wrong-device reje
 Virtual devices are detached before exit. These tests do not qualify a physical USB/Bluetooth device, motor force/duration, actual sensor output, real window-system focus behavior, input latency or commercial play. Run native Windows/Linux smoke and real-device gameplay separately. A WSL environment without exposed input devices cannot establish physical Linux controller support. Do not infer those results from a virtual rumble callback or an offscreen dialog.
 
 C++/C integration checks exercise shared hardware records, initialization/reset, serial observers, and native-state restoration. Run them with Release IPO enabled as well as any fallback configuration being qualified. IPO comparisons must record the effective setting and, for GCC C++, the `-fno-strict-aliasing` flag. The build disables IPO with sanitizers.
+
+The serial and printer targets use generated transfers to check both clock directions, interrupt timing, reply bytes, compressed packets and image output. The Qt smoke sends a job over the emulated serial registers and checks the resulting feed, PNG, and PDF output. The command-line workflow checks direct cartridge loading and archive selection and rejection. Set `CUPIDGB_REQUIRE_ARCHIVE_TESTS=1` to fail if 7-Zip is unavailable.
 
 Release tests explicitly keep their assertions enabled. Run the GCC/Clang sanitizer configuration as a separate check, with leak detection where available. Preserve the failing command and complete diagnostic when a sanitizer reports a defect.
 

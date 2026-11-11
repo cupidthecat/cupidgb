@@ -230,9 +230,8 @@ static void test_resume(void) {
                 prepare_phase(a, phase);
                 size_t length;
                 uint8_t *state = encode(a, &length);
-                const bool sgb = model == CUPID_GB_MODEL_SGB || model == CUPID_GB_MODEL_SGB2;
                 assert(length == cupid_gb_state_size(b) && length > 300518);
-                assert(state[8] == (sgb ? 5 : 4));
+                assert(state[8] == 6);
                 uint8_t *rom_pointer = b->rom;
                 strcpy(b->save_path, "host-session-save.sav");
                 assert(cupid_gb_load_state(b, state, length) == CUPID_GB_STATE_OK);
@@ -320,7 +319,7 @@ static void test_controller_state_versions(void) {
     cupid_gb_write_u8(source, 0x4000, 0x0d);
     size_t length;
     uint8_t *bytes = encode(source, &length);
-    assert(length == 310691 && bytes[300568] == source->joypad_extra[0] &&
+    assert(length == 310695 && bytes[300568] == source->joypad_extra[0] &&
            bytes[300569] == source->joypad_extra[1] && bytes[300570] == source->joypad_extra[2] &&
            bytes[300571] == 1);
     unsigned callbacks = 0;
@@ -815,7 +814,7 @@ static void test_rejection(void) {
     damaged[length - 1] ^= 1;
     rejected_unchanged(gb, damaged, length, CUPID_GB_STATE_INVALID);
     memcpy(damaged, valid, length);
-    damaged[length - 1] = 1;
+    damaged[300571] = 1;
     update_integrity(damaged, length);
     /* A cartridge without this motor cannot restore an asserted motor latch. */
     rejected_unchanged(gb, damaged, length, CUPID_GB_STATE_INVALID);
@@ -862,7 +861,7 @@ static void test_rejection(void) {
     damaged[length] = 0;
     rejected_unchanged(gb, damaged, length + 1, CUPID_GB_STATE_INVALID);
     memcpy(damaged, valid, length);
-    damaged[8] = 6;
+    damaged[8] = 7;
     update_integrity(damaged, length);
     rejected_unchanged(gb, damaged, length, CUPID_GB_STATE_UNSUPPORTED_VERSION);
     memcpy(damaged, valid, length);
@@ -931,10 +930,10 @@ static void test_sgb_transfer_resume(void) {
 
     size_t length;
     uint8_t *bytes = encode(source, &length);
-    assert(length == 310691 && bytes[8] == 5);
+    assert(length == 310695 && bytes[8] == 6);
     assert(bytes[v4_length + 7 + 4096] == 0xa5);
     assert(bytes[v4_length + 7 + 8192] == 0x80 && bytes[v4_length + 7 + 8193] == 0x0c);
-    assert(bytes[length - 2] == 0x34 && bytes[length - 1] == 0x12);
+    assert(bytes[length - 6] == 0x34 && bytes[length - 5] == 0x12);
     assert(cupid_gb_load_state(target, bytes, length) == CUPID_GB_STATE_OK);
     assert_hardware_equal(source, target);
     cupid_gb_tick_ppu_dots(source, 1);
@@ -967,6 +966,71 @@ static void test_sgb_transfer_resume(void) {
     free(bytes);
     cupid_gb_cleanup(source);
     cupid_gb_cleanup(target);
+    free(source);
+    free(target);
+}
+
+static void tick_to_vblank(CupidGb *gb) {
+    gb->frame_ready = false;
+    for (unsigned line = 0; line <= 154 && !gb->frame_ready; ++line)
+        cupid_gb_tick_ppu_dots(gb, 456);
+    assert(gb->frame_ready);
+}
+
+static void test_lcd_frame_phase_resume(void) {
+    CupidGb *source = calloc(1, sizeof(*source)), *target = calloc(1, sizeof(*target));
+    assert(source && target);
+    const CupidGbModel models[] = {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_CGB, CUPID_GB_MODEL_SGB};
+    for (unsigned i = 0; i < sizeof(models) / sizeof(models[0]); ++i) {
+        const bool cgb = models[i] == CUPID_GB_MODEL_CGB;
+        const bool handheld = models[i] != CUPID_GB_MODEL_SGB;
+        prepare(source, models[i], false);
+        prepare(target, models[i], false);
+        assert(!source->lcd_frame_odd && !source->lcd_first_frame);
+        tick_to_vblank(source);
+        assert(source->lcd_frame_odd == handheld);
+        tick_to_vblank(source);
+        assert(!source->lcd_frame_odd);
+        const uint8_t lcdc = source->io_registers[CUPID_GB_IO_LCDC];
+        cupid_gb_write_u8(source, 0xff40, lcdc & 0x7f);
+        assert(source->lcd_frame_odd == handheld);
+        cupid_gb_write_u8(source, 0xff40, lcdc & 0x7f);
+        assert(source->lcd_frame_odd == handheld);
+        cupid_gb_write_u8(source, 0xff40, lcdc);
+        assert(source->lcd_first_frame == cgb);
+        size_t length;
+        uint8_t *state = encode(source, &length);
+        const size_t phase_offset = length - 4;
+        assert(state[phase_offset] == handheld && state[phase_offset + 1] == cgb);
+        assert(cupid_gb_load_state(target, state, length) == CUPID_GB_STATE_OK);
+        assert(target->lcd_frame_odd == handheld && target->lcd_first_frame == cgb);
+        tick_to_vblank(source);
+        tick_to_vblank(target);
+        assert(source->lcd_frame_odd == cgb && !source->lcd_first_frame);
+        assert(target->lcd_frame_odd == cgb && !target->lcd_first_frame);
+        tick_to_vblank(source);
+        tick_to_vblank(target);
+        assert(source->lcd_frame_odd == (handheld && !cgb));
+        assert_encoded_equal(source, target);
+        for (size_t offset = phase_offset; offset < phase_offset + 2; ++offset) {
+            const uint8_t value = state[offset];
+            state[offset] = 2;
+            update_integrity(state, length);
+            rejected_unchanged(target, state, length, CUPID_GB_STATE_INVALID);
+            state[offset] = value;
+        }
+        if (cgb) {
+            const size_t old_length = phase_offset;
+            put_u32(state + 8, 4);
+            put_u32(state + 12, (uint32_t)old_length);
+            update_integrity(state, old_length);
+            assert(cupid_gb_load_state(target, state, old_length) == CUPID_GB_STATE_OK);
+            assert(!target->lcd_frame_odd && target->lcd_first_frame);
+        }
+        free(state);
+        cupid_gb_cleanup(source);
+        cupid_gb_cleanup(target);
+    }
     free(source);
     free(target);
 }
@@ -1045,10 +1109,16 @@ static void test_v5_sgb_mapper_sections(void) {
         }
         size_t length;
         uint8_t *bytes = encode(source, &length);
-        assert(length == mapper_offset + mapper_length && bytes[8] == 5 &&
+        assert(length == mapper_offset + mapper_length + 4 && bytes[8] == 6 &&
                bytes[mapper_offset - 2] == 0x34 && bytes[mapper_offset - 1] == 0x12);
         assert(memcmp(bytes + mapper_offset, wire, mapper_length) == 0);
         assert(cupid_gb_load_state(target, bytes, length) == CUPID_GB_STATE_OK);
+        assert_encoded_equal(source, target);
+        const size_t v5_length = length - 4;
+        put_u32(bytes + 8, 5);
+        put_u32(bytes + 12, (uint32_t)v5_length);
+        update_integrity(bytes, v5_length);
+        assert(cupid_gb_load_state(target, bytes, v5_length) == CUPID_GB_STATE_OK);
         assert_encoded_equal(source, target);
         free(bytes);
         cupid_gb_cleanup(source);
@@ -1128,14 +1198,19 @@ static void print_fixture(const char *path) {
     prepare_phase(gb, 2);
     size_t length;
     uint8_t *bytes = encode(gb, &length);
+    assert(length == 300576 && bytes[8] == 6 && !bytes[length - 4] && !bytes[length - 3]);
+    length -= 4;
+    put_u32(bytes + 8, 4);
+    put_u32(bytes + 12, (uint32_t)length);
+    update_integrity(bytes, length);
     char sha256[65];
     digest_hex(bytes, length, sha256);
     printf("CUPIDGB_STATE_FIXTURE size=%zu sha256=%s\n", length, sha256);
     fflush(stdout);
     assert(length == 300572);
     assert(strcmp(sha256, "652af4f40504c86dd59eff09f0997f5b60b654816a0908d7802704f981b43be5") == 0);
-    /* The previous wire payload remains byte-for-byte compatible when wrapped
-     * in its original header. New controller fields cannot shift that prefix. */
+    /* The older wire payloads remain byte-for-byte compatible when wrapped
+     * in their original headers. Added fields cannot shift either prefix. */
     put_u32(bytes + 8, 3);
     put_u32(bytes + 12, 300568);
     update_integrity(bytes, 300568);
@@ -1560,6 +1635,7 @@ int main(int argc, char **argv) {
     test_pixel_pipeline_resume();
     test_first_halt_poll_resume();
     test_sgb_transfer_resume();
+    test_lcd_frame_phase_resume();
     test_v5_sgb_mapper_sections();
     test_sgb_sample_phase_and_legacy_filter();
     print_fixture(argc == 3 ? argv[2] : NULL);

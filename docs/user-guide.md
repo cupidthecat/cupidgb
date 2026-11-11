@@ -10,7 +10,7 @@ Choose File > Open ROM, press Ctrl+O, drag a cartridge onto the window, or pass 
 cupidgb /path/to/cartridge.gbc
 ```
 
-Use an extracted cartridge image. The application does not currently offer an archive browser or ZIP extraction workflow. The open dialog lists `.gb`, `.gbc`, and `.sgb` files. File > Open Recent keeps up to ten successful cartridge paths.
+Open a `.gb`, `.gbc`, or `.sgb` file directly. With 7-Zip installed, CupidGB also opens `.zip`, `.7z`, and `.rar` archives containing exactly one unencrypted cartridge. Compressed RAR files require a 7-Zip installation with the RAR codec. CupidGB reads the cartridge into memory. Battery saves and state slots keep the archive extension in their names, such as `game.zip.sav` and `game.zip.s1`. File > Open Recent keeps up to ten successful cartridge paths.
 
 Automatic hardware selection uses the cartridge header. It selects color hardware for color-capable cartridges, SGB for SGB-enhanced monochrome cartridges, and may select color hardware for licensed monochrome cartridges to provide their compatibility palette. Select a specific model in Emulation > Settings when reproducing model-dependent behavior. A color-only cartridge cannot open under a selected monochrome model.
 
@@ -90,7 +90,7 @@ View > Window Size selects 1x through 8x in logical window units and stores the 
 
 View > Monochrome Palette offers Lime (Game Boy), Grayscale, Olive (Pocket), Teal (Light), and Custom. Lime is the default. A custom palette uses four `#RRGGBB` entries in Settings, ordered from the lightest shade 0 to the darkest shade 3. Invalid entries are rejected. These choices affect monochrome output; color-hardware compatibility palettes and SGB colors remain owned by the emulated hardware.
 
-View > Simple Frame Blending, also available in Settings, mixes the current and previous completed LCD images in linear light using gamma 2.2. It is disabled by default. Presentation history clears after cartridge/reset/state changes, rewind, and relevant settings changes. This is simple host blending; accurate scanline response remains pending.
+View > Frame Blending and Settings offer Disabled, Simple, and Accurate. Simple gives the two most recent completed LCD images equal weight. Accurate alternates the weighting by LCD row and guest frame phase. Both mix in linear light using gamma 2.2. New settings default to Accurate, which uses Simple on SGB and SGB2. Existing on/off preferences keep their previous behavior. Cartridge changes, reset, state loads, rewind, and palette changes clear the frame history.
 
 Settings > SGB display controls whether to show the Super Game Boy border. Hiding it crops the image to the game viewport and does not disable SGB commands or palette behavior. Host palettes and blending do not establish hardware color accuracy. Color correction/temperature and custom palette-file import remain pending. See [the parity checklist](parity.md).
 
@@ -101,6 +101,12 @@ Audio > Mute and the Settings volume slider control host playback. The frontend 
 Settings > Audio output selects System Default or an enumerated device. A saved device that is unavailable appears as Unavailable device (using System Default); playback falls back while retaining the requested device ID. Device-list changes trigger stream renegotiation. This changes host conversion/output, not the core's sample rate or an active recording. Real hardware unplug/replug behavior still needs broader validation. Advanced filtering controls remain pending.
 
 Audio > Start Audio Recording writes stereo 16-bit PCM into a WAVE file. Choose the action again to stop. Recording captures forward core output before host volume, mute, and resampling. Pause and rewind add no samples. Reset, cartridge replacement, closing, or a core sample-rate change ends the recording. Loading a state at the same rate continues the recording with the new forward timeline.
+
+## Game Boy Printer
+
+With a cartridge open, choose Emulation > Connect > Game Boy Printer, then use the game's print command. The printer feed opens when the game sends an image. Save PNG exports the feed at its original 160-pixel width and closes the feed window. Print opens the system print dialog. Choose Emulation > Connect > None to disconnect. Closing the feed starts a fresh roll when the next image arrives.
+
+Reset and successful state loads reset the printer's protocol. Paper already in the feed stays visible. Changing cartridges or closing the session disconnects the printer.
 
 The interface reports unavailable audio devices. A successful file recording proves sample capture, not audible host playback quality. Backend idle events and hardware sound differences remain under investigation.
 

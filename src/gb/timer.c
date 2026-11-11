@@ -3,6 +3,7 @@
 #include "cupid/gb/apu.h"
 #include "cupid/gb/camera.h"
 #include "cupid/gb/cpu.h"
+#include "cupid/gb/huc3.h"
 #include "cupid/gb/ppu.h"
 
 enum {
@@ -35,29 +36,75 @@ static void timer_pulse(CupidGb *gb) {
     }
 }
 
+static bool serial_shift(CupidGb *gb) {
+    gb->io_registers[SERIAL_DATA] <<= 1;
+    if (--gb->serial_bits_remaining == 0u) {
+        gb->io_registers[SERIAL_CONTROL] &= 0x7fu;
+        cupid_gb_request_interrupt(gb, CUPID_GB_INTERRUPT_SERIAL);
+        return true;
+    }
+    return false;
+}
+
+static void serial_launch(CupidGb *gb) {
+    if (gb->serial_link.launch) {
+        const bool outgoing = (gb->io_registers[SERIAL_DATA] & 0x80u) != 0u;
+        gb->serial_link.launch(gb, outgoing, gb->serial_link.user_data);
+    }
+}
+
 void cupid_gb_serial_master_edge(CupidGb *gb) {
     if (!gb) {
         return;
     }
 
-    const bool falling = gb->serial_master_clock;
-    gb->serial_master_clock = !falling;
-    if (!falling || gb->serial_bits_remaining == 0u ||
+    gb->serial_master_clock = !gb->serial_master_clock;
+    if (gb->serial_master_clock || gb->serial_bits_remaining == 0u ||
         (gb->io_registers[SERIAL_CONTROL] & 0x81u) != 0x81u) {
         return;
     }
 
-    /* An unplugged serial input is high. SB remains readable during transfer. */
-    gb->io_registers[SERIAL_DATA] = (uint8_t)(gb->io_registers[SERIAL_DATA] * 2u + 1u);
-    --gb->serial_bits_remaining;
-    if (gb->serial_bits_remaining != 0u) {
-        return;
+    const bool complete = serial_shift(gb);
+    /* A disconnected input is pulled high. Sampling may clock the peer. */
+    const bool incoming =
+        !gb->serial_link.sample || gb->serial_link.sample(gb, gb->serial_link.user_data);
+    gb->io_registers[SERIAL_DATA] |= incoming;
+    if (!complete) {
+        serial_launch(gb);
+    } else if (gb->serial_output_callback) {
+        gb->serial_output_callback(gb, gb->serial_tx_latch, gb->serial_output_user_data);
+    }
+}
+
+void cupid_gb_serial_apply_control_write(CupidGb *gb, uint8_t value) {
+    /* SC restarts the byte counter before driving the old clock low. A bit
+     * sampled on that edge counts toward the next armed transfer. */
+    gb->serial_bits_remaining = 8u;
+    if (gb->serial_master_clock) {
+        cupid_gb_serial_master_edge(gb);
     }
 
-    gb->io_registers[SERIAL_CONTROL] &= 0x7fu;
-    cupid_gb_request_interrupt(gb, CUPID_GB_INTERRUPT_SERIAL);
-    if (gb->serial_output_callback) {
-        gb->serial_output_callback(gb, gb->serial_tx_latch, gb->serial_output_user_data);
+    const uint8_t writable = gb->cgb_mode ? 0x83u : 0x81u;
+    gb->io_registers[SERIAL_CONTROL] = (uint8_t)((value & writable) | (uint8_t)~writable);
+    if (!(value & 0x80u)) {
+        gb->serial_bits_remaining = 0u;
+        return;
+    }
+    gb->serial_tx_latch = gb->io_registers[SERIAL_DATA];
+    if (value & 1u) {
+        serial_launch(gb);
+    }
+}
+
+bool cupid_gb_serial_external_bit(const CupidGb *gb) {
+    return gb && (gb->io_registers[SERIAL_CONTROL] & 0x80u) &&
+           ((gb->io_registers[SERIAL_CONTROL] & 1u) || (gb->io_registers[SERIAL_DATA] & 0x80u));
+}
+
+void cupid_gb_serial_external_clock(CupidGb *gb, bool incoming) {
+    if (gb && gb->serial_bits_remaining && (gb->io_registers[SERIAL_CONTROL] & 0x81u) == 0x80u) {
+        serial_shift(gb);
+        gb->io_registers[SERIAL_DATA] |= incoming;
     }
 }
 
@@ -141,6 +188,12 @@ static void clock_cpu_domain(CupidGb *gb) {
     divider_change(gb, (uint16_t)(divider_phase(gb) + 1u));
 }
 
+static void advance_base_time(CupidGb *gb, unsigned dots) {
+    gb->elapsed_cycles += dots;
+    if (gb->header.mbc_type == CUPID_GB_HUC3)
+        cupid_gb_huc3_tick_infrared(gb, dots);
+}
+
 static void switch_clock_segment(CupidGb *gb, unsigned cycles, unsigned *half_dot) {
     const unsigned frozen =
         cycles < gb->speed_switch_freeze_cycles ? cycles : gb->speed_switch_freeze_cycles;
@@ -150,9 +203,10 @@ static void switch_clock_segment(CupidGb *gb, unsigned cycles, unsigned *half_do
         gb->speed_switch_alignment = (uint8_t)((gb->speed_switch_alignment + ticks) & 7u);
     const unsigned dots = (*half_dot + ticks) / 2u;
     *half_dot = (*half_dot + ticks) & 1u;
-    gb->elapsed_cycles += dots;
-    if (dots)
+    if (dots) {
+        advance_base_time(gb, dots);
         cupid_gb_tick_ppu_dots(gb, (uint16_t)dots);
+    }
 }
 
 static void tick_switch_cycle(CupidGb *gb) {
@@ -222,7 +276,7 @@ void cupid_gb_tick(CupidGb *gb, uint16_t cycles) {
                 gb->speed_switch_alignment ^= 4u;
         }
         const uint16_t dots = gb->double_speed ? 2u : 4u;
-        gb->elapsed_cycles += dots;
+        advance_base_time(gb, dots);
         cupid_gb_tick_ppu_dots(gb, dots);
         cupid_gb_tick_apu(gb, dots);
     }
@@ -244,7 +298,7 @@ uint8_t cupid_gb_tick_halt(CupidGb *gb) {
     clock_cpu_domain(gb);
     cupid_gb_tick_dma(gb);
     const uint8_t middle = cupid_gb_tick_ppu_halt(gb);
-    gb->elapsed_cycles += 4u;
+    advance_base_time(gb, 4u);
     cupid_gb_tick_apu(gb, 4u);
     /* Monochrome hardware polls after the first two LCD dots. Timer and serial
      * divider transitions occupy the third T-cycle, beyond that polling point. */
@@ -252,7 +306,7 @@ uint8_t cupid_gb_tick_halt(CupidGb *gb) {
 }
 
 static void clock_lcd_dot(CupidGb *gb) {
-    ++gb->elapsed_cycles;
+    advance_base_time(gb, 1u);
     cupid_gb_tick_ppu_dots(gb, 1u);
     cupid_gb_tick_apu(gb, 1u);
 }
@@ -364,7 +418,7 @@ static unsigned bus_clock_span(CupidGb *gb, unsigned phase, unsigned cycles) {
                 gb->speed_switch_alignment =
                     (uint8_t)((gb->speed_switch_alignment + (gb->double_speed ? 1u : 2u)) & 7u);
             if (dot) {
-                ++gb->elapsed_cycles;
+                advance_base_time(gb, 1u);
                 cupid_gb_tick_ppu_dots(gb, 1u);
             } else {
                 cupid_gb_sync_stat_half(gb);

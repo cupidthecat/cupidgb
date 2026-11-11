@@ -177,6 +177,7 @@ void cupid_gb_reset_ppu(CupidGb *gb) {
     gb->ppu_counter = 0u;
     gb->stat_irq_delay = 0u;
     gb->frame_ready = false;
+    gb->lcd_first_frame = gb->model == CUPID_GB_MODEL_CGB;
     gb->ppu_lcd_warmup_lines = 2u;
     gb->ppu_lcd_startup = true;
     gb->ppu_line_boundary_hold = false;
@@ -272,7 +273,7 @@ void cupid_gb_tick_dma(CupidGb *gb) {
 
     if (gb->dma_index < sizeof(gb->object_attribute_memory)) {
         gb->object_attribute_memory[gb->dma_index] =
-            cupid_gb_read_u8(gb, (uint16_t)(gb->dma_source_base + gb->dma_index));
+            cupid_gb_read_bus_u8(gb, (uint16_t)(gb->dma_source_base + gb->dma_index));
         gb->dma_index = (uint8_t)(gb->dma_index + 1u);
     }
 
@@ -375,6 +376,9 @@ static void tick_ppu(CupidGb *gb, uint32_t dots, uint8_t *midpoint) {
                 /* LY changes before VBlank's interrupt request. Keeping this phase
                  * explicit avoids treating a following DI as an instruction exception. */
                 gb->frame_ready = true;
+                if (!sgb && !gb->lcd_first_frame)
+                    gb->lcd_frame_odd = !gb->lcd_frame_odd;
+                gb->lcd_first_frame = false;
                 if (sgb) {
                     cupid_gb_sgb_vblank(gb, dots - 1);
                 }

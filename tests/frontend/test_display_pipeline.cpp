@@ -37,14 +37,30 @@ int main() {
     QImage white(160, 144, QImage::Format_RGB32);
     black.fill(Qt::black);
     white.fill(Qt::white);
-    const auto blended = blendDisplayFrames(white, black);
+    const auto simple = FrameBlending::Simple;
+    const auto accurate = FrameBlending::Accurate;
+    const auto blended = blendDisplayFrames(white, black, simple, false);
     assert(blended.pixel(0, 0) == qRgb(186, 186, 186));
-    assert(blended == blendDisplayFrames(black, white));
-    assert(blendDisplayFrames(black, black) == black);
-    assert(blendDisplayFrames(white, white) == white);
-    assert(blendDisplayFrames(white, {}) == white);
-    assert(blendDisplayFrames(white, QImage(1, 1, QImage::Format_RGB32)) == white);
-    assert(blendDisplayFrames({}, black).isNull());
+    assert(blended == blendDisplayFrames(black, white, simple, true));
+    assert(blendDisplayFrames(black, black, simple, false) == black);
+    assert(blendDisplayFrames(white, white, accurate, true) == white);
+    assert(blendDisplayFrames(white, {}, accurate, false) == white);
+    assert(blendDisplayFrames(white, QImage(1, 1, QImage::Format_RGB32), accurate, false) == white);
+    assert(blendDisplayFrames({}, black, simple, false).isNull());
+    assert(blendDisplayFrames(white, black, FrameBlending::Disabled, true) == white);
+    const auto even = blendDisplayFrames(white, black, accurate, false);
+    const auto odd = blendDisplayFrames(white, black, accurate, true);
+    for (int y = 0; y < white.height(); ++y) {
+        assert(even.pixel(0, y) == (y & 1 ? qRgb(155, 155, 155) : qRgb(212, 212, 212)));
+        assert(odd.pixel(159, y) == even.pixel(0, y ^ 1));
+    }
+    assert(odd == blendDisplayFrames(black, white, accurate, false));
+    QImage oneChangedRow = white.copy();
+    for (int x = 0; x < oneChangedRow.width(); ++x)
+        oneChangedRow.setPixel(x, 0, qRgb(0, 0, 0));
+    const auto partial = blendDisplayFrames(white, oneChangedRow, accurate, false);
+    assert(partial.pixel(159, 0) == qRgb(212, 212, 212));
+    assert(partial.pixel(159, 1) == qRgb(255, 255, 255));
     // Cover all channel values and the table's rounding independently.
     QImage ramp(256, 1, QImage::Format_RGB32);
     QImage inverse(256, 1, QImage::Format_RGB32);
@@ -52,10 +68,14 @@ int main() {
         ramp.setPixel(x, 0, qRgb(x, x, x));
         inverse.setPixel(x, 0, qRgb(255 - x, 255 - x, 255 - x));
     }
-    const auto blendedRamp = blendDisplayFrames(ramp, inverse);
+    const auto blendedRamp = blendDisplayFrames(ramp, inverse, simple, false);
+    const auto weightedRamp = blendDisplayFrames(ramp, inverse, accurate, true);
     for (int x = 0; x < 256; ++x) {
-        const double light = (std::pow(x / 255.0, 2.2) + std::pow((255 - x) / 255.0, 2.2)) / 2.0;
-        const auto value = int(std::lround(std::pow(light, 1.0 / 2.2) * 255.0));
+        const double a = std::pow(x / 255.0, 2.2);
+        const double b = std::pow((255 - x) / 255.0, 2.2);
+        const auto value = int(std::lround(std::pow((a + b) / 2.0, 1.0 / 2.2) * 255.0));
         assert(blendedRamp.pixel(x, 0) == qRgb(value, value, value));
+        const auto weighted = int(std::lround(std::pow((a + 2 * b) / 3.0, 1.0 / 2.2) * 255.0));
+        assert(weightedRamp.pixel(x, 0) == qRgb(weighted, weighted, weighted));
     }
 }
