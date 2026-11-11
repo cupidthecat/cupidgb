@@ -496,7 +496,7 @@ Phantom pulse-trigger cases, high-selector noise corruption, wider non-CGB audio
 
 The comparison uses revision `ea667ad79aa28409f034b1fd6da7304e1844750d`. Paired runs use the same cartridge bytes, model, firmware, and input. Private receipts keep the build identities, hashes, full results, and captures.
 
-Windows MSVC Release and Linux GCC Release with Qt 6.8.3 each passed 31 of 31 CTest checks. The combined shared-boot ROM suite returned 177 explicit passes and four bounded results out of 181 on both builds. The prior CupidGB build returned the same verdicts.
+Windows MSVC Release, Linux GCC Release with Qt 6.8.3, and Linux ASan/UBSan with portable hashing each passed 31 of 31 CTest checks. The combined shared-boot ROM suite returned 177 explicit passes and four bounded results out of 181 on both builds. The prior CupidGB build returned the same verdicts.
 
 - With local firmware, CupidGB improved from four to seven explicit boot test passes, matching the comparison. Three tests pass with shared generated firmware and four reach the execution limit in both builds. The firmware profiles are separate results.
 - Five STAT suites match 100,008 generated cases and 200,016 controls on the observed endpoints and write phases. A separate speed-switch probe matches 60 control/clock observations and 60 sample-phase observations. These tests exercise the covered write routes and LCD boundaries.
@@ -507,6 +507,8 @@ Windows MSVC Release and Linux GCC Release with Qt 6.8.3 each passed 31 of 31 CT
 ### Mapper coverage
 
 Generated cartridges exercise mapper modes that the local commercial library lacks. The observations below cover specific reads, writes, capture steps, and persistence paths. The [hardware guide](hardware.md) records the remaining device behavior.
+
+The local scan ran all 880 available cartridge inputs with a limit of 420 guest-clock intervals per input. Of those, 876 reached the limit and four CGB inputs hit illegal opcodes. The Camera input now reaches the limit. A private trace for one failing input matched all 357,821 post-boot instruction addresses and opcodes, including the illegal instruction, when both builds used deterministic power-on RAM. The scan covers startup and early execution. Longer gameplay, audio, and persistence use separate checks.
 
 | Mapper | Observations and remaining gaps |
 | --- | --- |
@@ -532,13 +534,15 @@ An isolated APU shortcut preserved PCM, images, guest cycles, and instruction co
 
 ### Desktop playback
 
-Native Windows Qt runs used real audio output, normal rewind capture, and the same per-title boot and input as the WSLg runs. Both 60-second Windows captures ended in active gameplay. The table uses the last 55 seconds for guest-clock progress and widget paint timing. Peak working set covers the process lifetime.
+The final Windows and WSLg Xcb runs used Qt 6.8.3, audio output, normal rewind capture, and matching per-title firmware and inputs. All four 60-second captures ended in active gameplay. The table uses the last 55 seconds for guest-clock progress and widget paint timing. Memory measures the Windows working set or Linux resident set over the process lifetime.
 
-| Windows input | Nominal guest progress | Widget paint p95 / maximum | Peak working set | Audio errors / idle events |
+| Environment and input | Nominal guest progress | Widget paint p95 / maximum | Peak memory | Audio errors / idle events |
 | --- | ---: | ---: | ---: | ---: |
-| Tetris | 100.004% | 17.69 / 25.44 ms | 66.25 MiB | 0 / 0 |
-| Mario Deluxe | 99.983% | 17.77 / 21.57 ms | 87.86 MiB | 0 / 0 |
+| Windows, Tetris | 100.006% | 19.29 / 22.41 ms | 66.13 MiB | 0 / 0 |
+| Windows, Mario Deluxe | 99.981% | 17.69 / 22.81 ms | 87.21 MiB | 0 / 0 |
+| WSLg Xcb, Tetris | 99.976% | 17.41 / 24.65 ms | 94.96 MiB | 0 / 0 |
+| WSLg Xcb, Mario Deluxe | 100.013% | 17.64 / 20.01 ms | 113.78 MiB | 0 / 0 |
 
-A 36-second SGB2 Donkey Kong Windows sample reached 100.029% of nominal guest time after warmup, with zero audio errors or idle events. The sink processed 35.877 seconds of audio across the full run. Its widget paint count was zero, so this sample covers guest execution and audio delivery only. Widget paint timing in the other runs describes application paint events rather than physical display refresh.
+The WSLg processes used 10.39 and 11.74 seconds of user-plus-system CPU time. A separate 36-second SGB2 Donkey Kong Windows sample reached 100.029% of nominal guest time after warmup, with zero audio errors or idle events. The sink processed 35.877 seconds of audio across the full run. Its widget paint count was zero, so this sample covers guest execution and audio delivery. The other paint timings describe widget events. Physical display refresh was unmeasured.
 
-WSLg Xcb displayed the Qt window and passed the real-audio workflow smoke, including state load, rewind, and audio resumption. Longer playback through its RDP audio sink stalled behind the full audio queue. The 60-second checkpoint runs reached 77.90% for Tetris and 0.18% for Mario Deluxe after warmup. The previous build and a Qt 6.8.3 build also stalled in a 20-second Mario Deluxe run and advanced the same 30,830,526 guest cycles. A separate 36-second SGB2 sample reached 45.24% overall. These runs leave sustained Linux playback unqualified in this environment.
+Native workflow smokes passed on Windows and WSLg Xcb, including state load, rewind, and audio resumption. Earlier WSLg playback stalled with its RDP audio sink while the audio queue was full. The earlier 60-second runs reached 77.90% for Tetris and 0.18% for Mario Deluxe after warmup. The previous build and an intermediate Qt 6.8.3 build also stalled in 20-second Mario Deluxe runs and advanced the same 30,830,526 guest cycles. An earlier 36-second SGB2 sample reached 45.24% overall. The final reruns above completed at nominal speed. The intermittent RDP audio stalls remain open.
