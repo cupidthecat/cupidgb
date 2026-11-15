@@ -46,12 +46,18 @@ CupidGbStateResult cupid_gb_load_state_with_context(CupidGb *gb, const uint8_t *
  * ROMs, boot ROMs, and save paths are session resources and are never included in state data.
  * Restoring an active boot overlay requires the same boot ROM to be available in the target.
  * The target's current boot-overlay enabled flag need not match the saved flag.
+ * Version 12 appends shared receiver history after the unchanged version 11 payload on non-HuC3
+ * cartridges, followed by a built-in accessory descriptor. HuC3 keeps its existing receiver fields.
+ * A factory-tagged printer includes its parser, bits, image buffer, clock debt and job timer.
+ * Loading preserves the live attachment and callbacks, emits no image/completion callback,
+ * and validates the saved device even when that kind is not currently attached.
+ * An absent device or version 2-11 file initializes an attached printer at the loaded guest time.
  * Version 11 retains monochrome pulse clock gates, held duty output and pulse DAC codes alongside
  * LCD/cartridge/OAM timing, retained PPU bus history, all three
  * STOP access gates, the palette-port release edge, object fetch stage, pending
  * JOYP row release, and presentation events. Applicable SGB, MMM01, MBC7, Camera,
  * TPP1, and HuC3 sections are included.
- * Versions 2 through 10 remain readable with defaults for absent history. Older
+ * Versions 2 through 11 remain readable with defaults for absent history. Older
  * monochrome pulse latches are derived from saved channel state; unknown duty
  * sampling, trigger suppression and expired-clock history cannot be recovered.
  * Absent disconnected-DAC codes default to zero on every hardware model.
@@ -61,6 +67,9 @@ CupidGbStateResult cupid_gb_load_state_with_context(CupidGb *gb, const uint8_t *
  * continuation comparisons require the same qualified engine build and inputs.
  */
 size_t cupid_gb_state_size(const CupidGb *gb);
+/* Output and written-result storage must be separate from each other, the core,
+ * ROM, recognized printer allocation and any supplied trusted context. Capture
+ * does not advance the printer or consume its pending elapsed-clock interval. */
 CupidGbStateResult cupid_gb_save_state(const CupidGb *gb, uint8_t *data, size_t capacity,
                                        size_t *written);
 /* Failure leaves the entire target instance unchanged, including pending audio and ownership.

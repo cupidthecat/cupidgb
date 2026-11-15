@@ -140,8 +140,10 @@ static void test_link_pair(bool cgb, bool fast, bool double_speed) {
     prepare(a, cgb, double_speed);
     prepare(b, cgb, double_speed);
     SerialPeer cable_a = {.gb = b}, cable_b = {.gb = a};
-    cupid_gb_set_serial_link(a, (CupidGbSerialLink){launch_bit, sample_peer, &cable_a});
-    cupid_gb_set_serial_link(b, (CupidGbSerialLink){launch_bit, sample_peer, &cable_b});
+    cupid_gb_set_serial_link(
+        a, (CupidGbSerialLink){.launch = launch_bit, .sample = sample_peer, .user_data = &cable_a});
+    cupid_gb_set_serial_link(
+        b, (CupidGbSerialLink){.launch = launch_bit, .sample = sample_peer, .user_data = &cable_b});
 
     const uint16_t period = cgb && fast ? 4 : 128;
     for (unsigned direction = 0; direction < 2; ++direction) {
@@ -185,7 +187,9 @@ static void test_link_control_write(void) {
     prepare(master, true, false);
     prepare(slave, true, false);
     SerialPeer cable = {.gb = slave};
-    cupid_gb_set_serial_link(master, (CupidGbSerialLink){launch_bit, sample_peer, &cable});
+    cupid_gb_set_serial_link(
+        master,
+        (CupidGbSerialLink){.launch = launch_bit, .sample = sample_peer, .user_data = &cable});
     cupid_gb_write_u8(slave, 0xff01, 0xa5);
     cupid_gb_write_u8(slave, 0xff02, 0x80);
     cupid_gb_write_u8(master, 0xff01, 0x80);
@@ -237,7 +241,9 @@ static void test_link_roms(void) {
     CupidGb *master = calloc(1, sizeof(*master)), *slave = calloc(1, sizeof(*slave));
     assert(master && slave);
     SerialPeer cable = {.gb = slave};
-    cupid_gb_set_serial_link(master, (CupidGbSerialLink){launch_bit, sample_peer, &cable});
+    cupid_gb_set_serial_link(
+        master,
+        (CupidGbSerialLink){.launch = launch_bit, .sample = sample_peer, .user_data = &cable});
     load_link_rom(master, CUPID_GB_MODEL_CGB, 0x23, 0x83);
     load_link_rom(slave, CUPID_GB_MODEL_DMG_ABC, 0xd9, 0x80);
     for (unsigned i = 0; i < 8; ++i) {

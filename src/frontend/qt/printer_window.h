@@ -2,6 +2,7 @@
 
 #include <QDialog>
 #include <QImage>
+#include <QString>
 #include <cstdint>
 #include <functional>
 
@@ -15,8 +16,10 @@ class PrinterWindow final : public QDialog {
     using ModalAction = std::function<void(const std::function<void()> &)>;
 
     PrinterWindow(QWidget *parent, ModalAction runWhilePaused);
-    void append(const uint8_t *pixels, int height, int top, int bottom);
+    // Commit host paper without presenting widgets or dispatching guest work.
+    bool append(const uint8_t *pixels, int height, int top, int bottom);
     void setPrinting(bool printing);
+    void refresh(bool reveal);
     bool saveFeed(const QString &path) const;
     bool printFeed(QPagedPaintDevice &printer, int resolution) const;
 
@@ -31,5 +34,7 @@ class PrinterWindow final : public QDialog {
     QScrollArea *scroll_;
     QPushButton *save_;
     QPushButton *print_;
-    bool feedError_ = false;
+    QString feedError_;
+    bool feedDirty_ = false;
+    bool printing_ = false;
 };

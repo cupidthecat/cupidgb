@@ -77,6 +77,8 @@ class ControllerBackend final : public QObject {
     void stopRumble(SDL_JoystickID instance);
 
     // All callbacks run synchronously on this object's thread. Queue destructive/reentrant work.
+    // The gate callback runs before event delivery and may stop or request another poll.
+    std::function<void()> beforePoll;
     std::function<void(const DeviceInfo &)> deviceAdded, deviceChanged;
     std::function<void(SDL_JoystickID)> deviceRemoved, inputReleased;
     std::function<void(const DeviceState &, bool resynchronized)> stateChanged;

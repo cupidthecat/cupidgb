@@ -4,9 +4,11 @@
 #include "cupid/gb/apu.h"
 #include "cupid/gb/camera.h"
 #include "cupid/gb/huc3.h"
+#include "cupid/gb/infrared.h"
 #include "cupid/gb/mbc7.h"
 #include "cupid/gb/ppu.h"
 #include "cupid/gb/tpp1.h"
+#include "printer_internal.h"
 
 #include <limits.h>
 #include <stdlib.h>
@@ -14,6 +16,9 @@
 
 enum {
     STATE_HEADER_SIZE = 128,
+    STATE_VERSION_V12 = 12,
+    STATE_INFRARED_SIZE = 6,
+    STATE_ACCESSORY_DESCRIPTOR_SIZE = 8,
     /* V11 activates monochrome pulse timing and appends the held DAC codes. */
     STATE_VERSION_V11 = 11,
     STATE_VERSION_V10 = 10,
@@ -669,6 +674,22 @@ static bool valid_huc3_extension(const CupidGb *gb) {
            device->ir_decay <= CUPID_GB_HUC3_IR_DECAY_LIMIT;
 }
 
+static size_t infrared_wire_size(unsigned sections) {
+    return sections & STATE_SECTION_HUC3 ? 0 : STATE_INFRARED_SIZE;
+}
+
+static void state_infrared(StateIo *io, CupidGb *gb) {
+    word(io, &gb->huc3.ir_warmup);
+    word(io, &gb->huc3.ir_decay);
+    boolean(io, &gb->huc3.ir_output);
+    boolean(io, &gb->huc3.ir_detected);
+}
+
+static bool valid_infrared(const CupidGb *gb) {
+    return gb->huc3.ir_warmup <= CUPID_GB_INFRARED_WARMUP_LIMIT &&
+           gb->huc3.ir_decay <= CUPID_GB_INFRARED_DECAY_LIMIT;
+}
+
 static void state_extension_v5(StateIo *io, CupidGb *gb, unsigned sections) {
     if (sections & STATE_SECTION_SGB) {
         state_extension_sgb(io, gb);
@@ -905,14 +926,17 @@ static bool valid_hardware_extension(const CupidGb *gb) {
 
 static bool valid_hardware(const CupidGb *gb, unsigned sections) {
     return valid_hardware_prefix(gb, STATE_VERSION_V4) && valid_hardware_extension(gb) &&
-           valid_v5_sections(gb, sections);
+           valid_v5_sections(gb, sections) && valid_infrared(gb);
 }
 
 size_t cupid_gb_state_size(const CupidGb *gb) {
     if (!ready(gb)) {
         return 0;
     }
-    return extended_wire_size(state_sections(gb)) + STATE_V11_TAIL_SIZE;
+    const unsigned sections = state_sections(gb);
+    return extended_wire_size(sections) + STATE_V11_TAIL_SIZE + infrared_wire_size(sections) +
+           STATE_ACCESSORY_DESCRIPTOR_SIZE +
+           (cupid_gb_printer_attached(gb) ? PRINTER_STATE_WIRE_SIZE : 0);
 }
 
 static void put_u32(uint8_t *data, uint32_t value) {
@@ -931,12 +955,33 @@ static void integrity(const uint8_t *data, size_t length, uint8_t digest[32]) {
 }
 
 static bool overlaps(const void *a, size_t a_size, const void *b, size_t b_size) {
+    if (!a_size || !b_size)
+        return false;
     uintptr_t first = (uintptr_t)a, second = (uintptr_t)b;
     return first <= second ? second - first < a_size : first - second < b_size;
 }
 
+static bool overlaps_live_storage(const CupidGb *gb, const void *data, size_t size) {
+    if (!gb || !data)
+        return false;
+    const CupidGbPrinter *printer = cupid_gb_printer_attached(gb);
+    return overlaps(data, size, gb, sizeof(*gb)) ||
+           (gb->rom && overlaps(data, size, gb->rom, gb->rom_size)) ||
+           (printer && overlaps(data, size, printer, sizeof(*printer)));
+}
+
+static bool valid_written_pointer(const CupidGb *gb, const uint8_t *data, size_t capacity,
+                                  const size_t *written, const CupidGbStateContext *context) {
+    return !written ||
+           (!overlaps_live_storage(gb, written, sizeof(*written)) &&
+            (!data || !overlaps(written, sizeof(*written), data, capacity)) &&
+            (!context || !overlaps(written, sizeof(*written), context, sizeof(*context))));
+}
+
 static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t capacity,
                                      size_t *written, const uint8_t *rom_digest) {
+    if (!valid_written_pointer(gb, data, capacity, written, NULL))
+        return CUPID_GB_STATE_INVALID;
     if (written) {
         *written = 0;
     }
@@ -944,17 +989,21 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
         return CUPID_GB_STATE_NO_ROM;
     }
     const unsigned sections = state_sections(gb);
-    const size_t size = extended_wire_size(sections) + STATE_V11_TAIL_SIZE;
+    const size_t hardware_size =
+        extended_wire_size(sections) + STATE_V11_TAIL_SIZE + infrared_wire_size(sections);
+    const CupidGbPrinter *printer = cupid_gb_printer_attached(gb);
+    const size_t size =
+        hardware_size + STATE_ACCESSORY_DESCRIPTOR_SIZE + (printer ? PRINTER_STATE_WIRE_SIZE : 0);
     if (!data || capacity < size) {
         return CUPID_GB_STATE_BUFFER_TOO_SMALL;
     }
-    if (overlaps(data, size, gb, sizeof(*gb)) || overlaps(data, size, gb->rom, gb->rom_size) ||
-        !valid_hardware(gb, sections)) {
+    if (overlaps_live_storage(gb, data, size) || !valid_hardware(gb, sections) ||
+        (printer && !cupid_gb_printer_state_valid(&printer->state, gb))) {
         return CUPID_GB_STATE_INVALID;
     }
     memset(data, 0, STATE_HEADER_SIZE);
     memcpy(data, state_magic, sizeof(state_magic));
-    put_u32(data + 8, STATE_VERSION_V11);
+    put_u32(data + 8, STATE_VERSION_V12);
     put_u32(data + 12, (uint32_t)size);
     put_u32(data + 16, (uint32_t)gb->model);
     put_u32(data + 20, (uint32_t)gb->rom_size);
@@ -968,7 +1017,7 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
     if (gb->boot_rom_enabled) {
         cupid_sha256(gb->boot_rom, gb->boot_rom_size, data + 64);
     }
-    StateIo io = {NULL, data, STATE_HEADER_SIZE, size, false};
+    StateIo io = {NULL, data, STATE_HEADER_SIZE, hardware_size, false};
     state_fields(&io, (CupidGb *)gb);
     state_extension_v3(&io, (CupidGb *)gb);
     state_extension_v4(&io, (CupidGb *)gb);
@@ -983,8 +1032,23 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
     state_video_bus(&io, (CupidGb *)gb);
     state_stop_ports(&io, (CupidGb *)gb);
     bytes(&io, ((CupidGb *)gb)->apu.pulse_dac_hold, 2);
-    if (io.invalid || io.offset != size) {
+    if (!(sections & STATE_SECTION_HUC3))
+        state_infrared(&io, (CupidGb *)gb);
+    if (io.invalid || io.offset != hardware_size) {
         return CUPID_GB_STATE_INVALID;
+    }
+    uint8_t *accessory = data + hardware_size;
+    memset(accessory, 0, STATE_ACCESSORY_DESCRIPTOR_SIZE);
+    if (printer) {
+        accessory[0] = CUPID_GB_SERIAL_DEVICE_PRINTER;
+        accessory[1] = PRINTER_STATE_CODEC_VERSION;
+        put_u32(accessory + 4, PRINTER_STATE_WIRE_SIZE);
+        /* Capture is pure: the device may owe elapsed cycles to a later ordinary
+         * update. Advancing it here could emit completion while saving. */
+        if (!cupid_gb_printer_state_encode(&printer->state,
+                                           accessory + STATE_ACCESSORY_DESCRIPTOR_SIZE,
+                                           PRINTER_STATE_WIRE_SIZE))
+            return CUPID_GB_STATE_INVALID;
     }
     integrity(data, size, data + 96);
     if (written) {
@@ -998,13 +1062,17 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
     if (!ready(gb)) {
         return CUPID_GB_STATE_NO_ROM;
     }
-    if (!data || length < STATE_HEADER_SIZE || memcmp(data, state_magic, sizeof(state_magic))) {
+    CupidGbPrinter *printer = cupid_gb_printer_attached(gb);
+    if (!data || (printer && overlaps(data, length, printer, sizeof(*printer))) ||
+        length < STATE_HEADER_SIZE || memcmp(data, state_magic, sizeof(state_magic))) {
         return CUPID_GB_STATE_INVALID;
     }
     const uint32_t version = get_u32(data + 8);
-    if (version < STATE_VERSION_V2 || version > STATE_VERSION_V11) {
+    if (version < STATE_VERSION_V2 || version > STATE_VERSION_V12) {
         return CUPID_GB_STATE_UNSUPPORTED_VERSION;
     }
+    const size_t infrared_size =
+        version == STATE_VERSION_V12 ? infrared_wire_size(state_sections(gb)) : 0;
     const size_t prefix_size = version == STATE_VERSION_V2   ? STATE_WIRE_SIZE_V2
                                : version == STATE_VERSION_V3 ? STATE_WIRE_SIZE_V3
                                                              : STATE_WIRE_SIZE_V4;
@@ -1015,11 +1083,18 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
                              : version == STATE_VERSION_V7  ? STATE_V7_TAIL_SIZE
                              : version == STATE_VERSION_V6  ? STATE_V6_TAIL_SIZE
                                                             : 0;
-    const size_t device_size = length - tail_size;
-    if (length != get_u32(data + 12) ||
-        (version >= STATE_VERSION_V5
-             ? device_size < prefix_size || device_size > extended_wire_size(STATE_SECTIONS_ALL)
-             : device_size != prefix_size)) {
+    size_t device_size = length - tail_size;
+    if (length != get_u32(data + 12))
+        return CUPID_GB_STATE_INVALID;
+    if (version == STATE_VERSION_V12) {
+        if (length < prefix_size + tail_size + infrared_size + STATE_ACCESSORY_DESCRIPTOR_SIZE ||
+            length > extended_wire_size(STATE_SECTIONS_ALL) + tail_size + STATE_INFRARED_SIZE +
+                         STATE_ACCESSORY_DESCRIPTOR_SIZE + PRINTER_STATE_WIRE_SIZE)
+            return CUPID_GB_STATE_INVALID;
+    } else if (version >= STATE_VERSION_V5
+                   ? device_size < prefix_size ||
+                         device_size > extended_wire_size(STATE_SECTIONS_ALL)
+                   : device_size != prefix_size) {
         return CUPID_GB_STATE_INVALID;
     }
     uint8_t digest[32];
@@ -1042,6 +1117,33 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
         return CUPID_GB_STATE_WRONG_ROM;
     }
     unsigned sections = version >= STATE_VERSION_V5 ? state_sections(gb) : 0;
+    size_t accessory_size = 0;
+    const uint8_t *printer_payload = NULL;
+    if (version == STATE_VERSION_V12) {
+        device_size = extended_wire_size(sections);
+        const size_t accessory_offset = device_size + tail_size + infrared_size;
+        if (accessory_offset > length ||
+            length - accessory_offset < STATE_ACCESSORY_DESCRIPTOR_SIZE)
+            return CUPID_GB_STATE_INVALID;
+        const uint8_t *accessory = data + accessory_offset;
+        const uint32_t payload_size = get_u32(accessory + 4);
+        if (accessory[2] || accessory[3])
+            return CUPID_GB_STATE_INVALID;
+        if (accessory[0] == CUPID_GB_SERIAL_DEVICE_NONE) {
+            if (accessory[1] || payload_size)
+                return CUPID_GB_STATE_INVALID;
+        } else if (accessory[0] == CUPID_GB_SERIAL_DEVICE_PRINTER) {
+            if (accessory[1] != PRINTER_STATE_CODEC_VERSION ||
+                payload_size != PRINTER_STATE_WIRE_SIZE)
+                return CUPID_GB_STATE_INVALID;
+            printer_payload = accessory + STATE_ACCESSORY_DESCRIPTOR_SIZE;
+        } else {
+            return CUPID_GB_STATE_INVALID;
+        }
+        accessory_size = STATE_ACCESSORY_DESCRIPTOR_SIZE + (size_t)payload_size;
+        if (length - accessory_offset != accessory_size)
+            return CUPID_GB_STATE_INVALID;
+    }
     /* Older SGB states already used this version for the border hardware. */
     if (version == STATE_VERSION_V5 && sections == (STATE_SECTION_SGB | STATE_SECTION_HUC3) &&
         device_size == extended_wire_size(STATE_SECTION_SGB)) {
@@ -1077,7 +1179,8 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
     /* Host resources, cartridge metadata, and immutable inputs come only from the live
      * instance. Decode into separate storage and never run bus writes while loading. */
     *candidate = *gb;
-    StateIo io = {data, NULL, STATE_HEADER_SIZE, length, false};
+    const size_t hardware_length = length - accessory_size;
+    StateIo io = {data, NULL, STATE_HEADER_SIZE, hardware_length, false};
     state_fields(&io, candidate);
     if (version >= STATE_VERSION_V3) {
         state_extension_v3(&io, candidate);
@@ -1148,8 +1251,21 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
         /* Older writers did not retain disconnected DAC history. */
         memset(candidate->apu.pulse_dac_hold, 0, sizeof(candidate->apu.pulse_dac_hold));
     }
-    if (io.invalid || io.offset != length || candidate->boot_rom_enabled != (flags != 0) ||
-        !valid_hardware_prefix(candidate, version) || !valid_v5_sections(candidate, sections)) {
+    if (!(sections & STATE_SECTION_HUC3)) {
+        if (version == STATE_VERSION_V12) {
+            state_infrared(&io, candidate);
+        } else {
+            /* Older non-HuC3 files contain no receiver history. Preserve the
+             * live transport input, but do not borrow charge from its old timeline. */
+            candidate->huc3.ir_warmup = 0;
+            candidate->huc3.ir_decay = 0;
+            candidate->huc3.ir_output = false;
+            candidate->huc3.ir_detected = false;
+        }
+    }
+    if (io.invalid || io.offset != hardware_length || candidate->boot_rom_enabled != (flags != 0) ||
+        !valid_hardware_prefix(candidate, version) || !valid_v5_sections(candidate, sections) ||
+        !valid_infrared(candidate)) {
         free(candidate);
         return CUPID_GB_STATE_INVALID;
     }
@@ -1220,7 +1336,35 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
         cupid_gb_apu_set_sample_rate(candidate, cupid_gb_apu_get_sample_rate(candidate));
         candidate->apu.sample_rate = configured_rate;
     }
+    CupidGbPrinterState *printer_candidate = NULL;
+    if (printer_payload || printer) {
+        printer_candidate = malloc(sizeof(*printer_candidate));
+        if (!printer_candidate) {
+            free(candidate);
+            return CUPID_GB_STATE_OUT_OF_MEMORY;
+        }
+        if (printer_payload) {
+            /* Validate saved device bytes even when the live host has a different
+             * attachment. The candidate's serial context still borrows live storage. */
+            if (!cupid_gb_printer_state_decode(printer_candidate, printer_payload,
+                                               PRINTER_STATE_WIRE_SIZE) ||
+                !cupid_gb_printer_state_valid(printer_candidate, candidate)) {
+                free(printer_candidate);
+                free(candidate);
+                return CUPID_GB_STATE_INVALID;
+            }
+        } else {
+            /* V2-V11 and a saved empty attachment cannot recover printer history.
+             * Begin an empty device at this timeline, preserving its live callbacks. */
+            cupid_gb_printer_state_clear(printer_candidate, candidate->elapsed_cycles);
+        }
+    }
+    /* All parsing and allocation has succeeded. Neither copy can fail or emit
+     * callbacks, and a saved device never changes the host's chosen attachment. */
     *gb = *candidate;
+    if (printer)
+        printer->state = *printer_candidate;
+    free(printer_candidate);
     free(candidate);
     return CUPID_GB_STATE_OK;
 }
@@ -1235,8 +1379,7 @@ CupidGbStateResult cupid_gb_load_state(CupidGb *gb, const uint8_t *data, size_t 
 }
 
 CupidGbStateResult cupid_gb_state_context_init(CupidGbStateContext *context, const CupidGb *gb) {
-    if (!context || (gb && overlaps(context, sizeof(*context), gb, sizeof(*gb))) ||
-        (ready(gb) && overlaps(context, sizeof(*context), gb->rom, gb->rom_size))) {
+    if (!context || overlaps_live_storage(gb, context, sizeof(*context))) {
         return CUPID_GB_STATE_INVALID;
     }
     memset(context, 0, sizeof(*context));
@@ -1268,6 +1411,8 @@ static CupidGbStateResult check_context(const CupidGb *gb, const CupidGbStateCon
 CupidGbStateResult cupid_gb_save_state_with_context(const CupidGb *gb, uint8_t *data,
                                                     size_t capacity, size_t *written,
                                                     const CupidGbStateContext *context) {
+    if (!valid_written_pointer(gb, data, capacity, written, context))
+        return CUPID_GB_STATE_INVALID;
     CupidGbStateResult result = check_context(gb, context);
     if (result != CUPID_GB_STATE_OK) {
         if (written) {

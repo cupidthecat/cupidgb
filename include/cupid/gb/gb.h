@@ -290,14 +290,23 @@ typedef void (*CupidGbSerialLaunchCallback)(const struct CupidGb *gb, bool outgo
                                             void *user_data);
 typedef bool (*CupidGbSerialSampleCallback)(const struct CupidGb *gb, void *user_data);
 
+typedef enum CupidGbSerialDevice {
+    CUPID_GB_SERIAL_DEVICE_NONE = 0,
+    CUPID_GB_SERIAL_DEVICE_PRINTER = 1,
+} CupidGbSerialDevice;
+
 typedef struct CupidGbSerialLink {
     CupidGbSerialLaunchCallback launch;
     CupidGbSerialSampleCallback sample;
     void *user_data;
+    /* Built-in factories supply this tag. Ordinary cable callbacks use NONE. */
+    CupidGbSerialDevice device;
 } CupidGbSerialLink;
 
 typedef void (*CupidGbRumbleCallback)(const struct CupidGb *gb, bool enabled, uint64_t base_cycles,
                                       void *user_data);
+typedef void (*CupidGbInfraredCallback)(const struct CupidGb *gb, bool enabled,
+                                        uint64_t base_cycles, void *user_data);
 
 /* Alignment and word sampling are independent of the data-byte countdown. */
 typedef enum CupidGbObjectFetchStage {
@@ -432,12 +441,14 @@ typedef struct CupidGb {
     uint8_t boot_rom[CUPID_GB_MAX_BOOT_ROM_SIZE];
     size_t boot_rom_size;  /* 0x0100 for DMG, 0x0900 for CGB */
     bool boot_rom_enabled; /* true while boot ROM is mapped */
-    /* Host registrations are excluded from hardware snapshots. */
+    /* Registrations stay live; recognized built-in device history is serialized separately. */
     CupidGbSerialOutputCallback serial_output_callback;
     void *serial_output_user_data;
     CupidGbSerialLink serial_link;
     CupidGbRumbleCallback rumble_callback;
     void *rumble_user_data;
+    CupidGbInfraredCallback infrared_callback;
+    void *infrared_user_data;
     uint16_t oam_vram_row;      /* Retained source-bus row; UINT16_MAX releases the latch. */
     uint16_t oam_search_word;   /* Last word sampled by the shared OAM port. */
     bool stop_ppu_vram_blocked; /* STOP holds the sampled PPU access gate until wake. */
@@ -477,7 +488,8 @@ void cupid_gb_set_serial_output_callback(CupidGb *gb, CupidGbSerialOutputCallbac
  * subsequent bit after sampling on the falling clock edge. Missing samples
  * read high. The host may clock a peer from sample, but must not reenter gb.
  * Registrations survive reset and state loading; cleanup detaches the link.
- * Transport state, including an already launched bit, belongs to the host. */
+ * Ordinary cable state belongs to the host. A factory-tagged built-in printer
+ * has separate native device history, while its callbacks and ownership stay live. */
 void cupid_gb_set_serial_link(CupidGb *gb, CupidGbSerialLink link);
 /* Read an external-clock peer's outgoing bit before delivering the incoming
  * bit. An idle peer drives low and a peer using its own clock reads high.

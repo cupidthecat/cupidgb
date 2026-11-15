@@ -41,10 +41,11 @@ add_library(cupidgb_core STATIC
     src/gb/gb.c src/gb/state.c src/gb/cpu.c src/gb/ppu.c src/gb/pixels.c src/gb/apu.c
     src/gb/timer.c src/gb/cartridge.c src/gb/camera.c src/gb/mbc7.c src/gb/input.c src/gb/debugger.c src/gb/sgb.c
     src/gbc/cgb.c src/gbc/cgb_palette.c src/gbc/cgb_dma.c src/gbc/cgb_render.c
-    src/gb/printer.c
+    src/gb/printer.c src/gb/printer_state.c
     src/gb/cheats.c
     src/gb/tpp1.c
     src/gb/huc3.c
+    src/gb/infrared.c
 )
 target_include_directories(cupidgb_core PUBLIC include)
 if(NOT MSVC)
@@ -141,6 +142,7 @@ if(CUPIDGB_BUILD_QT)
         src/frontend/qt/main_window_motion_tests.cpp
         src/frontend/qt/main_window_telemetry.cpp
         src/frontend/qt/main_window_printer.cpp
+        src/frontend/qt/main_window_printer_tests.cpp
         src/frontend/qt/printer_window.cpp
         src/frontend/qt/guest_clock_pacer.cpp
         src/frontend/qt/audio_converter.cpp
@@ -188,7 +190,7 @@ if(CUPIDGB_BUILD_QT)
 endif()
 if(CUPIDGB_ENABLE_TESTS)
     enable_testing()
-    foreach(test_name IN ITEMS smoke gb serial printer ppu stat apu cpu_timing dma video_bus bus state battery native_v1_recovery sgb input cartridge camera mbc7 tpp1 huc3 cheats debugger sha256)
+    foreach(test_name IN ITEMS smoke gb serial printer printer_state ppu stat apu cpu_timing dma video_bus bus state battery native_v1_recovery sgb input cartridge camera mbc7 tpp1 huc3 infrared cheats debugger sha256)
         add_executable(cupidgb_${test_name} tests/test_${test_name}.c)
         target_link_libraries(cupidgb_${test_name} PRIVATE cupidgb_core)
         # Tests use assert for setup and checks, including in Release builds.

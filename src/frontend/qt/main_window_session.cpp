@@ -1,9 +1,22 @@
 #include "main_window_internal.h"
 
+#include <QScopeGuard>
+
 void MainWindow::resetPacing() {
     ++pacingGeneration_;
     nextFrame_ = clock_.nsecsElapsed();
     clockPacer_.reset();
+    refreshTimerInterval();
+}
+
+void MainWindow::refreshTimerInterval() {
+    // A transient state operation may unwind without resetting pacing. Keep its active
+    // interval so native audio callbacks cannot strand a running session at idle cadence.
+    const bool idle =
+        !emulator_ || paused_ || menuDepth_ || (rewind_ && (rewindFailed_ || rewindExhausted_));
+    const int interval = idle ? 16 : 1;
+    if (timer_.interval() != interval)
+        timer_.setInterval(interval);
 }
 
 void MainWindow::setTurboCap(unsigned quarters) {
@@ -19,6 +32,7 @@ void MainWindow::setTurboCap(unsigned quarters) {
 }
 
 void MainWindow::tick() {
+    const auto refreshInterval = qScopeGuard([this] { refreshTimerInterval(); });
     refreshControllerGate();
     if (!emulator_ || paused_ || stateOperation_ || menuDepth_)
         return;
@@ -242,7 +256,6 @@ bool MainWindow::restoreState(const QByteArray &bytes, bool reportFailure, bool 
         return false;
     }
     ++timelineId_;
-    resetPrinter();
     resetControllerRumble();
     controllerPlayerCount_ =
         cupid_gb_sgb_active(&emulator_->gb) ? emulator_->gb.sgb.player_count : 1;

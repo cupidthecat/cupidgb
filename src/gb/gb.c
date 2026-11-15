@@ -15,6 +15,8 @@
 
 #include "cupid/gb/gb.h"
 #include "cupid/gb/battery.h"
+#include "cupid/gb/infrared.h"
+#include "printer_internal.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -217,6 +219,8 @@ void cupid_gb_init(CupidGb *gb) {
     CupidGbSerialLink serial_link;
     CupidGbRumbleCallback rumble_callback;
     void *rumble_user_data;
+    CupidGbInfraredCallback infrared_callback;
+    void *infrared_user_data;
 
     if (gb == 0) {
         return;
@@ -229,6 +233,8 @@ void cupid_gb_init(CupidGb *gb) {
     serial_link = gb->serial_link;
     rumble_callback = gb->rumble_callback;
     rumble_user_data = gb->rumble_user_data;
+    infrared_callback = gb->infrared_callback;
+    infrared_user_data = gb->infrared_user_data;
     const int16_t motion_x = gb->mbc7.motion_x;
     const int16_t motion_y = gb->mbc7.motion_y;
     const bool huc3_ir_input = gb->huc3_ir_input;
@@ -245,6 +251,8 @@ void cupid_gb_init(CupidGb *gb) {
     gb->serial_link = serial_link;
     gb->rumble_callback = rumble_callback;
     gb->rumble_user_data = rumble_user_data;
+    gb->infrared_callback = infrared_callback;
+    gb->infrared_user_data = infrared_user_data;
     cupid_gb_mbc7_set_motion(gb, motion_x, motion_y);
     gb->huc3_ir_input = huc3_ir_input;
     gb->cheats = cheats;
@@ -325,6 +333,9 @@ void cupid_gb_init(CupidGb *gb) {
     gb->window_line_counter = 0u;
     cupid_gb_sgb_init(gb);
     cupid_gb_apu_import_legacy(gb);
+    CupidGbPrinter *printer = cupid_gb_printer_attached(gb);
+    if (printer)
+        cupid_gb_printer_state_clear(&printer->state, gb->elapsed_cycles);
 }
 
 // Boot ROM support
@@ -504,6 +515,9 @@ void cupid_gb_enter_boot_rom(CupidGb *gb) {
     gb->stat_irq_delay = 0u;
     gb->stat_irq_line = false;
     gb->window_line_counter = 0u;
+    CupidGbPrinter *printer = cupid_gb_printer_attached(gb);
+    if (printer)
+        cupid_gb_printer_state_clear(&printer->state, gb->elapsed_cycles);
 }
 
 /**
@@ -528,6 +542,8 @@ void cupid_gb_cleanup(CupidGb *gb) {
     gb->serial_link = (CupidGbSerialLink){0};
     gb->rumble_callback = NULL;
     gb->rumble_user_data = NULL;
+    gb->infrared_callback = NULL;
+    gb->infrared_user_data = NULL;
     gb->cheats = NULL;
     gb->mbc5_rumble_on = false;
 }
@@ -544,6 +560,16 @@ void cupid_gb_set_serial_output_callback(CupidGb *gb, CupidGbSerialOutputCallbac
 void cupid_gb_set_serial_link(CupidGb *gb, CupidGbSerialLink link) {
     if (gb) {
         gb->serial_link = link.launch || link.sample ? link : (CupidGbSerialLink){0};
+        CupidGbPrinter *printer = cupid_gb_printer_attached(gb);
+        if (printer) {
+            if (!printer->state.clock_seen) {
+                cupid_gb_printer_state_clear(&printer->state, gb->elapsed_cycles);
+            } else if (printer->state.last_cycle > gb->elapsed_cycles) {
+                /* A detached device can outlive a load into an earlier console
+                 * timeline. Rebase its clock without clearing the retained job. */
+                cupid_gb_printer_update(printer, gb);
+            }
+        }
     }
 }
 
@@ -607,9 +633,9 @@ static uint16_t read_cartridge_window(const CupidGb *gb, uint16_t address) {
     }
     if (gb->header.mbc_type == CUPID_GB_MBC7)
         return cupid_gb_mbc7_read(gb, address);
-    /* HuC1: IR mode returns 0xC0 (no IR signal) */
+    /* The cartridge window shares the receiver with the color hardware port. */
     if (gb->header.mbc_type == CUPID_GB_HUC1 && gb->huc1_ir_mode) {
-        return 0xc0u;
+        return (uint8_t)(0xc0u | cupid_gb_infrared_detected(gb));
     }
     {
         size_t offset = cupid_gb_effective_ram_bank(gb) * 0x2000u + (size_t)(address - 0xa000u);
@@ -1170,9 +1196,9 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
         if (!gb->ram_enabled && gb->header.mbc_type != CUPID_GB_HUC1) {
             return;
         }
-        /* An IR write drives the cartridge LED and must never overwrite SRAM.
-         * The disconnected accessory currently has no external LED callback. */
+        /* An IR write drives the cartridge LED and must never overwrite SRAM. */
         if (gb->header.mbc_type == CUPID_GB_HUC1 && gb->huc1_ir_mode) {
+            cupid_gb_infrared_write_cartridge(gb, value);
             return;
         }
         /* MBC2: built-in 512x4-bit RAM */

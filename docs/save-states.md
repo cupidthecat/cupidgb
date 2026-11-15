@@ -10,7 +10,7 @@ Load a native state file through File > Load State File or drop a `.s0` through 
 
 Writes use an atomic file replacement. Loading checks the complete cartridge identity and hardware model. A state captured with an active boot overlay requires the matching local boot binary. Failed validation preserves the running session and its host audio queue. A successful load replaces the emulated state, reapplies current physical input, clears queued host audio, and realigns pacing.
 
-New files use CupidGB native version 11. Versions 2 through 10 remain loadable. Interoperable BESS state imports remain pending.
+New files use CupidGB native version 12. Versions 2 through 11 remain loadable. Interoperable BESS state imports remain pending.
 
 The version identifies the wire encoding, not a promise to preserve emulation bugs between builds. Version 3 records pending CGB DMA work, CPU speed-switch sequencing, and audio clock, held-output, envelope, sweep, and noise latches. Version 2 has no values for these latches. Its loader initializes them deterministically after validating the old payload; it never takes missing history from the target's running session. Pending DMA and speed-switch delays start cleared, while an old armed HBlank transfer retains its saved block count. On color hardware, pulse clock startup follows the saved channel enable, and held pulse output follows the saved duty position. Monochrome pulse history uses the import rules described under version 11 below. Noise gates and held output derive from the saved channel/DAC and LFSR state, with a canonical prescaler phase. The old LFSR, timer, queued PCM, partial integration, and filter state remain intact. This cannot reproduce timing history the old format did not record. Keep the original state if you need to revisit its earlier build.
 
@@ -78,7 +78,7 @@ Version 8 appends eleven bytes after the V7 tail: the remaining JOYP row-release
 
 Cheat collections, global enable, color correction, and memory-search history are host configuration outside snapshots. Loading keeps the current rules and display settings.
 
-Device handles, assignments, bindings, rumble callbacks, feedback duty counters, serial link endpoints, and the printer feed are host data outside the wire format. Loading emits no motor callback. The frontend stops and resynchronizes host feedback and resets the printer protocol after a timeline change. A later forward interval may resume the saved motor state.
+Device handles, assignments, bindings, rumble and infrared callbacks, live infrared input, feedback duty counters, serial link registrations, and the printer feed are host data outside the wire format. Loading emits no motor or infrared callback. The frontend stops and resynchronizes host feedback; a later forward interval may resume the saved motor state. Version 12 separately records the built-in printer's emulated state while preserving its live callback registrations and the host's connection choice.
 
 Loading first verifies version, length, integrity, cartridge/model/boot identity, and field domains. It decodes into a separate candidate that retains the current session's ROM ownership and immutable metadata. Only a completely validated candidate replaces the live state.
 
@@ -93,6 +93,34 @@ Version 11 appends two pulse DAC codes, one byte per channel, each restricted to
 Versions 2 through 10 did not maintain the monochrome pulse latches. After validating an older file, the loader derives held duty output from its duty position and starts a clock only when the APU and DAC are enabled and the saved channel or timer indicates activity. It clears unknown trigger suppression and uses a canonical edge age. Disconnected DAC codes default to zero on every model. The saved oscillators, queued PCM, partial integration and filter state remain intact. This preserves a deterministic starting point, but cannot reconstruct a previous duty write, an expired clock, or a disconnected DAC's sample.
 
 Pixel queues and fetch phases recorded by older formats remain intact. Current execution uses the current fetch timing; importing an older snapshot cannot recover bus or scheduling history that the file did not record. Exact continuation comparisons require the same qualified build and inputs.
+
+### Printer state in version 12
+
+Version 12 keeps the hardware payload and version 11 tail in their existing order. Non-HuC3 cartridges then append six bytes of infrared history: little-endian 16-bit receiver charge and decay counters, followed by one-byte cartridge-output and detection flags. HuC3 retains these fields in its existing 25-byte section and adds no duplicate record. Older non-HuC3 files initialize the absent history to zero while keeping the current host input and callback.
+
+An eight-byte accessory descriptor follows that hardware history. Offsets in this table are relative to the descriptor:
+
+| Offset | Bytes | Value |
+| --- | --- | --- |
+| 0 | 1 | Device kind: zero for no saved device, one for the built-in printer |
+| 1 | 1 | Device codec: zero without a device, one for the printer |
+| 2 | 2 | Reserved, both zero |
+| 4 | 4 | Little-endian device payload length: zero or 32,687 bytes |
+
+The printer record follows the descriptor. Its explicit field order is in `src/gb/printer_state.c`: packet phase and header, decoded data and indices, checksums and compressed-run history, status and image rows, the image buffer, input/output bit history, and the fractional clock and remaining job time. It contains no pointers, callbacks or host paper. An ordinary state without model or cartridge extensions occupies 300,614 bytes without a printer and 333,301 bytes with one. Hosts must still query `cupid_gb_state_size` for each capture; connecting a printer changes the required length.
+
+| Saved attachment | Current attachment | Load result |
+| --- | --- | --- |
+| Printer | Printer | Restore the saved packet, bits, image buffer and job timing; keep current host callbacks |
+| No device, or a version 2–11 file | Printer | Start a fresh printer at the loaded guest time |
+| Printer | No device or an external cable | Validate the saved printer record, retain the current attachment and discard that device history |
+| No device | No device or an external cable | Retain the current attachment |
+
+Capture leaves the printer's clock untouched. Elapsed guest cycles can legitimately remain pending until its next update, and matching-device restoration preserves that debt and its fractional tick. Fresh-device imports start their clock at the loaded guest time. If a detached printer is later attached to an earlier console timeline, attachment rebases its clock and clears the fractional tick without consuming or discarding its pending job. It can then be captured immediately. Reset clears printer history at the reset boundary.
+
+The loader validates the entire console and accessory before committing either. An invalid device record leaves both live objects unchanged even when that device is not attached. Loading emits no image or completion callback. Save output, its written-length result and any trusted context must occupy storage separate from the live printer, core and cartridge.
+
+The Qt feed remains host output. A successful disk load, rewind or debugger Backstep preserves paper already emitted into the current feed; executing a print request again can append another strip. Closing the feed still starts a new roll when the next image arrives. PNG export and system printing use their explicit controls. Queued widget work renders the current feed and cannot reopen it for a replacement cartridge.
 
 ## Validation scope
 

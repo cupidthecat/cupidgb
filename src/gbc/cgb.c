@@ -4,6 +4,7 @@
 #include "cgb_internal.h"
 #include "cupid/gb/apu.h"
 #include "cupid/gb/gb.h"
+#include "cupid/gb/infrared.h"
 #include "cupid/gb/ppu.h"
 
 #include <string.h>
@@ -144,8 +145,8 @@ bool cupid_cgb_handle_read_register(const CupidGb *gb, uint16_t address, uint8_t
         case 0xff56u:
             *value = gb != 0 && gb->cgb_mode ? (uint8_t)(0x2eu | (gb->io_registers[0x56u] & 0xc1u))
                                              : 0xffu;
-            if (gb != 0 && gb->cgb_mode && gb->header.mbc_type == CUPID_GB_HUC3 &&
-                (gb->io_registers[0x56u] & 0xc0u) == 0xc0u && gb->huc3.ir_detected) {
+            if (gb != 0 && gb->cgb_mode && (gb->io_registers[0x56u] & 0xc0u) == 0xc0u &&
+                cupid_gb_infrared_detected(gb)) {
                 *value &= 0xfdu;
             }
             return true;
@@ -253,9 +254,7 @@ bool cupid_cgb_handle_write_register(CupidGb *gb, uint16_t address, uint8_t valu
             }
             return true;
         case 0xff56u:
-            if (gb->cgb_mode) {
-                gb->io_registers[address - 0xff00u] = value;
-            }
+            cupid_gb_infrared_write_port(gb, value);
             return true;
         case 0xff4du:
             if (gb->cgb_mode) {

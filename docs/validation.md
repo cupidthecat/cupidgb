@@ -1418,3 +1418,143 @@ the host's slow-motion conversion has its own interpolation policy. WAVE
 recording still captures forward PCM and excludes replay; controller rumble
 remains suppressed during rewind. Printer protocol, image-buffer and job state
 are not yet restored with native snapshots. These remain explicit parity gaps.
+
+## Peripheral continuation and desktop lifecycle, 2026-11-15
+
+This checkpoint adds native V12 printer and infrared history, shared CGB/HuC1/HuC3
+infrared connections, explicit cartridge/symbol reload, and reduced Qt polling
+while idle. The comparison revision remains
+`ea667ad79aa28409f034b1fd6da7304e1844750d`. Generated probes and commercial replay
+use frozen libraries, inputs, and source manifests; their scope is recorded below.
+
+### Regression gates
+
+The final Windows Release build passes all 49 checks; Linux Release passes all
+47. Both include the Qt reload, printer, controller, and idle-timer workflows.
+The Linux core sanitizer build passes all 28 checks with address/undefined
+behavior instrumentation and leak detection. The first full Release runs found
+two stale test expectations: a supposedly unsupported version was now V12, and
+an MBC7 size assertion omitted six receiver bytes. The repaired checks still
+require rejection of the next version and the exact current wire length.
+
+Printer reattachment also exposed a production defect: after loading an earlier
+console timeline while the printer was detached, immediate capture rejected its
+future clock origin. Attachment now rebases that origin without consuming or
+clearing the pending job. The regression fails before the repair and passes
+through both ordinary and trusted snapshot APIs afterward.
+
+### Printer continuation
+
+All 16 paired cases and 80 observations pass. The matrix covers buffered DATA,
+partially received DATA and reply bytes at one, four, and seven sampled bits,
+and an active print job on DMG and CGB. Each engine agrees with its independently
+continued control for image bytes, replies, callback order, and remaining work.
+Paired callback brackets and tail-cycle counts also agree in every case. The
+brackets are 12 base cycles wide; these are instruction/host-operation bounds,
+not exact internal callback edges.
+
+Both engines produce 30 image/completion callbacks on the uninterrupted paths
+and the same 30 after native restoration. Saving and loading emit none. An
+explicit-reset negative control still loses the pending history in all 16 cases.
+Four additional origin cases make 320 step comparisons per engine and agree on
+fresh-device load and reset clocks. V12 states with a printer occupy 333,301 bytes
+for these ordinary cartridges.
+
+The independent core regressions also cover the attachment matrix, malformed
+records with recomputed integrity, overlapping storage, older imports, reset,
+and retained callbacks. Qt workflows cover disk load, rewind, Backstep, already
+emitted paper, and queued work crossing a cartridge replacement. These checks
+do not qualify physical printing or commercial printer workflows.
+
+### Mapper and infrared comparisons
+
+The refreshed header/storage matrix has 4,096 rows: 4,066 match, with the same
+30 recorded exceptions for ROM+RAM types `08` and `09` and partial MBC6 type `20`.
+The exception check retains exact expected values rather than excluding those
+types from comparison. All 2,244 MMM01 menu/header rows match. Generated core
+tests cover ROM-only, MBC1, multicart MBC1, MBC2, MBC3, extended MBC3, MBC5/rumble,
+MMM01, MBC7, HuC1, HuC3, Camera, and TPP1. This is controller coverage, not a claim
+that every commercial cartridge or peripheral works.
+
+All 17,664 infrared register/callback observations and 10,240 stable sensor rows
+match. The frozen transition matrix retains 550 differences among 8,192 rows.
+A subsequent phase audit reproduces those rows and finds no separate charge-rate
+or clamping discrepancy: the implementations use different deterministic noise
+phases, and the original fixtures also began with different divider/display
+phases. Those 550 rows therefore describe that recorded setup, not a controlled
+measurement of one isolated defect. Exact transition behavior remains pending;
+stable receiver agreement does not establish it.
+
+A controlled follow-up normalizes divider and presentation origins. Resetting
+DIV changes detection in 254 of 512 comparison pairs, while CupidGB changes in
+none. A VRAM read that synchronizes deferred display work changes detection in
+107 of another 512 pairs; CupidGB again changes in none. One pair has identical
+CupidGB native bytes despite distinct required outputs. Exact transition parity
+therefore needs additional retained phase/history or a broader event mapping;
+substituting an existing elapsed, line, or frame counter is insufficient.
+
+### Commercial native-state continuation
+
+Nine traces cover eight commercial cartridges across ROM-only, MBC1, MBC2,
+MBC3, MBC5, MBC7, HuC3, and Camera, including a separate active MBC1 gameplay
+trace. Each local run warms for 3,000 intervals, saves during mode 3 with 17–19
+queued PCM frames, and compares 600 continuation intervals. All 36 runs pass:
+nine local save/restore runs per platform and nine cross-platform imports in
+each direction.
+
+The aggregate contains 319,566,188 instruction comparisons, 21,608 presentation
+and memory comparisons, and 432 complete native-byte comparisons. Every drained
+PCM chunk matches. Saved/final states and captured start/end image bytes agree
+between hosts. All 341 protected original files retain their bytes and
+modification times.
+
+These runs use frozen Windows library
+`c60f336d6488c7a19c467eb121b7547bcf4cb346ecb7abcc0432b43888c578d1`
+and Linux library
+`f2b3bcc5c1842bb38394e7c8d110c4d31fd5609ebef17ec890153d047f4c0520`.
+A later frontend rebuild changed the live Linux archive after a documented
+header-comment edit. The receipt retains that archive and the exact comment
+diff and does not claim byte identity with the frozen library. No continuation
+assertion failed. Startup uses the approximate post-boot profile and a private
+deterministic clock; PCM is checked before host playback. No printer or cable
+is attached during these commercial replay runs.
+
+### External suites and illegal execution
+
+The current frozen Windows runner produces 242 explicit passes in the 243-case
+external gate. The remaining OAM timing logger reaches its 3,600-interval limit
+with result code 128 and no success verdict. It remains bounded, not passed.
+
+Fresh diagnosis of the seven previously failing library inputs finds matching
+terminal opcodes, instruction counts, and final 256 instruction/register records
+under controlled startup. Their CPU fetches still expose a separate bug:
+CupidGB consumes no time for an invalid opcode and leaves IE enabled. The
+comparison consumes one machine cycle and clears IE while peripheral clocks
+continue. A 44-case synthetic matrix covers all eleven invalid opcodes, both
+CGB speeds, and both IME values; an injected pending interrupt incorrectly wakes
+CupidGB in every case. This is a remaining CPU/API/frontend gap. The seven
+library outcomes stay errors, and matching terminal paths do not justify labeling
+every input a bad dump or claiming successful gameplay.
+
+### Installed native workflows
+
+Fresh Windows and Linux installations pass the complete native Qt workflow with
+real audio, using the unchanged 180-second guard. Both verify the expected Qt/SDL
+runtime paths and retain ten UI captures. Debugger controls, startup messages,
+map overlays, and palette panels remain readable on both hosts. The Windows
+stage has 295 files; the Linux stage has 22 and uses Qt 6.8.3 with system SDL2.
+
+The Windows installed executable is
+`5d1e243ec621e57714ae38b8a86d35bac4a9479758547eeabdc05d4e2aed9396`.
+The Linux build executable is
+`d82c8c7880cc2c09760b6e3de7ce9202b8f694b5d44c28891dfe13ffc3727377`;
+its installed executable is
+`43e700942db1dcf1e721f40d8593bbab4dc0cd188c591ce4e18576fdcd3a14c8`.
+These integration checks run while other validation is active. Their duration
+is not a performance benchmark, and passing them does not qualify audible
+quality, physical refresh, a clean machine, or a portable Linux bundle.
+
+Formatting and whitespace checks pass. All 170 project C/C++ source and header
+files remain below 2,000 lines; the largest is the 1,957-line state regression.
+No obsolete root `licenses` directory is present. The project license and
+required notices for retained dependencies remain intact.

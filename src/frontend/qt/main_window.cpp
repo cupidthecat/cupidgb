@@ -26,7 +26,7 @@ MainWindow::MainWindow(bool isolated, bool automated, bool audioCheck,
         restoreGeometry(settings_.value("window/geometry").toByteArray());
     qApp->installEventFilter(this);
     timer_.setTimerType(Qt::PreciseTimer);
-    timer_.setInterval(1);
+    refreshTimerInterval();
     connect(&timer_, &QTimer::timeout, this, [this] { tick(); });
     connect(&saveTimer_, &QTimer::timeout, this, [this] { flushBattery(); });
     saveTimer_.setSingleShot(true);
@@ -80,6 +80,12 @@ MainWindow::MainWindow(bool isolated, bool automated, bool audioCheck,
     controllers_->navigationPressed = [this](const QString &action, SDL_JoystickID instance) {
         navigateControllerMenu(action, instance);
     };
+    controllers_->backend().beforePoll = [this] {
+        // Controller delivery must see current modal/focus gates even between idle ticks.
+        // Manual fixtures stop the main timer and supply their own delivery gates.
+        if (timer_.isActive())
+            refreshControllerGate();
+    };
     QString controllerError;
     if (!controllers_->backend().start(&controllerError))
         statusBar()->showMessage("Controllers unavailable: " + controllerError);
@@ -119,6 +125,7 @@ MainWindow::~MainWindow() {
         controllers_->shortcutPressed = {};
         controllers_->physicalEvent = {};
         controllers_->navigationPressed = {};
+        controllers_->backend().beforePoll = {};
         controllers_->backend().stop();
     }
     timer_.stop();
@@ -158,6 +165,9 @@ void MainWindow::buildMenus() {
     });
     recentMenu_ = file->addMenu("Open &Recent");
     updateRecentMenu();
+    reloadAction_ = file->addAction("&Reload Cartridge");
+    registerShortcut(reloadAction_, "reload");
+    connect(reloadAction_, &QAction::triggered, this, [this] { reloadRom(); });
     loadStateFileAction_ = file->addAction("Load State File…");
     connect(loadStateFileAction_, &QAction::triggered, this, [this] {
         QScopedValueRollback<bool> operation(stateOperation_, true);
@@ -460,6 +470,10 @@ void MainWindow::reportError(const QString &message) {
 }
 
 bool MainWindow::openRom(const QString &path) {
+    return openRom(path, false);
+}
+
+bool MainWindow::openRom(const QString &path, bool reload) {
     if (isStatePath(path)) {
         reportError(
             "State files cannot be opened as cartridges. Open a cartridge, then load its state.");
@@ -480,7 +494,9 @@ bool MainWindow::openRom(const QString &path) {
         return false;
     }
     auto candidate = std::make_unique<CupidEmulator>();
-    int model = modelOverride_.value_or(settings_.value("emulation/model", -1).toInt());
+    int model = reload && emulator_
+                    ? int(emulator_->gb.model)
+                    : modelOverride_.value_or(settings_.value("emulation/model", -1).toInt());
     if (model < 0)
         model = automaticModel(data);
     if (model > CUPID_GB_MODEL_SGB2 || model < CUPID_GB_MODEL_DMG_ABC) {
@@ -644,12 +660,12 @@ bool MainWindow::openRom(const QString &path) {
     resetMotionInput();
     resetRewind();
     ++sessionId_;
-    resetDebuggerTimeline(!sameCartridge);
+    resetDebuggerTimeline(!sameCartridge && !reload);
     if (inspectorsWindow_)
         inspectorsWindow_->sessionChanged();
     romData_ = data;
     romPath_ = absolute;
-    if (debugger_ && !sameCartridge) {
+    if (debugger_ && !sameCartridge && !reload) {
         const QString symbols = info.dir().filePath(info.completeBaseName() + ".sym");
         if (QFileInfo::exists(symbols))
             loadDebuggerSymbols(symbols);
@@ -744,6 +760,7 @@ bool MainWindow::closeRom() {
     if (emulator_)
         cupid_emulator_shutdown(emulator_.get());
     emulator_.reset();
+    refreshTimerInterval();
     if (controllers_)
         controllers_->setMotionEnabled(false);
     cheats_.reset();
@@ -777,7 +794,7 @@ bool MainWindow::restart() {
 
 void MainWindow::refreshActions() {
     for (auto *action :
-         {closeAction_, resetAction_, pauseAction_, frameAction_, screenshotAction_,
+         {closeAction_, resetAction_, reloadAction_, pauseAction_, frameAction_, screenshotAction_,
           screenshotAsAction_, copyScreenshotAction_, loadStateFileAction_, recordingAction_})
         action->setEnabled(bool(emulator_));
     recordingAction_->setText(recorder_ && recorder_->active() ? "Stop Audio &Recording"

@@ -33,8 +33,8 @@ The core decodes ROM-only, MBC1, MBC2, MBC3, MBC5, MMM01, MBC6, MBC7, HuC1, HuC3
 | MMM01 | Menu-first and menu-last dump layouts, menu-selected RAM capacity and battery metadata, one-way lock, ROM/RAM masks, multiplex mode, and battery SRAM |
 | MBC6 | Partial mapping; flash behavior remains pending |
 | MBC7 | Dual access gates, motion latches, 256-byte serial EEPROM, battery files, and mid-command continuation. Physical motion input remains pending |
-| HuC1 | Independent six-bit ROM and three-bit RAM selection, RAM access outside infrared mode, and disconnected infrared register behavior; transport and startup mapping qualification remain pending |
-| HuC3 | ROM bank zero after selection, 16 SRAM banks, read-only and read/write modes, nibble commands, clock and alarm persistence, and timed infrared register input and output. Host infrared transport and alarm notification remain pending |
+| HuC1 | Independent six-bit ROM and three-bit RAM selection, RAM access outside infrared mode, and a shared timed infrared receiver with host input and output callbacks. Physical transport and startup mapping qualification remain pending |
+| HuC3 | ROM bank zero after selection, 16 SRAM banks, read-only and read/write modes, nibble commands, clock and alarm persistence, and the shared timed infrared receiver. Physical infrared transport and alarm notification remain pending |
 | Camera | ROM/SRAM banking, shutter timing, generated sensor pixels, tile conversion, and capture continuation. Analog gain is approximate. Host camera input remains pending |
 | TPP1 | Extended header, mirrored bank registers, read-only and writable SRAM, RTC commands and persistence, and four guest rumble levels. Host feedback uses an on/off latch |
 
@@ -58,7 +58,7 @@ Interrupt entry samples enable and request state separately because either stack
 
 The memory map includes cartridge windows, VRAM, banked WRAM, echo RAM, OAM, I/O, high RAM, and interrupt enable. Device access restrictions depend on LCD and DMA state. Open-bus decay, fine bus conflicts, interrupt races, and revision differences remain incomplete. Passing ordinary instruction tests cannot establish those behaviors.
 
-The timer derives edges from divider phase and models delayed TIMA reloads and register-write windows. Serial supports an internal slow clock and the color fast clock with disconnected incoming data. Completed transfers can notify a host callback without changing hardware execution or writing to a host stream. External serial transport, infrared, and attached devices remain pending.
+The timer derives edges from divider phase and models delayed TIMA reloads and register-write windows. Serial supports an internal slow clock, the color fast clock, external-clock stepping, and host endpoints. Completed transfers can notify a host callback without changing hardware execution or writing to a host stream. The built-in printer implements packet transfer, image output, and timed jobs. The Qt frontend exposes the printer; paired cable sessions and physical transport remain pending.
 
 OAM DMA and CGB general/HBlank DMA are implemented. CGB transfers retain the fetched opcode, schedule sixteen-byte blocks through two-dot slots, and preserve pending HBlank work across state capture. Shared-bus decay for undriven source ranges and PPU fetch-address conflicts with mode-3 destinations remain incomplete. See [DMA timing](timing.md#dma-and-serial-consequences) for scheduling and sleep behavior. Bus contention, OAM restarts, collisions, and revision combinations still need broader coverage.
 
@@ -88,4 +88,4 @@ Physical CGB hardware enters an actual boot overlay with color registers availab
 
 Changing KEY0 does not reset the physical VRAM or WRAM bank latches. CPU data accesses and WRAM echo aliases continue through the retained bank, even when compatibility mode blocks a later register write. A visible bank-register value alone is insufficient to validate this mapping; check which bank received the data.
 
-CGB register dispatch includes DMA status, palette indexes, infrared storage, undocumented storage/masks, and read-only PCM amplitude registers. A physical color model and color execution mode are separate gates. Disconnected infrared register behavior does not establish external infrared transport, and PCM register access does not establish complete audio accuracy.
+CGB register dispatch includes DMA status, palette indexes, the infrared port, undocumented storage/masks, and read-only PCM amplitude registers. The CGB, HuC1, and HuC3 receivers share charge, decay, detection, and host input. Each output latch reports changed levels through a host callback. Physical CGB hardware accepts output writes in monochrome compatibility mode while hiding port reads; the receiver still follows its model and cartridge gates. Native snapshots preserve receiver history and keep the current host connection. Register/callback behavior and stable sensing have paired generated coverage. Noisy transition edges still differ, and physical infrared transport remains unqualified. PCM register access does not establish complete audio accuracy.

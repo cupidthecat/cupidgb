@@ -241,7 +241,116 @@ bool MainWindow::modelSmokeTest(const QString &directory) {
     return true;
 }
 
+bool MainWindow::idleTimerSmokeTest(const QString &path) {
+    MainWindow session(true, true, false, QStringLiteral(""), CUPID_GB_MODEL_DMG_ABC);
+    if (!session.timer_.isActive() || session.timer_.interval() != 16 ||
+        !session.controllers_->backend().running())
+        return smokeFailure(__FILE__, __LINE__);
+    session.tick();
+    if (session.emulator_ || session.timer_.interval() != 16 || !session.openRom(path) ||
+        session.timer_.interval() != 1)
+        return smokeFailure(__FILE__, __LINE__);
+
+    session.setPaused(true);
+    const uint64_t pausedCycles = session.emulator_->gb.elapsed_cycles;
+    unsigned idleCallbacks = 0;
+    const auto idleConnection =
+        connect(&session.timer_, &QTimer::timeout, &session, [&] { ++idleCallbacks; });
+    QEventLoop idleLoop;
+    QTimer::singleShot(48, &idleLoop, &QEventLoop::quit);
+    idleLoop.exec();
+    disconnect(idleConnection);
+    if (!idleCallbacks || session.timer_.interval() != 16 ||
+        session.emulator_->gb.elapsed_cycles != pausedCycles)
+        return smokeFailure(__FILE__, __LINE__);
+    session.setPaused(false);
+    if (session.timer_.interval() != 1)
+        return smokeFailure(__FILE__, __LINE__);
+
+    // Delivery gates update on a controller poll, without waiting for the main timer.
+    session.setPaused(true);
+    session.controllers_->setFocused(true);
+    session.controllers_->setDeliveryEnabled(true);
+    session.controllers_->backend().pollNow();
+    if (session.controllers_->deliveryEnabled() || session.timer_.interval() != 16)
+        return smokeFailure(__FILE__, __LINE__);
+    session.timer_.stop();
+    session.controllers_->setFocused(true);
+    session.controllers_->setDeliveryEnabled(true);
+    session.controllers_->backend().pollNow();
+    if (!session.controllers_->deliveryEnabled())
+        return smokeFailure(__FILE__, __LINE__);
+
+    // Manual session fixtures keep ownership of their stopped timer across every transition.
+    session.setPaused(false);
+    if (session.timer_.isActive() || session.timer_.interval() != 1)
+        return smokeFailure(__FILE__, __LINE__);
+    const uint64_t beforeGuard = session.emulator_->gb.elapsed_cycles;
+    {
+        QScopedValueRollback<bool> operation(session.stateOperation_, true);
+        session.resetPacing();
+        session.tick();
+        if (session.timer_.isActive() || session.timer_.interval() != 1 ||
+            session.emulator_->gb.elapsed_cycles != beforeGuard)
+            return smokeFailure(__FILE__, __LINE__);
+    }
+    session.tick();
+    if (session.timer_.isActive() || session.timer_.interval() != 1 ||
+        session.emulator_->gb.elapsed_cycles <= beforeGuard)
+        return smokeFailure(__FILE__, __LINE__);
+
+    session.resetRewind();
+    session.keyboardSpecialHeld_[1] = true;
+    session.reconcileControllerInput();
+    session.resetPacing();
+    session.tick();
+    if (!session.rewindExhausted_ || session.timer_.interval() != 16 || session.timer_.isActive())
+        return smokeFailure(__FILE__, __LINE__);
+    const QByteArray exhausted = session.captureState();
+    session.tick();
+    if (session.captureState() != exhausted)
+        return smokeFailure(__FILE__, __LINE__);
+    session.keyboardSpecialHeld_[1] = false;
+    session.reconcileControllerInput();
+    if (session.timer_.interval() != 1)
+        return smokeFailure(__FILE__, __LINE__);
+    session.keyboardSpecialHeld_[1] = true;
+    session.rewindFailed_ = true;
+    session.reconcileControllerInput();
+    if (session.timer_.interval() != 16)
+        return smokeFailure(__FILE__, __LINE__);
+    session.keyboardSpecialHeld_[1] = false;
+    session.reconcileControllerInput();
+    if (session.timer_.interval() != 1)
+        return smokeFailure(__FILE__, __LINE__);
+    session.resetRewind();
+
+    auto *menu = session.menuBar()->actions().value(1)->menu();
+    if (!menu || !QMetaObject::invokeMethod(menu, "aboutToShow", Qt::DirectConnection) ||
+        !session.menuDepth_ || session.timer_.interval() != 16)
+        return smokeFailure(__FILE__, __LINE__);
+    const uint64_t menuCycles = session.emulator_->gb.elapsed_cycles;
+    session.tick();
+    if (session.emulator_->gb.elapsed_cycles != menuCycles ||
+        !QMetaObject::invokeMethod(menu, "aboutToHide", Qt::DirectConnection))
+        return smokeFailure(__FILE__, __LINE__);
+    QCoreApplication::sendPostedEvents(&session, QEvent::MetaCall);
+    if (session.menuDepth_ || session.timer_.interval() != 1 || session.timer_.isActive())
+        return smokeFailure(__FILE__, __LINE__);
+    if (!session.closeRom() || session.timer_.interval() != 16 || session.timer_.isActive() ||
+        !session.openRom(path) || session.timer_.interval() != 1 || session.timer_.isActive())
+        return smokeFailure(__FILE__, __LINE__);
+    session.setPaused(true);
+    if (session.timer_.interval() != 16 || session.timer_.isActive())
+        return smokeFailure(__FILE__, __LINE__);
+    session.setPaused(false);
+    session.timer_.start();
+    return session.closeRom() && session.timer_.isActive() && session.timer_.interval() == 16;
+}
+
 bool MainWindow::pacingSmokeTest(const QString &path) {
+    if (!idleTimerSmokeTest(path))
+        return smokeFailure(__FILE__, __LINE__);
     for (const auto model : {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_SGB, CUPID_GB_MODEL_SGB2}) {
         settings_.setValue("emulation/model", int(model));
         if (!openRom(path))

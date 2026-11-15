@@ -109,7 +109,11 @@ class MainWindow final : public QMainWindow {
     bool flushBattery();
     bool closeRom();
     bool restart();
+    bool reloadRom();
+    bool openRom(const QString &path, bool reload);
+    bool reloadSmokeTest(const QString &directory);
     void resetPacing();
+    void refreshTimerInterval();
     void setTurboCap(unsigned quarters);
     void tick();
     enum class Playback { Forward, Rewind, RewindEnd };
@@ -171,6 +175,7 @@ class MainWindow final : public QMainWindow {
     void drainDebuggerAudio();
     bool debuggerSmokeTest(const QString &directory);
     bool pacingSmokeTest(const QString &path);
+    bool idleTimerSmokeTest(const QString &path);
     bool turboCapSmokeTest(const QString &path);
     bool displayCadenceSmokeTest(const QString &path);
     bool playbackSmokeTest(const QString &directory);
@@ -213,7 +218,6 @@ class MainWindow final : public QMainWindow {
     QAction *disconnectAction_ = nullptr;
     PrinterWindow *printerWindow_ = nullptr;
     CupidGbPrinter *printer_ = nullptr;
-    uint64_t printerGeneration_ = 0;
     DisplayWidget *display_ = nullptr;
     std::shared_ptr<AudioBuffer> audioBuffer_;
     std::shared_ptr<QAudioSink> audio_;
@@ -261,6 +265,7 @@ class MainWindow final : public QMainWindow {
     QAction *recordingAction_ = nullptr;
     QAction *closeAction_ = nullptr;
     QAction *resetAction_ = nullptr;
+    QAction *reloadAction_ = nullptr;
     QAction *frameAction_ = nullptr;
     QAction *screenshotAction_ = nullptr;
     QAction *screenshotAsAction_ = nullptr;

@@ -3,7 +3,7 @@
 #include "cupid/gb/apu.h"
 #include "cupid/gb/camera.h"
 #include "cupid/gb/cpu.h"
-#include "cupid/gb/huc3.h"
+#include "cupid/gb/infrared.h"
 #include "cupid/gb/input.h"
 #include "cupid/gb/ppu.h"
 
@@ -193,8 +193,9 @@ static void advance_base_time(CupidGb *gb, unsigned dots) {
     gb->elapsed_cycles += dots;
     if (gb->joyp_select_delay)
         cupid_gb_input_tick(gb, dots);
-    if (gb->header.mbc_type == CUPID_GB_HUC3)
-        cupid_gb_huc3_tick_infrared(gb, dots);
+    if (gb->cgb_mode || gb->header.mbc_type == CUPID_GB_HUC1 ||
+        gb->header.mbc_type == CUPID_GB_HUC3)
+        cupid_gb_infrared_tick(gb, dots);
 }
 
 /* The source bus is shared only while both engines can consume it. Callers

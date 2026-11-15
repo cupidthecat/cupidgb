@@ -26,7 +26,7 @@ Run the generated mapper, persistence, and SGB continuation checks together:
 
 ```sh
 ctest --test-dir build --output-on-failure \
-    -R 'cupidgb_(gb|cartridge|battery|camera|mbc7|huc3|tpp1|sgb|state)$'
+    -R 'cupidgb_(gb|cartridge|battery|camera|mbc7|huc3|infrared|tpp1|sgb|state|printer_state)$'
 ```
 
 For a library scan, inventory cartridge type bytes separately from the selected hardware model. Give each ROM a fixed guest-clock budget and retain its exact result, including an execution error or incomplete boot. Run banking and peripheral probes for hardware absent from the library. Use separate gameplay and persistence checks before claiming compatibility for a title.
@@ -38,15 +38,23 @@ ctest --test-dir build --output-on-failure \
     -R 'cupidgb_(controller_backend|controller_workflows|qt_workflows)$'
 ```
 
-The backend check attaches two identical standardized virtual controllers and one raw joystick. It verifies device identity/capabilities, axes/buttons/hats, transient raw and normalized edges, hotplug/reconnect, focus/background/master blocking, remapping, unrelated SDL events, rumble callbacks, subsystem ownership and teardown through a Qt event loop. It checks that SDL video and audio remain uninitialized.
+The backend check attaches two identical standardized virtual controllers and one raw joystick. It verifies device identity/capabilities, axes/buttons/hats, transient raw and normalized edges, hotplug/reconnect, focus/background/master blocking, remapping, unrelated SDL events, rumble callbacks, subsystem ownership and teardown through a Qt event loop. The callback before each poll must apply current delivery gates, bound recursive polling, and permit a safe stop during polling or startup. SDL video and audio must remain uninitialized.
 
 The workflow check uses actual native Qt controls for capture, wrong-device rejection, Cancel/OK, player/dead-zone changes, settings-file reload and detach during capture. The application smoke adds generated guest programs for immediate SGB player-count transitions in both directions, held/disabled/preferred device policy, keyboard/controller contribution merging, per-player rapid controls, selected-player reads, shortcuts, paused-tool input, state reconciliation and MBC5 feedback boundaries. Menu/settings tests process timers while checking cycle invariance and restoration of the running or paused state.
+
+Idle-timer workflows check immediate active/idle interval selection, zero guest progress while paused or behind a menu, controller gating before a poll, rewind exhaustion/release, and preservation of a deliberately stopped timer. A transient state-operation guard must leave the active interval available after it unwinds. Timer-event measurements belong in separate native runs; interval selection alone does not establish CPU use or physical wakeups.
 
 Virtual devices are detached before exit. These tests do not qualify a physical USB/Bluetooth device, motor force/duration, actual sensor output, real window-system focus behavior, input latency or commercial play. Run native Windows/Linux smoke and real-device gameplay separately. A WSL environment without exposed input devices cannot establish physical Linux controller support. Do not infer those results from a virtual rumble callback or an offscreen dialog.
 
 C++/C integration checks exercise shared hardware records, initialization/reset, serial observers, and native-state restoration. Run them with Release IPO enabled as well as any fallback configuration being qualified. IPO comparisons must record the effective setting and, for GCC C++, the `-fno-strict-aliasing` flag. The build disables IPO with sanitizers.
 
-The serial and printer targets use generated transfers to check both clock directions, interrupt timing, reply bytes, compressed packets and image output. The Qt smoke sends a job over the emulated serial registers and checks the resulting feed, PNG, and PDF output. The command-line workflow checks direct cartridge loading and archive selection and rejection. Set `CUPIDGB_REQUIRE_ARCHIVE_TESTS=1` to fail if 7-Zip is unavailable.
+The serial and printer targets use generated transfers to check both clock directions, interrupt timing, reply bytes, compressed packets and image output. The printer-state target compares interrupted transfers and jobs against independently continued devices through ordinary and trusted state APIs. It also covers malformed records with valid integrity hashes, both sides of the load transaction, attachment/callback retention, storage overlap, reset origins, older-format imports, and immediate capture after a retained printer is reattached to an earlier console timeline.
+
+The infrared target checks register masks and sensor availability across cartridge headers and all six model tags, HuC1 RAM isolation, CGB compatibility-mode writes, output callback ordering, normal/double-speed clocks and clock freezes, live host input, and native-state continuation. Private paired probes separately compare register/callback rows and stable receiver states. Noisy transition rows remain a measured gap; stable-state agreement does not qualify them.
+
+The Qt smoke sends jobs over the emulated serial registers and checks the resulting feed, PNG, and PDF output. It restores partial packets and active jobs through disk files, rewind and debugger Backstep; checks failed loads and paper already emitted before queued widget work; and checks that an old session's queued update cannot reopen the feed in a new session. The command-line workflow checks direct cartridge loading and archive selection and rejection. Set `CUPIDGB_REQUIRE_ARCHIVE_TESTS=1` to fail if 7-Zip is unavailable.
+
+Reload workflows modify generated cartridge and symbol files, then exercise File > Reload Cartridge and `reset reload`. They check refreshed ROM/symbol content, missing and malformed companions, preserved breakpoints/model/pause state, cleared history, Unicode paths, battery persistence, and failures that leave the running session intact.
 
 The cheat core target checks code formats, bank selection, comparisons, duplicate priority, cloning and `.cht` bytes. The search target checks physical regions, all preset conditions, byte/word data, overlapping words, type changes, and bank-boundary writes. Qt workflows exercise actual rule editing and toggles, file persistence and invalid imports, save-state continuity, blocked save destinations, search-to-rule creation, and state-file protection. Color tests hash the complete RGB555 domain for every correction mode and temperature.
 

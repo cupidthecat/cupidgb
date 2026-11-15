@@ -2,6 +2,7 @@
 
 #include <QCoreApplication>
 #include <QEvent>
+#include <QScopedValueRollback>
 #include <QThread>
 
 #include <algorithm>
@@ -67,6 +68,11 @@ bool ControllerBackend::start(QString *error) {
     if (QCoreApplication::instance())
         QCoreApplication::instance()->installEventFilter(this);
     pollNow();
+    if (!initialized_) {
+        if (error)
+            *error = QStringLiteral("Controller polling stopped during startup");
+        return false;
+    }
     timer_.start();
     return true;
 }
@@ -439,7 +445,11 @@ void ControllerBackend::pollNow() {
     assertThread();
     if (!initialized_ || polling_)
         return;
-    polling_ = true;
+    QScopedValueRollback<bool> polling(polling_, true);
+    if (beforePoll)
+        beforePoll();
+    if (!initialized_)
+        return;
     SDL_PumpEvents();
     SDL_JoystickUpdate();
     reconcileDevices();
@@ -450,7 +460,6 @@ void ControllerBackend::pollNow() {
         if (device.state.rumbleActive && clock_.elapsed() >= device.rumbleUntil)
             stopRumble(id);
     }
-    polling_ = false;
 }
 
 } // namespace cupid::input

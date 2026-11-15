@@ -1,5 +1,27 @@
 #include "main_window_internal.h"
 
+#include <QScopeGuard>
+
+namespace {
+bool readDebuggerSymbols(CupidGbDebugger *debugger, const QString &path, QString &error) {
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly) || file.size() > 4 * 1024 * 1024) {
+        error = "Cannot read symbols: " + path + "\n" + file.errorString();
+        return false;
+    }
+    const QByteArray text = file.readAll();
+    size_t errorLine = 0;
+    if (text.size() != file.size() ||
+        !cupid_gb_debugger_load_symbols(debugger, text.constData(), size_t(text.size()),
+                                        &errorLine)) {
+        error =
+            QString("Symbols rejected at line %1; existing symbols are unchanged.").arg(errorLine);
+        return false;
+    }
+    return true;
+}
+} // namespace
+
 void MainWindow::ensureDebugger() {
     const bool created = !debugger_;
     if (!debugger_) {
@@ -153,24 +175,50 @@ void MainWindow::refreshDebugger() {
 
 bool MainWindow::loadDebuggerSymbols(const QString &path) {
     ensureDebugger();
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly) || file.size() > 4 * 1024 * 1024) {
-        debuggerWindow_->appendOutput("Cannot read symbols: " + path + "\n" + file.errorString());
-        return false;
-    }
-    const QByteArray text = file.readAll();
-    size_t errorLine = 0;
-    if (text.size() != file.size() ||
-        !cupid_gb_debugger_load_symbols(debugger_.get(), text.constData(), size_t(text.size()),
-                                        &errorLine)) {
-        debuggerWindow_->appendOutput(
-            QString("Symbols rejected at line %1; existing symbols are unchanged.").arg(errorLine));
+    QString error;
+    if (!readDebuggerSymbols(debugger_.get(), path, error)) {
+        debuggerWindow_->appendOutput(error);
         return false;
     }
     debuggerWindow_->appendOutput(QString("Loaded %1 symbols from %2.")
                                       .arg(debugger_->symbol_count)
                                       .arg(QFileInfo(path).fileName()));
     refreshDebugger();
+    return true;
+}
+
+bool MainWindow::reloadRom() {
+    if (!emulator_)
+        return false;
+    QScopedValueRollback<bool> operation(stateOperation_, true);
+    const bool wasPaused = paused_;
+    std::unique_ptr<CupidGbDebugger> symbols;
+    const auto cleanup = qScopeGuard([&symbols] {
+        if (symbols)
+            cupid_gb_debugger_cleanup(symbols.get());
+    });
+    if (debugger_) {
+        symbols = std::make_unique<CupidGbDebugger>();
+        cupid_gb_debugger_init(symbols.get());
+        const QFileInfo rom(romPath_);
+        const QString path = rom.dir().filePath(rom.completeBaseName() + ".sym");
+        QString error;
+        // Validate replacement symbols before committing a cartridge reset.
+        // An absent companion file deliberately removes the previous symbols.
+        if (QFileInfo::exists(path) && !readDebuggerSymbols(symbols.get(), path, error)) {
+            reportError(error);
+            return false;
+        }
+    }
+    if (!openRom(romPath_, true))
+        return false;
+    if (symbols) {
+        std::swap(debugger_->symbols, symbols->symbols);
+        std::swap(debugger_->symbol_count, symbols->symbol_count);
+    }
+    setPaused(wasPaused);
+    statusBar()->showMessage("Cartridge reloaded", 3000);
+    notifyOnScreen("Cartridge reloaded");
     return true;
 }
 
@@ -304,7 +352,6 @@ bool MainWindow::debuggerBackstep() {
         return false;
     }
     ++timelineId_;
-    resetPrinter();
     resetControllerRumble();
     controllerPlayerCount_ =
         cupid_gb_sgb_active(&emulator_->gb) ? emulator_->gb.sgb.player_count : 1;
@@ -351,7 +398,7 @@ void MainWindow::debuggerCommand(const QString &input) {
                "continue (c)   step (s)   next (n)   finish (f)   backstep (bs)\n"
                "registers (r)   print (p) expression   disassemble [address]\n"
                "x address [decimal count]\n"
-               "write address byte   set register value   symbols path\n"
+               "write address byte   set register value   symbols path   reset reload\n"
                "Numbers are decimal; use $ or 0x for hexadecimal. Symbols are supported.\n"
                "Backstep retains up to 128 explicit debugger steps within 32 MiB.\n"
                "Continuous playback does not record instruction history.\n"
@@ -373,6 +420,15 @@ void MainWindow::debuggerCommand(const QString &input) {
     }
     if (!emulator_) {
         output("Open a cartridge before using debugger execution or memory commands.");
+        return;
+    }
+    if (verb == "reset") {
+        if (words.size() != 2 || words[1].compare("reload", Qt::CaseInsensitive) != 0) {
+            output("Usage: reset reload");
+            return;
+        }
+        if (reloadRom())
+            output("Cartridge and companion symbols reloaded; instruction history cleared.");
         return;
     }
     const auto number = [](QString text, unsigned maximum, unsigned *value) {

@@ -380,6 +380,32 @@ int main(int argc, char **argv) {
                     found.user.code == user.user.code,
                 "unrelated_sdl_event_preserved");
 
+        unsigned gatedPolls = 0;
+        backend.beforePoll = [&] {
+            ++gatedPolls;
+            backend.pollNow();
+            backend.setInputEnabled(false);
+        };
+        events.clear();
+        require(SDL_JoystickSetVirtualButton(second->joystick, 8, 1) == 0,
+                "pre_poll_gate_press_set");
+        backend.pollNow();
+        require(gatedPolls == 1 && backend.state(second->id, &b) && b.physical.buttons[8] &&
+                    !b.effective.allowed && !b.effective.buttons[8],
+                "pre_poll_gate_is_current_and_recursion_is_bounded");
+        require(std::any_of(events.begin(), events.end(),
+                            [&](const InputEvent &event) {
+                                return event.instance == second->id &&
+                                       event.kind == InputEvent::Kind::Button &&
+                                       event.control == 8 && event.value && !event.allowed;
+                            }),
+                "pre_poll_gate_blocks_new_event_delivery");
+        backend.beforePoll = {};
+        backend.setInputEnabled(true);
+        require(SDL_JoystickSetVirtualButton(second->joystick, 8, 0) == 0,
+                "pre_poll_gate_press_release");
+        backend.pollNow();
+
         require(backend.rumble(second->id, 800, 900, 250), "rumble_before_stop");
         backend.stop();
         require(!backend.running() && backend.devices().empty() && !second->low && !second->high,
@@ -392,6 +418,14 @@ int main(int argc, char **argv) {
                 "external_sdl_subsystem_references_survive");
         require(backend.start(&error) && backend.state(second->id, &b) && b.effective.buttons[1],
                 "restart_reopens_live_state");
+        backend.beforePoll = [&] { backend.stop(); };
+        backend.pollNow();
+        require(!backend.running() && backend.devices().empty(), "pre_poll_stop_is_safe");
+        require(!backend.start(&error) && !backend.running() && backend.devices().empty(),
+                "pre_poll_stop_cancels_startup");
+        backend.beforePoll = {};
+        require(backend.start(&error) && backend.state(second->id, &b),
+                "pre_poll_stop_releases_recursion_guard");
         backend.stop();
         unsigned destructorNotifications = 0;
         auto scopedBackend = std::make_unique<ControllerBackend>();

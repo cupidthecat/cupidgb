@@ -20,6 +20,8 @@ The SGB profile uses its NTSC base clock of 4,295,454 Hz. SGB2 and the other cur
 
 Emulation > Reset reloads the cartridge and battery data and applies the selected hardware and boot settings. It discards rewind history. File > Close ROM flushes battery data and closes the current session. Failed cartridge or battery loads preserve the current session; failed battery writes are reported and can prevent closing or replacement.
 
+File > Reload Cartridge rereads the current cartridge and its companion `.sym` file while keeping the active hardware model, breakpoints, and running or paused state. It clears rewind and instruction history after a successful reload. If the companion file is absent, the old symbols are cleared; malformed symbols or an unreadable cartridge leave the current session intact. Reload has no default shortcut; assign one in Settings if needed.
+
 ## Controls
 
 | Action | Default |
@@ -32,6 +34,7 @@ Emulation > Reset reloads the cartridge and battery data and applies the selecte
 | Slow motion | Hold Shift |
 | Rapid A / B | Unassigned; configure in Settings |
 | Open / close cartridge | Ctrl+O / Ctrl+W |
+| Reload cartridge | Unassigned; configure in Settings |
 | Reset / pause | Ctrl+R / Ctrl+P |
 | Advance one interval | Ctrl+N |
 | Debugger | Ctrl+C |
@@ -120,7 +123,9 @@ Audio > Start Audio Recording writes stereo 16-bit PCM into a WAVE file. Choose 
 
 With a cartridge open, choose Emulation > Connect > Game Boy Printer, then use the game's print command. The printer feed opens when the game sends an image. Save PNG exports the feed at its original 160-pixel width and closes the feed window. Print opens the system print dialog. Choose Emulation > Connect > None to disconnect. Closing the feed starts a fresh roll when the next image arrives.
 
-Reset and successful state loads reset the printer's protocol. Paper already in the feed stays visible. Changing cartridges or closing the session disconnects the printer.
+Current states retain pending printer packets and jobs when a printer is attached. Loading, rewind and debugger Backstep restore that work while keeping paper already emitted into the feed. Replaying a print request can add another strip. Loading a version 2–11 state, or a state saved without a printer, starts a fresh connected printer. State loading preserves your current connection choice.
+
+Reset clears pending printer work. Changing cartridges or closing the session disconnects the printer. Paper remains host output, and PNG export and system printing use their explicit controls.
 
 The interface reports unavailable audio devices. A successful file recording proves sample capture, not audible host playback quality. Backend idle events and hardware sound differences remain under investigation.
 

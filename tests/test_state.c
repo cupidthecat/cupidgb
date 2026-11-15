@@ -113,6 +113,16 @@ static uint8_t *encode(const CupidGb *gb, size_t *length) {
     return bytes;
 }
 
+static size_t v11_hardware_size(const CupidGb *gb, size_t length) {
+    enum { ACCESSORY_DESCRIPTOR_BYTES = 8, INFRARED_HISTORY_BYTES = 6 };
+
+    /* These fixtures have no attached device. HuC3 keeps its existing IR section. */
+    const size_t tail = ACCESSORY_DESCRIPTOR_BYTES +
+                        (gb->header.mbc_type == CUPID_GB_HUC3 ? 0 : INFRARED_HISTORY_BYTES);
+    assert(length >= tail);
+    return length - tail;
+}
+
 static void assert_encoded_equal(const CupidGb *left, const CupidGb *right) {
     size_t a_length, b_length;
     uint8_t *a = encode(left, &a_length);
@@ -249,7 +259,7 @@ static void test_resume(void) {
                 size_t length;
                 uint8_t *state = encode(a, &length);
                 assert(length == cupid_gb_state_size(b) && length > 300518);
-                assert(state[8] == 11);
+                assert(state[8] == 12);
                 uint8_t *rom_pointer = b->rom;
                 strcpy(b->save_path, "host-session-save.sav");
                 assert(cupid_gb_load_state(b, state, length) == CUPID_GB_STATE_OK);
@@ -352,11 +362,12 @@ static void test_pulse_continuation(void) {
             }
             size_t length;
             uint8_t *bytes = encode(a, &length);
-            assert(bytes[8] == 11);
-            assert(bytes[length - 2] == a->apu.pulse_dac_hold[0] &&
-                   bytes[length - 1] == a->apu.pulse_dac_hold[1]);
+            const size_t v11_length = v11_hardware_size(a, length);
+            assert(bytes[8] == 12);
+            assert(bytes[v11_length - 2] == a->apu.pulse_dac_hold[0] &&
+                   bytes[v11_length - 1] == a->apu.pulse_dac_hold[1]);
             if (stage == 2 || stage == 4)
-                assert(bytes[length - 2] == 15 && bytes[length - 1] == 15);
+                assert(bytes[v11_length - 2] == 15 && bytes[v11_length - 1] == 15);
             assert(cupid_gb_load_state(b, bytes, length) == CUPID_GB_STATE_OK);
             assert_encoded_equal(a, b);
             for (unsigned batch = 0; batch < 80; ++batch) {
@@ -378,7 +389,7 @@ static void test_pulse_continuation(void) {
             }
             assert_encoded_equal(a, b);
             for (unsigned channel = 0; channel < 2; ++channel) {
-                const size_t offset = length - 2 + channel;
+                const size_t offset = v11_length - 2 + channel;
                 uint8_t original = bytes[offset];
                 bytes[offset] = 16;
                 update_integrity(bytes, length);
@@ -410,8 +421,10 @@ static void test_legacy_pulse_history(void) {
     memset(source->apu.pulse_timing, 0, sizeof(source->apu.pulse_timing));
     size_t length;
     uint8_t *bytes = encode(source, &length);
-    const size_t lengths[] = {300518,      300568,      300572,     length - 28, length - 24,
-                              length - 23, length - 12, length - 6, length - 2};
+    const size_t v11_length = v11_hardware_size(source, length);
+    const size_t lengths[] = {300518,          300568,          300572,
+                              v11_length - 28, v11_length - 24, v11_length - 23,
+                              v11_length - 12, v11_length - 6,  v11_length - 2};
     for (unsigned version = 2; version <= 10; ++version) {
         size_t old_length = lengths[version - 2];
         put_u32(bytes + 8, version);
@@ -441,8 +454,9 @@ static void test_legacy_pulse_history(void) {
     source->apu.pulse_dac_hold[1] = 9;
     bytes = encode(source, &length);
     /* V5 required a peripheral section, covered by the SGB fixtures above. */
-    const unsigned color_versions[] = {2, 3, 4, 6, 7, 8, 9, 10};
-    const size_t color_lengths[] = {300518, 300568, 300572, 300576, 300577, 300588, 300594, 300598};
+    const unsigned color_versions[] = {2, 3, 4, 6, 7, 8, 9, 10, 11};
+    const size_t color_lengths[] = {300518, 300568, 300572, 300576, 300577,
+                                    300588, 300594, 300598, 300600};
     for (unsigned entry = 0; entry < sizeof(color_versions) / sizeof(color_versions[0]); ++entry) {
         const unsigned version = color_versions[entry];
         const size_t old_length = color_lengths[entry];
@@ -455,7 +469,8 @@ static void test_legacy_pulse_history(void) {
             fprintf(stderr, "Color state version %u (%zu bytes): %s\n", version, old_length,
                     cupid_gb_state_result_name(loaded));
         assert(loaded == CUPID_GB_STATE_OK);
-        assert(!a->apu.pulse_dac_hold[0] && !a->apu.pulse_dac_hold[1]);
+        assert(a->apu.pulse_dac_hold[0] == (version < 11 ? 0 : 15) &&
+               a->apu.pulse_dac_hold[1] == (version < 11 ? 0 : 9));
     }
     free(bytes);
     cupid_gb_cleanup(source);
@@ -492,9 +507,9 @@ static void test_controller_state_versions(void) {
     cupid_gb_write_u8(source, 0x4000, 0x0d);
     size_t length;
     uint8_t *bytes = encode(source, &length);
-    assert(length == 310719 && bytes[300568] == source->joypad_extra[0] &&
-           bytes[300569] == source->joypad_extra[1] && bytes[300570] == source->joypad_extra[2] &&
-           bytes[300571] == 1);
+    assert(v11_hardware_size(source, length) == 310719 &&
+           bytes[300568] == source->joypad_extra[0] && bytes[300569] == source->joypad_extra[1] &&
+           bytes[300570] == source->joypad_extra[2] && bytes[300571] == 1);
     unsigned callbacks = 0;
     cupid_gb_set_rumble_callback(target, state_rumble_callback, &callbacks);
     assert(cupid_gb_load_state(target, bytes, length) == CUPID_GB_STATE_OK);
@@ -977,6 +992,7 @@ static void test_rejection(void) {
     prepare_phase(gb, 2);
     size_t length;
     uint8_t *valid = encode(gb, &length);
+    const size_t v11_length = v11_hardware_size(gb, length);
     uint8_t *damaged = malloc(length + 1);
     CupidGb *snapshot = malloc(sizeof(*snapshot));
     assert(damaged && snapshot);
@@ -1001,10 +1017,10 @@ static void test_rejection(void) {
     damaged[length - 1] ^= 1;
     rejected_unchanged(gb, damaged, length, CUPID_GB_STATE_INVALID);
     memcpy(damaged, valid, length);
-    damaged[length - 13] = 5;
+    damaged[v11_length - 13] = 5;
     update_integrity(damaged, length);
     rejected_unchanged(gb, damaged, length, CUPID_GB_STATE_INVALID);
-    const size_t input_offsets[] = {length - 23, length - 22, length - 22};
+    const size_t input_offsets[] = {v11_length - 23, v11_length - 22, v11_length - 22};
     const uint8_t input_values[] = {1, 1, 0x10};
     for (unsigned field = 0; field < sizeof(input_values); ++field) {
         memcpy(damaged, valid, length);
@@ -1012,7 +1028,7 @@ static void test_rejection(void) {
         update_integrity(damaged, length);
         rejected_unchanged(gb, damaged, length, CUPID_GB_STATE_INVALID);
     }
-    const size_t counter_offsets[] = {length - 21, length - 17};
+    const size_t counter_offsets[] = {v11_length - 21, v11_length - 17};
     const uint32_t counter_values[] = {140448, 67485};
     for (unsigned field = 0; field < sizeof(counter_values) / sizeof(counter_values[0]); ++field) {
         memcpy(damaged, valid, length);
@@ -1068,7 +1084,7 @@ static void test_rejection(void) {
     damaged[length] = 0;
     rejected_unchanged(gb, damaged, length + 1, CUPID_GB_STATE_INVALID);
     memcpy(damaged, valid, length);
-    damaged[8] = 12;
+    damaged[8] = (uint8_t)(valid[8] + 1u);
     update_integrity(damaged, length);
     rejected_unchanged(gb, damaged, length, CUPID_GB_STATE_UNSUPPORTED_VERSION);
     memcpy(damaged, valid, length);
@@ -1137,10 +1153,11 @@ static void test_sgb_transfer_resume(void) {
 
     size_t length;
     uint8_t *bytes = encode(source, &length);
-    assert(length == 310719 && bytes[8] == 11);
+    const size_t v11_length = v11_hardware_size(source, length);
+    assert(v11_length == 310719 && bytes[8] == 12);
     assert(bytes[v4_length + 7 + 4096] == 0xa5);
     assert(bytes[v4_length + 7 + 8192] == 0x80 && bytes[v4_length + 7 + 8193] == 0x0c);
-    assert(bytes[length - 30] == 0x34 && bytes[length - 29] == 0x12);
+    assert(bytes[v11_length - 30] == 0x34 && bytes[v11_length - 29] == 0x12);
     assert(cupid_gb_load_state(target, bytes, length) == CUPID_GB_STATE_OK);
     assert_hardware_equal(source, target);
     cupid_gb_tick_ppu_dots(source, 1);
@@ -1207,7 +1224,7 @@ static void test_lcd_frame_phase_resume(void) {
         assert(source->lcd_first_frame == handheld);
         size_t length;
         uint8_t *state = encode(source, &length);
-        const size_t phase_offset = length - 28;
+        const size_t phase_offset = v11_hardware_size(source, length) - 28;
         assert(state[phase_offset] == handheld && state[phase_offset + 1] == handheld);
         assert(cupid_gb_load_state(target, state, length) == CUPID_GB_STATE_OK);
         assert(target->lcd_frame_odd == handheld && target->lcd_first_frame == handheld);
@@ -1316,12 +1333,13 @@ static void test_v5_sgb_mapper_sections(void) {
         }
         size_t length;
         uint8_t *bytes = encode(source, &length);
-        assert(length == mapper_offset + mapper_length + 28 && bytes[8] == 11 &&
+        const size_t v11_length = v11_hardware_size(source, length);
+        assert(v11_length == mapper_offset + mapper_length + 28 && bytes[8] == 12 &&
                bytes[mapper_offset - 2] == 0x34 && bytes[mapper_offset - 1] == 0x12);
         assert(memcmp(bytes + mapper_offset, wire, mapper_length) == 0);
         assert(cupid_gb_load_state(target, bytes, length) == CUPID_GB_STATE_OK);
         assert_encoded_equal(source, target);
-        const size_t v5_length = length - 28;
+        const size_t v5_length = v11_length - 28;
         put_u32(bytes + 8, 5);
         put_u32(bytes + 12, (uint32_t)v5_length);
         update_integrity(bytes, v5_length);
@@ -1415,8 +1433,10 @@ static void print_fixture(const char *path) {
     gb->dma_active = true;
     size_t length;
     uint8_t *bytes = encode(gb, &length);
-    assert(length == 300600 && bytes[8] == 11 && !bytes[length - 28] && !bytes[length - 27]);
-    length -= 28;
+    const size_t v11_length = v11_hardware_size(gb, length);
+    assert(v11_length == 300600 && bytes[8] == 12 && !bytes[v11_length - 28] &&
+           !bytes[v11_length - 27]);
+    length = v11_length - 28;
     put_u32(bytes + 8, 4);
     put_u32(bytes + 12, (uint32_t)length);
     update_integrity(bytes, length);
@@ -1861,7 +1881,7 @@ static void test_input_and_display_history(void) {
             }
             // Older tails did not record row release or presentation counters.
             for (unsigned version = 6; version <= 7; ++version) {
-                const size_t old_length = length - (version == 7 ? 23 : 24);
+                const size_t old_length = v11_hardware_size(a, length) - (version == 7 ? 23 : 24);
                 put_u32(state + 8, version);
                 put_u32(state + 12, (uint32_t)old_length);
                 update_integrity(state, old_length);

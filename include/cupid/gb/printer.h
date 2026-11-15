@@ -26,10 +26,13 @@ CupidGbPrinter *cupid_gb_printer_create(CupidGbPrinterImageCallback image,
 void cupid_gb_printer_reset(CupidGbPrinter *printer);
 /* Detach the link from its core before destroying the printer. */
 void cupid_gb_printer_destroy(CupidGbPrinter *printer);
+/* This factory marks the built-in endpoint for native snapshots. Keep its link
+ * fields together and detach it before destroying the caller-owned allocation. */
 CupidGbSerialLink cupid_gb_printer_link(CupidGbPrinter *printer);
 /* Advance the accessory after a guest execution slice. Serial callbacks also
- * synchronize it before receiving data. The printer has its own state and is
- * independent of the attached console's save state. */
+ * synchronize it before receiving data. Native V12 snapshots include the recognized
+ * endpoint's protocol, image buffer and job timer without storing host callbacks.
+ * Loading emits no image/completion callback and never replays already printed paper. */
 void cupid_gb_printer_update(CupidGbPrinter *printer, const CupidGb *gb);
 
 #endif

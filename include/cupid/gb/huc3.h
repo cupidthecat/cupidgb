@@ -1,7 +1,7 @@
 #ifndef CUPID_GB_HUC3_H
 #define CUPID_GB_HUC3_H
 
-#include "cupid/gb/gb.h"
+#include "cupid/gb/infrared.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -14,8 +14,8 @@ enum {
     CUPID_GB_HUC3_RESPONSE = 0xc,
     CUPID_GB_HUC3_STATUS = 0xd,
     CUPID_GB_HUC3_INFRARED = 0xe,
-    CUPID_GB_HUC3_IR_WARMUP_LIMIT = 34048,
-    CUPID_GB_HUC3_IR_DECAY_LIMIT = 48048
+    CUPID_GB_HUC3_IR_WARMUP_LIMIT = CUPID_GB_INFRARED_WARMUP_LIMIT,
+    CUPID_GB_HUC3_IR_DECAY_LIMIT = CUPID_GB_INFRARED_DECAY_LIMIT
 };
 
 void cupid_gb_huc3_advance(CupidGbHuc3 *device, int64_t host_seconds);

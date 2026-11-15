@@ -106,7 +106,7 @@ uint8_t cupid_gb_huc3_read_window(const CupidGb *gb) {
     if (gb->huc3_mode == CUPID_GB_HUC3_RESPONSE)
         return gb->huc3.flags == 2 ? 1u : gb->huc3_value;
     if (gb->huc3_mode == CUPID_GB_HUC3_INFRARED)
-        return gb->huc3.ir_detected ? 1u : 0u;
+        return cupid_gb_infrared_detected(gb) ? 1u : 0u;
     return 1u;
 }
 
@@ -114,38 +114,11 @@ void cupid_gb_huc3_write_window(CupidGb *gb, uint8_t value) {
     if (gb->huc3_mode == CUPID_GB_HUC3_COMMAND)
         command(gb, value);
     else if (gb->huc3_mode == CUPID_GB_HUC3_INFRARED)
-        gb->huc3.ir_output = (value & 1u) != 0;
-}
-
-static uint16_t charge(uint16_t current, unsigned clocks, bool on, unsigned limit) {
-    if (!on)
-        return current > clocks ? (uint16_t)(current - clocks) : 0;
-    const unsigned next = current + clocks;
-    return (uint16_t)(next < limit ? next : limit);
+        cupid_gb_infrared_write_cartridge(gb, value);
 }
 
 void cupid_gb_huc3_tick_infrared(CupidGb *gb, unsigned dots) {
-    enum { WARMUP_START = 32000, DECAY_START = 23000, NOISE_RANGE = 2048 };
-
-    CupidGbHuc3 *device = &gb->huc3;
-    const unsigned clocks = dots * 2u;
-    const uint8_t port = gb->cgb_mode ? gb->io_registers[0x56] : 0;
-    const bool sensing = gb->huc3_mode == CUPID_GB_HUC3_INFRARED || (port & 0xc0u) == 0xc0u;
-    if (!sensing && !device->ir_warmup && !device->ir_decay)
-        return;
-    device->ir_warmup = charge(device->ir_warmup, clocks, sensing, CUPID_GB_HUC3_IR_WARMUP_LIMIT);
-    bool detected = sensing && (gb->huc3_ir_input || device->ir_output || (port & 1u)) &&
-                    device->ir_warmup >= WARMUP_START;
-    /* Near both thresholds, the photodiode's output fluctuates. Keep the
-     * transition repeatable by deriving its noise from emulated clock phase. */
-    const unsigned noise = (unsigned)((gb->elapsed_cycles * 105067u) >> 7) % NOISE_RANGE;
-    if (device->ir_warmup < CUPID_GB_HUC3_IR_WARMUP_LIMIT && detected)
-        detected = noise < (unsigned)device->ir_warmup - WARMUP_START;
-    device->ir_decay = charge(device->ir_decay, clocks, detected, CUPID_GB_HUC3_IR_DECAY_LIMIT);
-    if (device->ir_decay >= DECAY_START)
-        detected = detected && device->ir_decay < DECAY_START + NOISE_RANGE &&
-                   noise > (unsigned)device->ir_decay - DECAY_START;
-    device->ir_detected = detected;
+    cupid_gb_infrared_tick(gb, dots);
 }
 
 uint32_t cupid_gb_huc3_seconds_to_alarm(const CupidGb *gb, int64_t host_seconds) {
@@ -166,8 +139,7 @@ uint32_t cupid_gb_huc3_seconds_to_alarm(const CupidGb *gb, int64_t host_seconds)
 }
 
 void cupid_gb_huc3_set_infrared_input(CupidGb *gb, bool active) {
-    if (gb)
-        gb->huc3_ir_input = active;
+    cupid_gb_set_infrared_input(gb, active);
 }
 
 bool cupid_gb_huc3_infrared_output(const CupidGb *gb) {

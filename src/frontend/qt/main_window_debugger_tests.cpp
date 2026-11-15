@@ -1,5 +1,7 @@
 #include "main_window_internal.h"
 
+#include <QScopeGuard>
+
 bool MainWindow::debuggerSmokeTest(const QString &directory) {
     settings_.setValue("emulation/model", int(CUPID_GB_MODEL_DMG_ABC));
     settings_.setValue("emulation/bootDirectory", QString());
@@ -592,5 +594,126 @@ bool MainWindow::debuggerSmokeTest(const QString &directory) {
         return smokeFailure(__FILE__, __LINE__);
     debuggerWindow_->close();
     inspectorsWindow_->close();
+    return reloadSmokeTest(directory);
+}
+
+bool MainWindow::reloadSmokeTest(const QString &directory) {
+    MainWindow session(true, true, false, QStringLiteral(""));
+    session.timer_.stop();
+    const auto previousModel = session.settings_.value("emulation/model");
+    const auto restoreSettings = qScopeGuard([&session, &previousModel] {
+        session.settings_.setValue("emulation/model", previousModel);
+    });
+    session.settings_.setValue("emulation/model", int(CUPID_GB_MODEL_DMG_ABC));
+    if (!session.reloadAction_ || session.reloadAction_->isEnabled() || session.reloadRom())
+        return smokeFailure(__FILE__, __LINE__);
+    const auto write = [](const QString &path, const QByteArray &bytes) {
+        QFile file(path);
+        return file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size();
+    };
+    QByteArray rom(32768, char(0));
+    rom[0x100] = char(0xc3);
+    rom[0x101] = char(0x50);
+    rom[0x102] = char(0x01);
+    rom[0x147] = char(0x03);
+    rom[0x149] = char(0x02);
+    rom[0x150] = char(0x3e);
+    rom[0x151] = char(0x11);
+    rom[0x152] = char(0x18);
+    rom[0x153] = char(0xfe);
+    uint8_t checksum = 0;
+    for (int i = 0x134; i <= 0x14c; ++i)
+        checksum = uint8_t(checksum - uint8_t(rom[i]) - 1);
+    rom[0x14d] = char(checksum);
+    const QString path = QDir(directory).filePath(QString::fromUtf8("reload-\xc3\xa9.gb"));
+    const QFileInfo info(path);
+    const QString symbolsPath = info.dir().filePath(info.completeBaseName() + ".sym");
+    if (!write(path, rom) || !write(symbolsPath, "00:0150 OldEntry\n") || !session.openRom(path) ||
+        !session.reloadAction_->isEnabled())
+        return smokeFailure(__FILE__, __LINE__);
+    session.ensureDebugger();
+    session.pauseDebugger();
+    session.debuggerWindow_->submitCommand("break $0152");
+    session.debuggerWindow_->submitCommand("step");
+    session.debuggerSlice();
+    if (session.debuggerTimer_.isActive() || session.debuggerHistory_.empty() ||
+        session.debugger_->bp_count != 1 || session.debugger_->symbol_count != 1)
+        return smokeFailure(__FILE__, __LINE__);
+    cupid_gb_write_u8(&session.emulator_->gb, 0x0000, 0x0a);
+    cupid_gb_write_u8(&session.emulator_->gb, 0xa000, 0x6d);
+    const QByteArray beforeInvalidCommand = session.captureState();
+    session.debuggerWindow_->submitCommand("reset reload extra");
+    session.debuggerWindow_->submitCommand("reset quick");
+    if (session.captureState() != beforeInvalidCommand || session.debuggerHistory_.empty())
+        return smokeFailure(__FILE__, __LINE__);
+    rom[0x151] = char(0x42);
+    if (!write(path, rom) || !write(symbolsPath, "00:0152 NewEntry\n"))
+        return smokeFailure(__FILE__, __LINE__);
+    // Reload retains the active hardware even when the next Reset preference changes.
+    session.settings_.setValue("emulation/model", int(CUPID_GB_MODEL_CGB));
+    session.debuggerWindow_->submitCommand("reset reload");
+    uint16_t symbolBank = 0;
+    uint16_t symbolAddress = 0;
+    if (!session.paused_ || session.debuggerTimer_.isActive() ||
+        session.emulator_->gb.cpu.pc != 0x100 ||
+        session.emulator_->gb.model != CUPID_GB_MODEL_DMG_ABC || session.romData_ != rom ||
+        session.emulator_->gb.cartridge_ram[0] != 0x6d || !session.debuggerHistory_.empty() ||
+        session.rewindStates_.size() > 1 || session.debugger_->bp_count != 1 ||
+        session.debugger_->breakpoints[0].address != 0x152 ||
+        !cupid_gb_debugger_lookup_symbol(session.debugger_.get(), "NewEntry", &symbolBank,
+                                         &symbolAddress) ||
+        symbolAddress != 0x152 ||
+        cupid_gb_debugger_lookup_symbol(session.debugger_.get(), "OldEntry", &symbolBank,
+                                        &symbolAddress))
+        return smokeFailure(__FILE__, __LINE__);
+    // The reload action refreshes symbols even when the cartridge bytes did not change.
+    if (!write(symbolsPath, "00:0150 UpdatedEntry\n"))
+        return smokeFailure(__FILE__, __LINE__);
+    session.reloadAction_->trigger();
+    if (!session.paused_ ||
+        !cupid_gb_debugger_lookup_symbol(session.debugger_.get(), "UpdatedEntry", &symbolBank,
+                                         &symbolAddress) ||
+        symbolAddress != 0x150 || session.debugger_->symbol_count != 1)
+        return smokeFailure(__FILE__, __LINE__);
+    session.setPaused(false);
+    if (!QFile::remove(symbolsPath))
+        return smokeFailure(__FILE__, __LINE__);
+    session.reloadAction_->trigger();
+    if (session.paused_ || session.debugger_->symbol_count || session.debugger_->bp_count != 1 ||
+        session.emulator_->gb.cpu.pc != 0x100)
+        return smokeFailure(__FILE__, __LINE__);
+    session.pauseDebugger();
+    session.debuggerWindow_->submitCommand("step");
+    session.debuggerSlice();
+    const QByteArray beforeFailure = session.captureState();
+    const auto historySize = session.debuggerHistory_.size();
+    if (!historySize || !write(symbolsPath, "invalid symbols\n") || session.reloadRom() ||
+        session.captureState() != beforeFailure || session.debuggerHistory_.size() != historySize ||
+        !session.paused_ || session.debugger_->bp_count != 1)
+        return smokeFailure(__FILE__, __LINE__);
+    session.failed_ = false;
+    if (!write(symbolsPath, "00:0150 ValidEntry\n") || !write(path, QByteArray(8, char(0))) ||
+        session.reloadRom() || session.captureState() != beforeFailure ||
+        session.debuggerHistory_.size() != historySize || session.debugger_->symbol_count)
+        return smokeFailure(__FILE__, __LINE__);
+    session.failed_ = false;
+    if (!QFile::remove(path) || session.reloadRom() || session.captureState() != beforeFailure ||
+        session.debuggerHistory_.size() != historySize || !session.paused_)
+        return smokeFailure(__FILE__, __LINE__);
+    session.failed_ = false;
+    if (!session.closeRom() || session.reloadAction_->isEnabled() || session.reloadRom())
+        return smokeFailure(__FILE__, __LINE__);
+    // File reload must also work before a debugger has ever been created.
+    MainWindow plain(true, true, false, QStringLiteral(""), int(CUPID_GB_MODEL_DMG_ABC));
+    plain.timer_.stop();
+    if (!write(path, rom) || !plain.openRom(path) || plain.debugger_)
+        return smokeFailure(__FILE__, __LINE__);
+    rom[0x151] = char(0x23);
+    if (!write(path, rom))
+        return smokeFailure(__FILE__, __LINE__);
+    plain.reloadAction_->trigger();
+    if (plain.romData_ != rom || plain.paused_ || plain.debugger_ ||
+        plain.emulator_->gb.cartridge_ram[0] != 0x6d || !plain.closeRom())
+        return smokeFailure(__FILE__, __LINE__);
     return true;
 }

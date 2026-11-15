@@ -49,6 +49,7 @@ Type `help` or `?` for the supported command list. Console numbers are decimal u
 | `write $c000 $42` | Write byte 42 to the current writable mapping |
 | `set PC $0100` | Change a CPU register while paused |
 | `symbols "path with spaces/game.sym"` | Load a symbol file |
+| `reset reload` | Reread the current cartridge and companion symbols, keeping the current model and breakpoints |
 
 Register edits accept AF, BC, DE, HL, SP, PC, A, F, B, C, D, E, H, L, and IME. The unused low bits of F remain zero; IME accepts only 0 or 1. A bank-qualified memory/disassembly request must refer to the bank currently mapped at that address. The commands do not switch hardware banks or patch ROM bytes.
 
@@ -73,7 +74,9 @@ Load Symbols accepts RGBDS-style `.sym` text with hexadecimal `bank:address name
 
 Loading replaces the symbol table only after complete validation. A malformed file leaves existing symbols intact and reports a line number. Duplicate names resolve to their last definition. Files are limited to 4 MiB and 16,384 symbols, with at most 127 bytes per name. The symbol loader does not read object files.
 
-Symbols and breakpoints are host debugger data. They are not embedded in native save states. Resetting the same cartridge path, data, and model preserves them while clearing execution history. A replacement clears the previous session's debugger data and loads a matching basename `.sym` file if available. The first debugger open also checks for that companion file. A failed cartridge open preserves the current session. Use the explicit symbol loader when a file needs to be reloaded or changed.
+Symbols and breakpoints are host debugger data. They are not embedded in native save states. Resetting the same cartridge path, data, and model preserves them while clearing execution history. A replacement clears the previous session's debugger data and loads a matching basename `.sym` file if available. The first debugger open also checks for that companion file. A failed cartridge open preserves the current session.
+
+File > Reload Cartridge and `reset reload` explicitly reread the cartridge and companion symbols. They keep the active hardware model, breakpoints, and running or paused state, then clear rewind and instruction history. An absent companion file clears the old symbols. A malformed symbol file or failed cartridge load preserves the session and its history. Use `symbols` to replace only the symbol table without reloading the cartridge.
 
 ## Instruction history and playback
 
