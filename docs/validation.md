@@ -873,3 +873,13 @@ bounded results, agree on verdicts, guest counters, image/PCM checksums and exit
 codes. These counts cover the selected models and protocols. Source-inapplicable
 startup revisions remain excluded, and these three mapper families do not stand
 in for every cartridge peripheral or all-game qualification.
+
+The Qt 6.8.3 native Linux CGB run also reaches active level 1-1 over 60 requested
+seconds with normal 44,100 Hz output. It exits normally with zero audio errors
+and zero startup or post-warmup idle events. The 55-second post-warmup window
+reports 99.997% guest progress against the adjusted host clock. Read-only clock
+sampling records 122 successful observations, changing ticks from 9,644 to
+9,685 microseconds and changing frequency correction. Adjusted monotonic time
+advances at roughly 0.9644 to 0.9685 of the RAW clock's rate. Consequently, the
+near-nominal adjusted-clock result does not establish stable real-time speed.
+Peak sampled resident memory is 114,680 KiB. The sampler makes no clock writes.
