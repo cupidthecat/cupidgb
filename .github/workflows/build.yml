@@ -120,7 +120,16 @@ jobs:
           echo 'Requested package policy without reusable binary caches:'
           sudo apt-cache "${apt_options[@]}" -o Dir::Cache::pkgcache= \
             -o Dir::Cache::srcpkgcache= policy qt6-base-dev qt6-multimedia-dev libsdl2-dev
-          sudo apt-get "${apt_options[@]}" install -y qt6-base-dev qt6-multimedia-dev libssl-dev libsdl2-dev 7zip
+          sudo apt-get "${apt_options[@]}" install -y qt6-base-dev qt6-multimedia-dev libssl-dev libsdl2-dev libxcb-cursor0 7zip
+      - name: Linux Qt SDK
+        if: runner.os == 'Linux'
+        timeout-minutes: 15
+        uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06 # v4
+        with:
+          version: '6.8.3'
+          arch: 'linux_gcc_64'
+          modules: qtmultimedia
+          cache: true
       - name: Windows controller SDK
         if: runner.os == 'Windows'
         timeout-minutes: 5

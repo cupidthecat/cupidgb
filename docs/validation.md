@@ -841,3 +841,35 @@ a 16.732 ms median, 18.081 ms 95th percentile and 20.408 ms maximum. An earlier
 menu-only trace records one startup audio idle event; it is retained separately.
 These are bounded application observations, without a listening assessment or
 physical display-refresh measurement. They do not qualify every game or saving.
+
+The matching Linux Qt 6.8.3 SDK passes 43/43 desktop checks, three additional
+complete CLI workflow runs, and a native Xcb audio-enabled smoke check. Desktop CI
+now selects that SDK on Linux as well as Windows. The earlier Qt 6.4.2 failures
+remain recorded; changing the validated toolkit does not establish long-term
+Linux audio stability or resolve changes to the host clock and audio service.
+
+A corrected Windows CGB trace enters level 1-1 and exercises running, scrolling
+and jumping. The 60-second run ends in the active level with terrain and an enemy
+visible. Its post-warmup window records 99.994% guest progress, 3,290 widget paints,
+zero audio idle events and zero audio errors. Paint intervals have a 16.719 ms
+median, 17.987 ms 95th percentile and 24.123 ms maximum. A separate 35-second
+capture caught a guest-controlled LCD-off transition: private per-interval checks
+show the display returning within five intervals. That white capture is retained
+without treating it as a persistent renderer failure.
+
+Active commercial DMG and CGB states also pass a bounded Linux V10 continuation
+check. Independent instances preserve 17 queued PCM frames at restore, then match
+443,012 drained stereo frames, 600 presentation buffers, final framebuffers and
+the complete final native state bytes over roughly ten further guest seconds.
+This checks the core codec and continuation; frontend disk workflows and
+cross-platform state interchange have separate requirements.
+
+The refreshed external corpus is pinned at `31510e12eea6286d36eea060a6adde755e1067aa`.
+Source-qualified shared-boot cases pass on both Windows and Linux: 66/66 DMG and
+53/53 CGB acceptance cases, plus 28 MBC1/MBC2/MBC5 banking cases. Two banking
+exhaustion cases remain bounded at the initial 600-interval limit and pass their
+separate 3,600-interval runs. All 149 paired observations, including those initial
+bounded results, agree on verdicts, guest counters, image/PCM checksums and exit
+codes. These counts cover the selected models and protocols. Source-inapplicable
+startup revisions remain excluded, and these three mapper families do not stand
+in for every cartridge peripheral or all-game qualification.

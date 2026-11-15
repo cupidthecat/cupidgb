@@ -8,7 +8,7 @@ CupidGB uses CMake for the hardware core, command-line ROM runner, Qt desktop ap
 | --- | --- |
 | CMake | 3.21 or newer |
 | Compilers | C11 and C++17 |
-| Qt | 6.4 or newer, Widgets, Multimedia, and Print Support modules |
+| Qt | 6.4 or newer APIs; desktop validation uses 6.8.3 with Widgets, Multimedia, and Print Support |
 | SDL2 | 2.24 or newer for the Qt desktop controller backend |
 | Python | 3.9 or newer when tests are enabled |
 | Build tool | Ninja, Make, or the matching Visual Studio generator |
@@ -37,6 +37,14 @@ ctest --test-dir build --output-on-failure
 Install `libssl-dev` as well to enable the optional native hashing path on Debian/Ubuntu. A build without it remains supported and uses the same hash format.
 
 If Qt is outside the system search paths, add `-DCMAKE_PREFIX_PATH=/path/to/Qt/6.x/gcc_64` when configuring. Use the actual installation path.
+
+Desktop CI uses Qt 6.8.3 on both platforms. For that Linux SDK, install its
+Multimedia module and point `CMAKE_PREFIX_PATH` at the `gcc_64` directory. The Xcb
+platform plugin also needs `libxcb-cursor0` on Debian/Ubuntu. Distribution Qt 6.4.2
+can compile the application, but local short-lived playback tests reproduce an
+intermittent PulseAudio shutdown abort, including in a clean preceding build.
+The same checks pass with the 6.8.3 SDK. Keep the toolkit version in runtime
+receipts; passing core checks does not qualify a particular audio backend.
 
 The desktop application needs a working graphical session and a usable audio output backend. An offscreen workflow check can run without a visible desktop:
 
