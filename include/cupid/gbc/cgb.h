@@ -16,6 +16,8 @@ void cupid_cgb_apply_compatibility_palette(struct CupidGb *gb);
 bool cupid_cgb_compat_active(const struct CupidGb *gb);
 uint16_t cupid_cgb_compat_bg_color(const struct CupidGb *gb, uint8_t shade);
 uint16_t cupid_cgb_compat_obj_color(const struct CupidGb *gb, unsigned int palette, uint8_t shade);
+/* CPU palette access differs from the gate sampled by a stopped PPU. */
+bool cupid_cgb_palettes_cpu_blocked(const struct CupidGb *gb);
 bool cupid_cgb_handle_read_register(const struct CupidGb *gb, uint16_t address, uint8_t *value);
 bool cupid_cgb_handle_write_register(struct CupidGb *gb, uint16_t address, uint8_t value);
 void cupid_cgb_render_scanline(struct CupidGb *gb, uint8_t lcdc, uint8_t ly, size_t base_index);

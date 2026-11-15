@@ -439,6 +439,9 @@ typedef struct CupidGb {
     uint16_t oam_vram_row;      /* Retained source-bus row; UINT16_MAX releases the latch. */
     uint16_t oam_search_word;   /* Last word sampled by the shared OAM port. */
     bool stop_ppu_vram_blocked; /* STOP holds the sampled PPU access gate until wake. */
+    bool stop_ppu_oam_blocked;
+    bool stop_ppu_palette_blocked;
+    uint16_t ppu_transfer_end_dot; /* Palette access remains blocked after the last pixel. */
     CupidGbObjectFetchStage object_fetch_stage;
 } CupidGb;
 

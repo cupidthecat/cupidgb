@@ -16,6 +16,7 @@ void cupid_gb_pixels_begin_line(CupidGb *gb) {
     p->object_count = 0;
     p->fetched_objects = 0;
     p->active = false;
+    gb->ppu_transfer_end_dot = 0;
     if (p->line == gb->io_registers[CUPID_GB_IO_WY])
         p->window_armed = true;
 }
@@ -28,6 +29,8 @@ static uint8_t raw_oam_read(const CupidGb *gb, uint8_t address) {
 }
 
 static uint8_t ppu_oam_read(const CupidGb *gb, uint8_t requested) {
+    if (gb->cpu.stopped && gb->stop_ppu_oam_blocked)
+        return 0xff;
     uint8_t address = requested;
     if ((gb->dma_active || gb->dma_start_delay) && gb->dma_index && gb->dma_index <= 160u) {
         if (gb->hdma_running)
@@ -51,6 +54,8 @@ void cupid_gb_pixels_scan_object(CupidGb *gb, unsigned index) {
     if (!dma || stationary)
         gb->oam_search_word = read_oam_word(gb, index * 4);
     if (dma && stationary && gb->model != CUPID_GB_MODEL_CGB)
+        return;
+    if (gb->cpu.stopped && gb->stop_ppu_oam_blocked)
         return;
     unsigned height = gb->io_registers[CUPID_GB_IO_LCDC] & 4 ? 16 : 8;
     uint8_t y = (uint8_t)gb->oam_search_word;
@@ -152,7 +157,10 @@ static void fetch_background(CupidGb *gb) {
         }
         case 1:
             p->tile = fetch_vram(gb, p->address);
-            p->attributes = gb->cgb_mode ? fetch_vram(gb, p->address + 0x2000u) : 0;
+            // Physical color hardware reads the attribute bank for monochrome
+            // cartridges too. Its bank, flip and priority bits still reach the FIFO.
+            p->attributes =
+                gb->model == CUPID_GB_MODEL_CGB ? fetch_vram(gb, p->address + 0x2000u) : 0;
             ++p->phase;
             break;
         case 2:
@@ -262,6 +270,30 @@ static void overlay_object(CupidGb *gb) {
     }
 }
 
+#if defined(__GNUC__) && !defined(__clang__) && defined(__x86_64__)
+/* GCC can lower the lane loop to four out-of-line memmoves per pixel. The
+ * fixed-size chunk path avoids those calls on the measured x86-64 target.
+ * Other architectures and compilers retain the loop.
+ * Capture both chunks before either store. Their overlapping destination bytes
+ * agree, preserving every lane with fixed-size copies that can remain inline.
+ * memcpy avoids alignment and host-byte-order assumptions. */
+static void shift_sprite_bytes(uint8_t values[8]) {
+    uint32_t first, last;
+    memcpy(&first, values + 1, sizeof first);
+    memcpy(&last, values + 4, sizeof last);
+    memcpy(values, &first, sizeof first);
+    memcpy(values + 3, &last, sizeof last);
+}
+
+static void shift_sprite_priorities(uint16_t values[8]) {
+    uint64_t first, last;
+    memcpy(&first, values + 1, sizeof first);
+    memcpy(&last, values + 4, sizeof last);
+    memcpy(values, &first, sizeof first);
+    memcpy(values + 3, &last, sizeof last);
+}
+#endif
+
 static void emit_pixel(CupidGb *gb) {
     CupidGbPixels *p = &gb->pixels;
     uint8_t lcdc = gb->io_registers[CUPID_GB_IO_LCDC];
@@ -280,7 +312,9 @@ static void emit_pixel(CupidGb *gb) {
     if (gb->cgb_mode) {
         const uint8_t *palette = object ? gb->cgb_obj_palette_ram : gb->cgb_bg_palette_ram;
         unsigned number = object ? p->sprite_palettes[0] : p->palettes[p->read];
-        gb->frame_buffer_color[index] = palette_color(palette, number * 4 + color);
+        gb->frame_buffer_color[index] = gb->cpu.stopped && gb->stop_ppu_palette_blocked
+                                            ? 0
+                                            : palette_color(palette, number * 4 + color);
         gb->frame_buffer[index] = color;
     } else {
         unsigned reg = object ? CUPID_GB_IO_OBP0 + p->sprite_palettes[0] : CUPID_GB_IO_BGP;
@@ -288,18 +322,26 @@ static void emit_pixel(CupidGb *gb) {
         gb->frame_buffer[index] = shade;
         if (cupid_cgb_compat_active(gb))
             gb->frame_buffer_color[index] =
-                object ? cupid_cgb_compat_obj_color(gb, p->sprite_palettes[0], shade)
-                       : cupid_cgb_compat_bg_color(gb, shade);
+                gb->cpu.stopped && gb->stop_ppu_palette_blocked ? 0
+                : object ? cupid_cgb_compat_obj_color(gb, p->sprite_palettes[0], shade)
+                         : cupid_cgb_compat_bg_color(gb, shade);
     }
     if (p->window_active)
         p->window_used = true;
     ++p->x;
+#if defined(__GNUC__) && !defined(__clang__) && defined(__x86_64__)
+    shift_sprite_bytes(p->sprite_colors);
+    shift_sprite_bytes(p->sprite_palettes);
+    shift_sprite_bytes(p->sprite_flags);
+    shift_sprite_priorities(p->sprite_priorities);
+#else
     for (unsigned i = 0; i < 7; ++i) {
         p->sprite_colors[i] = p->sprite_colors[i + 1];
         p->sprite_palettes[i] = p->sprite_palettes[i + 1];
         p->sprite_flags[i] = p->sprite_flags[i + 1];
         p->sprite_priorities[i] = p->sprite_priorities[i + 1];
     }
+#endif
     p->sprite_colors[7] = 0;
     p->sprite_priorities[7] = UINT16_MAX;
 }

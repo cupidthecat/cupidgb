@@ -10,6 +10,28 @@ bool cupid_gb_lcd_enabled(const CupidGb *gb) {
     return (gb->io_registers[CUPID_GB_IO_LCDC] & 0x80) != 0;
 }
 
+void cupid_gb_ppu_enter_stop(CupidGb *gb) {
+    const bool visible = cupid_gb_lcd_enabled(gb) && gb->pixels.line < 144u;
+    const unsigned mode = gb->io_registers[CUPID_GB_IO_STAT] & 3u;
+    bool vram_owned = visible && mode == CUPID_GB_PPU_MODE_TRANSFER;
+    if (gb->model == CUPID_GB_MODEL_CGB && !gb->double_speed && gb->ppu_lcd_startup &&
+        gb->pixels.dot < 84u)
+        vram_owned = false;
+    const bool oam_owned =
+        visible && (mode == CUPID_GB_PPU_MODE_OAM || mode == CUPID_GB_PPU_MODE_TRANSFER ||
+                    (!gb->ppu_lcd_startup && gb->pixels.dot == 0) ||
+                    (gb->ppu_transfer_end_dot && gb->pixels.dot == gb->ppu_transfer_end_dot));
+    gb->stop_ppu_vram_blocked = !vram_owned;
+    gb->stop_ppu_oam_blocked = !oam_owned;
+    gb->stop_ppu_palette_blocked = !cupid_cgb_palettes_cpu_blocked(gb);
+}
+
+void cupid_gb_ppu_leave_stop(CupidGb *gb) {
+    gb->stop_ppu_vram_blocked = false;
+    gb->stop_ppu_oam_blocked = false;
+    gb->stop_ppu_palette_blocked = false;
+}
+
 static void publish_frame(CupidGb *gb, uint8_t type, uint32_t remaining_dots) {
     gb->display_cycles_since_frame = remaining_dots;
     gb->display_frame_type = type;
@@ -200,6 +222,7 @@ void cupid_gb_reset_ppu(CupidGb *gb) {
     gb->ppu_lcd_warmup_lines = 2u;
     gb->ppu_lcd_startup = true;
     gb->ppu_line_boundary_hold = false;
+    gb->ppu_transfer_end_dot = 0;
     gb->window_line_counter = 0u;
     gb->io_registers[CUPID_GB_IO_LY] = 0u;
     cupid_gb_set_ppu_mode(gb, CUPID_GB_PPU_MODE_HBLANK);
@@ -306,6 +329,7 @@ static void tick_ppu(CupidGb *gb, uint32_t dots, uint8_t *midpoint) {
         gb->ppu_lcd_warmup_lines = 0;
         gb->ppu_lcd_startup = false;
         gb->ppu_line_boundary_hold = false;
+        gb->ppu_transfer_end_dot = 0;
         gb->window_line_counter = 0;
         gb->io_registers[CUPID_GB_IO_LY] = 0;
         cupid_gb_set_ppu_mode(gb, CUPID_GB_PPU_MODE_HBLANK);
@@ -374,6 +398,7 @@ static void tick_ppu(CupidGb *gb, uint32_t dots, uint8_t *midpoint) {
                 }
                 if (p->active && cupid_gb_pixels_tick(gb)) {
                     p->active = false;
+                    gb->ppu_transfer_end_dot = p->dot + 1u;
                     if (p->window_used)
                         ++gb->window_line_counter;
                     if (!gb->double_speed)
@@ -429,6 +454,7 @@ static void tick_ppu(CupidGb *gb, uint32_t dots, uint8_t *midpoint) {
                 gb->ppu_lcd_startup ? (gb->model == CUPID_GB_MODEL_CGB ? 452u : 453u) : 456u;
             if (p->dot == length) {
                 p->dot = 0;
+                gb->ppu_transfer_end_dot = 0;
                 ++p->line;
                 gb->ppu_lcd_startup = false;
                 gb->ppu_lcd_warmup_lines = 0;

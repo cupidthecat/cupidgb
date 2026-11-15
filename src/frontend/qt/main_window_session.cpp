@@ -22,7 +22,7 @@ void MainWindow::tick() {
     }
     pumpAudio();
     // Starting a native audio stream may dispatch window/session actions.
-    if (!emulator_ || paused_ || stateOperation_)
+    if (!emulator_ || paused_ || stateOperation_ || menuDepth_)
         return;
     if (!turbo_ && now < nextFrame_)
         return;
@@ -104,17 +104,32 @@ bool MainWindow::runFrame() {
     int16_t samples[CUPID_GB_APU_BUF_FRAMES * 2];
     const auto frames = cupid_gb_apu_drain(&gb, samples, CUPID_GB_APU_BUF_FRAMES);
     generatedAudioFrames_ += frames;
+    const bool completedFrame = gb.frame_ready;
+    const uint64_t session = sessionId_;
+    const uint64_t timeline = timelineId_;
+    const bool wasPaused = paused_;
+    const unsigned menuDepth = menuDepth_;
+    const auto unchanged = [this, session, timeline, wasPaused, menuDepth] {
+        return emulator_ && sessionId_ == session && timelineId_ == timeline &&
+               paused_ == wasPaused && menuDepth_ == menuDepth;
+    };
     if (recorder_ && recorder_->active() && !recorder_->append(samples, frames)) {
         const QString error = recorder_->errorString();
         if (stopRecording())
             reportError("Audio recording stopped: " + error);
     }
+    if (!unchanged())
+        return true;
     if (audio_ && !turbo_ && !paused_) {
         const QByteArray converted = audioConverter_->convert(samples, frames);
         audioBuffer_->append(converted.constData(), converted.size());
         pumpAudio();
     }
-    present(gb.frame_ready);
+    // A backend callback may close, replace, pause, or restore the cartridge.
+    // The old core reference is no longer usable after such a transition.
+    if (!unchanged())
+        return true;
+    present(completedFrame);
     updatePrinter();
     finishControllerRumble();
     advanceControls();

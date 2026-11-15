@@ -1056,7 +1056,38 @@ static void test_cb_memory_bus_phases(void) {
     cupid_gb_cleanup(&gb);
 }
 
+static void test_oam_conflicts_require_monochrome_search(void) {
+    static const uint8_t opcodes[] = {0x13, 0x1b, 0xc5, 0xd5, 0xe5, 0xf5, 0xc7, 0x22};
+    CupidGb gb = {0};
+    for (unsigned color = 0; color < 2; ++color) {
+        for (unsigned opcode = 0; opcode < sizeof(opcodes); ++opcode) {
+            for (unsigned dot = 0; dot < 80; ++dot) {
+                cupid_gb_set_model(&gb, color ? CUPID_GB_MODEL_CGB : CUPID_GB_MODEL_DMG_ABC);
+                prepare(&gb, opcodes[opcode], 0);
+                assert(!gb.cgb_mode);
+                gb.cpu.d = 0xfe;
+                gb.cpu.e = 0;
+                gb.cpu.h = 0xfe;
+                gb.cpu.l = 0xf0;
+                gb.cpu.sp = 0xfef0;
+                uint8_t before[160];
+                for (unsigned i = 0; i < sizeof(before); ++i)
+                    before[i] = gb.object_attribute_memory[i] =
+                        (uint8_t)(i * 73u + (i >> 3) * 9u + 5u);
+                cupid_gb_write_u8(&gb, 0xff40, 0x81);
+                /* The first monochrome row has no OAM scan. Physical color
+                 * hardware also stays immune after a real scan has begun. */
+                cupid_gb_tick_ppu_dots(&gb, (uint16_t)(dot + (color ? 452u : 0u)));
+                assert(cupid_gb_step(&gb));
+                assert(memcmp(before, gb.object_attribute_memory, sizeof(before)) == 0);
+            }
+        }
+    }
+    cupid_gb_cleanup(&gb);
+}
+
 int main(void) {
+    test_oam_conflicts_require_monochrome_search();
     test_conditional_control_flow();
     test_unconditional_control_flow();
     test_stack_bus_phases();

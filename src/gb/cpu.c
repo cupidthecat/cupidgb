@@ -106,9 +106,9 @@ static void cupid_gb_set_af(CupidGbCpu *cpu, uint16_t value) {
 /**
  * @brief Checks whether a DMG OAM corruption glitch would be triggered.
  *
- * The OAM corruption bug only fires on original DMG hardware when the PPU
- * is in OAM scan (Mode 2) on a visible scanline and the address falls in
- * the OAM region (0xFE00–0xFEFF).
+ * Monochrome hardware exposes OAM row conflicts while an actual search is
+ * active and the address falls in 0xFE00–0xFEFF. The initial LCD scanline has
+ * no OAM search. Physical color hardware stays unaffected in compatibility mode.
  *
  * @param gb          Pointer to the Game Boy state.
  * @param address     The address being accessed.
@@ -117,12 +117,13 @@ static void cupid_gb_set_af(CupidGbCpu *cpu, uint16_t value) {
  *
  * @return `true` if the OAM bug is active for this access, `false` otherwise.
  *
- * @note Always returns `false` in CGB mode or when the LCD is disabled.
+ * @note Always returns `false` on color hardware or when the LCD is disabled.
  */
 static bool cupid_gb_oam_bug_active(const CupidGb *gb, uint16_t address, uint16_t *row_offset) {
     uint8_t ly;
 
-    if (gb == 0 || gb->cgb_mode || !cupid_gb_lcd_enabled(gb)) {
+    if (gb == 0 || gb->model == CUPID_GB_MODEL_CGB || !cupid_gb_lcd_enabled(gb) ||
+        gb->ppu_lcd_startup) {
         return false;
     }
 
@@ -130,13 +131,16 @@ static bool cupid_gb_oam_bug_active(const CupidGb *gb, uint16_t address, uint16_
         return false;
     }
 
-    ly = gb->io_registers[CUPID_GB_IO_LY];
-    if (ly >= CUPID_GB_PPU_VISIBLE_SCANLINES || gb->ppu_counter >= CUPID_GB_PPU_OAM_CYCLES) {
+    ly = gb->pixels.initialized ? gb->pixels.line : gb->io_registers[CUPID_GB_IO_LY];
+    const unsigned dot = gb->pixels.initialized ? gb->pixels.dot : gb->ppu_counter * 4u;
+    if (ly >= CUPID_GB_PPU_VISIBLE_SCANLINES || dot >= 80u) {
         return false;
     }
 
     if (row_offset != 0) {
-        *row_offset = (uint16_t)(gb->ppu_counter * 8u);
+        /* Two objects share one eight-byte row. The search word is sampled
+         * halfway through the four-dot row slot, independently of STAT. */
+        *row_offset = (uint16_t)(((dot + 1u) / 4u) * 8u);
     }
     return true;
 }
@@ -1330,15 +1334,7 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode, CupidGbCpuBus *
                 /* EI matures for STOP's control signals after IRQ dispatch was
                  * already decided. It must not acquire the IME0 reset hold. */
                 gb->stop_divider_hold_cycles = gb->cpu.ime || gb->cpu.ime_delay ? 0 : 4;
-                const bool lcd = cupid_gb_lcd_enabled(gb);
-                const unsigned mode = gb->io_registers[CUPID_GB_IO_STAT] & 3u;
-                bool vram_blocked = lcd && gb->pixels.line < 144u && mode == 3u;
-                /* The initial normal-speed color line exposes mode 3 before
-                 * its VRAM read lock settles five dots after the transition. */
-                if (gb->model == CUPID_GB_MODEL_CGB && !gb->double_speed && gb->ppu_lcd_startup &&
-                    gb->pixels.dot < 83u)
-                    vram_blocked = false;
-                gb->stop_ppu_vram_blocked = !vram_blocked;
+                cupid_gb_ppu_enter_stop(gb);
                 gb->cpu.stopped = true;
                 cupid_cgb_hdma_sleep(gb);
             }
@@ -1364,7 +1360,7 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode, CupidGbCpuBus *
                 gb->io_registers[0x4du] = (uint8_t)(gb->double_speed ? 0x80u : 0);
             }
             if (switching || held) {
-                gb->stop_ppu_vram_blocked = false;
+                cupid_gb_ppu_leave_stop(gb);
                 gb->cpu.stopped = false;
                 cupid_cgb_hdma_wake(gb);
                 cupid_gb_tick_dma(gb);
@@ -1415,7 +1411,6 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode, CupidGbCpuBus *
         case 0x22u: {
             uint16_t hl = cupid_gb_get_hl(&gb->cpu);
             cupid_gb_cpu_write(gb, hl, gb->cpu.a, 1u, bus);
-            cupid_gb_trigger_oam_bug_write(gb, hl);
             cupid_gb_set_hl(&gb->cpu, (uint16_t)(hl + 1u));
             return 1u;
         }
@@ -1438,7 +1433,6 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode, CupidGbCpuBus *
         case 0x32u: {
             uint16_t hl = cupid_gb_get_hl(&gb->cpu);
             cupid_gb_cpu_write(gb, hl, gb->cpu.a, 1u, bus);
-            cupid_gb_trigger_oam_bug_write(gb, hl);
             cupid_gb_set_hl(&gb->cpu, (uint16_t)(hl - 1u));
             return 1u;
         }
@@ -1554,8 +1548,7 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode, CupidGbCpuBus *
             uint16_t val = cupid_gb_get_bc(&gb->cpu);
             cupid_gb_tick(gb, 1u); /* M1 */
             cupid_gb_trigger_oam_bug_write(gb, gb->cpu.sp);
-            cupid_gb_write_stack_byte(gb, (uint8_t)(val >> 8u), bus); /* M2 */
-            cupid_gb_trigger_oam_bug_write(gb, gb->cpu.sp);
+            cupid_gb_write_stack_byte(gb, (uint8_t)(val >> 8u), bus);   /* M2 */
             cupid_gb_write_stack_byte(gb, (uint8_t)(val & 0xffu), bus); /* M3 */
             return 1u;                                                  /* M4 */
         }
@@ -1575,8 +1568,7 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode, CupidGbCpuBus *
             uint16_t ret_addr = gb->cpu.pc;
             cupid_gb_tick(gb, 1u); /* M1 */
             cupid_gb_trigger_oam_bug_write(gb, gb->cpu.sp);
-            cupid_gb_write_stack_byte(gb, (uint8_t)(ret_addr >> 8u), bus); /* M2 */
-            cupid_gb_trigger_oam_bug_write(gb, gb->cpu.sp);
+            cupid_gb_write_stack_byte(gb, (uint8_t)(ret_addr >> 8u), bus);   /* M2 */
             cupid_gb_write_stack_byte(gb, (uint8_t)(ret_addr & 0xffu), bus); /* M3 */
             gb->cpu.pc = (uint16_t)(opcode & 0x38u);
             return 1u; /* M4 */
@@ -1652,8 +1644,7 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode, CupidGbCpuBus *
             uint16_t val = cupid_gb_get_de(&gb->cpu);
             cupid_gb_tick(gb, 1u); /* M1 */
             cupid_gb_trigger_oam_bug_write(gb, gb->cpu.sp);
-            cupid_gb_write_stack_byte(gb, (uint8_t)(val >> 8u), bus); /* M2 */
-            cupid_gb_trigger_oam_bug_write(gb, gb->cpu.sp);
+            cupid_gb_write_stack_byte(gb, (uint8_t)(val >> 8u), bus);   /* M2 */
             cupid_gb_write_stack_byte(gb, (uint8_t)(val & 0xffu), bus); /* M3 */
             return 1u;                                                  /* M4 */
         }
@@ -1709,8 +1700,7 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode, CupidGbCpuBus *
             uint16_t val = cupid_gb_get_hl(&gb->cpu);
             cupid_gb_tick(gb, 1u); /* M1 */
             cupid_gb_trigger_oam_bug_write(gb, gb->cpu.sp);
-            cupid_gb_write_stack_byte(gb, (uint8_t)(val >> 8u), bus); /* M2 */
-            cupid_gb_trigger_oam_bug_write(gb, gb->cpu.sp);
+            cupid_gb_write_stack_byte(gb, (uint8_t)(val >> 8u), bus);   /* M2 */
             cupid_gb_write_stack_byte(gb, (uint8_t)(val & 0xffu), bus); /* M3 */
             return 1u;                                                  /* M4 */
         }
@@ -1773,8 +1763,7 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode, CupidGbCpuBus *
             uint16_t val = cupid_gb_get_af(&gb->cpu);
             cupid_gb_tick(gb, 1u); /* M1 */
             cupid_gb_trigger_oam_bug_write(gb, gb->cpu.sp);
-            cupid_gb_write_stack_byte(gb, (uint8_t)(val >> 8u), bus); /* M2 */
-            cupid_gb_trigger_oam_bug_write(gb, gb->cpu.sp);
+            cupid_gb_write_stack_byte(gb, (uint8_t)(val >> 8u), bus);   /* M2 */
             cupid_gb_write_stack_byte(gb, (uint8_t)(val & 0xffu), bus); /* M3 */
             return 1u;                                                  /* M4 */
         }

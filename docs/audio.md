@@ -13,10 +13,15 @@ This guide describes the implemented behavior and its limits. The [parity checkl
 | `src/gb/timer.c` | DIV edges and conversion from CPU machine cycles to base T-cycles |
 | `src/gb/gb.c`, `src/gbc/cgb.c` | CPU-visible register masks, wave RAM access and color PCM registers |
 | `src/gb/state.c` | Portable snapshots, hardware-domain checks and older-state import |
-| `src/frontend/qt/main_window.cpp` | Playback queues, pacing, device changes, pause/load/rewind transitions and recording control |
+| `src/frontend/qt/main_window_audio.cpp`, `main_window_session.cpp` | Device changes, pacing, pause/load/rewind transitions and recording control |
+| `src/frontend/qt/audio_buffer.h` | Generated-sample queue and reentrant host-write transactions |
 | `src/frontend/qt/audio_converter.cpp`, `wave_recorder.cpp` | Host-format conversion and RIFF/WAVE encoding |
 
 The core has no Qt dependency and does not open an audio device. Run it and inspect or change its audio state on the same serialized execution path. Snapshot operations require an instruction boundary without concurrent core access. The host audio backend must not read or mutate `CupidGb` from its playback thread.
+
+Backend writes can dispatch Qt events, including telemetry and session changes. The queue releases its mutex before calling the device and retains the pending bytes until that call returns. A nested write cannot send the same prefix again. A timeline clear invalidates the pending transaction's removal, so it cannot consume replacement samples. Resetting telemetry also starts a new counter generation. An earlier write cannot add its accepted bytes to the new window.
+
+The caller retains both the queue and the sink during a backend call. Pausing or replacing a session disconnects and detaches the old sink immediately; its final lease resets and destroys it after the call returns. This keeps the sink-owned device alive without draining obsolete audio. Frame completion checks the session and timeline again before presentation, input updates or rewind capture, because backend dispatch may have closed or replaced the core.
 
 ## Clock domains
 
@@ -144,7 +149,7 @@ The APU regression target covers DIV clock/reset behavior, power transitions, le
 With the relevant targets built, run:
 
 ```sh
-ctest --test-dir build --output-on-failure -R 'cupidgb_(apu|state|audio_converter|wave_recorder|qt_workflows)$'
+ctest --test-dir build --output-on-failure -R 'cupidgb_(apu|state|audio_converter|audio_buffer|wave_recorder|qt_workflows)$'
 ```
 
 Qt-dependent targets require a frontend-enabled build. The ordinary offscreen workflow test does not prove that a real audio device played sound. Native audio smoke checks, device changes and sustained gameplay belong in the platform validation described in [testing](testing.md).

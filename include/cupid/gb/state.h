@@ -46,10 +46,11 @@ CupidGbStateResult cupid_gb_load_state_with_context(CupidGb *gb, const uint8_t *
  * ROMs, boot ROMs, and save paths are session resources and are never included in state data.
  * Restoring an active boot overlay requires the same boot ROM to be available in the target.
  * The target's current boot-overlay enabled flag need not match the saved flag.
- * Version 9 writes LCD/cartridge/OAM timing, retained PPU bus history, the STOP
- * access gate, object fetch stage, pending JOYP row release, and presentation
- * events. Applicable SGB, MMM01, MBC7, Camera, TPP1, and HuC3 sections are included.
- * Versions 2 through 8 remain readable with defaults for absent history.
+ * Version 10 writes LCD/cartridge/OAM timing, retained PPU bus history, all three
+ * STOP access gates, the palette-port release edge, object fetch stage, pending
+ * JOYP row release, and presentation events. Applicable SGB, MMM01, MBC7, Camera,
+ * TPP1, and HuC3 sections are included.
+ * Versions 2 through 9 remain readable with defaults for absent history.
  * Versions 2 and 3 import additional pads released and the motor off because their
  * writers discarded motor history. Version 2 also initializes audio and DMA latches.
  * Missing bus history and OAM alignment receive deterministic defaults. Exact

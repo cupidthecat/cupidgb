@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.21)
+project(CupidGBIconTool LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+find_package(Qt6 6.4 REQUIRED COMPONENTS Gui Svg)
+add_executable(cupidgb_generate_icon generate_icon.cpp)
+target_link_libraries(cupidgb_generate_icon PRIVATE Qt6::Gui Qt6::Svg)

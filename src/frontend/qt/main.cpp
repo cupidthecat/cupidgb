@@ -4,14 +4,16 @@
 #include <QCommandLineParser>
 #include <QDir>
 #include <QFileInfo>
+#include <QIcon>
 #include <QTemporaryDir>
 
 int main(int argc, char **argv) {
     QApplication app(argc, argv);
     QCoreApplication::setOrganizationName("CupidGB");
     QCoreApplication::setApplicationName("CupidGB");
-    QCoreApplication::setApplicationVersion("0.3.0");
+    QCoreApplication::setApplicationVersion(QString::fromLatin1(CUPIDGB_VERSION));
     QGuiApplication::setDesktopFileName("io.github.cupidthecat.CupidGB");
+    QGuiApplication::setWindowIcon(QIcon(QStringLiteral(":/icons/cupidgb.png")));
     QCommandLineParser parser;
     parser.setApplicationDescription("CupidGB Game Boy and Game Boy Color emulator");
     parser.addHelpOption();

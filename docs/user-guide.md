@@ -96,9 +96,15 @@ View > Monochrome Palette offers Lime (Game Boy), Grayscale, Olive (Pocket), Tea
 
 View > Frame Blending and Settings offer Disabled, Simple, and Accurate. Simple gives the two most recent completed LCD images equal weight. Accurate alternates the weighting by LCD row and guest frame phase. Both mix in linear light using gamma 2.2. New settings default to Accurate, which uses Simple on SGB and SGB2. Existing on/off preferences keep their previous behavior. Cartridge changes, reset, state loads, rewind, and palette changes clear the frame history.
 
-Settings > SGB display controls whether to show the Super Game Boy border. Hiding it crops the image to the game viewport and does not disable SGB commands or palette behavior. Host palettes and blending do not establish hardware color accuracy. Custom palette-file import remains pending. See [the parity checklist](parity.md).
+Settings > SGB display controls whether to show the Super Game Boy border. Hiding it crops the image to the game viewport and does not disable SGB commands or palette behavior. Host palettes and blending do not establish hardware color accuracy. See [the parity checklist](parity.md).
 
 The custom monochrome palette has four hardware shades and a separate LCD-off color. Older settings with only four shades use their lightest shade for the missing off color. LCD-off and first-blank events use the off color; monochrome STOP uses the lightest hardware shade. Repeat events retain the displayed image and blend history.
+
+View > Monochrome Palette > Saved Palettes selects a named palette from your library and activates Custom. Edit Palette Library opens the library and color controls. Add duplicates the selected palette, Name renames it, and Delete removes it. Duplicate names receive numbered suffixes. Deleting the last entry keeps its colors as an Untitled Palette. Restore Built-in Palettes restores the four built-in color sets while preserving entries with other names. The library holds up to 256 palettes. If missing built-ins would exceed that limit, restoration reports an error and leaves the entire library unchanged. Delete unused entries before trying again.
+
+The editor applies changes immediately. Choose each shade manually enables four individual hardware colors. With Separate LCD-off color disabled, the off color follows the lightest shade. Automatic mode instead uses the Darkest and LCD off colors as endpoints. Brightness bias adjusts the middle shades, while Hue bias and Hue strength control their color balance. Automatic mode with a separate off color leaves the lightest hardware shade slightly below the off endpoint. The preview shows the four shades followed by LCD off. Done closes the editor and keeps your changes. Selecting a palette or changing host colors does not advance the game.
+
+Import Palette reads `.sbp` files, adds a named library entry using the filename, and selects Custom. The import retains stored RGB samples, including resolved colors from automatic palettes, without regenerating them. Automatic editor settings remain available for later changes. Four-color files use their lightest shade when no off color is stored. A malformed or truncated file leaves the current palette unchanged. Export Palette writes the selected colors and applicable automatic settings to a `.sbp` file. Library names, selection, and editor controls persist across application restarts. The custom colors in the ordinary Settings dialog remain available; later manual edits update the selected library entry when the library is next used.
 
 ## Audio and recording
 
@@ -120,7 +126,9 @@ The interface reports unavailable audio devices. A successful file recording pro
 
 View > Color Correction offers Disabled, Correct Color Curves, Modern - Balanced, Accurate, Modern - Boost Contrast, Reduce Contrast, and Harsh Reality. Ambient Light Temperature has 21 steps, with a neutral midpoint. New settings use Modern - Balanced. These controls apply to CGB, CGB compatibility palettes, and SGB output. Native monochrome palettes keep their selected colors. Color correction applies to screenshots and selected inspector previews before frame blending. Raw inspector values remain RGB555.
 
-View > Save Screenshot or F12 opens a PNG destination dialog. Screenshots use the unblended native image, with the selected monochrome palette and SGB border visibility. Window scaling, black bars, menus, and decorations are excluded. Verify the selected filename before replacing an existing capture. Screenshot files are ordinary user outputs, separate from battery saves and states.
+View > Save Screenshot or F12 saves a PNG beside the cartridge without opening a dialog. The filename contains the cartridge basename and local capture time, such as `game 2026-11-15 13.02.03.png`. Further captures in the same second receive numbered suffixes starting at `2`; existing captures are preserved. A read-only cartridge folder produces an error, so use Save Screenshot As to choose another folder.
+
+View > Save Screenshot As or Shift+F12 opens a PNG destination dialog and can replace a selected capture. Copy Screenshot or Ctrl+Shift+C puts the image on the clipboard. These shortcuts can be changed in Settings. Screenshots use the unblended native image, with the selected monochrome palette, color correction and SGB border visibility. Window scaling, black bars, menus, and decorations are excluded. Screenshot files are ordinary user outputs, separate from battery saves and states.
 
 ## Battery saves, states, and rewind
 

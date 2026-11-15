@@ -444,6 +444,8 @@ bool MainWindow::smokeTest() {
             audioBuffer_->bytesAvailable() != 0 || !audioPriming_ || !waitForward() ||
             audioErrorEvents_)
             return smokeFailure(__FILE__, __LINE__);
+        if (!audioLifecycleSmokeTest(path))
+            return smokeFailure(__FILE__, __LINE__);
         qInfo("CupidGB real-audio save/load and rewind transition checks passed");
     }
     const auto originalKeys = keys_;
@@ -942,9 +944,91 @@ bool MainWindow::smokeTest() {
     if (!pacingSmokeTest(path) || !modelSmokeTest(directory.path()) ||
         !cheatSmokeTest(path, directory.path()) || !printerSmokeTest(path, directory.path()) ||
         !controllerSmokeTest(directory.path()) || !motionSmokeTest(directory.path()) ||
-        display_->collectPaintIntervals || !display_->paintIntervals.empty() ||
-        display_->lastPaintAt)
+        !displayFilesSmokeTest(directory.path()) || display_->collectPaintIntervals ||
+        !display_->paintIntervals.empty() || display_->lastPaintAt)
         return smokeFailure(__FILE__, __LINE__);
     qInfo("CupidGB Qt workflow smoke test passed");
     return !failed_;
+}
+
+bool MainWindow::audioLifecycleSmokeTest(const QString &path) {
+    QScopedValueRollback<bool> operation(stateOperation_, true);
+    MainWindow session(true, true, true);
+    session.timer_.stop();
+    if (!session.openRom(path))
+        return smokeFailure(__FILE__, __LINE__);
+    for (unsigned frame = 0; frame < 4; ++frame)
+        if (!session.runFrame())
+            return smokeFailure(__FILE__, __LINE__);
+    if (!session.audio_ || !session.audioDevice_ || session.audioPriming_ ||
+        session.audio_->error() != QAudio::NoError)
+        return smokeFailure(__FILE__, __LINE__);
+    // Let the real backend consume its prime before substituting the write
+    // endpoint. This fixture still requires a functioning native audio sink.
+    QEventLoop drain;
+    QTimer::singleShot(75, Qt::PreciseTimer, &drain, &QEventLoop::quit);
+    drain.exec();
+    if (session.audio_->bytesFree() < session.audio_->format().bytesPerFrame())
+        return smokeFailure(__FILE__, __LINE__);
+
+    class CallbackDevice final : public QIODevice {
+      public:
+        std::function<bool()> closeSession;
+        bool triggered = false;
+        bool closed = false;
+
+        CallbackDevice() {
+            open(QIODevice::WriteOnly | QIODevice::Unbuffered);
+        }
+
+      protected:
+        qint64 readData(char *, qint64) override {
+            return -1;
+        }
+
+        qint64 writeData(const char *, qint64 size) override {
+            triggered = true;
+            closed = closeSession();
+            return size;
+        }
+    } callback;
+
+    auto *menu = session.findChild<QMenu *>();
+    if (!menu)
+        return smokeFailure(__FILE__, __LINE__);
+    const auto beforeMenu = session.emulator_->gb.elapsed_cycles;
+    callback.closeSession = [&] {
+        QMetaObject::invokeMethod(menu, "aboutToShow", Qt::DirectConnection);
+        // Keep the next interval due so the menu guard is checked independently
+        // of the menu's ordinary pacing reset and released turbo binding.
+        session.nextFrame_ = 0;
+        return session.menuDepth_ != 0;
+    };
+    session.audioBuffer_->append("test", 4);
+    session.audioDevice_ = &callback;
+    session.audioPriming_ = false;
+    session.nextFrame_ = 0;
+    session.tick();
+    if (!callback.triggered || !callback.closed || !session.menuDepth_ ||
+        session.emulator_->gb.elapsed_cycles != beforeMenu)
+        return smokeFailure(__FILE__, __LINE__);
+    QMetaObject::invokeMethod(menu, "aboutToHide", Qt::DirectConnection);
+    QApplication::processEvents();
+    for (unsigned frame = 0; frame < 4; ++frame)
+        if (!session.runFrame())
+            return smokeFailure(__FILE__, __LINE__);
+    QEventLoop consume;
+    QTimer::singleShot(75, Qt::PreciseTimer, &consume, &QEventLoop::quit);
+    consume.exec();
+    callback.triggered = callback.closed = false;
+    const uint64_t previousSession = session.sessionId_;
+    callback.closeSession = [&] { return session.closeRom(); };
+    session.audioDevice_ = &callback;
+    session.audioPriming_ = false;
+    if (!session.runFrame() || !callback.triggered || !callback.closed || session.emulator_ ||
+        session.sessionId_ == previousSession || session.audio_ || session.audioDevice_ ||
+        !session.image_.isNull() || !session.rewindStates_.empty())
+        return smokeFailure(__FILE__, __LINE__);
+    qInfo("CupidGB reentrant audio-write cartridge-close check passed");
+    return true;
 }

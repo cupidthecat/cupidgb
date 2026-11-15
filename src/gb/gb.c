@@ -236,7 +236,7 @@ void cupid_gb_init(CupidGb *gb) {
     memset(gb, 0, sizeof(*gb));
     gb->oam_vram_row = UINT16_MAX;
     gb->oam_search_word = 0;
-    gb->stop_ppu_vram_blocked = false;
+    cupid_gb_ppu_leave_stop(gb);
     gb->object_fetch_stage = CUPID_GB_OBJECT_IDLE;
     gb->model = model;
     gb->rom = rom;
@@ -434,7 +434,8 @@ void cupid_gb_enter_boot_rom(CupidGb *gb) {
     gb->cpu.pc = 0x0000u; /* start executing boot ROM from address 0 */
     gb->oam_vram_row = UINT16_MAX;
     gb->oam_search_word = 0;
-    gb->stop_ppu_vram_blocked = false;
+    cupid_gb_ppu_leave_stop(gb);
+    gb->ppu_transfer_end_dot = 0;
     gb->object_fetch_stage = CUPID_GB_OBJECT_IDLE;
     /* Boot entry aborts an in-flight object transaction, including legacy imports. */
     gb->pixels.object_delay = 0;
@@ -461,7 +462,7 @@ void cupid_gb_enter_boot_rom(CupidGb *gb) {
     gb->speed_switch_toggle_cycles = 0;
     gb->speed_switch_freeze_cycles = 0;
     gb->stop_divider_hold_cycles = 0;
-    gb->stop_ppu_vram_blocked = false;
+    cupid_gb_ppu_leave_stop(gb);
     gb->speed_switch_alignment = 0;
     memset(gb->io_registers, 0x00u, sizeof(gb->io_registers));
     gb->io_registers[0x00u] = 0xcfu; /* P1: no buttons selected */
@@ -1240,7 +1241,7 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
 
         if (blocked) {
             if (!gb->cgb_mode && mode == CUPID_GB_PPU_MODE_OAM &&
-                gb->ppu_counter < CUPID_GB_PPU_OAM_CYCLES && address <= 0xfe9fu) {
+                gb->ppu_counter < CUPID_GB_PPU_OAM_CYCLES) {
                 cupid_gb_trigger_oam_bug_write_access(gb, address);
             }
             return;
@@ -1293,6 +1294,7 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
                 gb->ppu_lcd_warmup_lines = 0u;
                 gb->ppu_lcd_startup = false;
                 gb->ppu_line_boundary_hold = false;
+                gb->ppu_transfer_end_dot = 0;
                 gb->window_line_counter = 0u;
                 gb->io_registers[CUPID_GB_IO_LY] = 0u;
                 cupid_gb_set_ppu_mode(gb, CUPID_GB_PPU_MODE_HBLANK);
@@ -1387,7 +1389,7 @@ static bool cupid_gb_step_internal(CupidGb *gb, CupidGbStepTrace *trace) {
     if (gb->cpu.stopped) {
         cupid_gb_tick(gb, CUPID_GB_HALT_CYCLES);
         if ((cupid_gb_read_u8(gb, 0xff00u) & 0x0fu) != 0x0fu) {
-            gb->stop_ppu_vram_blocked = false;
+            cupid_gb_ppu_leave_stop(gb);
             gb->cpu.stopped = false;
             cupid_cgb_hdma_wake(gb);
             cupid_gb_tick_dma(gb);

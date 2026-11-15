@@ -14,6 +14,7 @@
 
 enum {
     STATE_HEADER_SIZE = 128,
+    STATE_VERSION_V10 = 10,
     STATE_VERSION_V9 = 9,
     STATE_VERSION_V8 = 8,
     STATE_VERSION_V7 = 7,
@@ -31,6 +32,7 @@ enum {
     STATE_V7_TAIL_SIZE = STATE_V6_TAIL_SIZE + 1,
     STATE_V8_TAIL_SIZE = STATE_V7_TAIL_SIZE + 11,
     STATE_V9_TAIL_SIZE = STATE_V8_TAIL_SIZE + 6,
+    STATE_V10_TAIL_SIZE = STATE_V9_TAIL_SIZE + 4,
     STATE_MMM01_EXTENSION_SIZE = 4,
     STATE_MBC7_EXTENSION_SIZE = 8,
     STATE_CAMERA_EXTENSION_SIZE = 64,
@@ -772,6 +774,19 @@ static void state_video_bus(StateIo *io, CupidGb *gb) {
     }
 }
 
+static void state_stop_ports(StateIo *io, CupidGb *gb) {
+    boolean(io, &gb->stop_ppu_oam_blocked);
+    boolean(io, &gb->stop_ppu_palette_blocked);
+    word(io, &gb->ppu_transfer_end_dot);
+    /* A last-pixel edge can only belong to an inactive visible line. The
+     * exact edge is history and cannot be reconstructed from mode bits. */
+    if (gb->ppu_transfer_end_dot &&
+        (gb->ppu_transfer_end_dot < 240u || gb->ppu_transfer_end_dot > 455u || gb->pixels.active ||
+         gb->pixels.line >= 144u || gb->pixels.x != CUPID_GB_SCREEN_WIDTH ||
+         gb->pixels.dot < gb->ppu_transfer_end_dot))
+        io->invalid = true;
+}
+
 static bool valid_v5_sections(const CupidGb *gb, unsigned sections) {
     return (!(sections & STATE_SECTION_SGB) || valid_sgb_extension(&gb->sgb.transfer)) &&
            (!(sections & STATE_SECTION_MMM01) || valid_mmm01_extension(gb)) &&
@@ -893,7 +908,7 @@ size_t cupid_gb_state_size(const CupidGb *gb) {
     if (!ready(gb)) {
         return 0;
     }
-    return extended_wire_size(state_sections(gb)) + STATE_V9_TAIL_SIZE;
+    return extended_wire_size(state_sections(gb)) + STATE_V10_TAIL_SIZE;
 }
 
 static void put_u32(uint8_t *data, uint32_t value) {
@@ -925,7 +940,7 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
         return CUPID_GB_STATE_NO_ROM;
     }
     const unsigned sections = state_sections(gb);
-    const size_t size = extended_wire_size(sections) + STATE_V9_TAIL_SIZE;
+    const size_t size = extended_wire_size(sections) + STATE_V10_TAIL_SIZE;
     if (!data || capacity < size) {
         return CUPID_GB_STATE_BUFFER_TOO_SMALL;
     }
@@ -935,7 +950,7 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
     }
     memset(data, 0, STATE_HEADER_SIZE);
     memcpy(data, state_magic, sizeof(state_magic));
-    put_u32(data + 8, STATE_VERSION_V9);
+    put_u32(data + 8, STATE_VERSION_V10);
     put_u32(data + 12, (uint32_t)size);
     put_u32(data + 16, (uint32_t)gb->model);
     put_u32(data + 20, (uint32_t)gb->rom_size);
@@ -962,6 +977,7 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
         io.invalid = true;
     state_input_and_display(&io, (CupidGb *)gb);
     state_video_bus(&io, (CupidGb *)gb);
+    state_stop_ports(&io, (CupidGb *)gb);
     if (io.invalid || io.offset != size) {
         return CUPID_GB_STATE_INVALID;
     }
@@ -981,13 +997,14 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
         return CUPID_GB_STATE_INVALID;
     }
     const uint32_t version = get_u32(data + 8);
-    if (version < STATE_VERSION_V2 || version > STATE_VERSION_V9) {
+    if (version < STATE_VERSION_V2 || version > STATE_VERSION_V10) {
         return CUPID_GB_STATE_UNSUPPORTED_VERSION;
     }
     const size_t prefix_size = version == STATE_VERSION_V2   ? STATE_WIRE_SIZE_V2
                                : version == STATE_VERSION_V3 ? STATE_WIRE_SIZE_V3
                                                              : STATE_WIRE_SIZE_V4;
-    const size_t tail_size = version >= STATE_VERSION_V9   ? STATE_V9_TAIL_SIZE
+    const size_t tail_size = version >= STATE_VERSION_V10  ? STATE_V10_TAIL_SIZE
+                             : version == STATE_VERSION_V9 ? STATE_V9_TAIL_SIZE
                              : version == STATE_VERSION_V8 ? STATE_V8_TAIL_SIZE
                              : version == STATE_VERSION_V7 ? STATE_V7_TAIL_SIZE
                              : version == STATE_VERSION_V6 ? STATE_V6_TAIL_SIZE
@@ -1109,6 +1126,15 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
         /* Finish an older in-flight object using its captured address/countdown. */
         candidate->object_fetch_stage =
             candidate->pixels.object_delay ? CUPID_GB_OBJECT_LEGACY : CUPID_GB_OBJECT_IDLE;
+    }
+    if (version >= STATE_VERSION_V10) {
+        state_stop_ports(&io, candidate);
+    } else {
+        /* Older files lack STOP OAM/palette ownership and the last-pixel edge.
+         * Clear absent history rather than borrowing it from the live session. */
+        candidate->stop_ppu_oam_blocked = false;
+        candidate->stop_ppu_palette_blocked = false;
+        candidate->ppu_transfer_end_dot = 0;
     }
     if (io.invalid || io.offset != length || candidate->boot_rom_enabled != (flags != 0) ||
         !valid_hardware_prefix(candidate, version) || !valid_v5_sections(candidate, sections)) {

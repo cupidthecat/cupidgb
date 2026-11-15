@@ -31,6 +31,9 @@ enum {
 };
 
 bool cupid_gb_lcd_enabled(const CupidGb *gb);
+/* STOP samples CPU port ownership once, then freezes the complementary PPU gates. */
+void cupid_gb_ppu_enter_stop(CupidGb *gb);
+void cupid_gb_ppu_leave_stop(CupidGb *gb);
 
 enum {
     CUPID_GB_FRAME_NORMAL = 0,

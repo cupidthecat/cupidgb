@@ -2,7 +2,9 @@
 
 #include "main_window.h"
 
+#include "audio_buffer.h"
 #include "audio_converter.h"
+#include "audio_sink_lifetime.h"
 #include "cartridge_file.h"
 #include "controller_dialog.h"
 #include "cupid/compat/native_v1.h"
@@ -46,8 +48,6 @@
 #include <QMessageBox>
 #include <QMimeData>
 #include <QMouseEvent>
-#include <QMutex>
-#include <QMutexLocker>
 #include <QPainter>
 #include <QPlainTextEdit>
 #include <QPointer>
@@ -225,63 +225,4 @@ class DisplayWidget final : public QWidget {
         const QRectF target = displayViewport(image.size(), size(), scaling, devicePixelRatioF());
         painter.drawImage(target, image);
     }
-};
-
-// Keep generated audio until the host accepts it. Backpressure pauses guest execution.
-class AudioBuffer final {
-  public:
-    explicit AudioBuffer(int bytesPerFrame = 4) : bytesPerFrame_(bytesPerFrame) {
-    }
-
-    void append(const char *data, qsizetype size) {
-        {
-            QMutexLocker lock(&mutex_);
-            queue_.append(data, size);
-            maximumQueued_ = std::max(maximumQueued_, queue_.size());
-        }
-    }
-
-    void clear() {
-        QMutexLocker lock(&mutex_);
-        queue_.clear();
-    }
-
-    qint64 bytesAvailable() const {
-        QMutexLocker lock(&mutex_);
-        return queue_.size();
-    }
-
-    void resetTelemetry() {
-        QMutexLocker lock(&mutex_);
-        bytesRead_ = 0;
-        maximumQueued_ = queue_.size();
-    }
-
-    QJsonObject telemetry() const {
-        QMutexLocker lock(&mutex_);
-        return {{"host_frames_written_to_sink", double(bytesRead_) / bytesPerFrame_},
-                {"maximum_queued_bytes", double(maximumQueued_)},
-                {"remaining_queued_bytes", double(queue_.size())}};
-    }
-
-    qint64 writeTo(QIODevice *device, qint64 maximum) {
-        QMutexLocker lock(&mutex_);
-        const qint64 available = std::min(maximum, qint64(queue_.size()));
-        const qint64 aligned = available - available % bytesPerFrame_;
-        if (aligned <= 0)
-            return 0;
-        const qint64 written = device->write(queue_.constData(), aligned);
-        if (written > 0) {
-            queue_.remove(0, qsizetype(written));
-            bytesRead_ += uint64_t(written);
-        }
-        return written;
-    }
-
-  private:
-    mutable QMutex mutex_;
-    QByteArray queue_;
-    uint64_t bytesRead_ = 0;
-    int bytesPerFrame_ = 4;
-    qsizetype maximumQueued_ = 0;
 };

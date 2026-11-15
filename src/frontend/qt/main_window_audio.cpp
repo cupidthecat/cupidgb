@@ -6,7 +6,7 @@ void MainWindow::setupAudio() {
     QScopedValueRollback<bool> operation(stateOperation_, true);
     stopAudio();
     audioConverter_.reset();
-    audioBuffer_ = std::make_unique<AudioBuffer>();
+    audioBuffer_ = std::make_shared<AudioBuffer>();
     const QByteArray requested = settings_.value("audio/outputDevice").toByteArray();
     QAudioDevice device = QMediaDevices::defaultAudioOutput();
     audioDeviceFallback_ = false;
@@ -35,12 +35,12 @@ void MainWindow::setupAudio() {
         statusBar()->showMessage("No usable audio output device is available");
         return;
     }
-    audioBuffer_ = std::make_unique<AudioBuffer>(format.bytesPerFrame());
+    audioBuffer_ = std::make_shared<AudioBuffer>(format.bytesPerFrame());
     audioConverter_ = std::make_unique<AudioConverter>(format);
     audioQueueLimit_ = format.bytesForDuration(50000);
     audioPrimeBytes_ = format.bytesForDuration(30000);
     audioPriming_ = true;
-    audio_ = std::make_unique<QAudioSink>(device, format);
+    audio_ = createAudioSink<QAudioSink>(device, format);
     connect(audio_.get(), &QAudioSink::stateChanged, this, [this](QAudio::State state) {
         if (state == QAudio::IdleState)
             audioPriming_ = true;
@@ -59,17 +59,12 @@ void MainWindow::setupAudio() {
 }
 
 void MainWindow::stopAudio() {
+    QScopedValueRollback<bool> operation(stateOperation_, true);
     audioDevice_ = nullptr;
     audioPriming_ = true;
-    if (audio_) {
-        // Disconnect callbacks before releasing the owning pointer: stopping the
-        // backend may synchronously emit stateChanged during destruction.
-        audio_->disconnect(this);
-        // A pause or timeline change discards obsolete samples. Draining the old
-        // stream can block the UI indefinitely when the host device stops consuming.
-        audio_->reset();
-        audio_.reset();
-    }
+    // Detach immediately, but retain the old backend while a reentrant start/write
+    // still uses its device. The final lease resets the obsolete stream, not drains it.
+    retireAudioSink(audio_, this);
 }
 
 void MainWindow::clearAudio() {
@@ -88,25 +83,44 @@ void MainWindow::clearAudio() {
 
 void MainWindow::pumpAudio() {
     QScopedValueRollback<bool> operation(stateOperation_, true);
+    // Backend event dispatch can replace the session queue while a write is active.
+    const auto buffer = audioBuffer_;
+    const auto sink = audio_;
     if (audio_ && !paused_) {
         // The event loop produces one guest frame at a time. Accumulate real samples
         // before starting the sink so frame-sized writes tolerate host scheduling jitter.
         // The 30 ms target stays below the 50 ms execution-backpressure limit.
         if (audioPriming_) {
-            if (audioBuffer_->bytesAvailable() < audioPrimeBytes_)
+            if (buffer->bytesAvailable() < audioPrimeBytes_)
                 return;
             // Start only when generated audio is ready. Repeated reset/start calls
             // with an empty queue can leave the Windows backend idle after a load.
-            if (!audioDevice_)
-                audioDevice_ = audio_->start();
-            if (audioDevice_ && audioBuffer_->writeTo(audioDevice_, audio_->bytesFree()) > 0) {
+            if (!audioDevice_) {
+                QIODevice *device = sink->start();
+                if (sink != audio_ || buffer != audioBuffer_ || paused_)
+                    return;
+                audioDevice_ = device;
+            }
+            QIODevice *const device = audioDevice_;
+            const qint64 capacity = sink->bytesFree();
+            if (sink != audio_ || buffer != audioBuffer_ || device != audioDevice_ || paused_ ||
+                menuDepth_)
+                return;
+            const qint64 written = buffer->writeTo(device, capacity);
+            if (written > 0 && sink == audio_ && buffer == audioBuffer_ && !paused_) {
                 audioPriming_ = false;
                 ++audioPrimeEvents_;
             }
             return;
         }
-        if (audioDevice_)
-            audioBuffer_->writeTo(audioDevice_, audio_->bytesFree());
+        if (audioDevice_) {
+            QIODevice *const device = audioDevice_;
+            const qint64 capacity = sink->bytesFree();
+            if (sink != audio_ || buffer != audioBuffer_ || device != audioDevice_ || paused_ ||
+                menuDepth_)
+                return;
+            buffer->writeTo(device, capacity);
+        }
     }
 }
 

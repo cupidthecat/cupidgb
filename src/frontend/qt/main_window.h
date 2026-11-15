@@ -41,6 +41,7 @@ class InspectorsWindow;
 class PrinterWindow;
 class CheatsWindow;
 struct CupidGbPrinter;
+class PaletteLibrary;
 
 class MainWindow final : public QMainWindow {
   public:
@@ -62,6 +63,12 @@ class MainWindow final : public QMainWindow {
   private:
     void buildMenus();
     void buildColorMenus(QMenu *view);
+    void buildPaletteFileMenu(QMenu *palette);
+    void importPalette();
+    void exportPalette();
+    bool loadPaletteFile(const QString &path);
+    void openPaletteEditor();
+    void applyPaletteLibrary(const PaletteLibrary &library);
     void applyDisplaySettings();
     void setFrameBlending(FrameBlending mode);
     QSize logicalWindowSize(const QSize &nativeSize, int scale) const;
@@ -108,9 +115,14 @@ class MainWindow final : public QMainWindow {
     void stopAudio();
     void clearAudio();
     void pumpAudio();
+    bool audioLifecycleSmokeTest(const QString &path);
     bool startRecording(const QString &path);
     bool stopRecording();
     void screenshot();
+    void screenshotAs();
+    void copyScreenshot();
+    bool saveScreenshot(const QString &path);
+    bool displayFilesSmokeTest(const QString &directory);
     QByteArray captureState(bool reportFailure = true, bool rewindSnapshot = false);
     bool restoreState(const QByteArray &state, bool reportFailure, bool rewindSnapshot = false);
     QString slotPath(int slot, bool legacy = false) const;
@@ -185,8 +197,8 @@ class MainWindow final : public QMainWindow {
     CupidGbPrinter *printer_ = nullptr;
     uint64_t printerGeneration_ = 0;
     DisplayWidget *display_ = nullptr;
-    std::unique_ptr<AudioBuffer> audioBuffer_;
-    std::unique_ptr<QAudioSink> audio_;
+    std::shared_ptr<AudioBuffer> audioBuffer_;
+    std::shared_ptr<QAudioSink> audio_;
     QIODevice *audioDevice_ = nullptr;
     std::unique_ptr<AudioConverter> audioConverter_;
     std::unique_ptr<WaveRecorder> recorder_;
@@ -228,6 +240,8 @@ class MainWindow final : public QMainWindow {
     QAction *resetAction_ = nullptr;
     QAction *frameAction_ = nullptr;
     QAction *screenshotAction_ = nullptr;
+    QAction *screenshotAsAction_ = nullptr;
+    QAction *copyScreenshotAction_ = nullptr;
     QAction *loadStateFileAction_ = nullptr;
     std::array<QAction *, 3> scalingActions_{};
     std::array<QAction *, 5> paletteActions_{};

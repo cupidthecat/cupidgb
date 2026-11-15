@@ -122,7 +122,7 @@ The MSVC configuration rejects this sanitizer option. Enabling sanitizers suppre
 
 ## Installation and deployment
 
-The desktop configuration installs the executable, project license and supplied SDL2 notices. Windows installation also copies the selected SDL2 runtime. Linux installation supplies a desktop entry, GB/GBC MIME descriptions, and an SVG application icon:
+The desktop configuration installs the executable, project license and supplied SDL2 notices. Windows installation also copies the selected SDL2 runtime and optional per-user Open With scripts. The executable includes CupidGB icon and version resources. Linux installation supplies a desktop entry, GB/GBC MIME descriptions, and an SVG application icon:
 
 ```sh
 cmake --install build --prefix /path/to/install
@@ -140,10 +140,14 @@ C:/Qt/6.8.3/msvc2022_64/bin/windeployqt.exe --release package/cupidgb.exe
 Copy-Item LICENSE package/LICENSE
 Copy-Item third_party/SDL2-LICENSE.txt package/SDL2-LICENSE.txt
 Copy-Item third_party/SDL2-COPYING.txt package/SDL2-COPYING.txt
+Copy-Item packaging/windows/Register-CupidGB.ps1, packaging/windows/Unregister-CupidGB.ps1, `
+    packaging/windows/CupidGB.FileAssociations.psm1 package/
 ./package/cupidgb.exe --smoke-test --audio-check
 ```
 
 Include the notices and license material required by the libraries actually shipped. Test the staged folder with development Qt paths removed from its environment. Check launch, dialogs, images, audio, and clean shutdown; dependency copying alone does not qualify deployment.
+
+The optional Windows scripts add CupidGB to Open With choices for `.gb` and `.gbc`, preserving current defaults and `UserChoice` entries. They are not run during installation or application startup. [Windows integration](../packaging/windows/README.md) describes registration, removal, private-hive checks, and icon regeneration.
 
 Qt continues to own video, audio and its event loop. SDL2 initializes only controller-related subsystems. The controller virtual-device tests need no physical gamepad, but their success does not qualify real drivers, motors or motion devices. See [controllers](controllers.md) for the input boundary and test limits.
 

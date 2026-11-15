@@ -240,9 +240,15 @@ void MainWindow::buildMenus() {
     fullscreen->setCheckable(true);
     connect(fullscreen, &QAction::toggled, this,
             [this](bool value) { value ? showFullScreen() : showNormal(); });
-    screenshotAction_ = view->addAction("Save &Screenshot…", QKeySequence("F12"));
+    screenshotAction_ = view->addAction("Save &Screenshot", QKeySequence("F12"));
     registerShortcut(screenshotAction_, "screenshot");
     connect(screenshotAction_, &QAction::triggered, this, [this] { screenshot(); });
+    screenshotAsAction_ = view->addAction("Save Screenshot &As…", QKeySequence("Shift+F12"));
+    registerShortcut(screenshotAsAction_, "screenshotAs");
+    connect(screenshotAsAction_, &QAction::triggered, this, [this] { screenshotAs(); });
+    copyScreenshotAction_ = view->addAction("&Copy Screenshot", QKeySequence("Ctrl+Shift+C"));
+    registerShortcut(copyScreenshotAction_, "copyScreenshot");
+    connect(copyScreenshotAction_, &QAction::triggered, this, [this] { copyScreenshot(); });
     auto *scaling = view->addMenu("Display &Scaling");
     auto *scalingGroup = new QActionGroup(this);
     const std::array<const char *, 3> scaleNames = {"Integer Scale", "Retain Aspect Ratio",
@@ -286,6 +292,7 @@ void MainWindow::buildMenus() {
             applyDisplaySettings();
         });
     }
+    buildPaletteFileMenu(palette);
     buildColorMenus(view);
     auto *blending = view->addMenu("Frame &Blending");
     auto *blendingGroup = new QActionGroup(this);
@@ -745,8 +752,9 @@ bool MainWindow::restart() {
 }
 
 void MainWindow::refreshActions() {
-    for (auto *action : {closeAction_, resetAction_, pauseAction_, frameAction_, screenshotAction_,
-                         loadStateFileAction_, recordingAction_})
+    for (auto *action :
+         {closeAction_, resetAction_, pauseAction_, frameAction_, screenshotAction_,
+          screenshotAsAction_, copyScreenshotAction_, loadStateFileAction_, recordingAction_})
         action->setEnabled(bool(emulator_));
     recordingAction_->setText(recorder_ && recorder_->active() ? "Stop Audio &Recording"
                                                                : "Start Audio &Recording…");

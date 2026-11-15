@@ -1,5 +1,6 @@
 #include "cupid/gb/gb.h"
 #include "cupid/gb/ppu.h"
+#include "cupid/gbc/cgb.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -634,6 +635,147 @@ static void test_presentation_chunk_invariance(void) {
     }
 }
 
+static void test_color_port_ownership_edges(void) {
+    /* Each row records an observed port-ownership transition after LCD enable:
+     * bit 0 = OAM, bit 1 = VRAM, bit 2 = palette. STAT alone misses these edges. */
+    static const unsigned normal[][2] = {{1, 0},   {79, 1},  {81, 5},  {84, 7},  {251, 5}, {252, 4},
+                                         {256, 0}, {452, 1}, {533, 3}, {536, 7}, {705, 5}, {706, 4},
+                                         {710, 0}, {908, 1}, {989, 3}, {992, 7}};
+    static const unsigned fast[][2] = {{1, 0},   {79, 3},  {81, 7},  {252, 4}, {254, 0},
+                                       {452, 1}, {533, 3}, {536, 7}, {706, 4}, {708, 0},
+                                       {908, 1}, {989, 3}, {992, 7}};
+    for (unsigned speed = 0; speed < 2; ++speed) {
+        CupidGb gb;
+        prepare(&gb, true, 0);
+        gb.double_speed = speed != 0;
+        cupid_gb_write_u8(&gb, 0xff40, 0);
+        cupid_gb_write_u8(&gb, 0xff40, 0x91);
+        gb.cgb_bg_palette_ram[0] = 0x12;
+        const unsigned (*edges)[2] = speed ? fast : normal;
+        const size_t count =
+            speed ? sizeof(fast) / sizeof(fast[0]) : sizeof(normal) / sizeof(normal[0]);
+        unsigned expected = 0;
+        size_t edge = 0;
+        for (unsigned dot = 1; dot <= 1000; ++dot) {
+            cupid_gb_tick_ppu_dots(&gb, 1);
+            if (edge < count && dot == edges[edge][0])
+                expected = edges[edge++][1];
+            cupid_gb_ppu_enter_stop(&gb);
+            const unsigned ports = !gb.stop_ppu_oam_blocked |
+                                   (unsigned)!gb.stop_ppu_vram_blocked << 1 |
+                                   (unsigned)!gb.stop_ppu_palette_blocked << 2;
+            assert(ports == expected);
+            assert(cupid_cgb_palettes_cpu_blocked(&gb) == ((expected & 4u) != 0));
+            assert(cupid_gb_read_u8(&gb, 0xff69) == (expected & 4u ? 0xff : 0x12));
+            cupid_gb_ppu_leave_stop(&gb);
+            assert(!gb.stop_ppu_oam_blocked && !gb.stop_ppu_vram_blocked &&
+                   !gb.stop_ppu_palette_blocked);
+        }
+        assert(edge == count);
+    }
+}
+
+static void test_stop_oam_and_palette_ports(void) {
+    CupidGb gb;
+    prepare(&gb, true, 1);
+    object(&gb, 0, 24, 1, 0);
+    gb.cpu.stopped = true;
+    gb.stop_ppu_oam_blocked = true;
+    cupid_gb_pixels_scan_object(&gb, 0);
+    assert(gb.oam_search_word == UINT16_MAX && !gb.pixels.object_count);
+    gb.stop_ppu_oam_blocked = false;
+    cupid_gb_pixels_scan_object(&gb, 0);
+    assert(gb.oam_search_word == 0x1810 && gb.pixels.object_count == 1);
+    for (unsigned color_mode = 0; color_mode < 2; ++color_mode) {
+        prepare(&gb, true, 1);
+        gb.cgb_mode = color_mode != 0;
+        object(&gb, 0, 24, 1, 0);
+        gb.cpu.stopped = true;
+        gb.stop_ppu_palette_blocked = true;
+        render(&gb);
+        assert(gb.frame_buffer_color[0] == 0 && gb.frame_buffer_color[16] == 0);
+        assert(gb.frame_buffer[0] == 1 && gb.frame_buffer[16] == 1);
+    }
+}
+
+static void test_physical_color_attributes_in_compatibility_mode(void) {
+    CupidGb gb;
+    for (unsigned color_hardware = 0; color_hardware < 2; ++color_hardware) {
+        prepare(&gb, color_hardware != 0, 1);
+        gb.cgb_mode = false;
+        object(&gb, 0, 24, 2, 0);
+        memset(gb.video_ram + 0x3800, 0x80, 32);
+        render(&gb);
+        assert(gb.frame_buffer[16] == (color_hardware ? 1 : 2));
+
+        prepare(&gb, color_hardware != 0, 1);
+        gb.cgb_mode = false;
+        memset(gb.video_ram + 0x3800, 8, 32);
+        memset(gb.video_ram + 0x2000, 0xff, 16);
+        render(&gb);
+        assert(gb.frame_buffer[16] == (color_hardware ? 3 : 1));
+    }
+}
+
+static void test_stopped_compatibility_background_priority(void) {
+    CupidGb gb;
+    memset(&gb, 0, sizeof(gb));
+    gb.model = CUPID_GB_MODEL_CGB;
+    gb.oam_vram_row = UINT16_MAX;
+    memset(gb.cgb_bg_palette_ram, 0x11, sizeof(gb.cgb_bg_palette_ram));
+    memset(gb.cgb_obj_palette_ram, 0x22, sizeof(gb.cgb_obj_palette_ram));
+    set_tile(&gb, 0, 3);
+    for (unsigned index = 0; index < 10; ++index)
+        object(&gb, index, (uint8_t)(8 + index * 13), 0, 0);
+    cupid_gb_write_u8(&gb, 0xff43, 1);
+    cupid_gb_write_u8(&gb, 0xff47, 0xe4);
+    cupid_gb_write_u8(&gb, 0xff48, 0xe4);
+    cupid_gb_write_u8(&gb, 0xff40, 0x93);
+    cupid_gb_tick_ppu_dots(&gb, 252);
+    cupid_gb_ppu_enter_stop(&gb);
+    gb.cpu.stopped = true;
+    assert(gb.stop_ppu_vram_blocked && !gb.stop_ppu_oam_blocked && !gb.stop_ppu_palette_blocked);
+    cupid_gb_tick_ppu_dots(&gb, 1148);
+    // Blocked attribute reads retain priority on physical color hardware even
+    // for a monochrome cartridge. Sprite pixels must stay behind the background.
+    for (unsigned pixel = 160; pixel < 480; ++pixel)
+        assert(gb.frame_buffer_color[pixel] == 0x1111);
+}
+
+static void test_pixel_output_preserves_object_queue_lanes(void) {
+    CupidGb gb;
+    for (unsigned color_mode = 0; color_mode < 2; ++color_mode) {
+        for (unsigned pattern = 0; pattern < 256; ++pattern) {
+            prepare(&gb, color_mode != 0, 0);
+            CupidGbPixels *p = &gb.pixels;
+            p->count = 8;
+            p->column = 1;
+            p->x = (uint8_t)(pattern % CUPID_GB_SCREEN_WIDTH);
+            for (unsigned slot = 0; slot < 8; ++slot) {
+                p->sprite_colors[slot] = (uint8_t)((pattern + slot * 13u) & 3u);
+                p->sprite_palettes[slot] =
+                    (uint8_t)((pattern + slot * 19u) & (color_mode ? 7u : 1u));
+                p->sprite_flags[slot] = (uint8_t)((pattern + slot) & 1u);
+                p->sprite_priorities[slot] = (uint16_t)(pattern * 257u + slot * 0x1435u);
+            }
+            const CupidGbPixels before = *p;
+            cupid_gb_pixels_tick(&gb);
+            assert(p->x == before.x + 1);
+            for (unsigned slot = 0; slot < 7; ++slot) {
+                assert(p->sprite_colors[slot] == before.sprite_colors[slot + 1]);
+                assert(p->sprite_palettes[slot] == before.sprite_palettes[slot + 1]);
+                assert(p->sprite_flags[slot] == before.sprite_flags[slot + 1]);
+                assert(p->sprite_priorities[slot] == before.sprite_priorities[slot + 1]);
+            }
+            assert(p->sprite_colors[7] == 0);
+            assert(p->sprite_priorities[7] == UINT16_MAX);
+            // Inactive metadata remains serialized until a later object replaces it.
+            assert(p->sprite_palettes[7] == before.sprite_palettes[7]);
+            assert(p->sprite_flags[7] == before.sprite_flags[7]);
+        }
+    }
+}
+
 int main(void) {
     test_dmg_object_order();
     test_dmg_priority_uses_raw_bg_color();
@@ -663,6 +805,11 @@ int main(void) {
     test_first_frame_presentation(false);
     test_first_frame_presentation(true);
     test_presentation_chunk_invariance();
+    test_color_port_ownership_edges();
+    test_stop_oam_and_palette_ports();
+    test_physical_color_attributes_in_compatibility_mode();
+    test_stopped_compatibility_background_priority();
+    test_pixel_output_preserves_object_queue_lanes();
     puts("PPU priority checks passed.");
     return 0;
 }

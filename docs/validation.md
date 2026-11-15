@@ -774,3 +774,70 @@ Complete FIFO/window timing remains open: the checked CGB window restart is stil
 Uncapped throughput controls compare the preceding merged build with accuracy checkpoint `9531139`. Each run advances 3,600 guest intervals, approximately 60.274 guest seconds. One warmup pair is discarded before five alternating measured pairs per game and host. Complete PCM, final images and guest counters match across builds and hosts for both inputs. Windows QPC elapsed medians increase from 7.620 to 8.160 seconds for Tetris and 8.906 to 9.589 for Mario Deluxe. Linux `CLOCK_MONOTONIC_RAW` medians increase from 6.786 to 7.725 and 8.034 to 8.458 seconds. Adjusted Linux clock measurements remain separate because the host rate changes. These are headless throughput costs, not presentation FPS or sustained playback results.
 
 A counts-only profile finds no selected or pending object in more than 96% of enabled lookup calls for those sequences. The lookup now returns immediately for zero selected slots or a fully fetched selected mask, ignoring unused higher bits from older snapshots. A private 46,137,344-case check preserves return values and mask mutations. Three measured alternating pilot pairs after warmup retain complete outputs and lower elapsed medians relative to `9531139`: Windows by 2.06%/1.02% and Linux by 1.46%/0.62% for Tetris/Mario Deluxe. These small pilot changes qualify the lookup shortcut only; the added accuracy work still has a net throughput cost. Both desktop suites and the sanitizer suite pass again after the shortcut.
+
+## Native ports and desktop workflows, 2026-11-15
+
+The current hardware work samples STOP access independently for VRAM, OAM and the
+color-palette port, retains the palette release edge in native version 10, and
+keeps versions 2 through 9 readable with defaults for missing history. CGB reset,
+register dispatch, palette access, DMA and rendering now occupy separate modules.
+The hardware tests also cover monochrome OAM-conflict phases and pixel-queue lane
+shifting. These checks do not establish complete fetcher timing or every hardware
+revision.
+
+A PPU-only comparison covers 64 physical-color profiles: color and compatibility
+mode, normal and double speed, eight scroll offsets, and zero or ten objects. It
+samples 1,400 dots per profile, then repeats with nine directly latched STOP
+positions. All 896,000 access masks and STAT mode samples match. A first run finds
+160 differing sprite pixels: compatibility mode had discarded physical attribute
+reads, losing background priority when VRAM was blocked. The targeted regression
+fails before the repair and passes afterward. The current production core matches
+all 276,480 compared RGB555 words. Internal line and LCD-x bookkeeping still differs
+at some boundaries. This fixture does not execute CPU STOP or cover DMA, audio,
+every pixel pattern or complete pipeline equivalence.
+
+The desktop work adds palette-file import/export, a persistent named palette
+library with automatic color controls, timestamped captures, Save As and clipboard
+capture. Restoring built-ins at the library limit now rejects the whole operation
+and preserves custom entries. The automatic theme collection remains incomplete.
+Windows resources and optional Open With scripts are included; registration tests
+use a private registry hive and preserve current user associations.
+
+Audio queue writes release the queue lock before calling the backend. In-flight
+operations retain the old queue and sink through reentrant session changes. Queue
+replacement and telemetry resets cannot consume replacement samples or charge the
+new reporting window. Stream-capacity checks validate ownership again before
+writing. Native callback tests close the cartridge during a write and open a menu
+during timer pumping; the menu case must retain the guest cycle count.
+
+Windows MSVC/Qt 6.8.3 Release passes 45/45 checks, including both private-hive tests.
+An earlier Linux GCC/Qt 6.4.2 Release suite passes 43/43. After the attribute repair,
+42/43 pass; the CLI check hits the intermittent backend abort described below.
+The separate Linux ASan/UBSan core build passes 26/26 after the repair with leak
+detection enabled. Native Windows and Linux audio-enabled
+Qt workflow checks pass. The palette editor was captured and visually reviewed
+under both native window systems.
+
+The first Linux desktop suite aborted one short CLI launch inside PulseAudio with
+`mainloop_io_free` asserting `!e->dead`. The standalone CLI check and one complete
+43-case rerun pass, but later launches reproduce PulseAudio dispatch assertions.
+A clean `bd41bf4` baseline also reproduces the abort on its first CLI test run.
+A debugger capture places the current failure in the PulseAudio thread during
+Qt's global audio-engine destruction, after the core has shut down. This does not
+prove the exact cause. A later
+60-second Linux CGB run completes, but the WSLg audio socket is missing and stream
+creation fails. Its clock and image measurements do not qualify sustained audio.
+
+A Windows CGB input sequence reaches commercial course selection over 60 seconds.
+After five seconds of warmup, guest progress is 99.995% with zero audio idle or
+error events. This run starts with a hidden window and has no widget paint events;
+it qualifies the bounded guest/audio counters only. It does not establish visible
+presentation, physical display refresh, complete gameplay or all-game speed.
+
+A separate visible Windows DMG input run reaches an active falling-block board.
+The 55-second window after warmup records 99.994% guest progress, 3,287 widget
+paints, zero audio idle events and zero audio errors. Widget paint intervals have
+a 16.732 ms median, 18.081 ms 95th percentile and 20.408 ms maximum. An earlier
+menu-only trace records one startup audio idle event; it is retained separately.
+These are bounded application observations, without a listening assessment or
+physical display-refresh measurement. They do not qualify every game or saving.

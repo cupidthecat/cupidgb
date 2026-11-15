@@ -40,7 +40,7 @@ add_library(cupidgb_core STATIC
     src/compat/native_v1.c src/gb/battery.c
     src/gb/gb.c src/gb/state.c src/gb/cpu.c src/gb/ppu.c src/gb/pixels.c src/gb/apu.c
     src/gb/timer.c src/gb/cartridge.c src/gb/camera.c src/gb/mbc7.c src/gb/input.c src/gb/debugger.c src/gb/sgb.c
-    src/gbc/cgb.c
+    src/gbc/cgb.c src/gbc/cgb_palette.c src/gbc/cgb_dma.c src/gbc/cgb_render.c
     src/gb/printer.c
     src/gb/cheats.c
     src/gb/tpp1.c
@@ -124,6 +124,11 @@ if(CUPIDGB_BUILD_QT)
         src/frontend/qt/main_window_motion.cpp
         src/frontend/qt/main_window_session.cpp
         src/frontend/qt/main_window_display.cpp
+        src/frontend/qt/main_window_display_files.cpp
+        src/frontend/qt/main_window_display_file_tests.cpp
+        src/frontend/qt/display_files.cpp
+        src/frontend/qt/palette_library.cpp
+        src/frontend/qt/palette_editor.cpp
         src/frontend/qt/main_window_debugger.cpp
         src/frontend/qt/main_window_workflow_tests.cpp
         src/frontend/qt/main_window_controller_tests.cpp
@@ -143,7 +148,17 @@ if(CUPIDGB_BUILD_QT)
     )
     target_link_libraries(cupidgb PRIVATE cupidgb_core cupidgb_controllers Qt6::Widgets
         Qt6::Multimedia Qt6::PrintSupport)
+    target_compile_definitions(cupidgb PRIVATE CUPIDGB_VERSION="${PROJECT_VERSION}")
+    qt_add_resources(cupidgb_icon_sources packaging/windows/cupidgb.qrc)
+    target_sources(cupidgb PRIVATE ${cupidgb_icon_sources})
     if(WIN32)
+        set_target_properties(cupidgb PROPERTIES WIN32_EXECUTABLE TRUE)
+        enable_language(RC)
+        configure_file(packaging/windows/cupidgb.rc.in
+            ${CMAKE_CURRENT_BINARY_DIR}/generated/cupidgb.rc @ONLY)
+        target_sources(cupidgb PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/generated/cupidgb.rc)
+        set_source_files_properties(${CMAKE_CURRENT_BINARY_DIR}/generated/cupidgb.rc PROPERTIES
+            OBJECT_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/packaging/windows/cupidgb.ico)
         add_custom_command(TARGET cupidgb POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 $<TARGET_FILE:SDL2::SDL2> $<TARGET_FILE_DIR:cupidgb>)
@@ -154,6 +169,8 @@ if(CUPIDGB_BUILD_QT)
     install(FILES third_party/SDL2-COPYING.txt DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/cupidgb)
     if(WIN32)
         install(FILES $<TARGET_FILE:SDL2::SDL2> DESTINATION ${CMAKE_INSTALL_BINDIR})
+        install(FILES packaging/windows/Register-CupidGB.ps1 packaging/windows/Unregister-CupidGB.ps1
+            packaging/windows/CupidGB.FileAssociations.psm1 DESTINATION ${CMAKE_INSTALL_BINDIR})
     endif()
     if(UNIX AND NOT APPLE)
         install(FILES packaging/linux/io.github.cupidthecat.CupidGB.desktop
@@ -180,6 +197,7 @@ if(CUPIDGB_ENABLE_TESTS)
         add_test(NAME cupidgb_${test_name} COMMAND cupidgb_${test_name})
         set_tests_properties(cupidgb_${test_name} PROPERTIES TIMEOUT 120)
     endforeach()
+    target_sources(cupidgb_gb PRIVATE tests/test_gb_hardware.c)
     add_executable(cupidgb_core_interop tests/test_core_interop.cpp)
     target_link_libraries(cupidgb_core_interop PRIVATE cupidgb_core)
     if(MSVC)
@@ -197,6 +215,17 @@ if(CUPIDGB_ENABLE_TESTS)
         set_tests_properties(cupidgb_runner PROPERTIES TIMEOUT 120)
     endif()
     if(TARGET cupidgb)
+        if(WIN32 AND NOT CMAKE_CROSSCOMPILING)
+            find_program(CUPIDGB_POWERSHELL_EXECUTABLE NAMES pwsh powershell REQUIRED)
+            add_test(NAME cupidgb_windows_associations
+                COMMAND ${CUPIDGB_POWERSHELL_EXECUTABLE} -NoProfile -NonInteractive -File
+                    ${CMAKE_CURRENT_SOURCE_DIR}/packaging/windows/test_file_associations.ps1)
+            set_tests_properties(cupidgb_windows_associations PROPERTIES TIMEOUT 30)
+            add_test(NAME cupidgb_windows_association_preservation
+                COMMAND ${CUPIDGB_POWERSHELL_EXECUTABLE} -NoProfile -NonInteractive -File
+                    ${CMAKE_CURRENT_SOURCE_DIR}/packaging/windows/test_file_association_preservation.ps1)
+            set_tests_properties(cupidgb_windows_association_preservation PROPERTIES TIMEOUT 30)
+        endif()
         add_executable(cupidgb_controller_backend tests/frontend/test_controller_backend.cpp)
         target_link_libraries(cupidgb_controller_backend PRIVATE cupidgb_controllers)
         add_test(NAME cupidgb_controller_backend COMMAND cupidgb_controller_backend)
@@ -263,6 +292,35 @@ if(CUPIDGB_ENABLE_TESTS)
             target_compile_options(cupidgb_display_pipeline PRIVATE -UNDEBUG)
         endif()
         add_test(NAME cupidgb_display_pipeline COMMAND cupidgb_display_pipeline)
+        add_executable(cupidgb_display_files
+            tests/frontend/test_display_files.cpp src/frontend/qt/display_files.cpp)
+        target_include_directories(cupidgb_display_files PRIVATE src/frontend/qt)
+        target_link_libraries(cupidgb_display_files PRIVATE Qt6::Gui)
+        if(MSVC)
+            target_compile_options(cupidgb_display_files PRIVATE /UNDEBUG)
+        else()
+            target_compile_options(cupidgb_display_files PRIVATE -UNDEBUG)
+        endif()
+        add_test(NAME cupidgb_display_files COMMAND cupidgb_display_files)
+        add_executable(cupidgb_palette_library tests/frontend/test_palette_library.cpp
+            src/frontend/qt/palette_library.cpp src/frontend/qt/display_files.cpp)
+        target_include_directories(cupidgb_palette_library PRIVATE src/frontend/qt)
+        target_link_libraries(cupidgb_palette_library PRIVATE Qt6::Gui)
+        add_executable(cupidgb_palette_editor tests/frontend/test_palette_editor.cpp
+            src/frontend/qt/palette_editor.cpp src/frontend/qt/palette_library.cpp
+            src/frontend/qt/display_files.cpp)
+        target_include_directories(cupidgb_palette_editor PRIVATE src/frontend/qt)
+        target_link_libraries(cupidgb_palette_editor PRIVATE Qt6::Widgets)
+        foreach(palette_test IN ITEMS cupidgb_palette_library cupidgb_palette_editor)
+            if(MSVC)
+                target_compile_options(${palette_test} PRIVATE /UNDEBUG)
+            else()
+                target_compile_options(${palette_test} PRIVATE -UNDEBUG)
+            endif()
+            add_test(NAME ${palette_test} COMMAND ${palette_test})
+            set_tests_properties(${palette_test} PROPERTIES
+                ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+        endforeach()
         add_executable(cupidgb_color_pipeline
             tests/frontend/test_color_pipeline.cpp src/frontend/qt/color_pipeline.cpp)
         target_include_directories(cupidgb_color_pipeline PRIVATE src/frontend/qt)
@@ -283,6 +341,16 @@ if(CUPIDGB_ENABLE_TESTS)
             target_compile_options(cupidgb_cheat_search PRIVATE -UNDEBUG)
         endif()
         add_test(NAME cupidgb_cheat_search COMMAND cupidgb_cheat_search)
+        add_executable(cupidgb_audio_buffer tests/frontend/test_audio_buffer.cpp)
+        target_include_directories(cupidgb_audio_buffer PRIVATE src/frontend/qt)
+        target_link_libraries(cupidgb_audio_buffer PRIVATE Qt6::Core)
+        if(MSVC)
+            target_compile_options(cupidgb_audio_buffer PRIVATE /UNDEBUG)
+        else()
+            target_compile_options(cupidgb_audio_buffer PRIVATE -UNDEBUG)
+        endif()
+        add_test(NAME cupidgb_audio_buffer COMMAND cupidgb_audio_buffer)
+        set_tests_properties(cupidgb_audio_buffer PROPERTIES TIMEOUT 10)
         add_executable(cupidgb_audio_converter
             tests/frontend/test_audio_converter.cpp src/frontend/qt/audio_converter.cpp)
         target_include_directories(cupidgb_audio_converter PRIVATE src/frontend/qt)

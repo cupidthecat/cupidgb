@@ -238,18 +238,6 @@ void MainWindow::present(bool completedFrame) {
     display_->update();
 }
 
-void MainWindow::screenshot() {
-    if (image_.isNull())
-        return;
-    const bool wasPaused = paused_;
-    setPaused(true);
-    const QString path =
-        QFileDialog::getSaveFileName(this, "Save Screenshot", "CupidGB.png", "PNG image (*.png)");
-    if (!path.isEmpty() && !image_.save(path, "PNG"))
-        reportError("Could not save screenshot: " + path);
-    setPaused(wasPaused);
-}
-
 void MainWindow::configure() {
     const bool wasPaused = paused_;
     setPaused(true);
