@@ -198,6 +198,11 @@ if(CUPIDGB_ENABLE_TESTS)
         add_test(NAME cupidgb_${test_name} COMMAND cupidgb_${test_name})
         set_tests_properties(cupidgb_${test_name} PROPERTIES TIMEOUT 120)
     endforeach()
+    if(CUPIDGB_ENABLE_SANITIZERS AND NOT CUPIDGB_ENABLE_NATIVE_HASH)
+        # Instrumented portable hashing processes the full snapshot matrix much
+        # more slowly than platform hashing. Keep every case and allow runner margin.
+        set_tests_properties(cupidgb_state PROPERTIES TIMEOUT 240)
+    endif()
     target_sources(cupidgb_gb PRIVATE tests/test_gb_hardware.c)
     add_executable(cupidgb_core_interop tests/test_core_interop.cpp)
     target_link_libraries(cupidgb_core_interop PRIVATE cupidgb_core)

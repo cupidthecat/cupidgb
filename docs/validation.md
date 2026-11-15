@@ -883,3 +883,30 @@ sampling records 122 successful observations, changing ticks from 9,644 to
 advances at roughly 0.9644 to 0.9685 of the RAW clock's rate. Consequently, the
 near-nominal adjusted-clock result does not establish stable real-time speed.
 Peak sampled resident memory is 114,680 KiB. The sampler makes no clock writes.
+
+The refreshed local library inventory contains 880 inputs and 878 distinct ROM
+hashes. A cold shared-boot scan gives each input 420 guest intervals with no input
+or battery loading: 874 reach that bound and six stop on illegal opcodes. All
+894 original files, including adjacent user data, retain their hashes and
+modification times. A bounded startup is not a compatibility verdict. The library
+contains ROM-only, MBC1, MBC2, MBC3, MBC5, MBC7, HuC3 and Camera inputs; it has no
+commercial HuC1, MBC6, MMM01 or TPP1 input. One nonstandard header is retained in
+the inventory and excluded from verified mapper coverage.
+
+All six stopped inputs also reach illegal instructions in the comparison build.
+Default startup matches five terminal register sets and four complete preceding
+64-instruction windows. Source inspection and repeated controls identify a
+startup-memory difference: the comparison's color profile varies work/high RAM,
+while CupidGB initializes it to zero. A separate reference-only zero-randomness
+control matches all six terminal sets and preceding windows. These diagnostic
+controls do not establish default startup equivalence or justify changing an
+input. A clean `bd41bf4` baseline matches all six current terminal sets, preceding
+windows and base-cycle counts. Power-on memory variation remains a parity
+requirement.
+
+One hosted portable-hash sanitizer state check exceeds its 120-second limit;
+the identical check passes in 111.53 seconds in the other event's job. A local
+complete run takes 132.21 seconds. The instrumented portable-hash configuration
+now gives that state check 240 seconds, retaining the entire matrix. Other
+configurations keep the 120-second state limit. The local portable state, SHA-256
+and C/C++ integration checks all pass with leak detection enabled.
