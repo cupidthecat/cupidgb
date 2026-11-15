@@ -79,6 +79,8 @@ typedef struct CupidGbDebugger {
  * and uses ordinary device semantics for I/O. It does not execute CPU cycles. */
 uint8_t cupid_gb_debug_peek(const CupidGb *gb, uint16_t address);
 bool cupid_gb_debug_poke(CupidGb *gb, uint16_t address, uint8_t value);
+/* Symbol and breakpoint bank identity. MMM01 uses controller bank numbers in
+ * menu-last order, including unlocked 0xfffe/0xffff, independent of file layout. */
 int cupid_gb_debugger_bank(const CupidGb *gb, uint16_t address);
 void cupid_gb_debug_disassemble(const CupidGb *gb, uint16_t address,
                                 CupidGbDebugInstruction *instruction);

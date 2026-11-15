@@ -382,6 +382,119 @@ bool MainWindow::debuggerSmokeTest(const QString &directory) {
         debugger_->last_stop != CUPID_GB_DEBUG_STOP_ERROR || debuggerHistory_.size() != 1 ||
         !debuggerBackstep() || captureState() != beforeIllegal)
         return smokeFailure(__FILE__, __LINE__);
+    // Both MMM01 dump layouts share logical labels and qualified expressions.
+    QByteArray menuFirst(0x20000, char(0));
+    for (int bank = 0; bank < 8; ++bank)
+        std::memset(menuFirst.data() + bank * 0x4000, bank, 0x4000);
+    const auto menuHeader = [&menuFirst](int offset, uint8_t type) {
+        for (int byte = 0; byte < 48; ++byte)
+            menuFirst[offset + 0x104 + byte] = char(byte + 1);
+        menuFirst.replace(offset + 0x134, 16,
+                          QByteArray("DEBUG MMM01", 11).leftJustified(16, '\0'));
+        menuFirst[offset + 0x143] = char(0x80);
+        menuFirst[offset + 0x146] = 0;
+        menuFirst[offset + 0x147] = char(type);
+        menuFirst[offset + 0x148] = 2;
+        menuFirst[offset + 0x149] = 0;
+        uint8_t sum = 0;
+        for (int byte = 0x134; byte <= 0x14c; ++byte)
+            sum = uint8_t(sum - uint8_t(menuFirst[offset + byte]) - 1);
+        menuFirst[offset + 0x14d] = char(sum);
+    };
+    menuHeader(0, 0x0b);
+    menuHeader(0x8000, 0x01);
+    for (unsigned color = 0; color < 2; ++color) {
+        settings_.setValue("emulation/model",
+                           int(color ? CUPID_GB_MODEL_CGB : CUPID_GB_MODEL_DMG_ABC));
+        for (unsigned layout = 0; layout < 2; ++layout) {
+            const QByteArray image =
+                layout ? menuFirst.mid(0x8000) + menuFirst.left(0x8000) : menuFirst;
+            const QString stem = QString("debugger-mmm01-%1-%2").arg(color).arg(layout);
+            const QString imagePath = QDir(directory).filePath(stem + ".gb");
+            QFile imageFile(imagePath);
+            QFile labelsFile(QDir(directory).filePath(stem + ".sym"));
+            if (!imageFile.open(QIODevice::WriteOnly) || imageFile.write(image) != image.size() ||
+                !labelsFile.open(QIODevice::WriteOnly) ||
+                labelsFile.write("fffe:0200 MenuEntry\nffff:4200 MenuUpper\n03:4200 GameEntry\n") <=
+                    0)
+                return smokeFailure(__FILE__, __LINE__);
+            imageFile.close();
+            labelsFile.close();
+            if (!openRom(imagePath))
+                return smokeFailure(__FILE__, __LINE__);
+            openDebugger();
+            openInspectors();
+            debuggerWindow_->submitCommand("set pc $0200");
+            auto *context = inspectorsWindow_->findChild<QLabel *>("inspectorContext");
+            auto *listing = debuggerWindow_->findChild<QPlainTextEdit *>("debuggerDisassembly");
+            if (!context || !listing ||
+                !context->text().contains("ROM0 bank 65534 | ROMX bank 65535") ||
+                !listing->toPlainText().contains("MenuEntry:\n$fffe:$0200"))
+                return smokeFailure(__FILE__, __LINE__);
+            const QByteArray beforeMenuQueries = captureState();
+            debuggerWindow_->submitCommand("print pc");
+            if (!debuggerWindow_->outputText().contains("$1fe:$0200 (512)"))
+                return smokeFailure(__FILE__, __LINE__);
+            debuggerWindow_->submitCommand("print [$1ff:$4200]");
+            if (!debuggerWindow_->outputText().contains("$0001 (1)") ||
+                captureState() != beforeMenuQueries)
+                return smokeFailure(__FILE__, __LINE__);
+            for (unsigned region = 0; region < 2; ++region) {
+                const uint16_t menuAddress = region ? 0x4200 : 0x0200;
+                const int menuBank = region ? 0xffff : 0xfffe;
+                const QString location = QString("$%1").arg(menuAddress, 4, 16, QChar('0'));
+                debuggerWindow_->submitCommand("set pc " + location);
+                const QByteArray beforeMenuBreaks = captureState();
+                const std::array<QString, 2> commands = {
+                    region ? "break MenuUpper" : "break MenuEntry",
+                    QString("break $%1:%2").arg(menuBank, 0, 16).arg(location)};
+                for (const auto &command : commands) {
+                    debuggerWindow_->submitCommand("delete all");
+                    debuggerWindow_->submitCommand(command);
+                    if (debugger_->bp_count != 1 ||
+                        debugger_->breakpoints[0].bank != (menuBank & 0x1ff) ||
+                        cupid_gb_debugger_match_breakpoint(debugger_.get(), &emulator_->gb))
+                        return smokeFailure(__FILE__, __LINE__);
+                }
+                // Host callers can address the full mapped identity explicitly.
+                debuggerWindow_->submitCommand("delete all");
+                if (!cupid_gb_debugger_breakpoint_add(debugger_.get(), menuBank, menuAddress) ||
+                    debugger_->breakpoints[0].bank != menuBank ||
+                    !cupid_gb_debugger_match_breakpoint(debugger_.get(), &emulator_->gb))
+                    return smokeFailure(__FILE__, __LINE__);
+                debuggerWindow_->submitCommand("delete all");
+                debuggerWindow_->submitCommand("break *:" + location);
+                if (debugger_->bp_count != 1 || debugger_->breakpoints[0].bank != -1 ||
+                    !cupid_gb_debugger_match_breakpoint(debugger_.get(), &emulator_->gb) ||
+                    captureState() != beforeMenuBreaks)
+                    return smokeFailure(__FILE__, __LINE__);
+                debuggerWindow_->submitCommand("delete all");
+            }
+            auto &mapped = emulator_->gb;
+            cupid_gb_write_u8(&mapped, 0x2000, 3);
+            cupid_gb_write_u8(&mapped, 0x4000, 0);
+            cupid_gb_write_u8(&mapped, 0x6000, 0);
+            cupid_gb_write_u8(&mapped, 0, 0x40);
+            debuggerWindow_->submitCommand("set pc $4200");
+            if (!context->text().contains("ROM0 bank 0 | ROMX bank 3") ||
+                !listing->toPlainText().contains("GameEntry:\n$03:$4200"))
+                return smokeFailure(__FILE__, __LINE__);
+            const QByteArray beforeGameQueries = captureState();
+            debuggerWindow_->submitCommand("print {3:$4200}");
+            if (!debuggerWindow_->outputText().contains("$0505 (1285)"))
+                return smokeFailure(__FILE__, __LINE__);
+            const auto oldOutputSize = debuggerWindow_->outputText().size();
+            debuggerWindow_->submitCommand("x $03:$4200 1");
+            const QString memoryOutput = debuggerWindow_->outputText().mid(oldOutputSize);
+            if (!memoryOutput.contains("05") || memoryOutput.contains("not currently mapped"))
+                return smokeFailure(__FILE__, __LINE__);
+            debuggerWindow_->submitCommand("break GameEntry if [3:$4200] == 5");
+            if (debugger_->bp_count != 1 || debugger_->breakpoints[0].bank != 3 ||
+                !cupid_gb_debugger_match_breakpoint(debugger_.get(), &mapped) ||
+                captureState() != beforeGameQueries)
+                return smokeFailure(__FILE__, __LINE__);
+        }
+    }
     const QString captureDirectory = qEnvironmentVariable("CUPIDGB_UI_CAPTURE_DIR");
     if (!captureDirectory.isEmpty()) {
         QDir captures(captureDirectory);

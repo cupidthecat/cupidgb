@@ -90,7 +90,7 @@ MainWindow::MainWindow(bool isolated, bool automated, bool audioCheck,
     for (auto *menu : findChildren<QMenu *>()) {
         connect(menu, &QMenu::aboutToShow, this, [this] {
             if (menuDepth_++ == 0) {
-                releaseKeys();
+                releaseKeys(false);
                 clearAudio();
                 resetControllerRumble();
                 resetPacing();
@@ -618,7 +618,7 @@ bool MainWindow::openRom(const QString &path) {
         // Device reclassification can emit output immediately. Clear old host
         // keys and gate every callback before routing input into the new core.
         QScopedValueRollback<bool> operation(stateOperation_, true);
-        releaseKeys();
+        releaseKeys(false);
         controllers_->setMotionEnabled(emulator_->gb.header.mbc_type == CUPID_GB_MBC7);
     }
     cheats_ = std::move(candidateCheats);
@@ -738,7 +738,7 @@ bool MainWindow::closeRom() {
     resetDebuggerTimeline(true);
     saveTimer_.stop();
     batteryDirty_ = false;
-    releaseKeys();
+    releaseKeys(false);
     stopAudio();
     audioBuffer_.reset();
     if (emulator_)

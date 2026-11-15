@@ -453,6 +453,9 @@ void MainWindow::debuggerCommand(const QString &input) {
                 location = value.value;
             }
         }
+        // Direct addresses and symbols use the same bank width as expressions.
+        if (valid && bank >= 0)
+            bank &= 0x1ff;
         const QByteArray expression = condition.toUtf8();
         if (!valid ||
             !cupid_gb_debugger_breakpoint_add_condition(debugger_.get(), &emulator_->gb, bank,

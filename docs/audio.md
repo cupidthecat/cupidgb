@@ -16,12 +16,13 @@ This guide describes the implemented behavior and its limits. The [parity checkl
 | `src/frontend/qt/main_window_audio.cpp`, `main_window_session.cpp` | Device changes, pacing, pause/load/rewind transitions and recording control |
 | `src/frontend/qt/audio_buffer.h` | Generated-sample queue and reentrant host-write transactions |
 | `src/frontend/qt/audio_converter.cpp`, `wave_recorder.cpp` | Host-format conversion and RIFF/WAVE encoding |
+| `src/frontend/qt/turbo_audio_window.cpp` | Whole-frame Turbo playback selection and phase retention |
 
 The core has no Qt dependency and does not open an audio device. Run it and inspect or change its audio state on the same serialized execution path. Snapshot operations require an instruction boundary without concurrent core access. The host audio backend must not read or mutate `CupidGb` from its playback thread.
 
 Backend writes can dispatch Qt events, including telemetry and session changes. The queue releases its mutex before calling the device and retains the pending bytes until that call returns. A nested write cannot send the same prefix again. A timeline clear invalidates the pending transaction's removal, so it cannot consume replacement samples. Resetting telemetry also starts a new counter generation. An earlier write cannot add its accepted bytes to the new window.
 
-The caller retains both the queue and the sink during a backend call. Pausing or replacing a session disconnects and detaches the old sink immediately; its final lease resets and destroys it after the call returns. This keeps the sink-owned device alive without draining obsolete audio. Frame completion checks the session and timeline again before presentation, input updates or rewind capture, because backend dispatch may have closed or replaced the core.
+The caller retains both the queue and the sink during a backend call. Pausing or replacing a session disconnects and detaches the old sink immediately; its final lease resets and destroys it after the call returns. This keeps the sink-owned device alive without draining obsolete audio. A completed interval commits its display and rewind bookkeeping before calling the backend, then returns without accessing guest or presentation state. The scheduler checks the session, timeline and pacing generation before charging that interval to a deadline. Mode changes inside a guarded backend call defer their audio reset until the leases and execution guard have been released.
 
 ## Clock domains
 
@@ -130,9 +131,17 @@ Qt requests stereo signed 16-bit playback at the default core rate, then uses th
 
 The host queue primes with generated audio before starting the sink. Its current target is 30 ms, below the 50 ms execution-backpressure threshold. When the host cannot accept more audio, normal playback waits before advancing more guest work. It does not skip guest cycles or discard core samples to reach a presentation rate. Device fallback, idle events and queue metrics need separate runtime validation from core channel timing.
 
-Pause, successful state load, rewind transitions and other timeline discontinuities clear stale host audio, reset conversion and re-prime playback. Failed state loads preserve the live session. Output-device changes replace the sink while preserving the guest hardware. The discarded sink is reset without requesting a drain of obsolete queued audio. Pause and timeline changes do not wait for those samples to play. The ordinary turbo path generates and drains core audio while omitting playback; it must not be used as evidence for normal-audio performance.
+Pause, successful state load, playback-mode transitions and other timeline discontinuities clear stale host audio, reset conversion and re-prime playback. Failed state loads preserve the live session. Output-device changes replace the sink while preserving the guest hardware. The discarded sink is reset without requesting a drain of obsolete queued audio. Focus loss releases keyboard modes through the same transition path, including when the backend dispatches that event during a write.
 
-Slow-motion playback changes the converter's effective input rate. WAVE recording receives core PCM before that conversion and before host mute or volume. It records signed 16-bit, two-channel, little-endian RIFF/WAVE at the core rate. Pauses and backward rewind add no audio. Forward debugger execution can append generated samples while paused playback remains silent.
+Turbo generates and drains the ordinary core samples, converts them into the negotiated host format, then selects periodic segments for playback. At host rate `F`, the window has `floor(F / 8)` frame positions. Its phase advances before selection and wraps to zero. A cap represented by `q` quarter-speed units retains positions through `floor(4 * floor(F / 8) / q)`; uncapped Turbo uses `floor(F / 16)`. Both bounds include position zero. Selection always copies complete host frames. It does not alter the core PCM or the recorder's input.
+
+The window phase survives block boundaries, mode/cap changes and sink resets. Normal playback bypasses selection without advancing that phase. A changed host sample rate scales the phase proportionally into the new window; an unchanged rate leaves it intact. Capacity drops still advance the window, so a full queue cannot shift the next segment.
+
+Turbo bounds pending software-queue data at `floor(F / 8) + 1` frames. The native sink separately requests 50 ms of buffering. This software bound is not a total device-latency guarantee, and backend queues can produce different drop traces. Normal playback retains its 50 ms backpressure policy and does not use Turbo's sample selection or capacity drops.
+
+Rewind restores and consumes history, then runs the restored guest forward for one replay interval. It discards the snapshot's already pending PCM from the host playback path and plays only samples produced by that replay. The positive cycles executed during replay determine the next host deadline; the backward change in guest time does not. Current input applies to replay. Disk-state loading still preserves the codec's pending-PCM continuation contract.
+
+Slow-motion playback changes the converter's effective input rate. This host resampling does not establish waveform equivalence to changing core sample timing. WAVE recording receives forward core PCM before that conversion and before host mute or volume. It records signed 16-bit, two-channel, little-endian RIFF/WAVE at the core rate. Pauses and rewind replay add no recorded audio, although replay is audible through the playback path. Forward debugger execution can append generated samples while paused playback remains silent.
 
 Loading or rewinding does not roll back bytes already written to a recording. Later forward execution appends its output. Reset, cartridge replacement, close and a changed core sample rate end the current file. The recorder bounds RIFF's 32-bit size fields, reports write failures and commits through `QSaveFile`. See [the user guide](user-guide.md) for recording controls.
 
@@ -153,7 +162,7 @@ The APU regression target covers DIV clock/reset behavior, power transitions, le
 With the relevant targets built, run:
 
 ```sh
-ctest --test-dir build --output-on-failure -R 'cupidgb_(apu|state|audio_converter|audio_buffer|wave_recorder|qt_workflows)$'
+ctest --test-dir build --output-on-failure -R 'cupidgb_(apu|state|audio_converter|audio_buffer|turbo_audio_window|wave_recorder|qt_workflows)$'
 ```
 
 Qt-dependent targets require a frontend-enabled build. The ordinary offscreen workflow test does not prove that a real audio device played sound. Native audio smoke checks, device changes and sustained gameplay belong in the platform validation described in [testing](testing.md).

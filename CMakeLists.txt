@@ -128,6 +128,7 @@ if(CUPIDGB_BUILD_QT)
         src/frontend/qt/main_window_display_files.cpp
         src/frontend/qt/main_window_display_file_tests.cpp
         src/frontend/qt/main_window_message_tests.cpp
+        src/frontend/qt/main_window_playback_tests.cpp
         src/frontend/qt/screen_messages.cpp
         src/frontend/qt/display_files.cpp
         src/frontend/qt/palette_library.cpp
@@ -143,6 +144,7 @@ if(CUPIDGB_BUILD_QT)
         src/frontend/qt/printer_window.cpp
         src/frontend/qt/guest_clock_pacer.cpp
         src/frontend/qt/audio_converter.cpp
+        src/frontend/qt/turbo_audio_window.cpp
         src/frontend/qt/wave_recorder.cpp
         src/frontend/qt/display_pipeline.cpp
         src/frontend/qt/debugger_window.cpp
@@ -390,6 +392,21 @@ if(CUPIDGB_ENABLE_TESTS)
             target_compile_options(cupidgb_audio_converter PRIVATE -UNDEBUG)
         endif()
         add_test(NAME cupidgb_audio_converter COMMAND cupidgb_audio_converter)
+        add_executable(cupidgb_turbo_audio_window
+            tests/frontend/test_turbo_audio_window.cpp src/frontend/qt/turbo_audio_window.cpp)
+        target_include_directories(cupidgb_turbo_audio_window PRIVATE src/frontend/qt)
+        if(MSVC)
+            target_compile_options(cupidgb_turbo_audio_window PRIVATE /UNDEBUG)
+        else()
+            target_compile_options(cupidgb_turbo_audio_window PRIVATE -UNDEBUG)
+        endif()
+        if(CUPIDGB_ENABLE_SANITIZERS)
+            target_compile_options(cupidgb_turbo_audio_window PRIVATE
+                -fsanitize=address,undefined -fno-omit-frame-pointer)
+            target_link_options(cupidgb_turbo_audio_window PRIVATE -fsanitize=address,undefined)
+        endif()
+        add_test(NAME cupidgb_turbo_audio_window COMMAND cupidgb_turbo_audio_window)
+        set_tests_properties(cupidgb_turbo_audio_window PROPERTIES TIMEOUT 30)
         add_executable(cupidgb_wave_recorder
             tests/frontend/test_wave_recorder.cpp src/frontend/qt/wave_recorder.cpp)
         target_include_directories(cupidgb_wave_recorder PRIVATE src/frontend/qt)

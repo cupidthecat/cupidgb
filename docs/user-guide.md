@@ -46,7 +46,7 @@ Emulation > Reset reloads the cartridge and battery data and applies the selecte
 
 Pause releases held game inputs and clears queued playback. Advance Frame pauses first, then runs until the next image or a bounded guest-clock interval when the LCD is off. It clears host audio rather than playing one isolated audio fragment.
 
-Turbo preserves guest hardware execution while increasing the host speed target. Emulation > Turbo Speed Cap and Settings offer Uncapped or 150% through 400% in 25% steps. Uncapped is the default. A cap is an upper target; it cannot make a busy host run faster than it can emulate. Host playback is suppressed during turbo. Slow motion gradually changes the target to half normal speed and adjusts playback conversion; releasing it returns to normal. With a turbo cap selected, slow motion scales that cap too. Rapid A and B alternate two forward intervals pressed and two released while their assigned keys are held.
+Turbo preserves guest hardware execution while increasing the host speed target. Emulation > Turbo Speed Cap and Settings offer Uncapped or 150% through 400% in 25% steps. Uncapped is the default. A cap is an upper target; it cannot make a busy host run faster than it can emulate. Turbo plays selected segments of generated audio through a bounded queue. Slow motion gradually changes the target to half normal speed and adjusts playback conversion; releasing it returns to normal. With a turbo cap selected, slow motion scales that cap too. Rapid A and B alternate two forward intervals pressed and two released while their assigned keys are held.
 
 Ordinary focus loss releases input so returning to the window does not leave a key stuck. Paused debugger inspection preserves the stopped guest input while releasing physical bindings; normal playback reconciles it before resuming. See [debugging](debugging.md) for that inspection behavior. Click the game area before playing if a dialog or another window has focus.
 
@@ -126,7 +126,7 @@ The interface reports unavailable audio devices. A successful file recording pro
 
 ## Screenshots
 
-View > Color Correction offers Disabled, Correct Color Curves, Modern - Balanced, Accurate, Modern - Boost Contrast, Reduce Contrast, and Harsh Reality. Ambient Light Temperature has 21 steps, with a neutral midpoint. New settings use Modern - Balanced. These controls apply to CGB, CGB compatibility palettes, and SGB output. Native monochrome palettes keep their selected colors. Color correction applies to screenshots and selected inspector previews before frame blending. Raw inspector values remain RGB555.
+View > Color Correction offers Disabled, Correct Color Curves, Modern - Balanced, Modern - Accurate, Modern - Boost Contrast, Reduce Contrast, and Harsh Reality. Ambient Light Temperature has 21 steps, with a neutral midpoint. New settings use Modern - Balanced. These controls apply to CGB, CGB compatibility palettes, and SGB output. Native monochrome palettes keep their selected colors. Color correction applies to screenshots and selected inspector previews before frame blending. Raw inspector values remain RGB555.
 
 View > Save Screenshot or F12 saves a PNG beside the cartridge without opening a dialog. The filename contains the cartridge basename and local capture time, such as `game 2026-11-15 13.02.03.png`. Further captures in the same second receive numbered suffixes starting at `2`; existing captures are preserved. A read-only cartridge folder produces an error, so use Save Screenshot As to choose another folder.
 
@@ -138,7 +138,9 @@ Battery saves preserve a game's own save memory and supported cartridge clock. T
 
 Native save states preserve execution at a point in time. Use Emulation > Save State or Load State for ten numbered slots. Slot 10 uses the zero key and `.s0` suffix. File > Load State File and state-file drag/drop require the matching cartridge to be open. State loads validate input identity and preserve the session on rejection. Native states do not provide a general state interchange format. See [save states and rewind](save-states.md).
 
-Hold Tab to rewind; hold Space as well to restore two snapshots per host interval. Releasing rewind resumes with current physical input. Playback during rewind is silent. Settings let you request 10, 30, 60, 120, 300, or 600 seconds of history within a 16, 32, 64, 128, or 256 MiB budget. The default requests 120 seconds within 256 MiB. Select Disabled to stop capture. The oldest snapshots are evicted when either limit is reached; available duration depends on compression.
+Hold Tab to rewind. With enough history, the first interval returns to the current frame position, then later intervals move back one frame at a time. Hold Space as well to move back one frame initially, then two per interval. The Turbo cap and slow-motion controls also set replay pacing. Rewind runs each restored interval forward to produce its image and sound using current input. At the end of the available history it waits for you to release rewind. Releasing resumes forward play with current physical input. Replay audio is excluded from WAVE recordings.
+
+Settings let you request 10, 30, 60, 120, 300, or 600 seconds of history within a 16, 32, 64, 128, or 256 MiB budget. The default requests 120 seconds within 256 MiB. Select Disabled to stop capture. The oldest snapshots are evicted when either limit is reached; available duration depends on compression.
 
 Rewind changes emulated battery data and can schedule a later battery save. Make an external copy of a save if you need to preserve a particular in-game timeline. The complete snapshot and recovery contracts are documented in the state guide.
 

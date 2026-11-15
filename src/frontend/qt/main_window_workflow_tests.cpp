@@ -7,6 +7,8 @@ bool MainWindow::smokeTest() {
     QTemporaryDir directory;
     if (!directory.isValid())
         return smokeFailure(__FILE__, __LINE__);
+    if (!playbackSmokeTest(directory.path()))
+        return smokeFailure(__FILE__, __LINE__);
     QByteArray rom(32768, char(0));
     rom[0x100] = char(0x18);
     rom[0x101] = char(0xfe);
@@ -308,7 +310,8 @@ bool MainWindow::smokeTest() {
         if (!runFrame())
             return smokeFailure(__FILE__, __LINE__);
     const QByteArray forwardState = captureState();
-    for (int i = 0; i < 3; ++i)
+    // The first replay repeats the current frame before history begins moving back.
+    for (int i = 0; i < 4; ++i)
         if (!rewindFrame())
             return smokeFailure(__FILE__, __LINE__);
     for (int i = 0; i < 3; ++i)
@@ -326,6 +329,10 @@ bool MainWindow::smokeTest() {
     QKeyEvent rewindDown(QEvent::KeyPress, Qt::Key_Tab, Qt::NoModifier);
     QKeyEvent rewindUp(QEvent::KeyRelease, Qt::Key_Tab, Qt::ControlModifier);
     QApplication::sendEvent(display_, &rewindDown);
+    tick();
+    if (emulator_->gb.elapsed_cycles != beforeRewind)
+        return smokeFailure(__FILE__, __LINE__);
+    nextFrame_ = 0;
     tick();
     QApplication::sendEvent(display_, &rewindUp);
     if (rewind_ || emulator_->gb.elapsed_cycles >= beforeRewind ||
@@ -621,8 +628,13 @@ bool MainWindow::smokeTest() {
         return smokeFailure(__FILE__, __LINE__);
     resetRewind();
     rememberFrame();
-    if (!runFrame() || !runFrame() || !rewindFrame() || !previousDisplayFrame_.isNull() ||
-        display_->image != image_ || !restoreState(displayState, false))
+    if (!runFrame() || !runFrame())
+        return smokeFailure(__FILE__, __LINE__);
+    const auto frameBeforeRewind = currentDisplayFrame_;
+    if (!rewindFrame() || previousDisplayFrame_ != frameBeforeRewind ||
+        display_->image != blendDisplayFrames(image_, frameBeforeRewind, FrameBlending::Accurate,
+                                              emulator_->gb.lcd_frame_odd) ||
+        !restoreState(displayState, false))
         return smokeFailure(__FILE__, __LINE__);
     blendingActions_[disabledBlend]->trigger();
     colorCorrectionActions_[size_t(ColorCorrection::Balanced)]->trigger();
@@ -1055,12 +1067,161 @@ bool MainWindow::audioLifecycleSmokeTest(const QString &path) {
     QEventLoop consume;
     QTimer::singleShot(75, Qt::PreciseTimer, &consume, &QEventLoop::quit);
     consume.exec();
+    for (const unsigned mode : {0u, 1u}) {
+        const uint64_t previousPrimes = session.audioPrimeEvents_;
+        session.keyboardSpecialHeld_[mode] = true;
+        session.reconcileControllerInput();
+        // A carried Turbo phase may discard several complete intervals. Reach
+        // a real native prime without resetting that phase or assuming frame one emits PCM.
+        for (unsigned frame = 0; frame < 16; ++frame) {
+            if (!(mode ? session.rewindFrame() : session.runFrame()))
+                return smokeFailure(__FILE__, __LINE__);
+            if (frame >= 3 && session.audioDevice_ && session.audioPrimeEvents_ > previousPrimes &&
+                !session.audioPriming_)
+                break;
+        }
+        const auto readiness = [&] {
+            return QJsonObject{
+                {"mode", int(mode)},
+                {"turbo", session.turbo_},
+                {"rewind", session.rewind_},
+                {"cap_quarters", int(session.turboCapQuarters_)},
+                {"sink", bool(session.audio_)},
+                {"device", bool(session.audioDevice_)},
+                {"state", session.audio_ ? int(session.audio_->state()) : -1},
+                {"idle", session.audio_ && session.audio_->state() == QAudio::IdleState},
+                {"error", session.audio_ ? int(session.audio_->error()) : -1},
+                {"host_rate", session.audio_ ? session.audio_->format().sampleRate() : 0},
+                {"host_frame_bytes", session.audio_ ? session.audio_->format().bytesPerFrame() : 0},
+                {"priming", session.audioPriming_},
+                {"prime_events", double(session.audioPrimeEvents_)},
+                {"processed_us", session.audio_ ? double(session.audio_->processedUSecs()) : 0},
+                {"bytes_free", session.audio_ ? double(session.audio_->bytesFree()) : 0},
+                {"phase", int(session.turboAudioWindow_.phase())},
+                {"queue",
+                 session.audioBuffer_ ? session.audioBuffer_->telemetry() : QJsonObject{}}};
+        };
+        const auto beforeWait = readiness();
+        const double accepted =
+            beforeWait["queue"].toObject()["host_frames_written_to_sink"].toDouble();
+        const qint64 initialCapacity = qint64(beforeWait["bytes_free"].toDouble());
+        const int frameBytes = beforeWait["host_frame_bytes"].toInt();
+        const bool primed = session.audio_ && session.audioDevice_ && !session.audioPriming_ &&
+                            session.audioPrimeEvents_ > previousPrimes && accepted >= 1 &&
+                            accepted == double(uint64_t(accepted)) && frameBytes > 0 &&
+                            session.audio_->state() == QAudio::ActiveState &&
+                            session.audio_->error() == QAudio::NoError;
+        QElapsedTimer readinessClock;
+        readinessClock.start();
+        bool capacityProgress = false;
+        // Stop as soon as the native sink consumes capacity. Sleeping the full
+        // budget would deliberately starve the stopped guest timer's short prime.
+        while (primed && readinessClock.elapsed() < 75) {
+            QEventLoop played;
+            QTimer::singleShot(1, Qt::PreciseTimer, &played, &QEventLoop::quit);
+            played.exec();
+            if (session.audio_->state() != QAudio::ActiveState ||
+                session.audio_->error() != QAudio::NoError || session.audioPriming_)
+                break;
+            const qint64 available = session.audio_->bytesFree();
+            if (available >= frameBytes && available > initialCapacity) {
+                capacityProgress = true;
+                break;
+            }
+        }
+        const bool ready =
+            primed && capacityProgress && session.audio_ && session.audioDevice_ &&
+            !session.audioPriming_ && session.audio_->state() == QAudio::ActiveState &&
+            session.audio_->error() == QAudio::NoError && session.audio_->processedUSecs() > 0 &&
+            (mode ? session.rewind_ : session.turbo_);
+        const QJsonObject evidence{{"before_wait", beforeWait},
+                                   {"after_wait", readiness()},
+                                   {"readiness_ms", double(readinessClock.elapsed())},
+                                   {"capacity_progress", capacityProgress},
+                                   {"ready", ready}};
+        if (!ready) {
+            qCritical("Native mode readiness: %s",
+                      QJsonDocument(evidence).toJson(QJsonDocument::Compact).constData());
+            return smokeFailure(__FILE__, __LINE__);
+        }
+        qInfo("Native mode readiness: %s",
+              QJsonDocument(evidence).toJson(QJsonDocument::Compact).constData());
+        const auto priorSink = session.audio_;
+        const auto priorBuffer = session.audioBuffer_;
+        unsigned phaseAtCallback = 0;
+        callback.triggered = callback.closed = false;
+        callback.closeSession = [&] {
+            phaseAtCallback = session.turboAudioWindow_.phase();
+            const uint64_t cycles = session.emulator_->gb.elapsed_cycles;
+            const bool committed =
+                !session.rewindStates_.empty() && session.rewindStates_.back().cycles == cycles;
+            QEvent inactive(QEvent::WindowDeactivate);
+            QApplication::sendEvent(&session, &inactive);
+            session.tick();
+            return committed && session.stateOperation_ && session.audioModeResetPending_ &&
+                   !session.turbo_ && !session.rewind_ &&
+                   session.emulator_->gb.elapsed_cycles == cycles;
+        };
+        session.audioDevice_ = &callback;
+        session.audioPriming_ = false;
+        for (unsigned interval = 0; interval < 16 && !callback.triggered; ++interval)
+            if (!(mode ? session.rewindFrame() : session.runFrame()))
+                return smokeFailure(__FILE__, __LINE__);
+        if (!callback.triggered || !callback.closed || session.audio_ == priorSink ||
+            session.audioBuffer_ == priorBuffer || session.audioBuffer_->bytesAvailable() ||
+            session.audioModeResetPending_ || session.turboAudioWindow_.phase() != phaseAtCallback)
+            return smokeFailure(__FILE__, __LINE__);
+        for (unsigned frame = 0; frame < 8; ++frame)
+            if (!session.runFrame())
+                return smokeFailure(__FILE__, __LINE__);
+    }
+    if (!session.saveSlot(6))
+        return smokeFailure(__FILE__, __LINE__);
+    const QByteArray restored = session.captureState();
+    for (const bool beforeReplay : {false, true}) {
+        session.keyboardSpecialHeld_[1] = true;
+        session.reconcileControllerInput();
+        for (unsigned frame = 0; frame < 4; ++frame)
+            if (!session.rewindFrame())
+                return smokeFailure(__FILE__, __LINE__);
+        QEventLoop beforeLoad;
+        QTimer::singleShot(75, Qt::PreciseTimer, &beforeLoad, &QEventLoop::quit);
+        beforeLoad.exec();
+        session.audioBuffer_->clear();
+        if (beforeReplay) {
+            const QByteArray queued(session.audio_->format().bytesPerFrame(), char(0));
+            session.audioBuffer_->append(queued.constData(), queued.size());
+        }
+        QImage loadedImage;
+        qint64 loadedDeadline = 0;
+        callback.triggered = callback.closed = false;
+        callback.closeSession = [&] {
+            const bool loaded = session.loadSlot(6);
+            loadedImage = session.display_->image;
+            loadedDeadline = session.nextFrame_;
+            return loaded;
+        };
+        session.audioDevice_ = &callback;
+        session.audioPriming_ = false;
+        session.nextFrame_ = 0;
+        session.tick();
+        if (!callback.triggered || !callback.closed || session.captureState() != restored ||
+            session.display_->image != loadedImage || session.nextFrame_ != loadedDeadline ||
+            session.rewindStates_.size() != 1 || session.audioBuffer_->bytesAvailable())
+            return smokeFailure(__FILE__, __LINE__);
+        for (unsigned frame = 0; frame < 8; ++frame)
+            if (!session.runFrame())
+                return smokeFailure(__FILE__, __LINE__);
+    }
+    QEventLoop beforeClose;
+    QTimer::singleShot(75, Qt::PreciseTimer, &beforeClose, &QEventLoop::quit);
+    beforeClose.exec();
     callback.triggered = callback.closed = false;
     const uint64_t previousSession = session.sessionId_;
     callback.closeSession = [&] { return session.closeRom(); };
     session.audioDevice_ = &callback;
     session.audioPriming_ = false;
-    if (!session.runFrame() || !callback.triggered || !callback.closed || session.emulator_ ||
+    if (!session.rewindFrame() || !callback.triggered || !callback.closed || session.emulator_ ||
         session.sessionId_ == previousSession || session.audio_ || session.audioDevice_ ||
         !session.image_.isNull() || !session.rewindStates_.empty())
         return smokeFailure(__FILE__, __LINE__);

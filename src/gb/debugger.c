@@ -84,10 +84,14 @@ bool cupid_gb_debug_poke(CupidGb *gb, uint16_t address, uint8_t value) {
 int cupid_gb_debugger_bank(const CupidGb *gb, uint16_t address) {
     if (!gb)
         return 0;
-    if (address < 0x4000u)
-        return (int)cupid_gb_effective_rom_bank(gb, true);
-    if (address < 0x8000u)
-        return (int)cupid_gb_effective_rom_bank(gb, false);
+    if (address < 0x8000u) {
+        const bool lower = address < 0x4000u;
+        /* MMM01 symbols describe controller banks, not the dump's menu placement.
+         * Keep the unlocked menu sentinels intact; only expressions narrow them. */
+        return (int)(gb->header.mbc_type == CUPID_GB_MMM01
+                         ? cupid_gb_selected_rom_bank(gb, lower)
+                         : cupid_gb_effective_rom_bank(gb, lower));
+    }
     if (address < 0xa000u)
         return (int)(cupid_cgb_vram_offset(gb, address) / 0x2000u);
     if (address < 0xc000u)
@@ -720,7 +724,7 @@ static uint8_t expression_peek(const CupidGb *gb, int bank, uint16_t address) {
     if (bank <= 0)
         return cupid_gb_debug_peek(gb, address);
     if (address < 0x8000u) {
-        /* A qualified address selects physical storage without changing the
+        /* A qualified address selects a ROM bank without changing the
          * mapper's latches. Firmware remains visible while its overlay is on. */
         if (gb->boot_rom_enabled && (address < 0x100u || (gb->model == CUPID_GB_MODEL_CGB &&
                                                           address >= 0x200u && address < 0x900u)))
@@ -729,7 +733,7 @@ static uint8_t expression_peek(const CupidGb *gb, int bank, uint16_t address) {
             return 0xff;
         /* The chip's power-of-two bank population includes erased file padding.
          * Only disconnected bank lines wrap; missing bytes still read as 0xff. */
-        const size_t physical_bank = (size_t)bank & (gb->rom_bank_count - 1u);
+        const size_t physical_bank = cupid_gb_rom_file_bank(gb, (size_t)bank);
         const size_t offset = physical_bank * 0x4000u + (address & 0x3fffu);
         return offset < gb->rom_size ? gb->rom[offset] : 0xff;
     }

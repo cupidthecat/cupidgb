@@ -20,7 +20,7 @@ void MainWindow::setPaused(bool value) {
     }
     paused_ = value;
     resetControllerRumble();
-    releaseKeys();
+    releaseKeys(false);
     QSignalBlocker blocker(pauseAction_);
     pauseAction_->setChecked(value);
     resetPacing();
@@ -30,14 +30,13 @@ void MainWindow::setPaused(bool value) {
     refreshDebugger();
 }
 
-void MainWindow::releaseKeys() {
+void MainWindow::releaseKeys(bool resetAudio) {
     if (!motionFocusActive_ && motionSource_ == MotionSource::Controller && motionInputAllowed())
         releaseMouseInput();
     else
         resetMotionInput();
     keyboardSpecialHeld_.fill(false);
-    turbo_ = false;
-    rewind_ = false;
+    rewindExhausted_ = false;
     slowHeld_ = false;
     speedSteps_ = 16;
     if (audioConverter_)
@@ -46,7 +45,7 @@ void MainWindow::releaseKeys() {
     rapidHeld_.fill(false);
     rapidPhase_.fill(0);
     physicalJoypad_ = 0xff;
-    reconcileControllerInput();
+    reconcileControllerInput(resetAudio);
 }
 
 void MainWindow::registerShortcut(QAction *action, const QString &id) {
@@ -113,7 +112,7 @@ void MainWindow::refreshControllerPlayerCount() {
                                                        : livePlayerButtons());
 }
 
-void MainWindow::reconcileControllerInput() {
+void MainWindow::reconcileControllerInput(bool resetAudio) {
     const bool oldTurbo = turbo_, oldRewind = rewind_;
     const auto held = [this](size_t action) {
         return !paused_ && (keyboardSpecialHeld_[action] || controllerOutput_.held[action]);
@@ -136,9 +135,16 @@ void MainWindow::reconcileControllerInput() {
         }
     // Session commits restore audio and pacing after their metadata is ready.
     // Opening a sink here could dispatch events against a partially committed ROM.
-    if (!stateOperation_ && (oldTurbo != turbo_ || oldRewind != rewind_)) {
-        clearAudio();
+    if (oldTurbo != turbo_ || oldRewind != rewind_) {
+        if (oldRewind != rewind_)
+            rewindExhausted_ = false;
         resetPacing();
+        if (resetAudio) {
+            if (stateOperation_)
+                audioModeResetPending_ = true;
+            else
+                clearAudio();
+        }
     }
     if (!(paused_ && debuggerInputPaused_) && !stateOperation_)
         applyHeldButtons();

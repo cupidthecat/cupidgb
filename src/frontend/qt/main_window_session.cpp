@@ -22,22 +22,22 @@ void MainWindow::tick() {
     refreshControllerGate();
     if (!emulator_ || paused_ || stateOperation_ || menuDepth_)
         return;
-    const qint64 now = clock_.nsecsElapsed();
-    if (rewind_) {
-        if (now >= nextFrame_) {
-            rewindFrame();
-            if (turbo_)
-                rewindFrame();
-            nextFrame_ = now + nominalFrameNanoseconds(emulator_ ? &emulator_->gb : nullptr);
-            clockPacer_.reset();
-        }
-        return;
-    }
+    const uint64_t entrySession = sessionId_;
+    const uint64_t entryTimeline = timelineId_;
+    const uint64_t entryPacing = pacingGeneration_;
+    if (audioModeResetPending_)
+        clearAudio();
     pumpAudio();
     // Starting a native audio stream may dispatch window/session actions.
-    if (!emulator_ || paused_ || stateOperation_ || menuDepth_)
+    if (!emulator_ || paused_ || stateOperation_ || menuDepth_ || sessionId_ != entrySession ||
+        timelineId_ != entryTimeline || pacingGeneration_ != entryPacing)
         return;
+    if (rewind_ && (rewindFailed_ || rewindExhausted_))
+        return;
+    const qint64 now = clock_.nsecsElapsed();
     const bool turbo = turbo_;
+    const bool rewind = rewind_;
+    const bool slow = slowHeld_;
     const unsigned cap = turbo ? turboCapQuarters_ : GuestClockPacer::normalTurboQuarters;
     const bool uncapped = turbo && !cap;
     if (!uncapped && now < nextFrame_)
@@ -46,22 +46,19 @@ void MainWindow::tick() {
     if (audio_ && !turbo_ && audioBuffer_->bytesAvailable() > audioQueueLimit_)
         return;
     const uint64_t session = sessionId_;
-    const uint64_t timeline = timelineId_;
     const uint64_t pacing = pacingGeneration_;
-    const uint64_t startCycles = emulator_->gb.elapsed_cycles;
     const unsigned speed = speedSteps_;
-    if (!runFrame() || paused_ || !emulator_ || stateOperation_ || menuDepth_ ||
-        sessionId_ != session || timelineId_ != timeline)
+    PlaybackResult result;
+    const bool ran = rewind ? rewindFrame(&result) : runFrame(Playback::Forward, &result);
+    if (!ran || paused_ || !emulator_ || stateOperation_ || menuDepth_ || sessionId_ != session ||
+        timelineId_ != result.timeline)
         return;
     // Audio callbacks can dispatch a speed preference or held-key change. Keep
     // the new deadline instead of charging an old-rate quantum to that timeline.
-    if (pacingGeneration_ != pacing || turbo_ != turbo || (turbo && turboCapQuarters_ != cap)) {
+    if (pacingGeneration_ != pacing || turbo_ != turbo || rewind_ != rewind || slowHeld_ != slow ||
+        (turbo && turboCapQuarters_ != cap)) {
         if (pacingGeneration_ == pacing)
             resetPacing();
-        return;
-    }
-    if (emulator_->gb.elapsed_cycles < startCycles) {
-        resetPacing();
         return;
     }
     if (uncapped) {
@@ -71,8 +68,10 @@ void MainWindow::tick() {
     }
     // LCD startup and re-enabling can finish a partial image. Charge only
     // consumed base-clock time, including the two-dot CGB machine cycles.
-    const auto interval = clockPacer_.advance(emulator_->gb.elapsed_cycles - startCycles, speed,
-                                              cupid_gb_base_clock_hz(&emulator_->gb), cap);
+    // Rewind restores an earlier clock before executing. Its positive replay
+    // interval, not the net movement through history, determines the deadline.
+    const auto interval =
+        clockPacer_.advance(result.cycles, speed, cupid_gb_base_clock_hz(&emulator_->gb), cap);
     if (!interval || nextFrame_ > std::numeric_limits<qint64>::max() - *interval) {
         setPaused(true);
         reportError("Host pacing duration could not be computed.");
@@ -87,20 +86,27 @@ void MainWindow::tick() {
     }
 }
 
-bool MainWindow::runFrame() {
+bool MainWindow::runFrame(Playback playback, PlaybackResult *result) {
     if (!emulator_)
         return false;
+    const bool replay = playback != Playback::Forward;
+    const bool lastInstruction = playback == Playback::RewindEnd;
+    if (!replay)
+        rewindExhausted_ = false;
     auto &gb = emulator_->gb;
     const uint32_t rate = cupid_gb_apu_get_sample_rate(&gb);
-    if (recorder_ && recorder_->active() && recorder_->sampleRate() != rate && !stopRecording())
+    if (!replay && recorder_ && recorder_->active() && recorder_->sampleRate() != rate &&
+        !stopRecording())
         return false;
     if (audioConverter_)
         audioConverter_->setInputRate(double(rate) * speedSteps_ / 16);
     const uint64_t startCycles = gb.elapsed_cycles;
+    if (result)
+        *result = {0, timelineId_};
     // Presentation events also cover LCD-off intervals. Keep a guest-clock bound
     // for a stalled or temporarily frozen display pipeline.
     for (unsigned steps = 0; steps < 80000; ++steps) {
-        if (!inputTrace_.empty()) {
+        if (!replay && !inputTrace_.empty() && gb.elapsed_cycles >= telemetryStartCycles_) {
             const uint64_t frame = (gb.elapsed_cycles - telemetryStartCycles_) / 70224;
             while (inputTraceIndex_ < inputTrace_.size() &&
                    inputTrace_[inputTraceIndex_].first <= frame) {
@@ -128,9 +134,14 @@ bool MainWindow::runFrame() {
         }
         if (gb.sgb.player_count != controllerPlayerCount_)
             refreshControllerPlayerCount();
-        if (gb.frame_ready || gb.elapsed_cycles - startCycles >= 70224)
+        if (lastInstruction || gb.frame_ready || gb.elapsed_cycles - startCycles >= 70224)
             break;
     }
+    const uint64_t consumedCycles = gb.elapsed_cycles - startCycles;
+    if (result)
+        result->cycles = consumedCycles;
+    if (replay)
+        replayedGuestCycles_ += consumedCycles;
     int16_t samples[CUPID_GB_APU_BUF_FRAMES * 2];
     const auto frames = cupid_gb_apu_drain(&gb, samples, CUPID_GB_APU_BUF_FRAMES);
     generatedAudioFrames_ += frames;
@@ -143,30 +154,38 @@ bool MainWindow::runFrame() {
         return emulator_ && sessionId_ == session && timelineId_ == timeline &&
                paused_ == wasPaused && menuDepth_ == menuDepth;
     };
-    if (recorder_ && recorder_->active() && !recorder_->append(samples, frames)) {
+    QByteArray converted;
+    if (audio_ && audioConverter_ && !paused_)
+        converted = convertPlaybackAudio(samples, frames, audio_->format());
+    // Publish and capture the completed interval before a host audio call can
+    // dispatch pause/load/close. History must describe the committed guest state.
+    if (completedFrame) {
+        advanceScreenMessages();
+        present(Presentation::Frame);
+        advanceControls();
+        rememberFrame();
+        if (replay)
+            ++replayedFrames_;
+    } else if (!replay) {
+        present(Presentation::Redraw);
+    }
+    updatePrinter();
+    finishControllerRumble();
+    watchBattery();
+    // Rewind is playback only. The existing recording contract captures forward
+    // guest PCM and remains independent of host rate conversion and Turbo drops.
+    if (!replay && recorder_ && recorder_->active() && !recorder_->append(samples, frames)) {
         const QString error = recorder_->errorString();
         if (stopRecording())
             reportError("Audio recording stopped: " + error);
     }
     if (!unchanged())
         return true;
-    if (audio_ && !turbo_ && !paused_) {
-        const QByteArray converted = audioConverter_->convert(samples, frames);
+    if (audio_ && !paused_ && !converted.isEmpty()) {
         audioBuffer_->append(converted.constData(), converted.size());
         pumpAudio();
     }
-    // A backend callback may close, replace, pause, or restore the cartridge.
-    // The old core reference is no longer usable after such a transition.
-    if (!unchanged())
-        return true;
-    if (completedFrame)
-        advanceScreenMessages();
-    present(completedFrame ? Presentation::Frame : Presentation::Redraw);
-    updatePrinter();
-    finishControllerRumble();
-    advanceControls();
-    watchBattery();
-    rememberFrame();
+    // No guest or presentation state is touched after a backend callback.
     return true;
 }
 
@@ -389,6 +408,7 @@ void MainWindow::resetRewind() {
     rewindContext_.reset();
     rewindBytes_ = 0;
     rewindFailed_ = false;
+    rewindExhausted_ = false;
     rewind_ = false;
     rewindSnapshotsCaptured_ = 0;
     rewindCaptureNanoseconds_ = 0;
@@ -458,29 +478,45 @@ void MainWindow::rememberFrame() {
     }
 }
 
-bool MainWindow::rewindFrame() {
-    if (!emulator_ || rewindFailed_ || rewindStates_.size() < 2) {
+bool MainWindow::rewindFrame(PlaybackResult *result) {
+    if (!emulator_ || rewindFailed_ || rewindExhausted_) {
         statusBar()->showMessage(rewindFailed_ ? "Rewind unavailable: snapshot capture failed"
                                                : "No earlier rewind history");
         return false;
     }
-    // The last entry describes the currently displayed frame. Restore its predecessor.
-    const auto &previous = rewindStates_[rewindStates_.size() - 2];
-    const QByteArray state = qUncompress(previous.compressed);
-    if (state.isEmpty() || !restoreState(state, false, true)) {
-        rewindFailed_ = true;
-        statusBar()->showMessage("Rewind disabled: stored state could not be restored");
-        return false;
+    const size_t consumed = turbo_ ? 3 : 2;
+    const bool exhausted = rewindStates_.size() < consumed;
+    if (!rewindStates_.empty()) {
+        // History includes the current interval. Consume the target too, then
+        // replay it once and append the resulting presentation. The first normal
+        // replay repeats the current image; later intervals move back one each.
+        const size_t target = rewindStates_.size() > consumed ? rewindStates_.size() - consumed : 0;
+        const QByteArray state = qUncompress(rewindStates_[target].compressed);
+        if (state.isEmpty() || !restoreState(state, false, true)) {
+            rewindFailed_ = true;
+            statusBar()->showMessage("Rewind disabled: stored state could not be restored");
+            return false;
+        }
+        // Native snapshots retain pending PCM. It belongs to the restored past;
+        // only newly generated replay samples enter the live host stream.
+        int16_t discarded[CUPID_GB_APU_BUF_FRAMES * 2];
+        cupid_gb_apu_drain(&emulator_->gb, discarded, CUPID_GB_APU_BUF_FRAMES);
+        resetDebuggerTimeline();
+        if (inspectorsWindow_)
+            inspectorsWindow_->sessionChanged();
+        applyHeldButtons();
+        batteryDirty_ = true;
+        saveTimer_.start();
+        while (rewindStates_.size() > target) {
+            rewindBytes_ -=
+                rewindStates_.back().compressed.capacity() + qsizetype(sizeof(RewindSnapshot));
+            rewindStates_.pop_back();
+        }
     }
-    resetDebuggerTimeline();
-    if (inspectorsWindow_)
-        inspectorsWindow_->sessionChanged();
-    applyHeldButtons();
-    batteryDirty_ = true;
-    saveTimer_.start();
-    rewindBytes_ -= rewindStates_.back().compressed.capacity() + qsizetype(sizeof(RewindSnapshot));
-    rewindStates_.pop_back();
-    advanceScreenMessages();
-    present(Presentation::Reset);
-    return true;
+    rewindExhausted_ = exhausted;
+    if (exhausted)
+        statusBar()->showMessage("No earlier rewind history");
+    // The terminal boundary executes one instruction, then waits for release.
+    // It does not invent a frame, control ramp, or display-message event.
+    return runFrame(exhausted ? Playback::RewindEnd : Playback::Rewind, result);
 }

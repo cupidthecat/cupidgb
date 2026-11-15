@@ -388,8 +388,8 @@ void InspectorsWindow::refresh() {
             "Double-click a writable memory cell to edit it. Editing pauses emulation.");
     context_->setText(QString("ROM0 bank %1 | ROMX bank %2 | VRAM bank %3 | WRAM bank %4 | RAM "
                               "bank %5 | LY %6 | LCD mode %7")
-                          .arg(cupid_gb_effective_rom_bank(gb, true))
-                          .arg(cupid_gb_effective_rom_bank(gb, false))
+                          .arg(cupid_gb_debugger_bank(gb, 0x0000))
+                          .arg(cupid_gb_debugger_bank(gb, 0x4000))
                           .arg(cupid_cgb_vram_offset(gb, 0x8000) / 0x2000u)
                           .arg(cupid_cgb_wram_offset(gb, 0xd000) / 0x1000u)
                           .arg(cupid_gb_effective_ram_bank(gb))

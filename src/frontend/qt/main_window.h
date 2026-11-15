@@ -4,6 +4,7 @@
 #include "controller_manager.h"
 #include "display_pipeline.h"
 #include "guest_clock_pacer.h"
+#include "turbo_audio_window.h"
 
 #include <QElapsedTimer>
 #include <QImage>
@@ -27,6 +28,7 @@ extern "C" {
 
 class QAction;
 class QAudioSink;
+class QAudioFormat;
 class QCloseEvent;
 class QMenu;
 class QMediaDevices;
@@ -77,7 +79,7 @@ class MainWindow final : public QMainWindow {
     void updateRecentMenu();
     void configure();
     void configureControllers();
-    void reconcileControllerInput();
+    void reconcileControllerInput(bool resetAudio = true);
     void refreshControllerGate();
     static std::optional<QPoint> pointerMotionSample(QPointF position, QSize source,
                                                      QSizeF available, DisplayScaling scaling,
@@ -98,7 +100,7 @@ class MainWindow final : public QMainWindow {
     bool controllerSmokeTest(const QString &directory);
     QString bootDirectory() const;
     void setPaused(bool paused);
-    void releaseKeys();
+    void releaseKeys(bool resetAudio = true);
     void setJoypad(uint8_t mask);
     void applyHeldButtons();
     void advanceControls();
@@ -110,7 +112,14 @@ class MainWindow final : public QMainWindow {
     void resetPacing();
     void setTurboCap(unsigned quarters);
     void tick();
-    bool runFrame();
+    enum class Playback { Forward, Rewind, RewindEnd };
+
+    struct PlaybackResult {
+        uint64_t cycles = 0;
+        uint64_t timeline = 0;
+    };
+
+    bool runFrame(Playback playback = Playback::Forward, PlaybackResult *result = nullptr);
     enum class Presentation { Redraw, Frame, Reset };
     void present(Presentation presentation = Presentation::Redraw);
     void notifyOnScreen(const QString &message);
@@ -120,6 +129,8 @@ class MainWindow final : public QMainWindow {
     void stopAudio();
     void clearAudio();
     void pumpAudio();
+    QByteArray convertPlaybackAudio(const int16_t *samples, size_t frames,
+                                    const QAudioFormat &format);
     bool audioLifecycleSmokeTest(const QString &path);
     bool startRecording(const QString &path);
     bool stopRecording();
@@ -137,7 +148,7 @@ class MainWindow final : public QMainWindow {
     bool recoverBattery(const QString &statePath, const QString &outputPath);
     void resetRewind();
     void rememberFrame();
-    bool rewindFrame();
+    bool rewindFrame(PlaybackResult *result = nullptr);
     void reportError(const QString &message);
     void refreshActions();
     void ensureDebugger();
@@ -162,6 +173,7 @@ class MainWindow final : public QMainWindow {
     bool pacingSmokeTest(const QString &path);
     bool turboCapSmokeTest(const QString &path);
     bool displayCadenceSmokeTest(const QString &path);
+    bool playbackSmokeTest(const QString &directory);
     bool modelSmokeTest(const QString &directory);
     void openCheats(bool search = false);
     void refreshCheats(bool newSession = false);
@@ -207,6 +219,7 @@ class MainWindow final : public QMainWindow {
     std::shared_ptr<QAudioSink> audio_;
     QIODevice *audioDevice_ = nullptr;
     std::unique_ptr<AudioConverter> audioConverter_;
+    TurboAudioWindow turboAudioWindow_;
     std::unique_ptr<WaveRecorder> recorder_;
     QMediaDevices *mediaDevices_ = nullptr;
     QByteArray activeAudioDeviceId_;
@@ -215,6 +228,7 @@ class MainWindow final : public QMainWindow {
     qint64 audioQueueLimit_ = 8192;
     qint64 audioPrimeBytes_ = 0;
     bool audioPriming_ = true;
+    bool audioModeResetPending_ = false;
     uint64_t audioPrimeEvents_ = 0;
     QTimer timer_;
     QTimer saveTimer_;
@@ -293,6 +307,7 @@ class MainWindow final : public QMainWindow {
     bool rewind_ = false;
     bool stateOperation_ = false;
     bool rewindFailed_ = false;
+    bool rewindExhausted_ = false;
 
     struct RewindSnapshot {
         QByteArray compressed;
@@ -314,6 +329,10 @@ class MainWindow final : public QMainWindow {
     uint64_t telemetryStartCycles_ = 0;
     uint64_t presentedImages_ = 0;
     uint64_t generatedAudioFrames_ = 0;
+    uint64_t replayedGuestCycles_ = 0;
+    uint64_t replayedFrames_ = 0;
+    uint64_t turboWindowDroppedFrames_ = 0;
+    uint64_t turboCapacityDroppedFrames_ = 0;
     uint64_t audioIdleEvents_ = 0;
     uint64_t audioErrorEvents_ = 0;
     std::vector<std::pair<uint64_t, uint8_t>> inputTrace_;

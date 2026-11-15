@@ -10,9 +10,12 @@
 enum { CUPID_GB_ENTRY_POINT = 0x0100 };
 
 size_t cupid_gb_ram_size_from_code(uint8_t code);
+/* Original-file storage bank for the currently mapped ROM region. */
 size_t cupid_gb_effective_rom_bank(const CupidGb *gb, bool lower_region);
 /* Controller-selected bank before physical ROM address-line aliasing. */
 size_t cupid_gb_selected_rom_bank(const CupidGb *gb, bool lower_region);
+/* Translate a controller bank into original-file storage, including address-line aliases. */
+size_t cupid_gb_rom_file_bank(const CupidGb *gb, size_t bank);
 size_t cupid_gb_selected_ram_bank(const CupidGb *gb);
 size_t cupid_gb_effective_ram_bank(const CupidGb *gb);
 /* Extended MBC3 wiring exposes eight ROM address bits and eight RAM banks. */

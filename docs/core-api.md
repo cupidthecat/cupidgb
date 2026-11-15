@@ -93,7 +93,7 @@ Buttons use an active-low byte, ordered Right, Left, Up, Down, A, B, Select, Sta
 
 `cupid_gb_mbc7_set_motion(gb, x, y)` supplies signed motion samples relative to neutral. About 112 counts correspond to one g. The cartridge copies them into its axis registers when the guest requests a sample. Native states store the sampled registers. The current host sample remains with the live instance.
 
-The direction-only scan resolves opposing direction contacts consistently; when both rows are selected, it preserves their wired-AND result. Monochrome row-switch settling and physical contact bouncing remain unimplemented. Do not interpret the immediate input API as complete electrical input timing.
+The direction-only scan resolves opposing direction contacts consistently; when both rows are selected, it preserves their wired-AND result. Monochrome row selection models immediate pull-down and delayed release, including MGB timing adjustments. Physical contact bouncing and broader electrical behavior remain unqualified; the input API does not model every property of real switches.
 
 `cupid_gb_read_u8` and `cupid_gb_write_u8` perform normal device accesses at the current hardware phase. They apply banking and access restrictions. They are not unrestricted debugger peek/poke operations and do not execute a CPU instruction's bus schedule by themselves. Tests that need bus phases should drive CPU execution or the relevant subsystem interface deliberately.
 
@@ -103,7 +103,7 @@ Do not mutate internal fields from another thread. The public structures expose 
 
 Register `cupid_gb_set_serial_output_callback(gb, callback, user_data)` to observe completed internal-clock transfers. The callback receives a const instance, the SB byte latched when SC starts the transfer, and the supplied user pointer. It runs synchronously after the eighth shift, the clearing of SC's start bit, and the serial interrupt request. Other work in the enclosing machine cycle can still be pending. The callback must neither mutate nor reenter the emulator. Queue any later host work outside the callback.
 
-The core writes no serial bytes to stdout and performs no host-stream flushing. A host can buffer, display, or ignore observed bytes. This API is a completed-byte observer, not a bit-level cable endpoint; external-clock transport remains incomplete.
+The core writes no serial bytes to stdout and performs no host-stream flushing. A host can buffer, display, or ignore observed bytes. This API observes completed bytes. Separate bit-level link APIs support internal- and external-clock transfers; desktop coordination of linked sessions remains pending.
 
 Registration survives initialization, cartridge loading, boot reset, and native-state loading. Cleanup or registration with a null callback clears both callback and user pointer. These host fields are excluded from snapshots: restoring guest state preserves the current registration rather than restoring an old pointer. A state load does not replay previously observed bytes.
 
@@ -144,6 +144,8 @@ Begin RUN, STEP, NEXT, or FINISH with `cupid_gb_debugger_begin`, then call `cupi
 `cupid_gb_debugger_evaluate` evaluates bounded, pure 16-bit expressions over registers, symbols, and side-effect-free memory views. Conditional execution breakpoints store their expression as host metadata and evaluate it only at a matching instruction boundary. An evaluation failure pauses execution with a debugger error. Invalid new definitions leave existing breakpoints intact. The Qt console exposes these operations through `print` and `break ... if ...`. See [debugging](debugging.md) for syntax and limits.
 
 Disassembly, symbol loading/lookups, bank identification, and breakpoint management have separate APIs. Symbol-buffer loading is transactional and bounded. The Qt host implements Backstep with trusted native snapshots; C hosts must provide their own instruction history and reconcile audio/pacing after restoration. See [debugging](debugging.md) for command behavior, memory scopes, and remaining capabilities.
+
+`cupid_gb_rom_file_bank` translates a controller-selected ROM bank to its original-file storage bank, including MMM01 menu placement and disconnected address lines. `cupid_gb_effective_rom_bank` applies that translation to the currently selected mapping. `cupid_gb_debugger_bank` supplies the identity used by symbol and breakpoint matching; for MMM01 this is the controller bank, including the unlocked `FFFE`/`FFFF` identities. Expression values and Qt `break` commands retain nine-bit qualifiers. Keep storage offsets and debugger identities distinct when embedding these APIs.
 
 ## Errors and compatibility
 

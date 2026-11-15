@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "cupid/gb/battery.h"
+#include "cupid/gb/cartridge.h"
 #include "cupid/gb/state.h"
 
 static void prepare(CupidGb *gb) {
@@ -755,6 +757,222 @@ static void test_expression_rom_geometry(CupidGb *gb) {
     free(rom);
 }
 
+static void mmm01_header(uint8_t *rom, uint8_t type, uint8_t ram, unsigned rom_code) {
+    for (unsigned offset = 0; offset < 48; ++offset)
+        rom[0x104 + offset] = (uint8_t)(offset + 1);
+    memcpy(rom + 0x134, "DEBUG MMM01", 11);
+    memset(rom + 0x13f, 0, 5);
+    rom[0x143] = 0x80;
+    rom[0x146] = 0;
+    rom[0x147] = type;
+    rom[0x148] = (uint8_t)rom_code;
+    rom[0x149] = ram;
+    rom[0x14a] = 0;
+    rom[0x14d] = 0;
+    for (size_t offset = 0x134; offset < 0x14d; ++offset)
+        rom[0x14d] = (uint8_t)(rom[0x14d] - rom[offset] - 1u);
+}
+
+static uint8_t mmm01_expected_byte(const uint8_t *logical, size_t size, const unsigned banks[2],
+                                   unsigned qualifier, unsigned address) {
+    if (address == 0x8000)
+        return 0x9c;
+    unsigned bank = qualifier & 0x1ffu;
+    if (!bank)
+        bank = banks[address >= 0x4000];
+    return logical[((size_t)bank * 0x4000 + address % 0x4000) % size];
+}
+
+static void test_mmm01_debugger_layouts(CupidGb *gb) {
+    static const size_t sizes[] = {0x8000, 0x9003, 0xc001, 0x20000, 0x800000};
+    static const uint8_t types[] = {0x0b, 0x0c, 0x0d, 0x11};
+
+    static const struct {
+        uint8_t select, extension, mode;
+        unsigned banks[2];
+        const char *labels[2];
+    } scenarios[] = {
+        {0, 0, 0, {0xfffe, 0xffff}, {"MenuWide0", "MenuWide1"}},
+        {3, 0, 0, {0, 3}, {NULL, "GameBank3"}},
+        {0x23, 0, 0, {32, 35}, {NULL, "AliasBank35"}},
+        {3, 0x20, 0, {256, 259}, {NULL, "HighBank259"}},
+        {3, 0, 0x41, {0, 3}, {NULL, "GameBank3"}},
+        {3, 3, 0x41, {0, 99}, {NULL, "Multiplex99"}},
+    };
+
+    static const unsigned qualifiers[] = {0,   1,   2,   3,   7,   8,   31,  35,
+                                          255, 256, 259, 510, 511, 512, 513, 65535};
+    static const unsigned addresses[] = {0x200,  0x201,  0x3ffe, 0x3fff,
+                                         0x4200, 0x4201, 0x7ffe, 0x7fff};
+    static const char symbols[] =
+        "03:4200 GameBank3\n23:4200 AliasBank35\n103:4200 HighBank259\n63:4200 Multiplex99\n"
+        "fffe:0200 MenuWide0\nffff:4200 MenuWide1\n"
+        "1fe:0200 MenuExpression0\n1ff:4200 MenuExpression1\n";
+    CupidGbDebugger debug;
+    cupid_gb_debugger_init(&debug);
+    assert(cupid_gb_debugger_load_symbols(&debug, symbols, sizeof(symbols) - 1, NULL));
+    for (unsigned color = 0; color < 2; ++color) {
+        cupid_gb_set_model(gb, color ? CUPID_GB_MODEL_CGB : CUPID_GB_MODEL_DMG_ABC);
+        for (size_t geometry = 0; geometry < sizeof(sizes) / sizeof(sizes[0]); ++geometry) {
+            const size_t size = sizes[geometry];
+            size_t physical_size = 0x8000;
+            unsigned rom_code = 0;
+            while (physical_size < size) {
+                physical_size *= 2;
+                ++rom_code;
+            }
+            uint8_t *original = malloc(physical_size), *logical = malloc(physical_size);
+            assert(original && logical);
+            for (size_t type = 0; type < sizeof(types) / sizeof(types[0]); ++type) {
+                if (types[type] == 0x11 && size != 0x20000)
+                    continue;
+                for (size_t offset = 0; offset < size; ++offset) {
+                    const size_t bank = offset / 0x4000;
+                    original[offset] = (uint8_t)(offset & 1 ? bank >> 8 : bank);
+                }
+                memset(original + size, 0xff, physical_size - size);
+                const uint8_t ram = types[type] == 0x0c || types[type] == 0x0d ? 3 : 0;
+                mmm01_header(original, types[type] == 0x11 ? 0x0b : types[type], ram, rom_code);
+                if (physical_size > 0x8000)
+                    mmm01_header(original + 0x8000, ram ? 0x03 : 0x01, ram, rom_code);
+                /* Build an independent normalized image, including erased tail bytes.
+                 * The core must keep the input bytes and identity in their original order. */
+                memcpy(logical, original + 0x8000, physical_size - 0x8000);
+                memcpy(logical + physical_size - 0x8000, original, 0x8000);
+                if (types[type] == 0x11)
+                    mmm01_header(logical + physical_size - 0x8000, 0x11, 0, rom_code);
+                for (unsigned layout = 0; layout < 2; ++layout) {
+                    if ((layout && physical_size == 0x8000) || (!layout && types[type] == 0x11))
+                        continue;
+                    const uint8_t *input = layout ? logical : original;
+                    const size_t input_size = layout ? physical_size : size;
+                    for (size_t scenario = 0; scenario < sizeof(scenarios) / sizeof(scenarios[0]);
+                         ++scenario) {
+                        assert(cupid_gb_load_rom(gb, input, input_size));
+                        assert(gb->header.mbc_type == CUPID_GB_MMM01);
+                        assert(gb->mmm01_menu_first == !layout);
+                        cupid_gb_write_u8(gb, 0xff40, 0);
+                        gb->video_ram[0] = gb->video_ram[0x2000] = 0x9c;
+                        gb->cpu.pc = 0x4200;
+                        if (scenario) {
+                            cupid_gb_write_u8(gb, 0x2000, scenarios[scenario].select);
+                            cupid_gb_write_u8(gb, 0x4000, scenarios[scenario].extension);
+                            cupid_gb_write_u8(gb, 0x6000, scenarios[scenario].mode);
+                            cupid_gb_write_u8(gb, 0, 0x40);
+                        }
+                        for (size_t offset = 0; offset < gb->cartridge_ram_size; ++offset)
+                            gb->cartridge_ram[offset] = (uint8_t)(offset ^ (offset >> 8));
+                        const size_t state_size = cupid_gb_state_size(gb);
+                        const size_t battery_size = cupid_gb_battery_size(gb);
+                        uint8_t *before = malloc(state_size), *after = malloc(state_size);
+                        uint8_t *battery_before = malloc(battery_size ? battery_size : 1);
+                        uint8_t *battery_after = malloc(battery_size ? battery_size : 1);
+                        assert(before && after && battery_before && battery_after);
+                        assert(cupid_gb_save_state(gb, before, state_size, NULL) ==
+                               CUPID_GB_STATE_OK);
+                        if (battery_size)
+                            assert(cupid_gb_save_battery(gb, battery_before, battery_size, NULL) ==
+                                   CUPID_GB_BATTERY_OK);
+                        for (size_t q = 0; q < sizeof(qualifiers) / sizeof(qualifiers[0]); ++q) {
+                            for (size_t a = 0; a < sizeof(addresses) / sizeof(addresses[0]); ++a) {
+                                for (unsigned word = 0; word < 2; ++word) {
+                                    char expression[64];
+                                    snprintf(expression, sizeof(expression), "%c$%x:$%04x%c",
+                                             word ? '{' : '[', qualifiers[q], addresses[a],
+                                             word ? '}' : ']');
+                                    uint16_t expected = mmm01_expected_byte(
+                                        logical, physical_size, scenarios[scenario].banks,
+                                        qualifiers[q], addresses[a]);
+                                    if (word)
+                                        expected |= (uint16_t)(mmm01_expected_byte(
+                                                                   logical, physical_size,
+                                                                   scenarios[scenario].banks,
+                                                                   qualifiers[q], addresses[a] + 1)
+                                                               << 8);
+                                    CupidGbDebugValue value;
+                                    assert(cupid_gb_debugger_evaluate(&debug, gb, expression,
+                                                                      &value, NULL));
+                                    assert(value.value == expected && value.bank == -1);
+                                }
+                            }
+                        }
+                        for (unsigned region = 0; region < 2; ++region) {
+                            const uint16_t address = region ? 0x4200 : 0x0200;
+                            const unsigned selected = scenarios[scenario].banks[region];
+                            const size_t file_bank =
+                                (selected + (layout ? 0u : 2u)) % (physical_size / 0x4000);
+                            gb->cpu.pc = address;
+                            assert(cupid_gb_effective_rom_bank(gb, !region) == file_bank);
+                            assert(cupid_gb_debugger_bank(gb, address) == (int)selected);
+                            CupidGbDebugValue pc;
+                            assert(cupid_gb_debugger_evaluate(&debug, gb, "pc", &pc, NULL));
+                            assert(pc.value == address && pc.bank == (int)(selected & 0x1ffu));
+                            const char *label = cupid_gb_debugger_symbol_for_address(
+                                &debug, cupid_gb_debugger_bank(gb, address), address, true);
+                            const char *expected_label = scenarios[scenario].labels[region];
+                            assert(expected_label ? label && !strcmp(label, expected_label)
+                                                  : !label);
+                            /* The menu's full bank identity selects its symbol; expression
+                             * values retain the public nine-bit bank qualifier contract. */
+                            if (label) {
+                                CupidGbDebugValue symbol;
+                                assert(
+                                    cupid_gb_debugger_evaluate(&debug, gb, label, &symbol, NULL));
+                                assert(symbol.value == address && symbol.bank == pc.bank);
+                            }
+                            for (size_t q = 0; q < sizeof(qualifiers) / sizeof(qualifiers[0]);
+                                 ++q) {
+                                cupid_gb_debugger_breakpoints_clear(&debug);
+                                const int qualified = (int)(qualifiers[q] & 0x1ffu);
+                                assert(
+                                    cupid_gb_debugger_breakpoint_add(&debug, qualified, address));
+                                assert(cupid_gb_debugger_match_breakpoint(&debug, gb) ==
+                                       ((unsigned)qualified == selected));
+                            }
+                            cupid_gb_debugger_breakpoints_clear(&debug);
+                            assert(cupid_gb_debugger_breakpoint_add(&debug, -1, address));
+                            assert(cupid_gb_debugger_match_breakpoint(&debug, gb));
+                        }
+                        assert(cupid_gb_save_state(gb, after, state_size, NULL) ==
+                               CUPID_GB_STATE_OK);
+                        assert(!memcmp(before, after, state_size));
+                        if (battery_size) {
+                            assert(cupid_gb_save_battery(gb, battery_after, battery_size, NULL) ==
+                                   CUPID_GB_BATTERY_OK);
+                            assert(!memcmp(battery_before, battery_after, battery_size));
+                        }
+                        assert(gb->rom_size == input_size && !memcmp(gb->rom, input, input_size));
+                        if (scenario == 1 && types[type] == 0x0b && physical_size == 0x20000) {
+                            /* Logical banks 3 and 11 alias the same storage. A bank
+                             * change must still cancel the one-shot resume exception. */
+                            cupid_gb_debugger_reset_execution(&debug);
+                            cupid_gb_debugger_breakpoints_clear(&debug);
+                            assert(cupid_gb_debugger_breakpoint_add(&debug, 3, 0x4200));
+                            assert(cupid_gb_debugger_breakpoint_add(&debug, 11, 0x4200));
+                            assert(cupid_gb_debugger_check(&debug, gb) ==
+                                   CUPID_GB_DEBUG_STOP_BREAKPOINT);
+                            const size_t file_bank = cupid_gb_effective_rom_bank(gb, false);
+                            cupid_gb_write_u8(gb, 0x2000, 11);
+                            assert(cupid_gb_effective_rom_bank(gb, false) == file_bank);
+                            cupid_gb_debugger_begin(&debug, gb, CUPID_GB_DEBUG_RUN);
+                            assert(cupid_gb_debugger_check(&debug, gb) ==
+                                   CUPID_GB_DEBUG_STOP_BREAKPOINT);
+                            assert(debug.skip_bank == 11);
+                        }
+                        free(before);
+                        free(after);
+                        free(battery_before);
+                        free(battery_after);
+                    }
+                }
+            }
+            free(original);
+            free(logical);
+        }
+    }
+    cupid_gb_debugger_cleanup(&debug);
+}
+
 int main(void) {
     CupidGb *gb = calloc(1, sizeof(*gb));
     assert(gb);
@@ -768,6 +986,7 @@ int main(void) {
     test_step_observation(gb);
     test_expressions_and_conditions(gb);
     test_expression_rom_geometry(gb);
+    test_mmm01_debugger_layouts(gb);
     cupid_gb_cleanup(gb);
     free(gb);
     puts("Debugger execution, memory, disassembly and symbols passed.");

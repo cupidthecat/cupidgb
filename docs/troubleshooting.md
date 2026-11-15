@@ -40,7 +40,7 @@ Rumble requires a supported device, enabled cartridge feedback, a nonzero streng
 
 ## Sound is missing or unstable
 
-Check Audio > Mute, Settings volume, and Settings > Audio output. System Default follows the host default device. A saved unavailable device falls back to the default while retaining the saved request. Turbo, pause, and rewind intentionally suppress host playback. WAVE recording captures the core stream before mute and volume, so a nonempty recording does not prove the host device is audible.
+Check Audio > Mute, Settings volume, and Settings > Audio output. System Default follows the host default device. A saved unavailable device falls back to the default while retaining the saved request. Pause silences playback. Turbo plays selected audio segments, and rewind plays newly generated replay audio until history runs out. Mode changes clear stale queued samples before playback primes again. WAVE recording captures forward core samples before mute and volume and excludes rewind replay, so a nonempty recording does not prove the host device is audible.
 
 Run the native frontend with `--smoke-test --audio-check` from a working desktop session. The default smoke test and offscreen CTest workflow do not open a real device. An unavailable or unsupported device is reported by the application.
 

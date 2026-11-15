@@ -20,6 +20,8 @@ Hash regressions cover known vectors, span partitions, large inputs, unaligned b
 
 Core tests exercise lifecycle, CPU/memory behavior, serial, timer/bus phases, graphics, audio, cartridge persistence, native snapshots, older-state battery recovery, and SGB behavior. Frontend checks cover sample conversion, WAVE file output, display processing, and integrated desktop workflows as those targets are present in the current build. Query the exact list with `ctest --test-dir build -N`; avoid carrying test counts from an older revision into a new result.
 
+The standalone `cupidgb_turbo_audio_window` target checks complete-frame selection, phase and block boundaries, every cap, normal bypass, host-rate changes, capacity drops and transactional rejection. It has no Qt dependency. Integrated playback workflows check history consumption and forward replay, exhaustion/release, current input, recording isolation, invalid snapshots, combined pacing, integer/float host formats, queue boundaries and focus-loss resets. These checks do not establish audible output or total device latency.
+
 Run the generated mapper, persistence, and SGB continuation checks together:
 
 ```sh
@@ -59,7 +61,7 @@ Release tests explicitly keep their assertions enabled. Run the GCC/Clang saniti
 
 The first command uses isolated temporary settings and a generated disposable cartridge. It checks application integration without opening a real audio device. CTest runs it using the offscreen platform plugin.
 
-The second command requires an actual output device and exercises playback around state loading and rewind. Also run native visible checks on each target platform. Offscreen checks do not establish dialogs, font/layout behavior, input focus, actual device playback, or physical display presentation under the native backend.
+The second command requires an actual output device and exercises playback around state loading and rewind. It also dispatches focus loss, state loading and cartridge close from backend writes, checking deferred mode resets and the absence of stale guest execution. Also run native visible checks on each target platform. Offscreen checks do not establish dialogs, font/layout behavior, input focus, actual device playback, or physical display presentation under the native backend.
 
 Generated inputs protect normal user data and allow repeatable failure cases. Commercial-game checks still need real cartridge execution, visual inspection, input, sound, and saving.
 
@@ -154,7 +156,7 @@ Use `--model dmg`, `--model cgb`, or another supported Qt profile to avoid autom
 
 `requested_model` is null when the option is absent, `"auto"` for explicit automatic selection, or the canonical selected profile name for a fixed request. The `dmg` alias reports `"dmgabc"`. `hardware_model` records the actual hardware chosen for the cartridge. `base_clock_hz` records that model's physical clock, and the whole-run and post-warmup speed calculations use it. This distinction matters when comparing automatic, fixed DMG, and SGB runs.
 
-Reports describe guest-clock progress, images submitted to the widget, widget paint counts/intervals, host audio format, generated samples, queue depth, backend idle/error events, rewind storage/capture work, and input progress. Check the exact report emitted by the current build rather than assuming a fixed schema.
+Reports describe guest-clock progress, images submitted to the widget, widget paint counts/intervals, host audio format, generated samples, queue depth, backend idle/error events, rewind storage/capture work, and input progress. Separate counters record replayed guest cycles, replay presentation events, Turbo window drops and Turbo queue-capacity drops. Dropped host playback frames are not skipped guest cycles. Check the exact report emitted by the current build rather than assuming a fixed schema.
 
 The `post_warmup` object reports a separate window after a five-second host warmup. It records the actual sampling time, counter baselines, measured duration, guest-clock rate, image/paint/sample deltas, audio events, and paint intervals wholly inside that window. Runs of five seconds or less report it as unavailable. This is a time window, not proof of steady gameplay or audible correctness. Whole-run fields retain startup observations. Cartridge or timeline replacement cancels the measurement instead of combining different sessions. Ordinary playback collects no paint-interval history; collection runs only for bounded reports.
 

@@ -509,8 +509,7 @@ size_t cupid_gb_selected_rom_bank(const CupidGb *gb, bool lower_region) {
     return bank;
 }
 
-size_t cupid_gb_effective_rom_bank(const CupidGb *gb, bool lower_region) {
-    size_t bank = cupid_gb_selected_rom_bank(gb, lower_region);
+size_t cupid_gb_rom_file_bank(const CupidGb *gb, size_t bank) {
     /* Some dumps put the two menu banks first. Translate bus bank numbers
      * without rotating the original bytes or their identity. */
     if (gb->header.mbc_type == CUPID_GB_MMM01 && gb->mmm01_menu_first)
@@ -518,6 +517,10 @@ size_t cupid_gb_effective_rom_bank(const CupidGb *gb, bool lower_region) {
     /* Loading rounds physical ROM population to a power of two. Snapshots
      * retain that immutable geometry, so absent address lines are a mask. */
     return gb->rom_bank_count ? bank & (gb->rom_bank_count - 1u) : 0;
+}
+
+size_t cupid_gb_effective_rom_bank(const CupidGb *gb, bool lower_region) {
+    return cupid_gb_rom_file_bank(gb, cupid_gb_selected_rom_bank(gb, lower_region));
 }
 
 /**

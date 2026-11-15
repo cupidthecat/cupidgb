@@ -20,7 +20,9 @@ Version 1 execution states cannot continue in the changed pixel and audio core. 
 
 ## Rewind
 
-Hold Tab to move backward through captured frames. Space with Tab moves backward two snapshots per host interval. Releasing rewind resumes forward emulation with current physical input. Rewind playback intentionally clears host audio; ordinary forward playback retains normal audio generation and queue backpressure.
+Hold Tab to move backward through captured frames. Rewind restores and removes history entries, then executes the selected state forward for one replay interval. With sufficient history, normal rewind first returns to the current frame position and subsequently moves back one frame per interval. Holding Space consumes one additional history entry, moving back one frame initially and two thereafter. The selected Turbo cap and slow-motion rate also apply to replay pacing. Insufficient history ends replay and waits for release; it does not invent another complete frame.
+
+Replay uses current physical input and produces a new image and audio. Entering or leaving rewind clears stale host playback. During replay, the frontend discards PCM already pending in the restored snapshot and queues only newly generated samples; ordinary disk-state loading retains the codec's pending-PCM continuation. Releasing rewind resumes forward execution with current input. Replay samples do not enter the forward-only WAVE recording.
 
 Settings control the requested history duration and memory budget. The default requests up to 120 seconds within a 256 MiB budget. The buffer evicts its oldest snapshots when either limit is reached. History age uses the model's base T-cycle frequency, so the duration limit represents guest seconds on SGB as well as the other profiles. Enabled rewind captures each completed frame before applying the history limits. Actual retained duration depends on how well the cartridge's state compresses; the interface reports shorter history when the memory limit is reached. Set the duration to zero to disable capture.
 

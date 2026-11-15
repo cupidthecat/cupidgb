@@ -18,6 +18,10 @@ void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
     telemetryStartCycles_ = emulator_->gb.elapsed_cycles;
     presentedImages_ = 0;
     generatedAudioFrames_ = 0;
+    replayedGuestCycles_ = 0;
+    replayedFrames_ = 0;
+    turboWindowDroppedFrames_ = 0;
+    turboCapacityDroppedFrames_ = 0;
     rewindSnapshotsCaptured_ = 0;
     rewindCaptureNanoseconds_ = 0;
     rewindCaptureMaximumNanoseconds_ = 0;
@@ -80,6 +84,10 @@ void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
                 {"images_submitted_to_widget", double(presentedImages_)},
                 {"widget_paint_events", double(display_->paintCount)},
                 {"audio_frames_generated", double(generatedAudioFrames_)},
+                {"rewind_replay_guest_t_cycles", double(replayedGuestCycles_)},
+                {"rewind_replay_presentation_events", double(replayedFrames_)},
+                {"turbo_window_dropped_host_frames", double(turboWindowDroppedFrames_)},
+                {"turbo_capacity_dropped_host_frames", double(turboCapacityDroppedFrames_)},
                 {"audio_idle_events_after_startup", double(audioIdleEvents_)},
                 {"audio_priming_target_microseconds", 30000},
                 {"audio_priming_events", double(audioPrimeEvents_)},

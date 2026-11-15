@@ -1,5 +1,7 @@
 #include "main_window_internal.h"
 
+#include <QScopeGuard>
+
 void MainWindow::setupAudio() {
     // Some audio backends dispatch Qt events while opening or closing a stream.
     // Guest execution must not reenter a pause, load, or rewind transition.
@@ -37,6 +39,7 @@ void MainWindow::setupAudio() {
     }
     audioBuffer_ = std::make_shared<AudioBuffer>(format.bytesPerFrame());
     audioConverter_ = std::make_unique<AudioConverter>(format);
+    turboAudioWindow_.setSampleRate(unsigned(format.sampleRate()));
     audioQueueLimit_ = format.bytesForDuration(50000);
     audioPrimeBytes_ = format.bytesForDuration(30000);
     audioPriming_ = true;
@@ -60,6 +63,7 @@ void MainWindow::setupAudio() {
 
 void MainWindow::stopAudio() {
     QScopedValueRollback<bool> operation(stateOperation_, true);
+    audioModeResetPending_ = false;
     audioDevice_ = nullptr;
     audioPriming_ = true;
     // Detach immediately, but retain the old backend while a reentrant start/write
@@ -68,6 +72,7 @@ void MainWindow::stopAudio() {
 }
 
 void MainWindow::clearAudio() {
+    audioModeResetPending_ = false;
     audioPriming_ = true;
     if (audio_) {
         // A new sink owns a fresh backend stream. Rapid reuse after several
@@ -82,6 +87,12 @@ void MainWindow::clearAudio() {
 }
 
 void MainWindow::pumpAudio() {
+    const auto finishModeChange = qScopeGuard([this] {
+        if (audioModeResetPending_ && !stateOperation_) {
+            clearAudio();
+            applyHeldButtons();
+        }
+    });
     QScopedValueRollback<bool> operation(stateOperation_, true);
     // Backend event dispatch can replace the session queue while a write is active.
     const auto buffer = audioBuffer_;
@@ -122,6 +133,31 @@ void MainWindow::pumpAudio() {
             buffer->writeTo(device, capacity);
         }
     }
+}
+
+QByteArray MainWindow::convertPlaybackAudio(const int16_t *samples, size_t frames,
+                                            const QAudioFormat &format) {
+    if (!audioConverter_ || !audioBuffer_ || !format.isValid() || format.bytesPerFrame() <= 0 ||
+        !turboAudioWindow_.setSampleRate(unsigned(format.sampleRate())))
+        return {};
+    QByteArray converted = audioConverter_->convert(samples, frames);
+    const size_t frameBytes = size_t(format.bytesPerFrame());
+    size_t capacity = TurboAudioWindow::unlimitedFrames;
+    if (turbo_) {
+        // The threshold frame is accepted too. This bounds the pending whole
+        // host frames; the audio backend has its own separate buffering.
+        const size_t maximum = size_t(format.sampleRate()) / 8 + 1;
+        const size_t queued = size_t(audioBuffer_->bytesAvailable()) / frameBytes;
+        capacity = queued < maximum ? maximum - queued : 0;
+    }
+    const auto filtered = turboAudioWindow_.filter(converted.data(), size_t(converted.size()),
+                                                   frameBytes, turbo_, turboCapQuarters_, capacity);
+    if (filtered.status != TurboAudioWindow::Status::Ok)
+        return {};
+    converted.truncate(qsizetype(filtered.outputFrames * frameBytes));
+    turboWindowDroppedFrames_ += filtered.windowDroppedFrames;
+    turboCapacityDroppedFrames_ += filtered.capacityDroppedFrames;
+    return converted;
 }
 
 bool MainWindow::startRecording(const QString &path) {

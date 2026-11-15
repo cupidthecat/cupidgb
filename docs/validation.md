@@ -1245,3 +1245,176 @@ adjusted monotonic time advances by 0.9167 to 1.0003 seconds per raw-clock secon
 Complete process durations are 120.93 adjusted seconds and
 127.30 raw seconds, including startup and shutdown. These measurements do not
 qualify stable physical-time Linux speed. No global clock setting was changed.
+
+## MMM01 debugger and playback replay
+
+This follow-up uses comparison revision
+`ea667ad79aa28409f034b1fd6da7304e1844750d` and the preceding
+`9b1058cd17695758dd935bc9fa9cbac5aa94bfeb` checkpoint as its baseline. The work
+changes debugger bank identity, Turbo host-audio selection and rewind replay.
+It does not revise the V11 state encoding or the guest cartridge mapping.
+
+### Debugger bank identity
+
+MMM01 debugger identities now follow the controller's logical bank numbers in
+both supported dump layouts. Bank-qualified memory queries translate those
+numbers into the original file's storage without changing mapper latches or
+rotating input bytes. Unlocked menu banks retain the raw `FFFE` and `FFFF`
+identities used by the debugger API. Expressions and the console's explicit
+breakpoint banks still narrow to nine bits; unqualified breakpoints can target
+the startup menu.
+
+The paired matrix contains 28 generated inputs on DMG and CGB, each in six
+controller states. It covers both menu placements, two-bank and 512-bank inputs,
+truncated and odd lengths, erased padding, lock and multiplex modes, and the
+type-11 detection heuristic. The complete matrix has 102,816 observations:
+
+| Observation | Cases | Baseline differences | Fixed differences |
+| --- | ---: | ---: | ---: |
+| Qualified reads | 86,016 | 26,928 | 0 |
+| Mapped banks, PC and labels | 672 | 494 | 0 |
+| Numeric breakpoints | 11,424 | 976 | 0 |
+| Symbol values | 2,352 | 0 | 0 |
+| Symbol breakpoints | 2,352 | 256 | 0 |
+| Total | 102,816 | 28,654 | 0 |
+
+The new public debugger regression fails on the original implementation and
+passes after the fix. It also checks two logical bank numbers that alias the
+same storage while retaining distinct breakpoint identities. The Qt workflow
+covers both models and layouts, inspector labels, wide raw API identities,
+console narrowing and wildcard breakpoints. A separate 336-instance comparison
+preserves complete ROM hashes, V11 snapshot bytes and battery bytes before and
+after the change. Debugger queries themselves leave serialized state unchanged.
+
+### Turbo audio selection
+
+The independently written host-frame helper selects contiguous spans in place
+without allocating. Its generated matrix covers 13,673,366 input frames in
+12,130 blocks, including 44.1, 48 and 96 kHz, all supported caps, complete frame
+sizes from one to 32 bytes, partition boundaries, phase wrap, normal bypass,
+queue capacity, host-rate changes, invalid input and guard bytes. Windows MSVC
+Release and Linux AddressSanitizer/UndefinedBehaviorSanitizer checks pass.
+
+A separate private probe runs the pinned source's actual playback callback at
+fixed rates and volume. Across 3,031,096 input frames in 408 blocks, all 736,938
+retained frame identifiers match byte for byte. Its artificial queue is empty
+until the selected capacity is exhausted and then reports above the threshold.
+This establishes the window arithmetic under that queue model. It does not
+establish native buffering, resampling, waveform quality, rate-change behavior
+or backend drop-trace equivalence.
+
+The integrated queue checks seed `floor(rate / 8)` pending frames, accept one
+more, then reject the first excess frame for 44.1 kHz integer stereo and 48 kHz
+float stereo. The software queue's inclusive limit is separate from the native
+sink's requested 50 ms buffer. Normal playback retains its existing conversion
+and execution-backpressure policy.
+
+### Rewind execution and callback safety
+
+Before implementation, paired probes of the actual history capture/pop API and
+CupidGB's restore/remove/replay sequence match all 32 numeric trace rows. They
+cover history lengths 0, 1, 2, 3, 5 and 8 under normal and Turbo rewind. Normal
+rewind first replays the current frame position and then moves back one frame
+per interval. Turbo moves back one frame initially, then two. Empty or
+insufficient history executes its terminal instruction and waits for release.
+
+The new regression first fails on the old frontend with displayed tag 16 instead
+of 17 and no newly generated replay PCM. The corrected frontend consumes the
+proper history, restores current input and runs forward to produce each replay
+image and sound. Positive executed cycles drive combined slow/Turbo pacing;
+backward movement through guest time never becomes a negative host deadline.
+
+Integrated workflows cover history byte accounting and exhaustion, release and
+forward resumption, current input, slow and rapid controls, fractional capped
+and uncapped pacing, invalid or wrong-cartridge snapshots, battery preservation,
+recording isolation, breakpoint stops and whole-frame host conversion. They
+also check focus loss during guarded dispatch and retained controller modes.
+Review caught a keyboard-release ordering defect that could leave old-mode
+audio queued; the final code retains the previous flags until reconciliation
+and applies or defers the reset correctly.
+
+Presentation and history are committed before backend audio calls can dispatch
+session changes. The frame path returns without accessing guest state after
+those calls. Session, timeline and pacing-generation checks prevent a callback
+from charging an old interval to a new deadline or executing a newly loaded
+timeline through the previous tick.
+
+### Complete local builds
+
+The initial complete follow-up passes all 47 Windows Release checks in 37.54
+seconds and all 45 Linux Release checks in 44.19 seconds. Both include the
+expanded Qt workflows and the standalone Turbo window target. Source hashes
+remain unchanged through each build and test run.
+
+The Windows executable is
+`302d3e6d67986548e026e48fef56022c717f754941bcba0de5ef1ef242bc1a92`.
+The Linux build executable is
+`3ba45a7da9fde121b620e97a839b1231528ae29dea9c8c7723b70b2d35fda617`.
+
+### Native audio fixture diagnosis
+
+Both fresh installed native checks initially fail the new readiness assertion,
+before reaching its injected focus-loss callback. That fixture generates four
+intervals, stops producing audio and waits 75 ms, then incorrectly requires the
+short stream to remain primed. The failures take 5.06 seconds on Windows and
+5.55 seconds on Linux; neither reaches the overall time guard.
+
+Instrumented runs show active playback with no error before the wait. Windows
+accepts 2,879 complete 48 kHz float-stereo frames, and Linux accepts 1,654 complete
+44.1 kHz integer-stereo frames. After the forced wait, each backend reports an
+idle stream and an underrun, as expected when its producer stops. Linux's
+processed duration advances from 6.22 to 37.51 ms. These observations identify a
+fixture assumption, not a change needed in production audio buffering.
+
+The repaired fixture keeps the 75 ms readiness deadline and stops polling when
+native capacity increases. It requires active playback, no backend error, a new
+prime, positive processed time and accepted complete frames. A carried Turbo
+phase can legitimately discard an entire interval, so bounded warmup and
+callback loops advance through that phase and stop immediately when the
+callback fires. The original failed stages and both diagnostic runs remain
+preserved.
+
+### Final installed workflows
+
+Fresh canonical installations pass the complete native audio workflow in
+11.43 seconds on Windows and 19.75 seconds on Linux/Xcb. Both run under the
+unchanged 180-second guard and retain all ten UI captures. The repaired
+fixture is the only change to the eight frozen playback integration files
+since the initial complete local suites; production playback behavior is
+unchanged during the fixture repair.
+
+| Platform and mode | Host format | Accepted frames | Writable capacity | Readiness |
+| --- | --- | ---: | ---: | ---: |
+| Windows Turbo | 48 kHz float stereo | 2,399 | 0 to 3,840 bytes | 2 ms |
+| Windows rewind | 48 kHz float stereo | 2,879 | 0 to 3,840 bytes | 8 ms |
+| Linux Turbo | 44.1 kHz integer stereo | 1,654 | 0 to 4,408 bytes | 1 ms |
+| Linux rewind | 44.1 kHz integer stereo | 2,756 | 0 to 4,412 bytes | 31 ms |
+
+All four observations retain active playback, no backend error, a live device,
+a new prime and positive processed time. The later focus-loss, nested-tick,
+state-load, phase/queue and cartridge-close assertions all complete. Startup
+text and debugger controls remain readable on both platforms.
+
+The final Windows build and installed executable have SHA-256
+`6dab6a8c8def8db19037bb87d1c2d32bf8213982d979894e39c55e7b622eb29c`.
+All loaded Qt and SDL modules come from its 295-file stage, with SDK Qt absent
+from the process search path. The Linux build is
+`0b4596870c8e28ecbd4ae72b8d454a7e89255ec97909259cafc97c9e0d3736f2`;
+the installed executable is
+`2022f7220db3343a4e13be74d73cd1b8bf7f99afde4e94b369b642865535ff6e`.
+The 22-file Linux stage uses matching Qt 6.8.3 and system SDL2, has a validated
+private icon cache and contains no executable RPATH or RUNPATH. Its existing
+audio server passes the protocol readiness gate without a service change.
+
+Source and executable identities remain unchanged throughout the final native
+runs. Formatting and whitespace checks pass, all 114 local documentation links
+resolve, and all 162 project source/test files remain below 2,000 lines. These
+installed workflow checks do not establish audible quality, sustained gameplay
+speed, clean-machine deployment or a portable Linux bundle.
+
+Matching history order and selected host-frame identifiers does not qualify
+identical rewind waveforms. V11 retains deterministic APU/filter history, and
+the host's slow-motion conversion has its own interpolation policy. WAVE
+recording still captures forward PCM and excludes replay; controller rumble
+remains suppressed during rewind. Printer protocol, image-buffer and job state
+are not yet restored with native snapshots. These remain explicit parity gaps.

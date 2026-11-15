@@ -56,6 +56,8 @@ Register edits accept AF, BC, DE, HL, SP, PC, A, F, B, C, D, E, H, L, and IME. T
 
 Expressions accept CPU registers, loaded symbols, decimal literals, `$`/`0x` hexadecimal literals, parentheses, and byte `[address]` or little-endian word `{address}` reads. Arithmetic wraps to 16 bits. Division or remainder by zero and shifts by 16 or more yield zero. Both logical operands are evaluated. A bank qualifier selects a side-effect-free ROM, VRAM, or WRAM view without switching guest banks; bank zero selects the mapped view. ROM banks alias through the cartridge's physical address lines, and unpopulated bytes at the end of a truncated image read as `FF`. Conditions are true when their value is nonzero. A condition that loses a symbol or otherwise fails evaluation pauses execution with a debugger error. Invalid new definitions leave existing breakpoints intact.
 
+MMM01 uses the same logical ROM-bank numbering for menu-first and menu-last dumps. The file remains in its original order. Before the controller locks, its menu banks display as `FFFE` and `FFFF`; expression values and the `break` command use nine-bit bank qualifiers. Use an address without a bank qualifier to stop in either startup menu bank. Symbol lookup and the raw core breakpoint API retain the full menu-bank identities.
+
 Precedence from lowest to highest is: comparisons; `+ - | ||`; `* / % & ^ &&`; shifts; bank qualification with `:`. Operators in a group associate left to right. These groups differ from C. Expressions are limited to 255 bytes and 32 nested levels. Assignment, unary operators, watchpoints, and range breakpoints remain unsupported.
 
 ## Symbols
@@ -103,4 +105,4 @@ Inspector raw grayscale mode bypasses color correction. Palette-selected color p
 
 ## Remaining debugger scope
 
-Menu-first MMM01 dumps still expose file-order bank labels and qualified reads; conversion to logical bank numbering remains pending. Read/write watchpoints, a full expression language, saved debugger sessions, continuous-playback instruction replay, arbitrary physical-bank memory editing, ROM patching, interactive palette editing, and presentation layer/channel toggles also remain pending. Inspector rendering and the bounded instruction history are useful diagnostic tools, not complete debugger or hardware parity.
+Read/write watchpoints, a full expression language, saved debugger sessions, continuous-playback instruction replay, arbitrary physical-bank memory editing, ROM patching, interactive palette editing, and presentation layer/channel toggles remain pending. Inspector rendering and the bounded instruction history are useful diagnostic tools, not complete debugger or hardware parity.
