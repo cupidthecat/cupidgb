@@ -1,6 +1,7 @@
 #include "main_window_internal.h"
 
 #include <QDebug>
+#include <QScopeGuard>
 
 extern "C" {
 #include "cupid/gb/ppu.h"
@@ -293,7 +294,156 @@ bool MainWindow::pacingSmokeTest(const QString &path) {
         if (!closeRom())
             return smokeFailure(__FILE__, __LINE__);
     }
-    return displayCadenceSmokeTest(path);
+    return turboCapSmokeTest(path) && displayCadenceSmokeTest(path);
+}
+
+bool MainWindow::turboCapSmokeTest(const QString &path) {
+    const bool hadCap = settings_.contains("emulation/turboCap");
+    const QVariant savedCap = settings_.value("emulation/turboCap");
+    const QVariant savedRewind = settings_.value("emulation/rewindSeconds", 120);
+    const auto restoreSettings = qScopeGuard([&] {
+        if (hadCap)
+            settings_.setValue("emulation/turboCap", savedCap);
+        else
+            settings_.remove("emulation/turboCap");
+        settings_.setValue("emulation/rewindSeconds", savedRewind);
+    });
+    for (const QVariant &invalid :
+         {QVariant(-25), QVariant(125), QVariant(151), QVariant(425), QVariant(150.5),
+          QVariant(QStringLiteral("bad")), QVariant(QStringLiteral("99999999999999999999"))}) {
+        settings_.setValue("emulation/turboCap", invalid);
+        if (configuredTurboCapQuarters(settings_) != 0)
+            return smokeFailure(__FILE__, __LINE__);
+    }
+    settings_.setValue("emulation/turboCap", 425);
+    MainWindow session(true, true, false, QStringLiteral(""), CUPID_GB_MODEL_DMG_ABC);
+    session.timer_.stop();
+    if (session.turboCapQuarters_ || !session.turboCapActions_[0]->isChecked() ||
+        settings_.value("emulation/turboCap").toInt() != 425)
+        return smokeFailure(__FILE__, __LINE__);
+    settings_.setValue("emulation/rewindSeconds", 0);
+    if (!session.openRom(path))
+        return smokeFailure(__FILE__, __LINE__);
+    session.setPaused(true);
+    const QByteArray initial = session.captureState();
+    for (size_t index = 0; index < turboCapChoices.size(); ++index) {
+        session.turboCapActions_[index]->trigger();
+        if (session.turboCapQuarters_ != turboCapChoices[index] ||
+            settings_.value("emulation/turboCap").toUInt() != turboCapChoices[index] * 25)
+            return smokeFailure(__FILE__, __LINE__);
+        for (size_t other = 0; other < turboCapChoices.size(); ++other)
+            if (session.turboCapActions_[other]->isChecked() != (other == index))
+                return smokeFailure(__FILE__, __LINE__);
+    }
+    if (session.captureState() != initial)
+        return smokeFailure(__FILE__, __LINE__);
+    session.setTurboCap(6);
+    for (const bool accept : {false, true}) {
+        bool inspected = false;
+        QTimer::singleShot(0, &session, [&] {
+            auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+            if (!dialog)
+                return;
+            auto *cap = dialog->findChild<QComboBox *>("turboSpeedCap");
+            inspected = cap && cap->count() == int(turboCapChoices.size()) &&
+                        cap->currentData().toUInt() == 6;
+            if (cap)
+                cap->setCurrentIndex(cap->findData(7u));
+            dialog->findChild<QDialogButtonBox *>()
+                ->button(accept ? QDialogButtonBox::Ok : QDialogButtonBox::Cancel)
+                ->click();
+        });
+        session.configure();
+        if (!inspected || session.turboCapQuarters_ != (accept ? 7u : 6u) ||
+            settings_.value("emulation/turboCap").toUInt() != (accept ? 175u : 150u))
+            return smokeFailure(__FILE__, __LINE__);
+    }
+    {
+        MainWindow reopened(true, true);
+        reopened.timer_.stop();
+        if (reopened.turboCapQuarters_ != 7 || !reopened.turboCapActions_[2]->isChecked())
+            return smokeFailure(__FILE__, __LINE__);
+    }
+
+    auto &gb = session.emulator_->gb;
+    const uint32_t clockHz = cupid_gb_base_clock_hz(&gb);
+    // The three execution gates must also hold when Turbo bypasses its deadline.
+    const auto stoppedCycles = gb.elapsed_cycles;
+    session.turbo_ = true;
+    session.nextFrame_ = 0;
+    session.tick();
+    if (gb.elapsed_cycles != stoppedCycles)
+        return smokeFailure(__FILE__, __LINE__);
+    session.setPaused(false);
+    session.setTurboCap(0);
+    session.turbo_ = true;
+    {
+        QScopedValueRollback<unsigned> menu(session.menuDepth_, 1);
+        session.tick();
+    }
+    {
+        QScopedValueRollback<bool> operation(session.stateOperation_, true);
+        session.tick();
+    }
+    if (gb.elapsed_cycles != stoppedCycles)
+        return smokeFailure(__FILE__, __LINE__);
+
+    for (const unsigned cap : {6u, 7u, 16u}) {
+        session.setTurboCap(cap);
+        session.turbo_ = true;
+        session.slowHeld_ = true;
+        session.speedSteps_ = 13;
+        session.resetPacing();
+        const auto start = gb.elapsed_cycles;
+        const auto deadline = session.nextFrame_;
+        session.tick();
+        const auto consumed = gb.elapsed_cycles - start;
+        const auto duration = qint64(consumed * UINT64_C(64000000000) / (clockHz * 13u * cap));
+        if (session.paused_ || !consumed || consumed > 70248 ||
+            session.nextFrame_ != deadline + duration)
+            return smokeFailure(__FILE__, __LINE__);
+        session.nextFrame_ = session.clock_.nsecsElapsed() + INT64_C(1000000000);
+        const auto waiting = gb.elapsed_cycles;
+        session.tick();
+        if (gb.elapsed_cycles != waiting)
+            return smokeFailure(__FILE__, __LINE__);
+    }
+    session.setTurboCap(0);
+    session.nextFrame_ = session.clock_.nsecsElapsed() + INT64_C(1000000000);
+    const auto unboundedStart = gb.elapsed_cycles;
+    session.tick();
+    if (gb.elapsed_cycles <= unboundedStart || gb.elapsed_cycles - unboundedStart > 70248)
+        return smokeFailure(__FILE__, __LINE__);
+
+    // Selecting a cap must not change normal-speed hardware, PCM production or
+    // its model-clock deadline. Re-run the same snapshot under two preferences.
+    session.turbo_ = session.slowHeld_ = false;
+    session.speedSteps_ = 16;
+    const auto normalStart = session.captureState();
+    QByteArray normalResult;
+    uint64_t normalAudio = 0;
+    for (const unsigned cap : {6u, 16u}) {
+        if (!session.restoreState(normalStart, false))
+            return smokeFailure(__FILE__, __LINE__);
+        session.setTurboCap(cap);
+        session.resetPacing();
+        const auto start = gb.elapsed_cycles;
+        const auto deadline = session.nextFrame_;
+        const auto audio = session.generatedAudioFrames_;
+        session.tick();
+        const auto consumed = gb.elapsed_cycles - start;
+        if (!consumed || session.nextFrame_ != deadline + qint64(consumed * 1000000000 / clockHz))
+            return smokeFailure(__FILE__, __LINE__);
+        if (normalResult.isEmpty()) {
+            normalResult = session.captureState();
+            normalAudio = session.generatedAudioFrames_ - audio;
+        } else if (normalResult != session.captureState() ||
+                   normalAudio != session.generatedAudioFrames_ - audio) {
+            return smokeFailure(__FILE__, __LINE__);
+        }
+    }
+    qInfo("CupidGB turbo cap settings and guest-clock deadline workflows passed");
+    return true;
 }
 
 bool MainWindow::displayCadenceSmokeTest(const QString &path) {

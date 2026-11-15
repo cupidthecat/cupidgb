@@ -19,6 +19,9 @@ uint32_t cupid_gb_apu_get_sample_rate(const CupidGb *gb);
  * an HLE boot profile. Output buffers, integration, and filters remain intact;
  * absent power/trigger history receives a deterministic approximation. */
 void cupid_gb_apu_import_legacy(CupidGb *gb);
+/* Reconstruct pulse clock and output latches absent from older monochrome engines.
+ * This leaves oscillators, queued audio, integration and filter state intact. */
+void cupid_gb_apu_import_monochrome_pulses(CupidGb *gb);
 /* DC blocking is enabled by default. Disabling it clears the coupling capacitor state. */
 void cupid_gb_apu_set_highpass(CupidGb *gb, bool enabled);
 /* Color-hardware digital channel taps, before routing, master gain, and filtering.

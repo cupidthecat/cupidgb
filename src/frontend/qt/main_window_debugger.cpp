@@ -317,9 +317,7 @@ bool MainWindow::debuggerBackstep() {
     clearAudio();
     resetRewind();
     rememberFrame();
-    previousDisplayFrame_ = {};
-    currentDisplayFrame_ = {};
-    present();
+    present(Presentation::Reset);
     refreshDebugger();
     return true;
 }
@@ -335,9 +333,7 @@ bool MainWindow::debuggerWrite(uint16_t address, uint8_t value) {
     resetRewind();
     rememberFrame();
     watchBattery();
-    previousDisplayFrame_ = {};
-    currentDisplayFrame_ = {};
-    present();
+    present(Presentation::Reset);
     refreshDebugger();
     return true;
 }

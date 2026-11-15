@@ -725,10 +725,13 @@ static uint8_t expression_peek(const CupidGb *gb, int bank, uint16_t address) {
         if (gb->boot_rom_enabled && (address < 0x100u || (gb->model == CUPID_GB_MODEL_CGB &&
                                                           address >= 0x200u && address < 0x900u)))
             return cupid_gb_debug_peek(gb, address);
-        if (!gb->rom_size)
+        if (!gb->rom_size || !gb->rom_bank_count)
             return 0xff;
-        const size_t offset = ((size_t)bank * 0x4000u + (address & 0x3fffu)) % gb->rom_size;
-        return gb->rom[offset];
+        /* The chip's power-of-two bank population includes erased file padding.
+         * Only disconnected bank lines wrap; missing bytes still read as 0xff. */
+        const size_t physical_bank = (size_t)bank & (gb->rom_bank_count - 1u);
+        const size_t offset = physical_bank * 0x4000u + (address & 0x3fffu);
+        return offset < gb->rom_size ? gb->rom[offset] : 0xff;
     }
     if (address < 0xa000u) {
         const unsigned selected = gb->model == CUPID_GB_MODEL_CGB ? (unsigned)bank & 1u : 0;

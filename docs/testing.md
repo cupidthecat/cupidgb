@@ -63,7 +63,9 @@ The second command requires an actual output device and exercises playback aroun
 
 Generated inputs protect normal user data and allow repeatable failure cases. Commercial-game checks still need real cartridge execution, visual inspection, input, sound, and saving.
 
-Set `CUPIDGB_UI_CAPTURE_DIR` when running the smoke check to retain private images of the generated-cartridge debugger and all five inspector tabs. The optional hook creates the supplied directory and writes fixed `debugger.png`, `memory.png`, `tiles.png`, `maps.png`, `objects.png`, and `palettes.png` files. Capture failures fail the check. Use the native platform to inspect actual Qt layout and fonts; a widget capture does not measure physical display presentation.
+Set `CUPIDGB_UI_CAPTURE_DIR` when running the smoke check to retain private images of the generated-cartridge debugger and all five inspector tabs. The optional hook creates the supplied directory and writes fixed `debugger.png`, `memory.png`, `tiles.png`, `maps.png`, `objects.png`, and `palettes.png` files. It also writes `tiles-grid.png`, `maps-overlay.png`, `messages.png`, and `messages-startup.png` for optional overlays and startup identity. Capture failures fail the check. Use the native platform to inspect actual Qt layout and fonts; a widget capture does not measure physical display presentation.
+
+The Windows offscreen plugin does not discover installed fonts through the native font backend. CTest gives the message glyph test a process-local `QT_QPA_FONTDIR` derived from the existing Windows Fonts directory. This keeps the glyph assertions active without copying fonts or changing the system environment. Native captures remain the check for actual desktop typography.
 
 The separate `cupidgb_controller_workflows` executable uses the same variable to save `controllers.png` from its native dialog and generated SDL devices. Run it without an offscreen platform override when reviewing the platform's layout and fonts. This capture contains test device state and does not need a game or physical controller.
 

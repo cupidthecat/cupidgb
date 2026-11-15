@@ -159,6 +159,7 @@ bool MainWindow::startRecording(const QString &path) {
     }
     refreshActions();
     statusBar()->showMessage("Recording forward audio at the core sample rate", 3000);
+    notifyOnScreen("Audio recording started");
     return true;
 }
 
@@ -172,5 +173,6 @@ bool MainWindow::stopRecording() {
         return false;
     }
     statusBar()->showMessage("Audio recording saved", 3000);
+    notifyOnScreen("Audio recording ended");
     return true;
 }

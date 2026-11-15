@@ -64,6 +64,10 @@ void MainWindow::buildColorMenus(QMenu *view) {
 }
 
 void MainWindow::applyDisplaySettings() {
+    const bool messages = settings_.value("video/osd", false).toBool();
+    display_->messages.setEnabled(messages);
+    if (auto *action = findChild<QAction *>("video/osd"))
+        action->setChecked(messages);
     const int scaling = std::clamp(settings_.value("video/scaling", 0).toInt(), 0, 2);
     display_->scaling = DisplayScaling(scaling);
     const int palette = std::clamp(settings_.value("video/palette", 0).toInt(), 0, 4);
@@ -109,17 +113,14 @@ void MainWindow::applyDisplaySettings() {
                                (image_.width() == CUPID_SGB_SCREEN_WIDTH) != showBorder;
     const bool colorHardware = emulator_ && (emulator_->gb.model == CUPID_GB_MODEL_CGB ||
                                              cupid_gb_sgb_active(&emulator_->gb));
-    if (displayPalette_ != colors || displayOffColor_ != offColor || borderChanged ||
-        (colorChanged && colorHardware)) {
-        previousDisplayFrame_ = {};
-        currentDisplayFrame_ = {};
-    }
+    const bool resetHistory = displayPalette_ != colors || displayOffColor_ != offColor ||
+                              borderChanged || (colorChanged && colorHardware);
     displayPalette_ = colors;
     displayOffColor_ = offColor;
     setFrameBlending(configuredFrameBlending(settings_));
     borderAction_->setChecked(showBorder);
     if (emulator_)
-        present();
+        present(resetHistory ? Presentation::Reset : Presentation::Redraw);
     else
         display_->update();
 }
@@ -162,12 +163,28 @@ void MainWindow::resizeDisplay(int scale) {
         windowSizeActions_[i]->setChecked(int(i) + 1 == scale);
 }
 
-void MainWindow::present(bool completedFrame) {
+void MainWindow::notifyOnScreen(const QString &message) {
+    if (!emulator_)
+        return;
+    display_->messages.show(message);
+}
+
+void MainWindow::advanceScreenMessages() {
+    if (!display_->messages.enabled())
+        return;
+    const QString mode = turbo_      ? QStringLiteral("Fast forward...")
+                         : slowHeld_ ? QStringLiteral("Slow motion...")
+                         : rewind_   ? QStringLiteral("Rewinding...")
+                                     : QString();
+    display_->messages.advanceFrame(mode);
+}
+
+void MainWindow::present(Presentation presentation) {
     if (!emulator_)
         return;
     const auto &gb = emulator_->gb;
     // A repeated hardware frame leaves both the visible image and blend history intact.
-    if (completedFrame && gb.display_frame_type == CUPID_GB_FRAME_REPEAT)
+    if (presentation == Presentation::Frame && gb.display_frame_type == CUPID_GB_FRAME_REPEAT)
         return;
     const bool sgb = cupid_gb_sgb_active(&gb);
     const QSize nativeSize = sgb && borderAction_->isChecked()
@@ -219,18 +236,42 @@ void MainWindow::present(bool completedFrame) {
             }
         }
     }
+    // State restores and incompatible display conversions explicitly start a
+    // new history. An empty history alone does not identify a reset: a paused
+    // startup image can already contain text before the first guest frame.
+    if (presentation == Presentation::Reset) {
+        previousDisplayFrame_ = {};
+        currentDisplayFrame_ = {};
+        previousMessageFrame_ = {};
+        currentMessageFrame_ = {};
+    }
     // Only completed LCD frames advance blend history. A restored VBlank frame
     // may seed it once so the next guest frame has a valid predecessor.
-    if (completedFrame) {
+    if (presentation == Presentation::Frame) {
         previousDisplayFrame_ = currentDisplayFrame_;
+        previousMessageFrame_ = currentDisplayFrame_.isNull() ? QImage() : currentMessageFrame_;
         currentDisplayFrame_ = image_;
-    } else if (currentDisplayFrame_.isNull() && gb.frame_ready) {
+    } else if (presentation == Presentation::Reset && gb.frame_ready) {
         currentDisplayFrame_ = image_;
     }
+    // Toggling notifications clears pending text, but the submitted LCD image
+    // survives until another guest frame. Its text can still blend into that
+    // next frame; host settings changes must not advance this history.
+    if (presentation != Presentation::Redraw)
+        currentMessageFrame_ =
+            display_->messages.enabled() ? display_->messages.image(image_.size()) : QImage();
     // SGB sends the image to the TV without the handheld LCD's row polarity.
     const auto mode =
         sgb && frameBlending_ == FrameBlending::Accurate ? FrameBlending::Simple : frameBlending_;
-    display_->image = blendDisplayFrames(image_, previousDisplayFrame_, mode, gb.lcd_frame_odd);
+    if (currentMessageFrame_.isNull() && previousMessageFrame_.isNull()) {
+        display_->image = blendDisplayFrames(image_, previousDisplayFrame_, mode, gb.lcd_frame_odd);
+    } else {
+        // Draw before blending so appearing and expiring text uses the same
+        // weights as LCD pixels. Repeat events retain the submitted composite.
+        const QImage current = composeScreenMessage(image_, currentMessageFrame_);
+        const QImage previous = composeScreenMessage(previousDisplayFrame_, previousMessageFrame_);
+        display_->image = blendDisplayFrames(current, previous, mode, gb.lcd_frame_odd);
+    }
     display_->setMinimumSize(image_.size());
     if (resizeWindow)
         resizeWindowCentered(logicalWindowSize(nativeSize, defaultScale), previousWindowGeometry);
@@ -281,6 +322,14 @@ void MainWindow::configure() {
             boot->setText(path);
     });
     form->addRow("Boot ROM directory", bootRow);
+    auto *turboCap = new QComboBox;
+    turboCap->setObjectName("turboSpeedCap");
+    for (const unsigned quarters : turboCapChoices)
+        turboCap->addItem(quarters ? QString("%1%").arg(quarters * 25) : QStringLiteral("Uncapped"),
+                          quarters);
+    turboCap->setCurrentIndex(turboCap->findData(turboCapQuarters_));
+    turboCap->setToolTip("Upper speed while Turbo is held. Slow motion scales this limit.");
+    form->addRow("Turbo speed cap", turboCap);
     auto *scaling = new QComboBox;
     scaling->setObjectName("displayScaling");
     scaling->addItems({"Integer Scale", "Retain Aspect Ratio", "Fill Window"});
@@ -349,6 +398,10 @@ void MainWindow::configure() {
     border->setObjectName("sgbBorder");
     border->setChecked(settings_.value("video/sgbBorder", true).toBool());
     form->addRow("SGB display", border);
+    auto *messages = new QCheckBox("Show on-screen messages");
+    messages->setObjectName("onScreenMessages");
+    messages->setChecked(settings_.value("video/osd", false).toBool());
+    form->addRow("Notifications", messages);
     auto *outputDevice = new QComboBox;
     outputDevice->setObjectName("audioOutputDevice");
     outputDevice->addItem("System Default", QByteArray());
@@ -505,6 +558,7 @@ void MainWindow::configure() {
         }
         if (!modelOverride_)
             settings_.setValue("emulation/model", model->currentData());
+        setTurboCap(turboCap->currentData().toUInt());
         settings_.setValue("emulation/bootDirectory", boot->text());
         bootDirectoryOverride_ = QString();
         settings_.setValue("video/scaling", scaling->currentIndex());
@@ -515,6 +569,7 @@ void MainWindow::configure() {
         settings_.setValue("video/colorCorrection", correction->currentData());
         settings_.setValue("video/colorTemperature", temperature->value());
         settings_.setValue("video/sgbBorder", border->isChecked());
+        settings_.setValue("video/osd", messages->isChecked());
         for (size_t i = 0; i < colorNames.size(); ++i)
             settings_.setValue(QString("video/customPalette/%1").arg(i), colorNames[i]);
         settings_.setValue("video/customPalette/off", offColorValue.name());

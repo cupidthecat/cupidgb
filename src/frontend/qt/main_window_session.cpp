@@ -1,8 +1,21 @@
 #include "main_window_internal.h"
 
 void MainWindow::resetPacing() {
+    ++pacingGeneration_;
     nextFrame_ = clock_.nsecsElapsed();
     clockPacer_.reset();
+}
+
+void MainWindow::setTurboCap(unsigned quarters) {
+    if (quarters < 6 || quarters > 16)
+        quarters = 0;
+    settings_.setValue("emulation/turboCap", quarters * 25);
+    for (size_t i = 0; i < turboCapActions_.size(); ++i)
+        turboCapActions_[i]->setChecked(turboCapChoices[i] == quarters);
+    if (turboCapQuarters_ != quarters) {
+        turboCapQuarters_ = quarters;
+        resetPacing();
+    }
 }
 
 void MainWindow::tick() {
@@ -24,25 +37,42 @@ void MainWindow::tick() {
     // Starting a native audio stream may dispatch window/session actions.
     if (!emulator_ || paused_ || stateOperation_ || menuDepth_)
         return;
-    if (!turbo_ && now < nextFrame_)
+    const bool turbo = turbo_;
+    const unsigned cap = turbo ? turboCapQuarters_ : GuestClockPacer::normalTurboQuarters;
+    const bool uncapped = turbo && !cap;
+    if (!uncapped && now < nextFrame_)
         return;
     // Bound each event-loop turn so dialogs, input, and close remain responsive.
     if (audio_ && !turbo_ && audioBuffer_->bytesAvailable() > audioQueueLimit_)
         return;
     const uint64_t session = sessionId_;
     const uint64_t timeline = timelineId_;
+    const uint64_t pacing = pacingGeneration_;
     const uint64_t startCycles = emulator_->gb.elapsed_cycles;
     const unsigned speed = speedSteps_;
-    if (!runFrame() || paused_ || !emulator_ || sessionId_ != session || timelineId_ != timeline)
+    if (!runFrame() || paused_ || !emulator_ || stateOperation_ || menuDepth_ ||
+        sessionId_ != session || timelineId_ != timeline)
         return;
+    // Audio callbacks can dispatch a speed preference or held-key change. Keep
+    // the new deadline instead of charging an old-rate quantum to that timeline.
+    if (pacingGeneration_ != pacing || turbo_ != turbo || (turbo && turboCapQuarters_ != cap)) {
+        if (pacingGeneration_ == pacing)
+            resetPacing();
+        return;
+    }
     if (emulator_->gb.elapsed_cycles < startCycles) {
         resetPacing();
+        return;
+    }
+    if (uncapped) {
+        nextFrame_ = now;
+        clockPacer_.reset();
         return;
     }
     // LCD startup and re-enabling can finish a partial image. Charge only
     // consumed base-clock time, including the two-dot CGB machine cycles.
     const auto interval = clockPacer_.advance(emulator_->gb.elapsed_cycles - startCycles, speed,
-                                              cupid_gb_base_clock_hz(&emulator_->gb));
+                                              cupid_gb_base_clock_hz(&emulator_->gb), cap);
     if (!interval || nextFrame_ > std::numeric_limits<qint64>::max() - *interval) {
         setPaused(true);
         reportError("Host pacing duration could not be computed.");
@@ -50,8 +80,8 @@ void MainWindow::tick() {
     }
     nextFrame_ += *interval;
     // A short LCD interval must not shrink the host-stall recovery window.
-    const qint64 nominalInterval = nominalFrameNanoseconds(&emulator_->gb, speed);
-    if (turbo_ || now - nextFrame_ > nominalInterval * 4) {
+    const qint64 nominalInterval = nominalFrameNanoseconds(&emulator_->gb, speed, cap);
+    if (now - nextFrame_ > nominalInterval * 4) {
         nextFrame_ = now;
         clockPacer_.reset();
     }
@@ -129,7 +159,9 @@ bool MainWindow::runFrame() {
     // The old core reference is no longer usable after such a transition.
     if (!unchanged())
         return true;
-    present(completedFrame);
+    if (completedFrame)
+        advanceScreenMessages();
+    present(completedFrame ? Presentation::Frame : Presentation::Redraw);
     updatePrinter();
     finishControllerRumble();
     advanceControls();
@@ -231,6 +263,7 @@ bool MainWindow::saveSlot(int slot) {
         return false;
     }
     statusBar()->showMessage(QString("State saved to slot %1").arg(slot ? slot : 10), 3000);
+    notifyOnScreen(QString("State saved to slot %1").arg(slot ? slot : 10));
     resetPacing();
     return true;
 }
@@ -245,6 +278,7 @@ bool MainWindow::loadSlot(int slot) {
     if (!loadStateFile(path))
         return false;
     statusBar()->showMessage(QString("State loaded from slot %1").arg(slot ? slot : 10), 3000);
+    notifyOnScreen(QString("State loaded from slot %1").arg(slot ? slot : 10));
     return true;
 }
 
@@ -287,10 +321,9 @@ bool MainWindow::loadStateFile(const QString &path) {
     resetPacing();
     resetRewind();
     rememberFrame();
-    previousDisplayFrame_ = {};
-    currentDisplayFrame_ = {};
-    present();
+    present(Presentation::Reset);
     statusBar()->showMessage("State loaded", 3000);
+    notifyOnScreen("State loaded");
     return true;
 }
 
@@ -447,8 +480,7 @@ bool MainWindow::rewindFrame() {
     saveTimer_.start();
     rewindBytes_ -= rewindStates_.back().compressed.capacity() + qsizetype(sizeof(RewindSnapshot));
     rewindStates_.pop_back();
-    previousDisplayFrame_ = {};
-    currentDisplayFrame_ = {};
-    present();
+    advanceScreenMessages();
+    present(Presentation::Reset);
     return true;
 }

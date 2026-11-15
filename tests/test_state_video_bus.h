@@ -43,7 +43,7 @@ static void test_boot_entry_object_abort(void) {
 }
 
 static void test_video_bus_history(void) {
-    enum { VIDEO_HISTORY_BYTES = 10 };
+    enum { VIDEO_HISTORY_BYTES = 10, PULSE_DAC_BYTES = 2 };
 
     CupidGb *a = calloc(1, sizeof(*a)), *b = calloc(1, sizeof(*b));
     CupidGb *before = malloc(sizeof(*before));
@@ -66,7 +66,7 @@ static void test_video_bus_history(void) {
         a->cpu.stopped = (row & 2) != 0;
         size_t length;
         uint8_t *state = encode(a, &length);
-        const size_t offset = length - VIDEO_HISTORY_BYTES;
+        const size_t offset = length - VIDEO_HISTORY_BYTES - PULSE_DAC_BYTES;
         assert(state[offset] == (uint8_t)rows[row] &&
                state[offset + 1] == (uint8_t)(rows[row] >> 8));
         assert(cupid_gb_load_state(b, state, length) == CUPID_GB_STATE_OK);
@@ -107,7 +107,7 @@ static void test_video_bus_history(void) {
         a->oam_vram_row = 1;
         size_t length;
         uint8_t *state = encode(a, &length);
-        const size_t offset = length - VIDEO_HISTORY_BYTES;
+        const size_t offset = length - VIDEO_HISTORY_BYTES - PULSE_DAC_BYTES;
         assert(a->oam_vram_row == 1 && state[offset] == 0xff && state[offset + 1] == 0xff);
         if (unused != 0) {
             state[offset] = 0;
@@ -128,9 +128,9 @@ static void test_video_bus_history(void) {
     const size_t lengths[] = {300518,
                               300568,
                               300572,
-                              length - VIDEO_HISTORY_BYTES - 12,
-                              length - VIDEO_HISTORY_BYTES - 11,
-                              length - VIDEO_HISTORY_BYTES};
+                              length - VIDEO_HISTORY_BYTES - PULSE_DAC_BYTES - 12,
+                              length - VIDEO_HISTORY_BYTES - PULSE_DAC_BYTES - 11,
+                              length - VIDEO_HISTORY_BYTES - PULSE_DAC_BYTES};
     for (unsigned version = 0; version < sizeof(versions) / sizeof(versions[0]); ++version) {
         b->oam_vram_row = 2;
         b->oam_search_word = 0x033c;
@@ -349,10 +349,10 @@ static void test_stop_port_history(void) {
             gates_seen |= 1u << (a->stop_ppu_oam_blocked | a->stop_ppu_palette_blocked << 1);
             size_t length;
             uint8_t *state = encode(a, &length);
-            assert(state[length - 4] == a->stop_ppu_oam_blocked &&
-                   state[length - 3] == a->stop_ppu_palette_blocked &&
-                   state[length - 2] == (uint8_t)a->ppu_transfer_end_dot &&
-                   state[length - 1] == (uint8_t)(a->ppu_transfer_end_dot >> 8));
+            assert(state[length - 6] == a->stop_ppu_oam_blocked &&
+                   state[length - 5] == a->stop_ppu_palette_blocked &&
+                   state[length - 4] == (uint8_t)a->ppu_transfer_end_dot &&
+                   state[length - 3] == (uint8_t)(a->ppu_transfer_end_dot >> 8));
             b->stop_ppu_oam_blocked = !a->stop_ppu_oam_blocked;
             b->stop_ppu_palette_blocked = !a->stop_ppu_palette_blocked;
             b->ppu_transfer_end_dot = UINT16_MAX;
@@ -371,17 +371,17 @@ static void test_stop_port_history(void) {
             /* V9 retains the VRAM gate, but cannot supply the newly recorded
              * OAM/palette gates or the exact trailing access edge. */
             put_u32(state + 8, 9);
-            put_u32(state + 12, (uint32_t)(length - 4));
-            update_integrity(state, length - 4);
+            put_u32(state + 12, (uint32_t)(length - 6));
+            update_integrity(state, length - 6);
             b->stop_ppu_oam_blocked = b->stop_ppu_palette_blocked = true;
             b->ppu_transfer_end_dot = UINT16_MAX;
-            assert(cupid_gb_load_state(b, state, length - 4) == CUPID_GB_STATE_OK);
+            assert(cupid_gb_load_state(b, state, length - 6) == CUPID_GB_STATE_OK);
             assert(!b->stop_ppu_oam_blocked && !b->stop_ppu_palette_blocked &&
                    !b->ppu_transfer_end_dot &&
                    b->stop_ppu_vram_blocked == a->stop_ppu_vram_blocked);
-            put_u32(state + 8, 10);
+            put_u32(state + 8, 11);
             put_u32(state + 12, (uint32_t)length);
-            const size_t offsets[] = {length - 4, length - 3, length - 2, length - 1};
+            const size_t offsets[] = {length - 6, length - 5, length - 4, length - 3};
             const uint8_t invalid[] = {2, 2, 1, 0xff};
             for (unsigned field = 0; field < sizeof(invalid); ++field) {
                 const uint8_t previous = state[offsets[field]];
@@ -425,7 +425,7 @@ static void test_object_fetch_stage_history(void) {
         a->pixels.object_delay = (uint8_t)stages[entry][1];
         size_t length;
         uint8_t *state = encode(a, &length);
-        assert(state[length - 5] == stages[entry][0]);
+        assert(state[length - 7] == stages[entry][0]);
         assert(cupid_gb_load_state(b, state, length) == CUPID_GB_STATE_OK);
         assert(a->object_fetch_stage == b->object_fetch_stage);
         assert_encoded_equal(a, b);
@@ -453,13 +453,13 @@ static void test_object_fetch_stage_history(void) {
             }
             free(damaged);
         }
-        state[length - 5] = 4;
+        state[length - 7] = 4;
         update_integrity(state, length);
         *before = *b;
         rejected_unchanged(b, state, length, CUPID_GB_STATE_INVALID);
         assert(memcmp(before, b, sizeof(*b)) == 0);
         if (entry == 0 || entry == 1 || entry == 5) {
-            state[length - 5] = entry == 0   ? CUPID_GB_OBJECT_LEGACY
+            state[length - 7] = entry == 0   ? CUPID_GB_OBJECT_LEGACY
                                 : entry == 1 ? CUPID_GB_OBJECT_WAIT_BACKGROUND
                                              : CUPID_GB_OBJECT_IDLE;
             update_integrity(state, length);
@@ -479,7 +479,7 @@ static void test_object_fetch_stage_history(void) {
     a->pixels.active = false;
     size_t length;
     uint8_t *state = encode(a, &length);
-    const size_t old_length = length - 10;
+    const size_t old_length = length - 12;
     put_u32(state + 8, 8);
     put_u32(state + 12, (uint32_t)old_length);
     update_integrity(state, old_length);
@@ -492,7 +492,7 @@ static void test_object_fetch_stage_history(void) {
     uint8_t *restored = encode(b, &restored_length);
     assert(restored_length == length &&
            memcmp(restored + 128, state + 128, old_length - 128) == 0 &&
-           restored[length - 5] == CUPID_GB_OBJECT_LEGACY);
+           restored[length - 7] == CUPID_GB_OBJECT_LEGACY);
     free(restored);
     free(state);
     a->pixels.initialized = true;
@@ -501,9 +501,9 @@ static void test_object_fetch_stage_history(void) {
     a->pixels.x = CUPID_GB_SCREEN_WIDTH;
     state = encode(a, &length);
     put_u32(state + 8, 8);
-    put_u32(state + 12, (uint32_t)(length - 10));
-    update_integrity(state, length - 10);
-    assert(cupid_gb_load_state(b, state, length - 10) == CUPID_GB_STATE_OK);
+    put_u32(state + 12, (uint32_t)(length - 12));
+    update_integrity(state, length - 12);
+    assert(cupid_gb_load_state(b, state, length - 12) == CUPID_GB_STATE_OK);
     cupid_gb_tick_ppu_dots(b, 2);
     assert(b->object_fetch_stage == CUPID_GB_OBJECT_IDLE && !b->pixels.object_delay);
     restored = encode(b, &restored_length);

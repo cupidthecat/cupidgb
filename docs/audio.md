@@ -58,7 +58,7 @@ Keep these states distinct:
 - **Channel active:** Trigger, length and sweep behavior determine channel status. NR52 reads rebuild the four status bits from current channel state.
 - **Held digital output:** A channel can retain a sampled duty or LFSR result independently of its current counter and register values.
 
-An inactive channel contributes digital zero through an enabled DAC. That is different from disconnecting the DAC: the signed transfer maps digital value `d` to `15 - 2*d`, so digital zero has a positive DC level before filtering. Do not silence an inactive channel by bypassing its still-enabled DAC in the mixer.
+Length or sweep expiry drives digital zero through an enabled DAC. The signed transfer maps digital value `d` to `15 - 2*d`, so digital zero has a positive DC level before filtering. A pulse DAC disconnect instead retains its last digital code. Re-enabling that DAC without triggering can expose the retained code until a later channel-output event replaces it. Color PCM register readback still masks inactive channels to zero. The analog disconnect and reconnect response remains an approximation.
 
 Route guest accesses through the memory map. Sound-register read masks expose unused bits as high, and readback is not a dump of internal fields. Writing `io_registers` directly bypasses trigger, length, DAC and timing side effects. Calling the low-level write handler after replacing the old register value can also lose the previous-value information needed for live-write behavior.
 
@@ -70,7 +70,9 @@ CH1 and CH2 each have an eight-step duty waveform, an 11-bit frequency, a length
 
 The CGB path keeps frequency-clock startup, the last edge's age, a held duty bit and output suppression separately in `CupidGbPulseTiming`. An inactive start holds output low until the appropriate clock edge. Retriggering an active channel has different settling behavior and retains duty phase. Changing the duty register does not justify recomputing a held output immediately. Frequency writes near a counter reload can affect that reload or the duty clock, so the last edge's age is part of the state.
 
-The monochrome path has simpler pulse counters. It must not inherit the newer color timing rules merely because a shared helper is convenient. Its remaining model-specific quirks need separate validation.
+Monochrome pulse clocks start on trigger and continue after length or sweep expiry until DAC or master-power shutdown. Duty writes take effect at the next frequency edge, so mixing uses the sampled duty bit instead of recomputing it from the live register. Inactive and active triggers have different startup delays tied to the retained power phase. An inactive trigger suppresses output until its first qualifying edge. These clocks share storage with the color implementation, but keep their own trigger and gate behavior.
+
+A combined trigger and length-enable write samples channel activity before the extra length clock. If a one-tick counter expires during that write, the trigger still retains active-channel timing and held output while reloading length to 63. Treating the temporary expiry as an inactive start adds the wrong delay and suppresses the held pulse.
 
 CH1 adds sweep. Live frequency, sweep shadow frequency, a calculated delta and a completed delta have different roles. The color path schedules setup and calculation work on the divided clock and retains a short restart hold in base T-cycles. A calculation can finish after the DIV event that started it. Overflow can disable CH1, and changing sweep controls while work is pending can affect the result. Zero shift, subtraction history and restart behavior therefore need more than one periodic frequency update.
 
@@ -139,6 +141,8 @@ Loading or rewinding does not roll back bytes already written to a recording. La
 Current native states encode channel registers/counters, held outputs, divided-clock phases, pulse/envelope/sweep/noise timing, pending PCM frames, partial integration and filter state. These are explicit portable fields, not a dump of `CupidGbApu` memory. Device handles, sink queues, conversion positions and recording files belong to the host and are excluded.
 
 Version 2 states lack the newer power/trigger/edge history. Import initializes the missing timing fields from a deterministic approximation of the known prefix. It preserves that prefix, queued PCM, mixer areas and capacitors rather than inheriting unrelated live timing from the destination. It cannot recover an unrecorded counter phase or earlier register-write sequence. Do not describe imported version 2 audio as exact continuation of that missing history.
+
+Version 11 retains monochrome pulse clock gates, held duty bits, trigger suppression and two disconnected-DAC codes. Versions 2 through 10 derive the missing monochrome latches from saved channel, DAC, timer and duty state; missing DAC codes start at zero on every model. The loader cannot recover a register-write sequence that those builds never recorded. Current-format continuation tests include active, suppressed, length-expired and disconnected pulse channels.
 
 SGB loading also refreshes a nonzero derived high-pass coefficient for the model clock at the same sample rate. It keeps pending samples, partial integration and the default-rate sentinel intact. Query the state size and use the codec; do not hard-code structure offsets or infer state length from this guide. The full compatibility and host-reset contract is in [save states and rewind](save-states.md).
 

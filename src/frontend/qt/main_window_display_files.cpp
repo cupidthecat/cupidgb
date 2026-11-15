@@ -180,10 +180,13 @@ void MainWindow::screenshot() {
     QString error;
     const QString path =
         saveTimestampedScreenshot(image_, romPath_, QDateTime::currentDateTime(), &error);
-    if (path.isEmpty())
+    if (path.isEmpty()) {
+        notifyOnScreen("Failed to save screenshot");
         reportError("Could not save screenshot: " + error);
-    else
+    } else {
         statusBar()->showMessage("Screenshot saved: " + QDir::toNativeSeparators(path), 5000);
+        notifyOnScreen("Screenshot saved");
+    }
 }
 
 bool MainWindow::saveScreenshot(const QString &path) {
@@ -194,10 +197,12 @@ bool MainWindow::saveScreenshot(const QString &path) {
     }
     QString error;
     if (!saveScreenshotFile(image_, path, &error)) {
+        notifyOnScreen("Failed to save screenshot");
         reportError("Could not save screenshot: " + error);
         return false;
     }
     statusBar()->showMessage("Screenshot saved: " + QDir::toNativeSeparators(path), 5000);
+    notifyOnScreen("Screenshot saved");
     return true;
 }
 
@@ -223,4 +228,5 @@ void MainWindow::copyScreenshot() {
         return;
     QApplication::clipboard()->setImage(image_);
     statusBar()->showMessage("Screenshot copied", 3000);
+    notifyOnScreen("Screenshot copied");
 }

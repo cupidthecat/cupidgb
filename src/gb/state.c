@@ -14,6 +14,8 @@
 
 enum {
     STATE_HEADER_SIZE = 128,
+    /* V11 activates monochrome pulse timing and appends the held DAC codes. */
+    STATE_VERSION_V11 = 11,
     STATE_VERSION_V10 = 10,
     STATE_VERSION_V9 = 9,
     STATE_VERSION_V8 = 8,
@@ -33,6 +35,7 @@ enum {
     STATE_V8_TAIL_SIZE = STATE_V7_TAIL_SIZE + 11,
     STATE_V9_TAIL_SIZE = STATE_V8_TAIL_SIZE + 6,
     STATE_V10_TAIL_SIZE = STATE_V9_TAIL_SIZE + 4,
+    STATE_V11_TAIL_SIZE = STATE_V10_TAIL_SIZE + 2,
     STATE_MMM01_EXTENSION_SIZE = 4,
     STATE_MBC7_EXTENSION_SIZE = 8,
     STATE_CAMERA_EXTENSION_SIZE = 64,
@@ -892,7 +895,8 @@ static bool valid_hardware_extension(const CupidGb *gb) {
     }
     for (unsigned channel = 0; channel < 2; ++channel) {
         const CupidGbPulseTiming *timing = &gb->apu.pulse_timing[channel];
-        if (timing->start_delay > 12 || timing->edge_age > 4) {
+        if (timing->start_delay > 12 || timing->edge_age > 4 ||
+            gb->apu.pulse_dac_hold[channel] > 15) {
             return false;
         }
     }
@@ -908,7 +912,7 @@ size_t cupid_gb_state_size(const CupidGb *gb) {
     if (!ready(gb)) {
         return 0;
     }
-    return extended_wire_size(state_sections(gb)) + STATE_V10_TAIL_SIZE;
+    return extended_wire_size(state_sections(gb)) + STATE_V11_TAIL_SIZE;
 }
 
 static void put_u32(uint8_t *data, uint32_t value) {
@@ -940,7 +944,7 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
         return CUPID_GB_STATE_NO_ROM;
     }
     const unsigned sections = state_sections(gb);
-    const size_t size = extended_wire_size(sections) + STATE_V10_TAIL_SIZE;
+    const size_t size = extended_wire_size(sections) + STATE_V11_TAIL_SIZE;
     if (!data || capacity < size) {
         return CUPID_GB_STATE_BUFFER_TOO_SMALL;
     }
@@ -950,7 +954,7 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
     }
     memset(data, 0, STATE_HEADER_SIZE);
     memcpy(data, state_magic, sizeof(state_magic));
-    put_u32(data + 8, STATE_VERSION_V10);
+    put_u32(data + 8, STATE_VERSION_V11);
     put_u32(data + 12, (uint32_t)size);
     put_u32(data + 16, (uint32_t)gb->model);
     put_u32(data + 20, (uint32_t)gb->rom_size);
@@ -978,6 +982,7 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
     state_input_and_display(&io, (CupidGb *)gb);
     state_video_bus(&io, (CupidGb *)gb);
     state_stop_ports(&io, (CupidGb *)gb);
+    bytes(&io, ((CupidGb *)gb)->apu.pulse_dac_hold, 2);
     if (io.invalid || io.offset != size) {
         return CUPID_GB_STATE_INVALID;
     }
@@ -997,18 +1002,19 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
         return CUPID_GB_STATE_INVALID;
     }
     const uint32_t version = get_u32(data + 8);
-    if (version < STATE_VERSION_V2 || version > STATE_VERSION_V10) {
+    if (version < STATE_VERSION_V2 || version > STATE_VERSION_V11) {
         return CUPID_GB_STATE_UNSUPPORTED_VERSION;
     }
     const size_t prefix_size = version == STATE_VERSION_V2   ? STATE_WIRE_SIZE_V2
                                : version == STATE_VERSION_V3 ? STATE_WIRE_SIZE_V3
                                                              : STATE_WIRE_SIZE_V4;
-    const size_t tail_size = version >= STATE_VERSION_V10  ? STATE_V10_TAIL_SIZE
-                             : version == STATE_VERSION_V9 ? STATE_V9_TAIL_SIZE
-                             : version == STATE_VERSION_V8 ? STATE_V8_TAIL_SIZE
-                             : version == STATE_VERSION_V7 ? STATE_V7_TAIL_SIZE
-                             : version == STATE_VERSION_V6 ? STATE_V6_TAIL_SIZE
-                                                           : 0;
+    const size_t tail_size = version >= STATE_VERSION_V11   ? STATE_V11_TAIL_SIZE
+                             : version == STATE_VERSION_V10 ? STATE_V10_TAIL_SIZE
+                             : version == STATE_VERSION_V9  ? STATE_V9_TAIL_SIZE
+                             : version == STATE_VERSION_V8  ? STATE_V8_TAIL_SIZE
+                             : version == STATE_VERSION_V7  ? STATE_V7_TAIL_SIZE
+                             : version == STATE_VERSION_V6  ? STATE_V6_TAIL_SIZE
+                                                            : 0;
     const size_t device_size = length - tail_size;
     if (length != get_u32(data + 12) ||
         (version >= STATE_VERSION_V5
@@ -1136,6 +1142,12 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
         candidate->stop_ppu_palette_blocked = false;
         candidate->ppu_transfer_end_dot = 0;
     }
+    if (version >= STATE_VERSION_V11) {
+        bytes(&io, candidate->apu.pulse_dac_hold, 2);
+    } else {
+        /* Older writers did not retain disconnected DAC history. */
+        memset(candidate->apu.pulse_dac_hold, 0, sizeof(candidate->apu.pulse_dac_hold));
+    }
     if (io.invalid || io.offset != length || candidate->boot_rom_enabled != (flags != 0) ||
         !valid_hardware_prefix(candidate, version) || !valid_v5_sections(candidate, sections)) {
         free(candidate);
@@ -1194,6 +1206,11 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
     if (!valid_hardware_extension(candidate)) {
         free(candidate);
         return CUPID_GB_STATE_INVALID;
+    }
+    if (version < STATE_VERSION_V11) {
+        /* Those writers maintained the pulse latches only for color hardware.
+         * Validate first, then derive missing monochrome history from the file. */
+        cupid_gb_apu_import_monochrome_pulses(candidate);
     }
     if (candidate->model == CUPID_GB_MODEL_SGB && candidate->apu.highpass_rate) {
         /* Older SGB snapshots used the handheld clock for this derived host filter

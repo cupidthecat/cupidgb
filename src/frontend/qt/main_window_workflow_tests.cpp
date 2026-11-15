@@ -1,6 +1,8 @@
 #include "inspector_renderer.h"
 #include "main_window_internal.h"
 
+#include <QScopeGuard>
+
 bool MainWindow::smokeTest() {
     QTemporaryDir directory;
     if (!directory.isValid())
@@ -594,9 +596,9 @@ bool MainWindow::smokeTest() {
         return smokeFailure(__FILE__, __LINE__);
     paletteActions_[1]->trigger();
     std::fill(std::begin(emulator_->gb.frame_buffer), std::end(emulator_->gb.frame_buffer), 3);
-    present(true);
+    present(Presentation::Frame);
     std::fill(std::begin(emulator_->gb.frame_buffer), std::end(emulator_->gb.frame_buffer), 0);
-    present(true);
+    present(Presentation::Frame);
     if (image_.pixel(0, 0) != qRgb(255, 255, 255) ||
         display_->image.pixel(0, 0) != qRgb(186, 186, 186))
         return smokeFailure(__FILE__, __LINE__);
@@ -840,14 +842,14 @@ bool MainWindow::smokeTest() {
     // must retain those overlays, including their palette-selected colors.
     emulator_->gb.sgb.border_tiles[0] = 0xff;
     emulator_->gb.sgb.border_palettes[1] = 0x001f;
-    present(true);
+    present(Presentation::Frame);
     if (image_.pixel(CUPID_SGB_VIEWPORT_X, CUPID_SGB_VIEWPORT_Y) != qRgb(255, 0, 0) ||
         !previousDisplayFrame_.isNull() || display_->image != image_)
         return smokeFailure(__FILE__, __LINE__);
     const QImage bordered = image_;
     blendingActions_[accurateBlend]->trigger();
     emulator_->gb.sgb.border_palettes[1] = 0x0000;
-    present(true);
+    present(Presentation::Frame);
     if (display_->image != blendDisplayFrames(image_, bordered, FrameBlending::Simple, false) ||
         display_->image.pixel(CUPID_SGB_VIEWPORT_X, CUPID_SGB_VIEWPORT_Y) != qRgb(186, 0, 0))
         return smokeFailure(__FILE__, __LINE__);
@@ -862,7 +864,7 @@ bool MainWindow::smokeTest() {
     if (image_.size() != bordered.size())
         return smokeFailure(__FILE__, __LINE__);
     emulator_->gb.sgb.border_palettes[1] = 0x294a;
-    present(true);
+    present(Presentation::Frame);
     if (image_.pixel(CUPID_SGB_VIEWPORT_X, CUPID_SGB_VIEWPORT_Y) != qRgb(58, 58, 58))
         return smokeFailure(__FILE__, __LINE__);
     colorTemperatureSlider_->setValue(20);
@@ -883,7 +885,7 @@ bool MainWindow::smokeTest() {
     std::fill(std::begin(emulator_->gb.frame_buffer_color),
               std::end(emulator_->gb.frame_buffer_color), sampleColor);
     const QByteArray colorState = captureState();
-    present(true);
+    present(Presentation::Frame);
     if (image_.pixel(0, 0) != (*cgbColorTable_)[sampleColor] ||
         image_.pixel(0, 0) == inspectorRgb555(sampleColor))
         return smokeFailure(__FILE__, __LINE__);
@@ -944,7 +946,8 @@ bool MainWindow::smokeTest() {
     if (!pacingSmokeTest(path) || !modelSmokeTest(directory.path()) ||
         !cheatSmokeTest(path, directory.path()) || !printerSmokeTest(path, directory.path()) ||
         !controllerSmokeTest(directory.path()) || !motionSmokeTest(directory.path()) ||
-        !displayFilesSmokeTest(directory.path()) || display_->collectPaintIntervals ||
+        !displayFilesSmokeTest(directory.path()) ||
+        !screenMessagesSmokeTest(path, directory.path()) || display_->collectPaintIntervals ||
         !display_->paintIntervals.empty() || display_->lastPaintAt)
         return smokeFailure(__FILE__, __LINE__);
     qInfo("CupidGB Qt workflow smoke test passed");
@@ -953,6 +956,14 @@ bool MainWindow::smokeTest() {
 
 bool MainWindow::audioLifecycleSmokeTest(const QString &path) {
     QScopedValueRollback<bool> operation(stateOperation_, true);
+    const bool hadCap = settings_.contains("emulation/turboCap");
+    const QVariant savedCap = settings_.value("emulation/turboCap");
+    const auto restoreCap = qScopeGuard([&] {
+        if (hadCap)
+            settings_.setValue("emulation/turboCap", savedCap);
+        else
+            settings_.remove("emulation/turboCap");
+    });
     MainWindow session(true, true, true);
     session.timer_.stop();
     if (!session.openRom(path))
@@ -963,6 +974,8 @@ bool MainWindow::audioLifecycleSmokeTest(const QString &path) {
     if (!session.audio_ || !session.audioDevice_ || session.audioPriming_ ||
         session.audio_->error() != QAudio::NoError)
         return smokeFailure(__FILE__, __LINE__);
+    qInfo("CupidGB reentrant audio check uses %d bytes per host frame",
+          session.audio_->format().bytesPerFrame());
     // Let the real backend consume its prime before substituting the write
     // endpoint. This fixture still requires a functioning native audio sink.
     QEventLoop drain;
@@ -993,6 +1006,25 @@ bool MainWindow::audioLifecycleSmokeTest(const QString &path) {
         }
     } callback;
 
+    session.setTurboCap(6);
+    session.audioBuffer_->clear();
+    qint64 changedDeadline = 0;
+    callback.closeSession = [&] {
+        const auto beforeNested = session.emulator_->gb.elapsed_cycles;
+        session.setTurboCap(7);
+        changedDeadline = session.nextFrame_;
+        session.tick();
+        return session.stateOperation_ && session.emulator_->gb.elapsed_cycles == beforeNested;
+    };
+    session.audioDevice_ = &callback;
+    session.audioPriming_ = false;
+    session.nextFrame_ = 0;
+    const auto beforeCap = session.emulator_->gb.elapsed_cycles;
+    session.tick();
+    if (!callback.triggered || !callback.closed || session.turboCapQuarters_ != 7 ||
+        session.emulator_->gb.elapsed_cycles <= beforeCap || session.nextFrame_ != changedDeadline)
+        return smokeFailure(__FILE__, __LINE__);
+    callback.triggered = callback.closed = false;
     auto *menu = session.findChild<QMenu *>();
     if (!menu)
         return smokeFailure(__FILE__, __LINE__);
@@ -1004,7 +1036,10 @@ bool MainWindow::audioLifecycleSmokeTest(const QString &path) {
         session.nextFrame_ = 0;
         return session.menuDepth_ != 0;
     };
-    session.audioBuffer_->append("test", 4);
+    // A native output may use float stereo or another host frame size. The
+    // callback must run before guest execution, with a complete frame queued.
+    const QByteArray hostFrame(session.audio_->format().bytesPerFrame(), char(0));
+    session.audioBuffer_->append(hostFrame.constData(), hostFrame.size());
     session.audioDevice_ = &callback;
     session.audioPriming_ = false;
     session.nextFrame_ = 0;

@@ -25,12 +25,12 @@ The core decodes ROM-only, MBC1, MBC2, MBC3, MBC5, MMM01, MBC6, MBC7, HuC1, HuC3
 
 | Family | Current scope and limits |
 | --- | --- |
-| ROM-only | Fixed ROM and optional RAM, with battery files when the header identifies battery storage |
+| ROM-only | Fixed ROM; explicit ROM+RAM types `08` and `09` retain direct RAM, with battery storage for `09` |
 | MBC1 | ROM/RAM bank selection, wired bank aliases, and logo-detected multicart layouts; multicart RAM remains in bank 0 |
 | MBC2 | Address-dependent control and built-in 512 by 4-bit RAM |
 | MBC3 | Banked ROM/RAM, optional clock registers, live/latched clock persistence, halt and carry handling; extended MBC30-sized inputs use eight-bit ROM selection and up to eight RAM banks |
 | MBC5 | Nine-bit ROM selection, RAM banking, exact RAM-enable decoding and a motor latch/host observer for rumble cartridges; physical feedback remains unqualified |
-| MMM01 | Menu-first and menu-last dump layouts, one-way lock, ROM/RAM masks, multiplex mode, and battery SRAM |
+| MMM01 | Menu-first and menu-last dump layouts, menu-selected RAM capacity and battery metadata, one-way lock, ROM/RAM masks, multiplex mode, and battery SRAM |
 | MBC6 | Partial mapping; flash behavior remains pending |
 | MBC7 | Dual access gates, motion latches, 256-byte serial EEPROM, battery files, and mid-command continuation. Physical motion input remains pending |
 | HuC1 | Independent six-bit ROM and three-bit RAM selection, RAM access outside infrared mode, and disconnected infrared register behavior; transport and startup mapping qualification remain pending |
@@ -38,9 +38,13 @@ The core decodes ROM-only, MBC1, MBC2, MBC3, MBC5, MMM01, MBC6, MBC7, HuC1, HuC3
 | Camera | ROM/SRAM banking, shutter timing, generated sensor pixels, tile conversion, and capture continuation. Analog gain is approximate. Host camera input remains pending |
 | TPP1 | Extended header, mirrored bank registers, read-only and writable SRAM, RTC commands and persistence, and four guest rumble levels. Host feedback uses an on/off latch |
 
-MBC6 exposes partial mapping without flash support. The maximum cartridge image size is 8 MiB. The core supports up to 128 KiB of cartridge storage, including TPP1. Larger TPP1 SRAM configurations are rejected before cartridge replacement.
+MBC6 exposes partial mapping without flash support. The maximum cartridge image size is 8 MiB. The core supports up to 128 KiB of cartridge storage, including TPP1. Larger TPP1 ROM or SRAM configurations are rejected before cartridge replacement. Generated TPP1 checks cover every 16-bit ROM-register value against all 512 supported physical banks and all 256 RAM-latch values at each supported SRAM capacity; those aliases do not establish support for larger chips.
 
 Physical ROM bank population follows the actual file length, rounded to the next power of two with a minimum of two 16 KiB banks. Bytes in an unpopulated tail read as `0xff`. Header ROM-size metadata does not override the loaded bank population, and an unknown size code does not reject an otherwise loadable image. Cartridge identity and native-state hashes retain the original, unpadded input bytes. A ROM-only type-0 header on an image larger than 32 KiB selects an MBC3 banking fallback. An invalid header checksum is reported without necessarily rejecting the image.
+
+RAM capacity follows the resolved cartridge hardware. A nonzero RAM-size byte alone does not add storage to an ordinary ROM-only or unsupported cartridge. Recognized bank controllers can still expose RAM described by that byte even when their type byte says no RAM. MBC2 and MBC7 use their fixed internal storage; TPP1 uses its extended header. ROM and RAM address aliases use the power-of-two chip geometry established by the loader.
+
+MMM01 menu detection uses the final 32 KiB of the padded physical ROM geometry, not the last 32 KiB of an incomplete file. Both menu-first and menu-last dumps retain their original bytes. The menu supplies RAM capacity and battery capability; a no-RAM menu's promotion also depends on the first game's RAM declaration. Menus declaring type `11` do not inherit a game's battery, timer or motor flags. Paired generated cases cover conflicting headers, both layouts, erased tails and truncated menu metadata.
 
 Two-KiB SRAM mirrors across the eight-KiB RAM window. Ordinary timer-equipped MBC3 RAM banks 4 through 7 are disconnected; the wider RAM wiring applies to extended inputs larger than 2 MiB ROM or 32 KiB RAM. These rules have targeted regression coverage, but do not qualify every undocumented board or decaying open-bus behavior.
 

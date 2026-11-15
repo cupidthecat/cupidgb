@@ -6,8 +6,9 @@
 #include <limits>
 
 static std::int64_t advance(GuestClockPacer &pacer, std::uint64_t cycles, unsigned steps = 16,
-                            std::uint64_t clockHz = GuestClockPacer::baseClockHz) {
-    const auto duration = pacer.advance(cycles, steps, clockHz);
+                            std::uint64_t clockHz = GuestClockPacer::baseClockHz,
+                            unsigned turboQuarters = GuestClockPacer::normalTurboQuarters) {
+    const auto duration = pacer.advance(cycles, steps, clockHz, turboQuarters);
     assert(duration);
     return *duration;
 }
@@ -96,6 +97,8 @@ static void invalid_inputs_preserve_carry() {
     assert(!pacer.advance(1, 16, 0));
     assert(!pacer.advance(1, 16, std::numeric_limits<std::uint64_t>::max()));
     assert(!pacer.advance(std::numeric_limits<std::uint64_t>::max(), 16));
+    for (const unsigned cap : {0u, 1u, 5u, 17u, std::numeric_limits<unsigned>::max()})
+        assert(!pacer.advance(1, 16, GuestClockPacer::baseClockHz, cap));
     assert(advance(pacer, 1) == 239);
 
     for (const unsigned steps : {8u, 16u}) {
@@ -166,6 +169,62 @@ static void wide_clock_arithmetic() {
     assert(!pacer.advance(std::uint64_t(signedMaximum) + 1, 16, UINT64_C(1000000000)));
 }
 
+static void turbo_caps_and_slow_motion() {
+    for (const std::uint64_t clockHz : {UINT64_C(4194304), UINT64_C(4295454)}) {
+        for (unsigned steps = 8; steps <= 16; ++steps) {
+            for (unsigned cap = 6; cap <= 16; ++cap) {
+                GuestClockPacer pacer;
+                std::uint64_t cycles = 0;
+                std::int64_t elapsed = 0;
+                for (unsigned piece = 0; piece < 1000; ++piece) {
+                    const auto delta = std::uint64_t((piece * 1009u) % 10007u + 1u);
+                    cycles += delta;
+                    elapsed += advance(pacer, delta, steps, clockHz, cap);
+                    const auto exact = cycles * UINT64_C(64000000000) / (clockHz * steps * cap);
+                    assert(elapsed == std::int64_t(exact));
+                }
+                // All fractional caps share this exact 64-second horizon.
+                pacer.reset();
+                assert(advance(pacer, clockHz * steps * cap, steps, clockHz, cap) ==
+                       INT64_C(64000000000));
+            }
+        }
+    }
+    GuestClockPacer mixed;
+    for (const unsigned cap : {7u, 7u, 9u, 4u, 16u, 6u}) {
+        GuestClockPacer fresh;
+        mixed.reset();
+        advance(mixed, 2, 13, GuestClockPacer::baseClockHz, 8);
+        // A cap change discards the old fraction, but stable new-rate calls
+        // must retain their own fraction even at individual base-clock dots.
+        for (unsigned dot = 0; dot < 100; ++dot)
+            assert(advance(mixed, 1, 13, GuestClockPacer::baseClockHz, cap) ==
+                   advance(fresh, 1, 13, GuestClockPacer::baseClockHz, cap));
+    }
+    mixed.reset();
+    GuestClockPacer control;
+    assert(advance(mixed, 2, 13, GuestClockPacer::baseClockHz, 7) ==
+           advance(control, 2, 13, GuestClockPacer::baseClockHz, 7));
+    assert(!mixed.advance(1, 13, GuestClockPacer::baseClockHz, 5));
+    assert(!mixed.advance(1, 13, std::numeric_limits<std::uint64_t>::max(), 16));
+    assert(!mixed.advance(std::numeric_limits<std::uint64_t>::max(), 13,
+                          GuestClockPacer::baseClockHz, 9));
+    assert(advance(mixed, 1, 13, GuestClockPacer::baseClockHz, 7) ==
+           advance(control, 1, 13, GuestClockPacer::baseClockHz, 7));
+    for (const unsigned cap : {6u, 7u, 16u}) {
+        constexpr auto maximum = std::numeric_limits<std::uint64_t>::max();
+        const unsigned factor = cap == 6 ? 48 : cap == 7 ? 112 : 64;
+        const std::int64_t whole = cap == 6   ? INT64_C(32000000000)
+                                   : cap == 7 ? INT64_C(64000000000)
+                                              : INT64_C(16000000000);
+        const auto clockHz = maximum / factor;
+        mixed.reset();
+        assert(advance(mixed, clockHz * factor - 1, 16, clockHz, cap) == whole - 1);
+        assert(advance(mixed, 1, 16, clockHz, cap) == 1);
+        assert(!mixed.advance(1, 16, clockHz + 1, cap));
+    }
+}
+
 int main() {
     frame_and_partial_intervals();
     exact_clock_and_double_speed_granularity();
@@ -174,5 +233,6 @@ int main() {
     invalid_inputs_preserve_carry();
     model_clocks_and_switches();
     wide_clock_arithmetic();
-    std::cout << "Guest-clock pacing, fractional carry and rate changes passed.\n";
+    turbo_caps_and_slow_motion();
+    std::cout << "Guest-clock pacing, turbo caps, fractional carry and rate changes passed.\n";
 }

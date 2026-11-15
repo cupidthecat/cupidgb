@@ -18,6 +18,7 @@ MainWindow::MainWindow(bool isolated, bool automated, bool audioCheck,
         settings_.setValue("video/scaling", settings_.value("video/integerScale", true).toBool()
                                                 ? int(DisplayScaling::Integer)
                                                 : int(DisplayScaling::Aspect));
+    turboCapQuarters_ = configuredTurboCapQuarters(settings_);
     buildMenus();
     applyDisplaySettings();
     resizeDisplay(std::clamp(settings_.value("video/defaultScale", 2).toInt(), 1, 8));
@@ -217,6 +218,19 @@ void MainWindow::buildMenus() {
         clearAudio();
         refreshDebugger();
     });
+    auto *turboCap = emulation->addMenu("Turbo Speed Cap");
+    auto *turboGroup = new QActionGroup(this);
+    for (size_t i = 0; i < turboCapChoices.size(); ++i) {
+        const unsigned quarters = turboCapChoices[i];
+        auto *action = turboCap->addAction(quarters ? QString("%1%").arg(quarters * 25)
+                                                    : QStringLiteral("Uncapped"));
+        action->setObjectName(QString("turboCap/%1").arg(quarters * 25));
+        action->setCheckable(true);
+        action->setChecked(quarters == turboCapQuarters_);
+        turboGroup->addAction(action);
+        turboCapActions_[i] = action;
+        connect(action, &QAction::triggered, this, [this, quarters] { setTurboCap(quarters); });
+    }
     auto *saveStates = emulation->addMenu("Save State");
     auto *loadStates = emulation->addMenu("Load State");
     for (int ordinal = 1; ordinal <= 10; ++ordinal) {
@@ -313,6 +327,13 @@ void MainWindow::buildMenus() {
     borderAction_->setObjectName("video/sgbBorder");
     connect(borderAction_, &QAction::triggered, this, [this](bool enabled) {
         settings_.setValue("video/sgbBorder", enabled);
+        applyDisplaySettings();
+    });
+    auto *messages = view->addAction("On-screen &Messages");
+    messages->setObjectName("video/osd");
+    messages->setCheckable(true);
+    connect(messages, &QAction::triggered, this, [this](bool enabled) {
+        settings_.setValue("video/osd", enabled);
         applyDisplaySettings();
     });
     auto *audio = menuBar()->addMenu("&Audio");
@@ -621,8 +642,6 @@ bool MainWindow::openRom(const QString &path) {
         this);
     resetControllerRumble();
     resetMotionInput();
-    previousDisplayFrame_ = {};
-    currentDisplayFrame_ = {};
     resetRewind();
     ++sessionId_;
     resetDebuggerTimeline(!sameCartridge);
@@ -664,7 +683,9 @@ bool MainWindow::openRom(const QString &path) {
         statusBar()->showMessage(cheatWarning);
     }
     setupAudio();
-    present();
+    display_->messages.clear();
+    display_->messages.showCartridge(QCoreApplication::applicationVersion(), romData_);
+    present(Presentation::Reset);
     rememberFrame();
     refreshActions();
     return true;
@@ -737,7 +758,10 @@ bool MainWindow::closeRom() {
     image_ = {};
     previousDisplayFrame_ = {};
     currentDisplayFrame_ = {};
+    previousMessageFrame_ = {};
+    currentMessageFrame_ = {};
     display_->image = {};
+    display_->messages.clear();
     display_->setMinimumSize(160, 144);
     display_->update();
     setWindowTitle("CupidGB");

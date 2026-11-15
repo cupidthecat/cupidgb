@@ -3,6 +3,7 @@
 
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static void prepare(CupidGb *gb, bool cgb, bool double_speed) {
@@ -188,6 +189,209 @@ static void test_pulse_pitch(void) {
     }
 }
 
+static void test_pulse_trigger_length_enable(void) {
+    const CupidGbModel models[] = {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_DMG0, CUPID_GB_MODEL_MGB,
+                                   CUPID_GB_MODEL_SGB,     CUPID_GB_MODEL_SGB2, CUPID_GB_MODEL_CGB};
+    CupidGb *subject = calloc(1, sizeof(*subject)), *control = calloc(1, sizeof(*control));
+    assert(subject && control);
+    for (unsigned model = 0; model < sizeof(models) / sizeof(models[0]); ++model) {
+        const unsigned speeds = models[model] == CUPID_GB_MODEL_CGB ? 2 : 1;
+        for (unsigned speed = 0; speed < speeds; ++speed) {
+            for (unsigned channel = 0; channel < 2; ++channel) {
+                for (unsigned phase = 0; phase < 4; ++phase) {
+                    *subject = (CupidGb){0};
+                    subject->model = models[model];
+                    subject->cgb_mode = models[model] == CUPID_GB_MODEL_CGB;
+                    subject->double_speed = speed != 0;
+                    const uint16_t base = channel ? 0xff16 : 0xff11;
+                    cupid_gb_write_u8(subject, 0xff26, 0x80);
+                    cupid_gb_apu_set_highpass(subject, false);
+                    cupid_gb_write_u8(subject, 0xff24, 0x70);
+                    cupid_gb_write_u8(subject, 0xff25, (uint8_t)(0x10u << channel));
+                    cupid_gb_write_u8(subject, base, 0xc0);
+                    cupid_gb_write_u8(subject, base + 1, 0xf0);
+                    cupid_gb_write_u8(subject, base + 3, 0x84);
+                    const uint16_t first_edge =
+                        channel ? subject->apu.ch2_timer : subject->apu.ch1_timer;
+                    tick_audio(subject, first_edge + 4u + phase);
+                    assert(subject->apu.clock_phase == phase);
+                    assert(subject->apu.pulse_timing[channel].output_high);
+                    subject->apu.fs_step = 1;
+                    *control = *subject;
+                    cupid_gb_write_u8(subject, base, 0xff); /* Length one, duty unchanged. */
+                    cupid_gb_write_u8(control, base, 0xfe); /* Non-expiring control. */
+                    int16_t actual[256], expected[256];
+                    cupid_gb_apu_drain(subject, actual, 128);
+                    cupid_gb_apu_drain(control, expected, 128);
+
+                    /* The combined write reloads an expired length to 63 without
+                     * interrupting the active pulse's held output or trigger timing. */
+                    cupid_gb_write_u8(subject, base + 3, 0xc4);
+                    cupid_gb_write_u8(control, base + 3, 0xc4);
+                    assert((channel ? subject->apu.ch2_len : subject->apu.ch1_len) == 63);
+                    assert((channel ? control->apu.ch2_len : control->apu.ch1_len) == 1);
+                    assert(cupid_gb_read_u8(subject, 0xff26) & (1u << channel));
+                    const CupidGbPulseTiming *timing = &subject->apu.pulse_timing[channel];
+                    assert(timing->output_high && !timing->output_blocked);
+                    assert(timing->start_delay == 6u + (phase & 2u));
+                    assert(!memcmp(timing, &control->apu.pulse_timing[channel], sizeof(*timing)));
+                    assert((channel ? subject->apu.ch2_timer : subject->apu.ch1_timer) ==
+                           (channel ? control->apu.ch2_timer : control->apu.ch1_timer));
+                    tick_audio(subject, 192);
+                    tick_audio(control, 192);
+                    unsigned count = cupid_gb_apu_drain(subject, actual, 128);
+                    assert(count > 0 && count == cupid_gb_apu_drain(control, expected, 128));
+                    assert(!memcmp(actual, expected, count * 2u * sizeof(*actual)));
+                    assert(actual[(count - 1) * 2u] == -4080);
+
+                    const uint16_t remaining =
+                        channel ? subject->apu.ch2_timer : subject->apu.ch1_timer;
+                    const uint8_t position =
+                        channel ? subject->apu.ch2_duty_pos : subject->apu.ch1_duty_pos;
+                    tick_audio(subject, remaining - 1u);
+                    assert((channel ? subject->apu.ch2_duty_pos : subject->apu.ch1_duty_pos) ==
+                           position);
+                    tick_audio(subject, 1);
+                    assert((channel ? subject->apu.ch2_duty_pos : subject->apu.ch1_duty_pos) ==
+                           ((position + 1u) & 7u));
+                }
+            }
+        }
+    }
+    free(subject);
+    free(control);
+}
+
+static void test_monochrome_pulse_clock_lifetime(void) {
+    const CupidGbModel models[] = {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_DMG0, CUPID_GB_MODEL_MGB,
+                                   CUPID_GB_MODEL_SGB, CUPID_GB_MODEL_SGB2};
+    for (unsigned model = 0; model < sizeof(models) / sizeof(models[0]); ++model) {
+        for (unsigned channel = 0; channel < 2; ++channel) {
+            CupidGb gb = {0};
+            gb.model = models[model];
+            const uint16_t base = channel ? 0xff16 : 0xff11;
+            uint16_t *timer = channel ? &gb.apu.ch2_timer : &gb.apu.ch1_timer;
+            uint8_t *position = channel ? &gb.apu.ch2_duty_pos : &gb.apu.ch1_duty_pos;
+            CupidGbPulseTiming *timing = &gb.apu.pulse_timing[channel];
+            cupid_gb_write_u8(&gb, 0xff26, 0x80);
+            cupid_gb_write_u8(&gb, base + 1, 0xf0);
+            cupid_gb_write_u8(&gb, base + 2, 0xf0);
+            cupid_gb_write_u8(&gb, base + 3, 7);
+            tick_audio(&gb, 256);
+            assert(*position == 0 && *timer == 0 && !timing->clock_started);
+            /* A connected DAC alone cannot start the pulse frequency clock. */
+            cupid_gb_write_u8(&gb, base + 3, 0x87);
+            assert(timing->clock_started && timing->output_blocked);
+            tick_audio(&gb, 71);
+            assert(*position == 0);
+            tick_audio(&gb, 1);
+            assert(*position == 1 && !timing->output_blocked);
+            cupid_gb_write_u8(&gb, base, 63);
+            cupid_gb_write_u8(&gb, base + 3, 0x47);
+            cupid_gb_apu_div_event(&gb);
+            assert(!(cupid_gb_read_u8(&gb, 0xff26) & (1u << channel)));
+            /* Length expiry gates the channel output while its phase keeps moving. */
+            tick_audio(&gb, 64);
+            assert(*position == 2 && timing->clock_started);
+            cupid_gb_write_u8(&gb, base + 1, 0);
+            const uint16_t held_timer = *timer;
+            tick_audio(&gb, 256);
+            assert(*position == 2 && *timer == held_timer && !timing->clock_started);
+            cupid_gb_write_u8(&gb, base + 1, 0xf0);
+            tick_audio(&gb, 256);
+            assert(*position == 2 && *timer == held_timer && !timing->clock_started);
+            cupid_gb_write_u8(&gb, base + 3, 0x87);
+            tick_audio(&gb, 72);
+            assert(*position == 3 && timing->clock_started);
+            cupid_gb_write_u8(&gb, 0xff26, 0);
+            cupid_gb_write_u8(&gb, 0xff26, 0x80);
+            tick_audio(&gb, 256);
+            assert(*position == 0 && *timer == 0 && !timing->output_high);
+        }
+    }
+}
+
+static void test_monochrome_pulse_duty_hold(void) {
+    for (unsigned channel = 0; channel < 2; ++channel) {
+        CupidGb gb = {0};
+        const uint16_t base = channel ? 0xff16 : 0xff11;
+        CupidGbPulseTiming *timing = &gb.apu.pulse_timing[channel];
+        cupid_gb_write_u8(&gb, 0xff26, 0x80);
+        cupid_gb_apu_set_highpass(&gb, false);
+        cupid_gb_write_u8(&gb, 0xff24, 0x70);
+        cupid_gb_write_u8(&gb, 0xff25, (uint8_t)(0x10u << channel));
+        cupid_gb_write_u8(&gb, base, 0xc0);
+        cupid_gb_write_u8(&gb, base + 1, 0xf0);
+        cupid_gb_write_u8(&gb, base + 3, 0x80);
+        tick_audio(&gb, 8200);
+        assert(timing->output_high);
+        cupid_gb_write_u8(&gb, base, 0);
+        tick_audio(&gb, 192);
+        assert(timing->output_high);
+        assert(gb.apu.buf[2u * (gb.apu.buf_write - 1)] == -4080);
+        /* Retriggering changes volume immediately without resampling the new duty. */
+        cupid_gb_write_u8(&gb, base + 1, 0xe0);
+        cupid_gb_write_u8(&gb, base + 3, 0x80);
+        tick_audio(&gb, 192);
+        assert(timing->output_high);
+        assert(gb.apu.buf[2u * (gb.apu.buf_write - 1)] == -3536);
+        const uint16_t remaining = channel ? gb.apu.ch2_timer : gb.apu.ch1_timer;
+        tick_audio(&gb, remaining - 1u);
+        assert(timing->output_high);
+        tick_audio(&gb, 1);
+        assert(!timing->output_high);
+    }
+}
+
+static void test_pulse_dac_hold(void) {
+    for (unsigned color = 0; color < 2; ++color) {
+        for (unsigned channel = 0; channel < 2; ++channel) {
+            for (unsigned expire_length = 0; expire_length < 2; ++expire_length) {
+                CupidGb gb = {0};
+                gb.model = color ? CUPID_GB_MODEL_CGB : CUPID_GB_MODEL_DMG_ABC;
+                const uint16_t base = channel ? 0xff16 : 0xff11;
+                cupid_gb_write_u8(&gb, 0xff26, 0x80);
+                cupid_gb_apu_set_highpass(&gb, false);
+                cupid_gb_write_u8(&gb, 0xff24, 0x70);
+                cupid_gb_write_u8(&gb, 0xff25, (uint8_t)(0x10u << channel));
+                cupid_gb_write_u8(&gb, base, 0xc0);
+                cupid_gb_write_u8(&gb, base + 1, 0xf0);
+                cupid_gb_write_u8(&gb, base + 3, 0x80);
+                tick_audio(&gb, 8400);
+                assert(gb.apu.buf[2u * (gb.apu.buf_write - 1)] == -4080);
+                for (unsigned toggle = 0; toggle < 2; ++toggle) {
+                    cupid_gb_write_u8(&gb, base + 1, 0);
+                    tick_audio(&gb, 192);
+                    assert(gb.apu.buf[2u * (gb.apu.buf_write - 1)] == 0);
+                    /* A DAC-only enable retains its prior code even though the
+                     * output gate and the readable PCM tap remain inactive. */
+                    cupid_gb_write_u8(&gb, base + 1, 0x80);
+                    tick_audio(&gb, 192);
+                    assert(!(cupid_gb_read_u8(&gb, 0xff26) & (1u << channel)));
+                    assert(gb.apu.buf[2u * (gb.apu.buf_write - 1)] == -4080);
+                    if (color)
+                        assert(cupid_gb_apu_read_pcm12(&gb) == 0);
+                }
+                if (expire_length) {
+                    cupid_gb_write_u8(&gb, base, 63);
+                    cupid_gb_write_u8(&gb, base + 3, 0x40);
+                    gb.apu.fs_step = gb.apu.fs_skip_div_event = 0;
+                    cupid_gb_apu_div_event(&gb);
+                } else {
+                    cupid_gb_write_u8(&gb, base + 3, 0x80);
+                }
+                tick_audio(&gb, 192);
+                assert(gb.apu.buf[2u * (gb.apu.buf_write - 1)] == 4080);
+                /* Expiry and a new trigger both replace the held DAC code. */
+                cupid_gb_write_u8(&gb, base + 1, 0);
+                cupid_gb_write_u8(&gb, base + 1, 0xf0);
+                tick_audio(&gb, 192);
+                assert(gb.apu.buf[2u * (gb.apu.buf_write - 1)] == 4080);
+            }
+        }
+    }
+}
+
 static void test_noise_clock(void) {
     const uint32_t divisors[] = {8, 16, 32, 48, 64, 80, 96, 112};
     for (unsigned divisor = 0; divisor < 8; ++divisor) {
@@ -272,6 +476,7 @@ static void test_dac_transfer_and_pan(void) {
     gb.apu.ch1_duty_pos = 7;
     gb.apu.ch1_vol = 15;
     gb.apu.ch1_timer = 8192;
+    cupid_gb_apu_import_legacy(&gb); /* Seed the synthetic fixture's held output. */
     tick_audio(&gb, 192);
     assert(cupid_gb_apu_drain(&gb, output, 4) == 2);
     assert(output[2] == -4080 && output[3] == 0);
@@ -333,6 +538,7 @@ static void test_duty_phase(void) {
             gb.apu.ch2_duty = (uint8_t)duty;
             gb.apu.ch1_timer = 8192;
             gb.apu.ch2_timer = 8192;
+            cupid_gb_apu_import_legacy(&gb); /* Materialize this synthetic duty/phase. */
             tick_audio(&gb, 192);
             uint32_t count = cupid_gb_apu_drain(&gb, output, 4);
             assert(count >= 2);
@@ -1110,6 +1316,10 @@ static void test_color_pulse_phantom_trigger(void) {
 }
 
 int main(void) {
+    test_pulse_trigger_length_enable();
+    test_pulse_dac_hold();
+    test_monochrome_pulse_clock_lifetime();
+    test_monochrome_pulse_duty_hold();
     test_color_pulse_phantom_trigger();
     test_color_pulse_clock_and_held_duty();
     test_color_envelope_edges();

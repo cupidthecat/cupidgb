@@ -139,6 +139,8 @@ typedef struct CupidGbApu {
     CupidGbPulseTiming pulse_timing[2];
     CupidGbSweepTiming sweep_timing;
     CupidGbNoiseTiming noise_timing;
+    /* DAC disconnect freezes its code until a later channel-output event. */
+    uint8_t pulse_dac_hold[2];
 
     /* Output */
     uint32_t sample_acc;

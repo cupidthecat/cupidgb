@@ -450,6 +450,24 @@ bool MainWindow::debuggerSmokeTest(const QString &directory) {
             if (!inspectorsWindow_->grab().save(captures.filePath(names[size_t(tab)])))
                 return smokeFailure(__FILE__, __LINE__);
         }
+        auto *grid = inspectorsWindow_->findChild<QCheckBox *>("inspectorGrid");
+        auto *scrolling = inspectorsWindow_->findChild<QCheckBox *>("inspectorScrolling");
+        if (!grid || !scrolling)
+            return smokeFailure(__FILE__, __LINE__);
+        fixture.io_registers[0x42] = 224;
+        fixture.io_registers[0x43] = 200;
+        const QByteArray overlayState = captureState();
+        grid->setChecked(true);
+        scrolling->setChecked(true);
+        inspectorsWindow_->selectTab(2);
+        QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+        if (!inspectorsWindow_->grab().save(captures.filePath("maps-overlay.png")))
+            return smokeFailure(__FILE__, __LINE__);
+        inspectorsWindow_->selectTab(1);
+        QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+        if (!inspectorsWindow_->grab().save(captures.filePath("tiles-grid.png")) ||
+            captureState() != overlayState)
+            return smokeFailure(__FILE__, __LINE__);
     }
     if (!closeRom())
         return smokeFailure(__FILE__, __LINE__);

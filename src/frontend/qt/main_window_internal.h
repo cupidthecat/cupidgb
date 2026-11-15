@@ -11,6 +11,7 @@
 #include "cupid/gb/battery.h"
 #include "debugger_window.h"
 #include "inspectors_window.h"
+#include "screen_messages.h"
 #include "wave_recorder.h"
 
 #include <QAbstractButton>
@@ -85,6 +86,14 @@ constexpr std::array<const char *, 5> specialNames = {"Turbo", "Rewind", "Slow m
                                                       "Rapid B"};
 constexpr std::array<int, 5> defaultSpecialKeys = {Qt::Key_Space, Qt::Key_Tab, Qt::Key_Shift, 0, 0};
 constexpr std::array<const char *, 3> frameBlendingNames = {"Disabled", "Simple", "Accurate"};
+constexpr std::array<unsigned, 12> turboCapChoices = {0, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
+
+unsigned configuredTurboCapQuarters(const QSettings &settings) {
+    bool valid = false;
+    const int percent = settings.value("emulation/turboCap", 0).toString().toInt(&valid);
+    return valid && percent >= 150 && percent <= 400 && percent % 25 == 0 ? unsigned(percent / 25)
+                                                                          : 0;
+}
 
 FrameBlending configuredFrameBlending(const QSettings &settings) {
     bool valid = false;
@@ -98,9 +107,10 @@ FrameBlending configuredFrameBlending(const QSettings &settings) {
 }
 
 // LCD geometry stays at 70,224 base cycles; elapsed time follows the model oscillator.
-qint64 nominalFrameNanoseconds(const CupidGb *gb, unsigned speedSteps = 16) {
-    return qint64(uint64_t(70224) * 1000000000 * 16 /
-                  (uint64_t(cupid_gb_base_clock_hz(gb)) * speedSteps));
+qint64 nominalFrameNanoseconds(const CupidGb *gb, unsigned speedSteps = 16,
+                               unsigned turboQuarters = 4) {
+    return qint64(uint64_t(70224) * 1000000000 * 64 /
+                  (uint64_t(cupid_gb_base_clock_hz(gb)) * speedSteps * turboQuarters));
 }
 
 bool smokeFailure(const char *file, int line) {
@@ -182,6 +192,7 @@ class DisplayWidget final : public QWidget {
     }
 
     QImage image;
+    ScreenMessages messages;
     DisplayScaling scaling = DisplayScaling::Integer;
     uint64_t paintCount = 0;
     QElapsedTimer paintClock;

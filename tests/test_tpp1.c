@@ -147,7 +147,7 @@ static void test_state_restore(CupidGb *gb) {
     assert(size);
     uint8_t *state = malloc(size);
     assert(state && cupid_gb_save_state(gb, state, size, NULL) == CUPID_GB_STATE_OK);
-    assert(state[8] == 10);
+    assert(state[8] == 11);
     command(gb, 0x20);
     command(gb, 0);
     cupid_gb_write_u8(gb, 0, 0);
@@ -157,6 +157,159 @@ static void test_state_restore(CupidGb *gb) {
     assert(cupid_gb_read_u8(gb, 0xa003) == 0x58);
     assert(cupid_gb_read_u8(gb, 0x4000) == 7);
     free(state);
+}
+
+static void test_absent_sram_bus(CupidGb *gb) {
+    assert(!gb->cartridge_ram_size && !gb->ram_bank_count);
+    const uint64_t writes = gb->battery_write_generation;
+    for (unsigned mode = 2; mode <= 3; ++mode) {
+        command(gb, (uint8_t)mode);
+        for (unsigned bank = 0; bank < 256; ++bank) {
+            cupid_gb_write_u8(gb, 0x0002, (uint8_t)bank);
+            cupid_gb_write_u8(gb, 0xa000, 0x25);
+            cupid_gb_write_u8(gb, 0xbfff, 0x73);
+            /* An ignored SRAM write still drives the CPU's value onto the bus. */
+            assert(cupid_gb_read_bus_u8(gb, 0xa000) == 0x73);
+            assert(cupid_gb_read_bus_u8(gb, 0x0200) == 0x6d);
+            const uint64_t expiry = gb->cartridge_bus_expiry;
+            assert(cupid_gb_read_u8(gb, 0xa000) == 0xff);
+            assert(cupid_gb_read_u8(gb, 0xbfff) == 0xff);
+            assert(cupid_gb_read_bus_u8(gb, 0xa000) == 0x6d);
+            assert(cupid_gb_read_bus_u8(gb, 0xbfff) == 0x6d);
+            assert(gb->cartridge_bus_expiry == expiry);
+            /* Floating reads cannot renew the six-T-cycle cartridge-bus hold. */
+            gb->elapsed_cycles += 5;
+            assert(cupid_gb_read_bus_u8(gb, 0xa123) == 0x6d);
+            assert(gb->cartridge_bus_expiry == expiry);
+            ++gb->elapsed_cycles;
+            assert(cupid_gb_read_bus_u8(gb, 0xbfff) == 0xff);
+            assert(gb->cartridge_bus_expiry == expiry);
+        }
+    }
+    assert(gb->battery_write_generation == writes);
+}
+
+static void test_supported_sram_populations(CupidGb *gb, uint8_t *rom, size_t length) {
+    static const unsigned populations[] = {0, 1, 2, 4, 8, 16};
+    static const uint16_t addresses[] = {0xa000, 0xa123, 0xbfff};
+    for (unsigned code = 0; code < sizeof(populations) / sizeof(populations[0]); ++code) {
+        const unsigned banks = populations[code];
+        rom[0x152] = (uint8_t)code;
+        rom[0x153] = 8;
+        rom[0x200] = 0x6d;
+        assert(cupid_gb_load_rom(gb, rom, length));
+        assert(gb->header.mbc_type == CUPID_GB_TPP1 && gb->header.ram_bank_count == banks);
+        assert(gb->ram_bank_count == banks);
+        assert(gb->cartridge_ram_size == (size_t)banks * RAM_BANK_SIZE);
+        assert(cupid_gb_battery_size(gb) == (size_t)banks * RAM_BANK_SIZE + 20);
+        if (!banks) {
+            test_absent_sram_bus(gb);
+            continue;
+        }
+
+        uint8_t expected[16][3] = {{0}};
+        command(gb, 3);
+        for (unsigned bank = 0; bank < banks; ++bank) {
+            cupid_gb_write_u8(gb, 0x2002, (uint8_t)bank);
+            for (unsigned slot = 0; slot < 3; ++slot) {
+                assert(cupid_gb_read_bus_u8(gb, addresses[slot]) == 0xff);
+                expected[bank][slot] = (uint8_t)(0x80u | slot << 5u | bank);
+                cupid_gb_write_u8(gb, addresses[slot], expected[bank][slot]);
+            }
+        }
+
+        const uint64_t writes = gb->battery_write_generation;
+        for (unsigned bank = 0; bank < 256; ++bank) {
+            cupid_gb_write_u8(gb, 0x5002, (uint8_t)bank);
+            command(gb, 0);
+            assert(cupid_gb_read_u8(gb, 0xbffe) == bank);
+            command(gb, 2);
+            for (unsigned slot = 0; slot < 3; ++slot) {
+                const uint8_t value = expected[bank % banks][slot];
+                assert(cupid_gb_read_bus_u8(gb, addresses[slot]) == value);
+                cupid_gb_write_u8(gb, addresses[slot], (uint8_t)~value);
+                assert(cupid_gb_read_bus_u8(gb, addresses[slot]) == value);
+            }
+        }
+        assert(gb->battery_write_generation == writes);
+
+        /* Writes through every raw latch value must change only its physical bank. */
+        for (unsigned bank = 0; bank < 256; ++bank) {
+            const unsigned slot = bank % 3;
+            const uint8_t value = (uint8_t)(0x5au ^ bank);
+            command(gb, 3);
+            cupid_gb_write_u8(gb, 0x7002, (uint8_t)bank);
+            cupid_gb_write_u8(gb, addresses[slot], value);
+            expected[bank % banks][slot] = value;
+            assert(cupid_gb_read_bus_u8(gb, addresses[slot]) == value);
+            command(gb, 0);
+            assert(cupid_gb_read_u8(gb, 0xbffe) == bank);
+            command(gb, 2);
+            for (unsigned physical = 0; physical < banks; ++physical) {
+                cupid_gb_write_u8(gb, 0x0002, (uint8_t)physical);
+                for (unsigned check = 0; check < 3; ++check)
+                    assert(cupid_gb_read_bus_u8(gb, addresses[check]) == expected[physical][check]);
+            }
+        }
+    }
+}
+
+static void assert_large_rom_bank(const CupidGb *gb, unsigned bank) {
+    /* Two-byte markers distinguish the upper 256 banks from the lower half. */
+    assert(cupid_gb_read_u8(gb, 0x4200) == (uint8_t)bank);
+    assert(cupid_gb_read_u8(gb, 0x4201) == ((bank >> 8u) & 1u));
+    assert(cupid_gb_read_u8(gb, 0x0200) == 0);
+    assert(cupid_gb_read_u8(gb, 0x0201) == 0);
+}
+
+static void test_full_rom_bank_addressing(CupidGb *gb, bool color) {
+    const unsigned banks = 512;
+    const size_t length = (size_t)banks * ROM_BANK_SIZE;
+    uint8_t *rom = calloc(length, 1);
+    assert(rom);
+    make_rom(rom, color);
+    rom[0x148] = 8;
+    rom[0x152] = 0;
+    update_checksum(rom);
+    for (unsigned bank = 0; bank < banks; ++bank) {
+        const size_t offset = (size_t)bank * ROM_BANK_SIZE + 0x200;
+        rom[offset] = (uint8_t)bank;
+        rom[offset + 1] = (uint8_t)(bank >> 8u);
+    }
+    assert(cupid_gb_load_rom(gb, rom, length));
+    assert(gb->rom_size == length && gb->rom_bank_count == banks);
+    unsigned previous = 1;
+    for (unsigned bank = 0; bank <= 0xffff; ++bank) {
+        const uint16_t port = (uint16_t)((bank & 0x1fffu) << 2u);
+        if (bank & 1u) {
+            cupid_gb_write_u8(gb, (uint16_t)(port | 1u), (uint8_t)(bank >> 8u));
+            assert_large_rom_bank(gb, (bank & 0xff00u) | (previous & 0xffu));
+            assert(cupid_gb_read_u8(gb, 0xbffc) == (uint8_t)previous);
+            cupid_gb_write_u8(gb, port, (uint8_t)bank);
+        } else {
+            cupid_gb_write_u8(gb, port, (uint8_t)bank);
+            assert_large_rom_bank(gb, (previous & 0xff00u) | (bank & 0xffu));
+            assert(cupid_gb_read_u8(gb, 0xbffd) == (uint8_t)(previous >> 8u));
+            cupid_gb_write_u8(gb, (uint16_t)(port | 1u), (uint8_t)(bank >> 8u));
+        }
+        assert(cupid_gb_read_u8(gb, 0xbffc) == (uint8_t)bank);
+        assert(cupid_gb_read_u8(gb, 0xbffd) == (uint8_t)(bank >> 8u));
+        assert_large_rom_bank(gb, bank);
+        previous = bank;
+    }
+    static const uint8_t modes[] = {0, 2, 3, 5};
+    static const unsigned selections[] = {0, 0xff, 0x100, 0x1ff, 0x8000, 0xffff};
+    for (unsigned mode = 0; mode < sizeof(modes) / sizeof(modes[0]); ++mode) {
+        command(gb, modes[mode]);
+        for (unsigned selection = 0; selection < sizeof(selections) / sizeof(selections[0]);
+             ++selection) {
+            const unsigned bank = selections[selection];
+            cupid_gb_write_u8(gb, 0x0001, (uint8_t)(bank >> 8u));
+            cupid_gb_write_u8(gb, 0x0000, (uint8_t)bank);
+            assert_large_rom_bank(gb, bank);
+        }
+    }
+    free(rom);
 }
 
 int main(void) {
@@ -178,6 +331,8 @@ int main(void) {
         rom[0x153] = 0;
         assert(cupid_gb_load_rom(gb, rom, length));
         assert(!gb->cartridge_ram_size && !cupid_gb_battery_size(gb));
+        test_supported_sram_populations(gb, rom, length);
+        test_full_rom_bank_addressing(gb, color != 0);
     }
     cupid_gb_cleanup(gb);
     free(gb);

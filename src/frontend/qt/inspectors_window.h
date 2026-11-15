@@ -54,6 +54,8 @@ class InspectorsWindow final : public QMainWindow {
     QLabel *context_ = nullptr;
     QLabel *status_ = nullptr;
     QCheckBox *live_ = nullptr;
+    QCheckBox *grid_ = nullptr;
+    QCheckBox *scrolling_ = nullptr;
     QLineEdit *address_ = nullptr;
     QLineEdit *editAddress_ = nullptr;
     QLineEdit *editValue_ = nullptr;

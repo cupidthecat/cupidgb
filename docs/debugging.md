@@ -54,7 +54,7 @@ Register edits accept AF, BC, DE, HL, SP, PC, A, F, B, C, D, E, H, L, and IME. T
 
 ## Expressions and conditional stops
 
-Expressions accept CPU registers, loaded symbols, decimal literals, `$`/`0x` hexadecimal literals, parentheses, and byte `[address]` or little-endian word `{address}` reads. Arithmetic wraps to 16 bits. Division or remainder by zero and shifts by 16 or more yield zero. Both logical operands are evaluated. A bank qualifier selects a side-effect-free ROM, VRAM, or WRAM view without switching guest banks; bank zero selects the mapped view. Conditions are true when their value is nonzero. A condition that loses a symbol or otherwise fails evaluation pauses execution with a debugger error. Invalid new definitions leave existing breakpoints intact.
+Expressions accept CPU registers, loaded symbols, decimal literals, `$`/`0x` hexadecimal literals, parentheses, and byte `[address]` or little-endian word `{address}` reads. Arithmetic wraps to 16 bits. Division or remainder by zero and shifts by 16 or more yield zero. Both logical operands are evaluated. A bank qualifier selects a side-effect-free ROM, VRAM, or WRAM view without switching guest banks; bank zero selects the mapped view. ROM banks alias through the cartridge's physical address lines, and unpopulated bytes at the end of a truncated image read as `FF`. Conditions are true when their value is nonzero. A condition that loses a symbol or otherwise fails evaluation pauses execution with a debugger error. Invalid new definitions leave existing breakpoints intact.
 
 Precedence from lowest to highest is: comparisons; `+ - | ||`; `* / % & ^ &&`; shifts; bank qualification with `:`. Operators in a group associate left to right. These groups differ from C. Expressions are limited to 255 bytes and 32 nested levels. Assignment, unary operators, watchpoints, and range breakpoints remain unsupported.
 
@@ -95,10 +95,12 @@ Writes require a loaded session and pause execution. ROM and unusable address ra
 
 Tiles shows the 384 tiles in either physical VRAM bank or both banks. Maps selects the background/window map, either map address explicitly, and signed/unsigned tile addressing. CGB attributes control bank selection, flips, palettes, and displayed metadata. The map cell readout identifies its address and attributes.
 
+Tile grid adds eight-pixel cell boundaries in Tiles and Maps. The tile view also marks its larger tile groups. Scrolling viewport in Maps outlines the current 160-by-144 background viewport and shades the area outside it. The viewport follows SCX and SCY and wraps across either edge of the 256-by-256 map. Both overlays start disabled, retain their choices while the inspector is open, and leave decoded pixels and emulated memory unchanged.
+
 OAM lists all 40 entries, including entries outside visible lines. The table shows screen-relative X/Y positions, tile/flags, bank/palette, and 8-by-8 or 8-by-16 previews; tooltips include raw coordinates. A line-limit indication means the entry loses selection on at least one visible line after ten earlier objects; it does not mean that the whole object is necessarily invisible. Palettes exposes register values and raw color entries.
 
 Inspector raw grayscale mode bypasses color correction. Palette-selected color previews and swatches use the active CGB correction and ambient temperature. Numeric entries retain their RGB555 values. Object previews retain a visible distinction for otherwise uniform monochrome object palettes.
 
 ## Remaining debugger scope
 
-Conditional breakpoints, read/write watchpoints, a full expression language, saved debugger sessions, continuous-playback instruction replay, arbitrary physical-bank memory editing, ROM patching, a map viewport overlay, interactive palette editing, and presentation layer/channel toggles remain pending. Inspector rendering and the bounded instruction history are useful diagnostic tools, not complete debugger or hardware parity.
+Menu-first MMM01 dumps still expose file-order bank labels and qualified reads; conversion to logical bank numbering remains pending. Read/write watchpoints, a full expression language, saved debugger sessions, continuous-playback instruction replay, arbitrary physical-bank memory editing, ROM patching, interactive palette editing, and presentation layer/channel toggles also remain pending. Inspector rendering and the bounded instruction history are useful diagnostic tools, not complete debugger or hardware parity.

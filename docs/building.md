@@ -167,11 +167,15 @@ On Linux, the executable can use distribution-provided Qt and runtime packages. 
 cmake --install build --prefix "$HOME/.local"
 ```
 
-Make sure `$HOME/.local/bin` is in your session's `PATH`, because the desktop entry launches `cupidgb` by name. If the desktop does not refresh its application or MIME databases automatically, run the tools provided by your distribution:
+Make sure `$HOME/.local/bin` is in your session's `PATH`, because the desktop entry launches `cupidgb` by name. If the desktop does not refresh its application, MIME and icon databases automatically, run the tools provided by your distribution:
 
 ```sh
 update-desktop-database "$HOME/.local/share/applications"
 update-mime-database "$HOME/.local/share/mime"
+gtk-update-icon-cache --force --ignore-theme-index --index-only "$HOME/.local/share/icons/hicolor"
+gtk-update-icon-cache --validate "$HOME/.local/share/icons/hicolor"
 ```
 
-These commands require the corresponding desktop-file and shared-MIME utilities. They update the user's installed metadata; they do not make CupidGB the default handler. The repository does not currently supply an installer or portable Linux bundle. Staged-install checks do not establish behavior in every desktop environment. See [troubleshooting](troubleshooting.md) for plugin and runtime path problems.
+These commands require the corresponding desktop-file, shared-MIME and GTK icon-cache utilities. They update the user's installed metadata; they do not make CupidGB the default handler. For another installation prefix, use its `share` directory instead. A missing icon cache caused very slow Qt dialog creation in a private prefix on a Windows-mounted WSL filesystem; generating the cache resolved that measured delay without changing the application or removing the prefix from icon discovery.
+
+The repository does not currently supply an installer or portable Linux bundle. Staged-install checks do not establish behavior in every desktop environment. See [troubleshooting](troubleshooting.md) for plugin and runtime path problems.

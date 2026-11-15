@@ -1,6 +1,9 @@
 #include "inspector_renderer.h"
 
+#include <QPainter>
+#include <QPainterPath>
 #include <algorithm>
+#include <utility>
 
 extern "C" {
 #include "cupid/gbc/cgb.h"
@@ -191,4 +194,63 @@ QString inspectorMapCell(const CupidGb &gb, InspectorMap map, int x, int y) {
         .arg(bool(attributes & 0x20u))
         .arg(bool(attributes & 0x40u))
         .arg(bool(attributes & 0x80u));
+}
+
+QRegion inspectorViewport(QPoint scroll) {
+    const int x = (scroll.x() % 256 + 256) % 256;
+    const int y = (scroll.y() % 256 + 256) % 256;
+    const std::array<std::pair<int, int>, 2> columns = {
+        {{x, std::min(160, 256 - x)}, {0, std::max(0, x + 160 - 256)}}};
+    const std::array<std::pair<int, int>, 2> rows = {
+        {{y, std::min(144, 256 - y)}, {0, std::max(0, y + 144 - 256)}}};
+    QRegion visible;
+    for (const auto &[left, width] : columns)
+        for (const auto &[top, height] : rows)
+            if (width && height)
+                visible += QRect(left, top, width, height);
+    return visible;
+}
+
+void paintInspectorOverlays(QPainter &painter, const QRectF &target, const QSize &imageSize,
+                            const InspectorOverlays &overlays) {
+    if (target.isEmpty() || imageSize.isEmpty())
+        return;
+    painter.save();
+    painter.setClipRect(target, Qt::IntersectClip);
+    const qreal scaleX = target.width() / imageSize.width();
+    const qreal scaleY = target.height() / imageSize.height();
+    if (overlays.grid != InspectorGrid::None) {
+        // Keep grid lines one host point wide as the decoded image is enlarged.
+        for (int x = 8; x < imageSize.width(); x += 8) {
+            const QRectF line(target.left() + x * scaleX - 1, target.top(), 1, target.height());
+            painter.fillRect(line, QColor(0, 0, 0, 64));
+            if (overlays.grid == InspectorGrid::Tiles && x % 128 == 0)
+                painter.fillRect(line, QColor(0, 0, 0, 128));
+        }
+        for (int y = 8; y < imageSize.height(); y += 8) {
+            const QRectF line(target.left(), target.top() + y * scaleY - 1, target.width(), 1);
+            painter.fillRect(line, QColor(0, 0, 0, 64));
+            if (overlays.grid == InspectorGrid::Tiles && y % 64 == 0)
+                painter.fillRect(line, QColor(0, 0, 0, 128));
+        }
+    }
+    if (overlays.scrolling && imageSize == QSize(256, 256)) {
+        QPainterPath visible;
+        for (const QRect &piece : inspectorViewport(overlays.scroll))
+            visible.addRect(QRectF(target.left() + piece.x() * scaleX,
+                                   target.top() + piece.y() * scaleY, piece.width() * scaleX,
+                                   piece.height() * scaleY));
+        QPainterPath outside;
+        outside.addRect(target);
+        outside = outside.subtracted(visible);
+        painter.fillPath(outside, QColor(51, 51, 51, 128));
+        // Clip the outline to the shaded side. Wrapped seams at map edges and
+        // adjacent region pieces must not draw false lines inside the viewport.
+        painter.setClipPath(outside, Qt::IntersectClip);
+        QPen outline(QColor(0, 0, 0, 153));
+        outline.setWidthF(4);
+        outline.setJoinStyle(Qt::RoundJoin);
+        painter.strokePath(visible, outline);
+    }
+    painter.restore();
 }

@@ -93,6 +93,7 @@ class InspectorImageView final : public QWidget {
     }
 
     QImage image;
+    InspectorOverlays overlays;
     std::function<void(QPoint)> pointChanged;
 
     QSize sizeHint() const override {
@@ -112,8 +113,10 @@ class InspectorImageView final : public QWidget {
     void paintEvent(QPaintEvent *) override {
         QPainter painter(this);
         painter.fillRect(rect(), palette().brush(QPalette::Dark));
-        if (!image.isNull())
+        if (!image.isNull()) {
             painter.drawImage(target(), image);
+            paintInspectorOverlays(painter, target(), image.size(), overlays);
+        }
     }
 
     void mouseMoveEvent(QMouseEvent *event) override {
@@ -138,6 +141,16 @@ InspectorsWindow::InspectorsWindow(QWidget *parent) : QMainWindow(parent, Qt::Wi
     live_->setChecked(true);
     controls->addWidget(refreshButton);
     controls->addWidget(live_);
+    grid_ = new QCheckBox("Tile grid");
+    grid_->setObjectName("inspectorGrid");
+    grid_->setToolTip("Show tile boundaries in both the Tiles and Maps views.");
+    scrolling_ = new QCheckBox("Scrolling viewport");
+    scrolling_->setObjectName("inspectorScrolling");
+    scrolling_->setToolTip("Show the 160 by 144 background viewport from SCX and SCY.");
+    grid_->hide();
+    scrolling_->hide();
+    controls->addWidget(grid_);
+    controls->addWidget(scrolling_);
     controls->addStretch();
     layout->addLayout(controls);
     context_ = new QLabel;
@@ -322,7 +335,13 @@ InspectorsWindow::InspectorsWindow(QWidget *parent) : QMainWindow(parent, Qt::Wi
     });
     for (auto *box : {tileBank_, tilePalette_, mapKind_, mapAddressing_, mapPalette_})
         connect(box, &QComboBox::currentIndexChanged, this, [this] { refresh(); });
-    connect(tabs_, &QTabWidget::currentChanged, this, [this] { refresh(); });
+    for (auto *box : {grid_, scrolling_})
+        connect(box, &QCheckBox::toggled, this, [this] { refresh(); });
+    connect(tabs_, &QTabWidget::currentChanged, this, [this](int tab) {
+        grid_->setVisible(tab == 1 || tab == 2);
+        scrolling_->setVisible(tab == 2);
+        refresh();
+    });
     connect(objects_, &QTableWidget::itemSelectionChanged, this, [this] {
         if (!refreshing_)
             showObject();
@@ -362,6 +381,8 @@ void InspectorsWindow::refresh() {
         return;
     }
     tabs_->setEnabled(true);
+    grid_->setEnabled(true);
+    scrolling_->setEnabled(true);
     if (status_->text() == "Open a cartridge to inspect its hardware state.")
         status_->setText(
             "Double-click a writable memory cell to edit it. Editing pauses emulation.");
@@ -396,6 +417,8 @@ void InspectorsWindow::refresh() {
 void InspectorsWindow::clearViews() {
     QScopedValueRollback<bool> update(refreshing_, true);
     tabs_->setEnabled(false);
+    grid_->setEnabled(false);
+    scrolling_->setEnabled(false);
     context_->setText("No cartridge loaded");
     status_->setText("Open a cartridge to inspect its hardware state.");
     memory_->clearContents();
@@ -403,6 +426,7 @@ void InspectorsWindow::clearViews() {
     palettes_->clearContents();
     for (auto *view : {tilesImage_, mapImage_, objectImage_}) {
         view->image = {};
+        view->overlays = {};
         view->update();
     }
     mapInfo_->clear();
@@ -437,6 +461,7 @@ void InspectorsWindow::setColorTable(const ColorTable *colors) {
 void InspectorsWindow::refreshTiles(const CupidGb &gb) {
     tilesImage_->image = inspectorTiles(gb, tileBank_->currentData().toInt(),
                                         paletteSelection(tilePalette_), colorTable_);
+    tilesImage_->overlays.grid = grid_->isChecked() ? InspectorGrid::Tiles : InspectorGrid::None;
     tilesImage_->update();
 }
 
@@ -444,6 +469,9 @@ void InspectorsWindow::refreshMap(const CupidGb &gb) {
     mapImage_->image = inspectorMap(gb, InspectorMap(mapKind_->currentIndex()),
                                     InspectorTileAddressing(mapAddressing_->currentIndex()),
                                     paletteSelection(mapPalette_), colorTable_);
+    mapImage_->overlays = {grid_->isChecked() ? InspectorGrid::Map : InspectorGrid::None,
+                           scrolling_->isChecked(),
+                           QPoint(gb.io_registers[0x43], gb.io_registers[0x42])};
     mapImage_->update();
     mapInfo_->setText(QString("SCX %1  SCY %2  WX %3  WY %4. Hover for tile attributes.")
                           .arg(gb.io_registers[0x43])

@@ -662,6 +662,99 @@ static void test_expressions_and_conditions(CupidGb *gb) {
     cupid_gb_debugger_cleanup(&debug);
 }
 
+static void test_expression_rom_geometry(CupidGb *gb) {
+    /* Each populated bank contains 0x30 + bank, except byte zero (0x42).
+     * Explicit words distinguish erased bytes from wrapping to earlier file data. */
+    static const struct {
+        size_t size;
+        uint16_t bank1_end, bank2_start, bank2_end, bank3_start, bank3_end;
+    } fixtures[] = {
+        {0xc001, 0x3131, 0x3232, 0x3232, 0xff33, 0xffff},
+        {0x7fff, 0xff31, 0x3042, 0x3030, 0x3131, 0xff31},
+        {0x8000, 0x3131, 0x3042, 0x3030, 0x3131, 0x3131},
+        {0x8001, 0x3131, 0xff32, 0xffff, 0xffff, 0xffff},
+        {0xbfff, 0x3131, 0x3232, 0xff32, 0xffff, 0xffff},
+        {0xc000, 0x3131, 0x3232, 0x3232, 0xffff, 0xffff},
+        {0x10000, 0x3131, 0x3232, 0x3232, 0x3333, 0x3333},
+    };
+
+    const uint8_t types[] = {0x01, 0xbc};
+    uint8_t *rom = malloc(0x10000);
+    assert(rom);
+    CupidGbDebugger debug;
+    cupid_gb_debugger_init(&debug);
+    for (unsigned color = 0; color < 2; ++color) {
+        cupid_gb_set_model(gb, color ? CUPID_GB_MODEL_CGB : CUPID_GB_MODEL_DMG_ABC);
+        for (size_t type = 0; type < sizeof(types) / sizeof(types[0]); ++type) {
+            for (size_t fixture = 0; fixture < sizeof(fixtures) / sizeof(fixtures[0]); ++fixture) {
+                const size_t size = fixtures[fixture].size;
+                for (size_t offset = 0; offset < size; ++offset)
+                    rom[offset] = (uint8_t)(0x30 + offset / 0x4000);
+                rom[0] = 0x42;
+                memcpy(rom + 0x134, "DEBUG ROM TAIL", 14);
+                rom[0x143] = 0x80;
+                rom[0x147] = types[type];
+                rom[0x148] = 1;
+                rom[0x149] = types[type] == 0xbc ? 0xc1 : 0;
+                rom[0x14a] = types[type] == 0xbc ? 0x65 : 0;
+                rom[0x152] = rom[0x153] = 0;
+                rom[0x14d] = 0;
+                for (size_t offset = 0x134; offset < 0x14d; ++offset)
+                    rom[0x14d] = (uint8_t)(rom[0x14d] - rom[offset] - 1u);
+                assert(cupid_gb_load_rom(gb, rom, size));
+                cupid_gb_write_u8(gb, 0xff40, 0);
+                gb->video_ram[0] = gb->video_ram[0x2000] = 0x9c;
+                assert(cupid_gb_read_bus_u8(gb, 0) == 0x42);
+
+                const uint16_t first = fixtures[fixture].bank3_start & 0xffu;
+                const uint16_t last = fixtures[fixture].bank3_end >> 8u;
+
+                const struct {
+                    const char *expression;
+                    uint16_t expected;
+                } probes[] = {
+                    {"[3:$4001]", fixtures[fixture].bank3_start >> 8u},
+                    {"{3:$4000}", fixtures[fixture].bank3_start},
+                    {"{1:$7ffe}", fixtures[fixture].bank1_end},
+                    {"{2:$4000}", fixtures[fixture].bank2_start},
+                    {"{2:$7ffe}", fixtures[fixture].bank2_end},
+                    {"{3:$7ffe}", fixtures[fixture].bank3_end},
+                    {"{7:$4000}", fixtures[fixture].bank3_start},
+                    {"[7:$4001]", fixtures[fixture].bank3_start >> 8u},
+                    {"[4:$4000]", 0x42},
+                    {"[3:$0000]", first},
+                    {"[3:$0001]", fixtures[fixture].bank3_start >> 8u},
+                    {"{3:$3fff}", (uint16_t)(last | first << 8u)},
+                    {"{3:$7fff}", (uint16_t)(last | 0x9c00u)},
+                    {"[0:$4000]", 0x31},
+                    {"[$201:$4000]", 0x31},
+                };
+
+                const size_t state_size = cupid_gb_state_size(gb);
+                uint8_t *before = malloc(state_size), *after = malloc(state_size);
+                assert(before && after);
+                assert(cupid_gb_save_state(gb, before, state_size, NULL) == CUPID_GB_STATE_OK);
+                for (size_t probe = 0; probe < sizeof(probes) / sizeof(probes[0]); ++probe) {
+                    CupidGbDebugValue value;
+                    assert(cupid_gb_debugger_evaluate(&debug, gb, probes[probe].expression, &value,
+                                                      NULL));
+                    assert(value.value == probes[probe].expected && value.bank == -1);
+                }
+                cupid_gb_debugger_breakpoints_clear(&debug);
+                assert(cupid_gb_debugger_breakpoint_add_condition(&debug, gb, -1, gb->cpu.pc,
+                                                                  "[4:$4000] == $42"));
+                assert(cupid_gb_debugger_match_breakpoint(&debug, gb));
+                assert(cupid_gb_save_state(gb, after, state_size, NULL) == CUPID_GB_STATE_OK);
+                assert(!memcmp(before, after, state_size));
+                free(before);
+                free(after);
+            }
+        }
+    }
+    cupid_gb_debugger_cleanup(&debug);
+    free(rom);
+}
+
 int main(void) {
     CupidGb *gb = calloc(1, sizeof(*gb));
     assert(gb);
@@ -674,6 +767,7 @@ int main(void) {
     test_execution_preserves_hardware(gb);
     test_step_observation(gb);
     test_expressions_and_conditions(gb);
+    test_expression_rom_geometry(gb);
     cupid_gb_cleanup(gb);
     free(gb);
     puts("Debugger execution, memory, disassembly and symbols passed.");

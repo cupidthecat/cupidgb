@@ -88,6 +88,32 @@ size_t cupid_gb_ram_size_from_code(uint8_t code) {
     }
 }
 
+static size_t cartridge_storage_size(const CupidGbCartridgeHeader *header, size_t rom_size) {
+    switch (header->mbc_type) {
+        case CUPID_GB_MBC_UNKNOWN:
+            return 0;
+        case CUPID_GB_MBC_NONE:
+            /* A size byte cannot attach storage to a ROM-only or unsupported
+             * cartridge. Explicit ROM+RAM types retain their direct RAM map.
+             * Oversized type-00 images use the loader's banked-ROM fallback. */
+            if (header->cartridge_type != 0x08u && header->cartridge_type != 0x09u &&
+                !(header->cartridge_type == 0 && rom_size > 0x8000u))
+                return 0;
+            break;
+        case CUPID_GB_MBC2:
+            return 512u;
+        case CUPID_GB_MBC7:
+            return CUPID_GB_MBC7_EEPROM_SIZE;
+        case CUPID_GB_TPP1:
+            return header->ram_bank_count * 0x2000u;
+        default:
+            break;
+    }
+    /* Recognized bank controllers can have RAM despite a no-RAM type byte.
+     * Their explicit size metadata still describes the connected chip. */
+    return cupid_gb_ram_size_from_code(header->ram_size_code);
+}
+
 /**
  * @brief Counts the number of set bits in an 8-bit value.
  *
@@ -392,8 +418,7 @@ void cupid_gb_huc3_write(CupidGb *gb, uint16_t address, uint8_t value) {
  *
  * Computes the physical 16 KiB ROM bank that should be mapped into the
  * requested address region, accounting for MBC type, banking mode, and
- * multicart layout. The result is always wrapped modulo the available
- * bank count.
+ * multicart layout. Physical address-line aliasing is applied separately.
  *
  * @param gb           Pointer to the Game Boy state.
  * @param lower_region `true` for the fixed lower region (0x0000–0x3FFF),
@@ -490,7 +515,9 @@ size_t cupid_gb_effective_rom_bank(const CupidGb *gb, bool lower_region) {
      * without rotating the original bytes or their identity. */
     if (gb->header.mbc_type == CUPID_GB_MMM01 && gb->mmm01_menu_first)
         bank += 2u;
-    return gb->rom_bank_count ? bank % gb->rom_bank_count : 0;
+    /* Loading rounds physical ROM population to a power of two. Snapshots
+     * retain that immutable geometry, so absent address lines are a mask. */
+    return gb->rom_bank_count ? bank & (gb->rom_bank_count - 1u) : 0;
 }
 
 /**
@@ -531,7 +558,8 @@ size_t cupid_gb_effective_ram_bank(const CupidGb *gb) {
     size_t bank = cupid_gb_selected_ram_bank(gb);
     if (gb->header.mbc_type == CUPID_GB_MBC3 && !cupid_gb_has_extended_mbc3(gb))
         bank &= 3u;
-    return bank % gb->ram_bank_count;
+    /* Each supported storage capacity contains a power-of-two bank count. */
+    return bank & (gb->ram_bank_count - 1u);
 }
 
 void cupid_gb_mmm01_write(CupidGb *gb, uint16_t address, uint8_t value) {
@@ -796,24 +824,54 @@ bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size) {
         cupid_log_error("Failed to parse Game Boy cartridge header.");
         return false;
     }
+    size_t rom_bank_count = 2u;
+    while (rom_bank_count * 0x4000u < rom_size)
+        rom_bank_count *= 2u;
+
     const bool mmm01_menu_first = header.mbc_type == CUPID_GB_MMM01;
-    if (!mmm01_menu_first && header.mbc_type != CUPID_GB_TPP1 && rom_size > 0x8000u) {
-        const uint8_t *menu = rom_data + rom_size - 0x8000u;
-        if (!memcmp(rom_data + CUPID_GB_LOGO_START, menu + CUPID_GB_LOGO_START,
+    uint8_t mmm01_menu_type = header.cartridge_type;
+    uint8_t mmm01_game_ram_code = header.ram_size_code;
+    if (mmm01_menu_first && rom_bank_count > 2u) {
+        /* Menu-first dumps address the first game immediately after the menu.
+         * Keep the original bytes in place and inspect that logical header. */
+        const size_t game_ram_offset = 0x8000u + CUPID_GB_RAM_SIZE;
+        mmm01_game_ram_code = game_ram_offset < rom_size ? rom_data[game_ram_offset] : 0xffu;
+    } else if (!mmm01_menu_first && header.mbc_type != CUPID_GB_TPP1 && rom_bank_count > 2u) {
+        /* The menu occupies the chip's last 32 KiB, including erased padding
+         * when the file ends before the final physical bank is populated. */
+        const size_t menu_offset = rom_bank_count * 0x4000u - 0x8000u;
+        if (menu_offset + CUPID_GB_CARTRIDGE_TYPE < rom_size &&
+            !memcmp(rom_data + CUPID_GB_LOGO_START, rom_data + menu_offset + CUPID_GB_LOGO_START,
                     CUPID_GB_LOGO_END - CUPID_GB_LOGO_START + 1u)) {
-            CupidGbMbcType tail_type = cupid_gb_detect_mbc_type(menu[CUPID_GB_CARTRIDGE_TYPE]);
-            if (tail_type == CUPID_GB_MMM01) {
-                cupid_gb_parse_header(menu, 0x8000u, &header);
-            } else if (menu[CUPID_GB_CARTRIDGE_TYPE] == 0x11u) {
-                /* Some MMM01 menus declare a plain MBC3 type. */
+            uint8_t menu[0x150];
+            const size_t available = rom_size - menu_offset;
+            memset(menu, 0xff, sizeof(menu));
+            memcpy(menu, rom_data + menu_offset,
+                   available < sizeof(menu) ? available : sizeof(menu));
+            const uint8_t menu_type = menu[CUPID_GB_CARTRIDGE_TYPE];
+            if (cupid_gb_detect_mbc_type(menu_type) == CUPID_GB_MMM01) {
+                cupid_gb_parse_header(menu, sizeof(menu), &header);
+                mmm01_menu_type = menu_type;
+            } else if (menu_type == 0x11u) {
+                /* Some MMM01 menus declare a plain MBC3 type. Their RAM size
+                 * still comes from the menu, without a battery, RTC or motor. */
                 header.mbc_type = CUPID_GB_MMM01;
+                header.has_battery = false;
+                header.has_timer = false;
+                header.has_rumble = false;
+                header.ram_size_code = menu[CUPID_GB_RAM_SIZE];
+                header.ram_bank_count = cupid_gb_ram_bank_count_from_code(header.ram_size_code);
+                mmm01_menu_type = menu_type;
             }
         }
     }
 
-    const size_t ram_size = header.mbc_type == CUPID_GB_TPP1
-                                ? header.ram_bank_count * 0x2000u
-                                : cupid_gb_ram_size_from_code(header.ram_size_code);
+    size_t ram_size = cartridge_storage_size(&header, rom_size);
+    /* A no-RAM MMM01 menu can acquire a chip through the first game's size
+     * declaration. The menu then supplies its capacity, not the game's size. */
+    if (header.mbc_type == CUPID_GB_MMM01 && mmm01_menu_type != 0x0cu && mmm01_menu_type != 0x0du &&
+        mmm01_game_ram_code == 0)
+        ram_size = 0;
     if (ram_size > CUPID_GB_MAX_RAM_SIZE) {
         cupid_log_error("Game Boy cartridge RAM size exceeds emulator limits.");
         return false;
@@ -876,10 +934,8 @@ bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size) {
     /* Connected ROM address lines follow file population, independently of
      * header metadata. Missing bytes read as erased 0xff in the memory map.
      * Keep rom_size unpadded so hashes and native states identify the input file. */
-    gb->rom_bank_count = 2u;
-    while (gb->rom_bank_count * 0x4000u < rom_size)
-        gb->rom_bank_count *= 2u;
-    gb->ram_bank_count = gb->header.ram_bank_count;
+    gb->rom_bank_count = rom_bank_count;
+    gb->ram_bank_count = (ram_size + 0x1fffu) / 0x2000u;
     gb->current_rom_bank = gb->rom_bank_count > 1u ? 1u : 0u;
     gb->current_ram_bank = 0u;
     gb->mbc5_rumble_on = false;
@@ -907,14 +963,7 @@ bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size) {
         cupid_gb_huc3_advance(&gb->huc3, (int64_t)time(NULL));
     }
 
-    /* MBC2 has 512x4-bit built-in RAM regardless of header RAM size */
-    if (gb->header.mbc_type == CUPID_GB_MBC2) {
-        gb->cartridge_ram_size = 512u;
-        gb->ram_bank_count = 1u;
-    }
     if (gb->header.mbc_type == CUPID_GB_MBC7) {
-        gb->cartridge_ram_size = CUPID_GB_MBC7_EEPROM_SIZE;
-        gb->ram_bank_count = 1u;
         gb->current_rom_bank = 0;
         cupid_gb_mbc7_reset(gb);
     }

@@ -8,6 +8,7 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPainter>
 #include <QPointer>
 #include <QPushButton>
 #include <QTableWidget>
@@ -193,6 +194,190 @@ void testObjectsAndPalettes() {
     cupid_gb_cleanup(gb.get());
 }
 
+void testViewportAndGrids() {
+    for (const QPoint scroll : {QPoint(0, 0), QPoint(96, 112), QPoint(97, 113), QPoint(240, 0),
+                                QPoint(0, 240), QPoint(240, 240), QPoint(255, 255)}) {
+        const QRegion visible = inspectorViewport(scroll);
+        QImage image(256, 256, QImage::Format_RGB32);
+        image.fill(Qt::white);
+        {
+            QPainter painter(&image);
+            paintInspectorOverlays(painter, image.rect(), image.size(),
+                                   {InspectorGrid::None, true, scroll});
+        }
+        unsigned count = 0;
+        for (int y = 0; y < 256; ++y)
+            for (int x = 0; x < 256; ++x) {
+                // Membership follows a wrapped source coordinate, independently
+                // of how the renderer splits the viewport into rectangles.
+                const bool expected =
+                    (x - scroll.x() + 256) % 256 < 160 && (y - scroll.y() + 256) % 256 < 144;
+                count += expected;
+                assert(visible.contains(QPoint(x, y)) == expected);
+                assert((image.pixel(x, y) == qRgb(255, 255, 255)) == expected);
+            }
+        assert(count == 160 * 144);
+    }
+
+    const QColor margin(203, 217, 229);
+    const QRect target(11, 7, 512, 384);
+    QImage plain(540, 400, QImage::Format_RGB32);
+    plain.fill(margin);
+    {
+        QPainter painter(&plain);
+        painter.fillRect(target, Qt::white);
+    }
+    auto paintGrid = [&](InspectorGrid grid) {
+        QImage image = plain;
+        QPainter painter(&image);
+        paintInspectorOverlays(painter, target, QSize(256, 192), {grid, false, {}});
+        return image;
+    };
+    assert(paintGrid(InspectorGrid::None) == plain);
+    const auto tiles = paintGrid(InspectorGrid::Tiles);
+    const auto map = paintGrid(InspectorGrid::Map);
+    const int small = qRed(tiles.pixel(target.left() + 15, target.top() + 4));
+    const int bank = qRed(tiles.pixel(target.left() + 255, target.top() + 4));
+    assert(bank < small && small < 255);
+    assert(qRed(tiles.pixel(target.left() + 4, target.top() + 127)) == bank);
+    assert(qRed(map.pixel(target.left() + 255, target.top() + 4)) == small);
+    assert(qRed(map.pixel(target.left() + 4, target.top() + 127)) == small);
+    assert(tiles.pixel(target.left() + 14, target.top() + 4) == qRgb(255, 255, 255));
+    assert(tiles.pixel(target.left() + 16, target.top() + 4) == qRgb(255, 255, 255));
+    unsigned verticalLines = 0;
+    for (int x = target.left(); x <= target.right(); ++x)
+        verticalLines += tiles.pixel(x, target.top() + 4) != qRgb(255, 255, 255);
+    assert(verticalLines == 31);
+    assert(tiles.pixel(target.left() - 1, target.top()) == margin.rgb());
+    assert(tiles.pixel(target.right() + 1, target.bottom()) == margin.rgb());
+    assert(plain.pixel(target.left() + 15, target.top() + 4) == qRgb(255, 255, 255));
+
+    QImage scaled(540, 540, QImage::Format_RGB32);
+    scaled.fill(margin);
+    const QRect mapTarget(11, 7, 512, 512);
+    {
+        QPainter painter(&scaled);
+        painter.fillRect(mapTarget, Qt::white);
+        paintInspectorOverlays(painter, mapTarget, QSize(256, 256),
+                               {InspectorGrid::None, true, QPoint(240, 240)});
+    }
+    for (const QPoint corner : {QPoint(8, 8), QPoint(248, 8), QPoint(8, 248), QPoint(248, 248)})
+        assert(scaled.pixel(mapTarget.topLeft() + corner * 2) == qRgb(255, 255, 255));
+    assert(scaled.pixel(mapTarget.topLeft() + QPoint(400, 400)) != qRgb(255, 255, 255));
+    assert(scaled.pixel(mapTarget.left() - 1, mapTarget.top()) == margin.rgb());
+    assert(scaled.pixel(mapTarget.right() + 1, mapTarget.bottom()) == margin.rgb());
+}
+
+QRgb imageViewPixel(QWidget *view, const QImage &capture, QSize nativeSize, QPoint point) {
+    const int scale = std::max(
+        1, std::min(view->width() / nativeSize.width(), view->height() / nativeSize.height()));
+    const QPoint origin((view->width() - nativeSize.width() * scale) / 2,
+                        (view->height() - nativeSize.height() * scale) / 2);
+    const QPoint sample = origin + point * scale + QPoint(scale / 2, scale / 2);
+    const qreal ratio = capture.devicePixelRatio();
+    return capture.pixel(int((sample.x() + 0.5) * ratio), int((sample.y() + 0.5) * ratio));
+}
+
+void testOverlayWorkflows() {
+    auto gb = machine(true);
+    setColor(*gb, false, 0, 0, 0x7fff);
+    gb->io_registers[0x43] = gb->io_registers[0x42] = 0;
+    CupidGb *session = gb.get();
+    unsigned writes = 0;
+    InspectorsWindow window;
+    window.setSession([&] { return session; },
+                      [&](uint16_t, uint8_t) {
+                          ++writes;
+                          return false;
+                      });
+    window.show();
+    auto *live = window.findChild<QCheckBox *>("inspectorLive");
+    auto *grid = window.findChild<QCheckBox *>("inspectorGrid");
+    auto *scrolling = window.findChild<QCheckBox *>("inspectorScrolling");
+    auto *mapView = window.findChild<QWidget *>("inspectorMapImage");
+    auto *tilesView = window.findChild<QWidget *>("inspectorTileImage");
+    assert(live && grid && scrolling && mapView && tilesView);
+    live->setChecked(false);
+    assert(!grid->isChecked() && !scrolling->isChecked());
+    assert(!grid->isVisible() && !scrolling->isVisible());
+    const auto initial = snapshot(*gb);
+    window.selectTab(2);
+    QApplication::processEvents();
+    assert(grid->isVisible() && scrolling->isVisible());
+    const QImage plain = mapView->grab().toImage();
+    scrolling->setChecked(true);
+    const QImage viewport = mapView->grab().toImage();
+    assert(viewport != plain);
+    assert(imageViewPixel(mapView, viewport, {256, 256}, {20, 20}) == qRgb(255, 255, 255));
+    assert(imageViewPixel(mapView, viewport, {256, 256}, {220, 220}) != qRgb(255, 255, 255));
+    scrolling->setChecked(false);
+    assert(mapView->grab().toImage() == plain);
+    grid->setChecked(true);
+    assert(mapView->grab().toImage() != plain);
+    grid->setChecked(false);
+    assert(mapView->grab().toImage() == plain);
+    assert(snapshot(*gb) == initial && writes == 0);
+
+    grid->setChecked(true);
+    window.selectTab(1);
+    QApplication::processEvents();
+    assert(grid->isChecked() && grid->isVisible() && !scrolling->isVisible());
+    const QImage tileGrid = tilesView->grab().toImage();
+    grid->setChecked(false);
+    const QImage tilePlain = tilesView->grab().toImage();
+    assert(tileGrid != tilePlain);
+    grid->setChecked(true);
+    assert(tilesView->grab().toImage() == tileGrid);
+    window.selectTab(3);
+    assert(!grid->isVisible() && !scrolling->isVisible());
+    grid->setChecked(false);
+    window.selectTab(2);
+    QApplication::processEvents();
+    scrolling->setChecked(true);
+    gb->io_registers[0x43] = 240;
+    gb->io_registers[0x42] = 240;
+    const auto scrolled = snapshot(*gb);
+    const auto scrolledCopy = std::make_unique<CupidGb>(*gb);
+    live->setChecked(true);
+    QEventLoop refresh;
+    QTimer::singleShot(350, &refresh, &QEventLoop::quit);
+    refresh.exec();
+    live->setChecked(false);
+    const QImage wrapped = mapView->grab().toImage();
+    for (const QPoint corner : {QPoint(8, 8), QPoint(248, 8), QPoint(8, 248), QPoint(248, 248)})
+        assert(imageViewPixel(mapView, wrapped, {256, 256}, corner) == qRgb(255, 255, 255));
+    assert(imageViewPixel(mapView, wrapped, {256, 256}, {200, 200}) != qRgb(255, 255, 255));
+    assert(snapshot(*gb) == scrolled && writes == 0);
+    assert(std::memcmp(gb.get(), scrolledCopy.get(), sizeof(*gb)) == 0);
+
+    session = nullptr;
+    window.sessionChanged();
+    const QImage cleared = mapView->grab().toImage();
+    assert(!grid->isEnabled() && !scrolling->isEnabled());
+    grid->setChecked(true);
+    scrolling->setChecked(false);
+    assert(mapView->grab().toImage() == cleared);
+    auto replacement = machine(false);
+    replacement->io_registers[0x43] = 40;
+    replacement->io_registers[0x42] = 60;
+    const auto replacementState = snapshot(*replacement);
+    session = replacement.get();
+    window.sessionChanged();
+    assert(grid->isEnabled() && scrolling->isEnabled());
+    grid->setChecked(false);
+    scrolling->setChecked(true);
+    const QImage replaced = mapView->grab().toImage();
+    assert(imageViewPixel(mapView, replaced, {256, 256}, {80, 80}) == qRgb(255, 255, 255));
+    assert(imageViewPixel(mapView, replaced, {256, 256}, {8, 8}) != qRgb(255, 255, 255));
+    assert(snapshot(*replacement) == replacementState && writes == 0);
+    assert(snapshot(*gb) == scrolled);
+    window.setSession({}, {});
+    window.close();
+    QApplication::processEvents();
+    cupid_gb_cleanup(replacement.get());
+    cupid_gb_cleanup(gb.get());
+}
+
 void testWindowWorkflows() {
     auto gb = machine(true);
     CupidGb *session = gb.get();
@@ -307,6 +492,8 @@ int main(int argc, char **argv) {
     testTilePlanes();
     testMapsAndAttributes();
     testObjectsAndPalettes();
+    testViewportAndGrids();
+    testOverlayWorkflows();
     testWindowWorkflows();
     return 0;
 }

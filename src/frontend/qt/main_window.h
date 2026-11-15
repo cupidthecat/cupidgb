@@ -108,9 +108,14 @@ class MainWindow final : public QMainWindow {
     bool closeRom();
     bool restart();
     void resetPacing();
+    void setTurboCap(unsigned quarters);
     void tick();
     bool runFrame();
-    void present(bool completedFrame = false);
+    enum class Presentation { Redraw, Frame, Reset };
+    void present(Presentation presentation = Presentation::Redraw);
+    void notifyOnScreen(const QString &message);
+    void advanceScreenMessages();
+    bool screenMessagesSmokeTest(const QString &path, const QString &directory);
     void setupAudio();
     void stopAudio();
     void clearAudio();
@@ -155,6 +160,7 @@ class MainWindow final : public QMainWindow {
     void drainDebuggerAudio();
     bool debuggerSmokeTest(const QString &directory);
     bool pacingSmokeTest(const QString &path);
+    bool turboCapSmokeTest(const QString &path);
     bool displayCadenceSmokeTest(const QString &path);
     bool modelSmokeTest(const QString &directory);
     void openCheats(bool search = false);
@@ -215,6 +221,7 @@ class MainWindow final : public QMainWindow {
     QTimer audioRefreshTimer_;
     QElapsedTimer clock_;
     qint64 nextFrame_ = 0;
+    uint64_t pacingGeneration_ = 0;
     GuestClockPacer clockPacer_;
     QString romPath_;
     QString savePath_;
@@ -232,6 +239,8 @@ class MainWindow final : public QMainWindow {
     QSize displayNativeSize_{160, 144};
     QImage previousDisplayFrame_;
     QImage currentDisplayFrame_;
+    QImage previousMessageFrame_;
+    QImage currentMessageFrame_;
     QMenu *recentMenu_ = nullptr;
     QAction *pauseAction_ = nullptr;
     QAction *muteAction_ = nullptr;
@@ -244,6 +253,7 @@ class MainWindow final : public QMainWindow {
     QAction *copyScreenshotAction_ = nullptr;
     QAction *loadStateFileAction_ = nullptr;
     std::array<QAction *, 3> scalingActions_{};
+    std::array<QAction *, 12> turboCapActions_{};
     std::array<QAction *, 5> paletteActions_{};
     std::array<QAction *, 8> windowSizeActions_{};
     std::array<QAction *, 3> blendingActions_{};
@@ -275,6 +285,7 @@ class MainWindow final : public QMainWindow {
     std::array<unsigned, 2> rapidPhase_{};
     bool slowHeld_ = false;
     unsigned speedSteps_ = 16;
+    unsigned turboCapQuarters_ = 0;
     uint8_t physicalJoypad_ = 0xff;
     bool paused_ = false;
     bool debuggerInputPaused_ = false;

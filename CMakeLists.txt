@@ -127,6 +127,8 @@ if(CUPIDGB_BUILD_QT)
         src/frontend/qt/main_window_display.cpp
         src/frontend/qt/main_window_display_files.cpp
         src/frontend/qt/main_window_display_file_tests.cpp
+        src/frontend/qt/main_window_message_tests.cpp
+        src/frontend/qt/screen_messages.cpp
         src/frontend/qt/display_files.cpp
         src/frontend/qt/palette_library.cpp
         src/frontend/qt/palette_editor.cpp
@@ -288,6 +290,27 @@ if(CUPIDGB_ENABLE_TESTS)
         add_test(NAME cupidgb_inspectors COMMAND cupidgb_inspectors)
         set_tests_properties(cupidgb_inspectors PROPERTIES
             ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+        add_executable(cupidgb_screen_messages tests/frontend/test_screen_messages.cpp
+            src/frontend/qt/screen_messages.cpp)
+        target_include_directories(cupidgb_screen_messages PRIVATE src/frontend/qt)
+        target_link_libraries(cupidgb_screen_messages PRIVATE Qt6::Gui)
+        if(MSVC)
+            target_compile_options(cupidgb_screen_messages PRIVATE /UNDEBUG)
+        else()
+            target_compile_options(cupidgb_screen_messages PRIVATE -UNDEBUG)
+        endif()
+        add_test(NAME cupidgb_screen_messages COMMAND cupidgb_screen_messages)
+        set_tests_properties(cupidgb_screen_messages PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+        if(WIN32 AND DEFINED ENV{WINDIR})
+            # The offscreen plugin does not discover installed Windows fonts itself.
+            # Give this glyph regression the font files available to native Qt.
+            file(TO_CMAKE_PATH "$ENV{WINDIR}/Fonts" cupidgb_message_test_fonts)
+            if(IS_DIRECTORY "${cupidgb_message_test_fonts}")
+                set_property(TEST cupidgb_screen_messages APPEND PROPERTY ENVIRONMENT
+                    "QT_QPA_FONTDIR=${cupidgb_message_test_fonts}")
+            endif()
+        endif()
         add_executable(cupidgb_display_pipeline
             tests/frontend/test_display_pipeline.cpp src/frontend/qt/display_pipeline.cpp)
         target_include_directories(cupidgb_display_pipeline PRIVATE src/frontend/qt)
