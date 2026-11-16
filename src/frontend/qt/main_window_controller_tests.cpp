@@ -964,6 +964,14 @@ bool MainWindow::controllerSmokeTest(const QString &directory) {
     // pointer workflow checks input through the gameplay window's focus gate.
     if (!debuggerWindow_ || !debuggerWindow_->close() || debuggerWindow_->isVisible())
         return smokeFailure(__FILE__, __LINE__);
+    // The offscreen plugin can retain a hidden tool as the active widget. There
+    // is no window manager to select the gameplay window for synthetic input.
+    QT_WARNING_PUSH
+    QT_WARNING_DISABLE_DEPRECATED
+    QApplication::setActiveWindow(this);
+    QT_WARNING_POP
+    if (QApplication::activeWindow() != this)
+        return smokeFailure(__FILE__, __LINE__);
 
     if (!openMotorCartridge(8))
         return smokeFailure(__FILE__, __LINE__);

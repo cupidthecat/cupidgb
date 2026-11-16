@@ -102,8 +102,22 @@ bool MainWindow::motionSmokeTest(const QString &directory) {
     timer_.stop();
     motionFocusActive_ = true;
     refreshControllerGate();
-    if (!motionInputAllowed(true))
+    if (!motionInputAllowed(true)) {
+        const auto *active = QApplication::activeWindow();
+        const auto *modal = QApplication::activeModalWidget();
+        const auto *popup = QApplication::activePopupWidget();
+        qCritical("Motion workflow gate: paused=%d operation=%d menuDepth=%u menuSuspended=%d "
+                  "trace=%u focus=%d appState=%d isolated=%d visible=%d active=%s activeVisible=%d "
+                  "activeIsMain=%d modal=%s popup=%s",
+                  int(paused_), int(stateOperation_), unsigned(menuDepth_),
+                  int(menuInputSuspended_), unsigned(inputTrace_.size()), int(motionFocusActive_),
+                  int(QApplication::applicationState()), int(isolated_), int(isVisible()),
+                  active ? qPrintable(active->objectName()) : "<none>",
+                  int(active && active->isVisible()), int(active == this),
+                  modal ? qPrintable(modal->objectName()) : "<none>",
+                  popup ? qPrintable(popup->objectName()) : "<none>");
         return smokeFailure(__FILE__, __LINE__);
+    }
     const auto move = [&](int x, int y) {
         const QSize source = display_->image.size();
         const QRectF viewport = displayViewport(source, display_->size(), display_->scaling,
