@@ -51,9 +51,13 @@ Type `help` or `?` for the supported command list. Console numbers are decimal u
 | `write $c000 $42` | Write byte 42 to the current writable mapping |
 | `set PC $0100` | Change a CPU register while paused |
 | `symbols "path with spaces/game.sym"` | Load a symbol file |
-| `reset reload` | Reread the current cartridge and companion symbols, keeping the current model and breakpoints |
+| `reset` | Hard-reset the loaded console, preserving pause choice and rewind history |
+| `reset quick` | Quick-reset the loaded console with retained physical memory and rewind history |
+| `reset reload` | Refresh cartridge, firmware and companion symbols; preserve the active model and compatible rewind |
 
 Register edits accept AF, BC, DE, HL, SP, PC, A, F, B, C, D, E, H, L, and IME. The unused low bits of F remain zero; IME accepts only 0 or 1. A bank-qualified memory/disassembly request must refer to the bank currently mapped at that address. The commands do not switch hardware banks or patch ROM bytes.
+
+The native `reset` and `reset quick` commands operate on the loaded assets. They do not reread cartridge, firmware or symbol files. Both keep host registrations, breakpoints, symbols and active recording while clearing instruction history. `reset reload` uses the same asset workflow as File > Reload Cartridge.
 
 ## Expressions and conditional stops
 
@@ -76,9 +80,9 @@ Load Symbols accepts RGBDS-style `.sym` text with hexadecimal `bank:address name
 
 Loading replaces the symbol table only after complete validation. A malformed file leaves existing symbols intact and reports a line number. Duplicate names resolve to their last definition. Files are limited to 4 MiB and 16,384 symbols, with at most 127 bytes per name. The symbol loader does not read object files.
 
-Symbols and breakpoints are host debugger data. They are not embedded in native save states. Resetting the same cartridge path, data, and model preserves them while clearing execution history. A replacement clears the previous session's debugger data and loads a matching basename `.sym` file if available. The first debugger open also checks for that companion file. A failed cartridge open preserves the current session.
+Symbols and breakpoints are host debugger data. They are not embedded in native save states. Native console resets keep them while clearing instruction history. A replacement clears the previous session's debugger data and loads a matching basename `.sym` file if available. The first debugger open also checks for that companion file. A failed cartridge open preserves the current session.
 
-File > Reload Cartridge and `reset reload` explicitly reread the cartridge and companion symbols. They keep the active hardware model, breakpoints, and running or paused state, then clear rewind and instruction history. An absent companion file clears the old symbols. A malformed symbol file or failed cartridge load preserves the session and its history. Use `symbols` to replace only the symbol table without reloading the cartridge.
+Menu Reset, Quick Reset, Reload and `reset reload` refresh cartridge, firmware and companion symbols. An absent companion file clears the old symbols. Malformed symbols or unreadable assets preserve the session and its history. Existing breakpoints remain for compatible sessions. Ordinary Reset clears frame rewind; Quick Reset and Reload retain it when cartridge bytes, model and firmware match. All clear instruction history. Use `symbols` to replace only the symbol table without reloading the cartridge.
 
 ## Instruction history and playback
 
@@ -112,4 +116,4 @@ Inspector raw grayscale mode bypasses color correction. Palette-selected color p
 
 Use Audio > Audio Channels or Alt+1 through Alt+4 to listen to individual channel combinations. Muting changes output mixing while the emulated channel continues running. These choices persist through state loading, rewind and Backstep for the current session.
 
-Bare `reset` and `reset quick` console commands remain pending; use the implemented `reset reload` command or the ordinary Reset action for the documented current workflows. Read/write watchpoints, a full expression language, saved debugger sessions, continuous-playback instruction replay, arbitrary physical-bank memory editing, ROM patching, interactive palette editing, and graphics layer toggles also remain pending. Inspector rendering and the bounded instruction history are useful diagnostic tools, not complete debugger or hardware parity.
+Read/write watchpoints, a full expression language, saved debugger sessions, continuous-playback instruction replay, arbitrary physical-bank memory editing, ROM patching, interactive palette editing, and graphics layer toggles remain pending. Inspector rendering and the bounded instruction history are useful diagnostic tools, not complete debugger or hardware parity.

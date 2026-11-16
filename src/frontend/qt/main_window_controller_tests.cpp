@@ -22,6 +22,8 @@
 
 #include "main_window_internal.h"
 
+#include <cmath>
+
 bool MainWindow::controllerSmokeTest(const QString &directory) {
     using namespace cupid::input;
     controllerSmokeActive_ = true;
@@ -204,7 +206,7 @@ bool MainWindow::controllerSmokeTest(const QString &directory) {
     if (!runFrame() || emulator_->gb.sgb.player_count != 4 || emulator_->gb.joypad != 0xef)
         return smokeFailure(__FILE__, __LINE__);
     emulator_->gb.sgb.current_player = 1;
-    emulator_->gb.io_registers[0] = 0x10;
+    cupid_gb_write_u8(&emulator_->gb, 0xff00, 0x10);
     if ((cupid_gb_read_u8(&emulator_->gb, 0xff00) & 0xf) != 0xd)
         return smokeFailure(__FILE__, __LINE__);
     QKeyEvent press(QEvent::KeyPress, keys_[4], Qt::NoModifier);
@@ -456,7 +458,105 @@ bool MainWindow::controllerSmokeTest(const QString &directory) {
         return smokeFailure(__FILE__, __LINE__);
     timer_.stop();
     SDL_JoystickSetVirtualButton(first.handle, 0, 0);
+    SDL_JoystickSetVirtualAxis(first.handle, 1, 0);
     controllers_->backend().pollNow();
+    if (!wait([&] { return controllers_->output().buttons == ControllerOutput{}.buttons; }) ||
+        emulator_->gb.joypad != 0xff)
+        return smokeFailure(__FILE__, __LINE__);
+    // Physical controller shortcuts retain a simultaneously held gameplay
+    // button through each reset workflow, including the new core instance.
+    const auto resetConfiguration = controllers_->configuration();
+    controllers_->setFocused(true);
+    controllers_->setDeliveryEnabled(true);
+    SDL_JoystickSetVirtualButton(first.handle, 0, 1);
+    if (!wait([&] { return !(emulator_->gb.joypad & 0x10); }))
+        return smokeFailure(__FILE__, __LINE__);
+    {
+        QScopedValueRollback<bool> operation(stateOperation_, true);
+        refreshControllerGate();
+        SDL_JoystickSetVirtualButton(first.handle, 0, 0);
+        controllers_->backend().pollNow();
+        if (!controllerInputDeferred_ || controllers_->output().buttons[0] != 0xff ||
+            (controllerOutput_.buttons[0] & 0x10))
+            return smokeFailure(__FILE__, __LINE__);
+    }
+    refreshControllerGate();
+    if (controllerInputDeferred_ || emulator_->gb.joypad != 0xff ||
+        controllerOutput_.buttons[0] != 0xff) {
+        const auto output = controllers_->output();
+        const auto live = livePlayerButtons();
+        qCritical("Controller release after transaction failed: deferred=%d operation=%d "
+                  "menu=%u/%d delivery=%d appState=%d paused=%d manager=%02x retained=%02x "
+                  "live=%02x/%02x/%02x/%02x physical=%02x core=%02x players=%u navigationY=%d",
+                  int(controllerInputDeferred_), int(stateOperation_), menuDepth_,
+                  int(menuInputSuspended_), int(controllers_->deliveryEnabled()),
+                  int(QApplication::applicationState()), int(paused_), unsigned(output.buttons[0]),
+                  unsigned(controllerOutput_.buttons[0]), unsigned(live[0]), unsigned(live[1]),
+                  unsigned(live[2]), unsigned(live[3]), unsigned(physicalJoypad_),
+                  unsigned(emulator_->gb.joypad), controllerPlayerCount_,
+                  int(SDL_JoystickGetAxis(first.handle, 1)));
+        return smokeFailure(__FILE__, __LINE__);
+    }
+    for (const QString &command :
+         {QStringLiteral("reset"), QStringLiteral("quickReset"), QStringLiteral("reload")}) {
+        auto shortcutConfiguration = resetConfiguration;
+        shortcutConfiguration.profiles[a.info.persistentKey].bindings["shortcut/" + command] = {
+            {Binding::Button, 7, 1}};
+        controllers_->configure(shortcutConfiguration);
+        controllers_->setFocused(true);
+        controllers_->setDeliveryEnabled(true);
+        SDL_JoystickSetVirtualButton(first.handle, 0, 1);
+        if (!wait([&] { return !(emulator_->gb.joypad & 0x10); }))
+            return smokeFailure(__FILE__, __LINE__);
+        const uint64_t beforeReset = sessionId_;
+        SDL_JoystickSetVirtualButton(first.handle, 7, 1);
+        if (!wait([&] { return sessionId_ != beforeReset; }) || sessionId_ != beforeReset + 1 ||
+            failed_ || paused_ || emulator_->gb.elapsed_cycles || (emulator_->gb.joypad & 0x10) ||
+            (controllerOutput_.buttons[0] & 0x10))
+            return smokeFailure(__FILE__, __LINE__);
+        SDL_JoystickSetVirtualButton(first.handle, 7, 0);
+        SDL_JoystickSetVirtualButton(first.handle, 0, 0);
+        if (!wait([&] { return emulator_->gb.joypad == 0xff; }))
+            return smokeFailure(__FILE__, __LINE__);
+    }
+    controllers_->configure(resetConfiguration);
+    controllers_->setFocused(true);
+    controllers_->setDeliveryEnabled(true);
+    SDL_JoystickSetVirtualButton(first.handle, 0, 1);
+    if (!wait([&] { return !(emulator_->gb.joypad & 0x10); }))
+        return smokeFailure(__FILE__, __LINE__);
+    emulationMenu->popup(mapToGlobal(QPoint(20, 20)));
+    controllers_->setFocused(true);
+    if (!menuInputSuspended_ || (emulator_->gb.joypad & 0x10) ||
+        !selectMenuAction(quickResetAction_))
+        return smokeFailure(__FILE__, __LINE__);
+    const uint64_t beforeMenuReset = sessionId_;
+    SDL_JoystickSetVirtualButton(second.handle, 0, 1);
+    if (!wait([&] { return sessionId_ != beforeMenuReset; }) || sessionId_ != beforeMenuReset + 1 ||
+        menuDepth_ || paused_ || emulator_->gb.elapsed_cycles || (emulator_->gb.joypad & 0x10))
+        return smokeFailure(__FILE__, __LINE__);
+    SDL_JoystickSetVirtualButton(second.handle, 0, 0);
+    SDL_JoystickSetVirtualAxis(first.handle, 1, 0);
+    controllers_->backend().pollNow();
+    emulationMenu->popup(mapToGlobal(QPoint(20, 20)));
+    controllers_->setFocused(true);
+    SDL_JoystickSetVirtualButton(first.handle, 0, 0);
+    if (!wait([&] { return emulator_->gb.joypad == 0xff; }) || !menuInputSuspended_)
+        return smokeFailure(__FILE__, __LINE__);
+    const bool menuMute = muteAction_->isChecked();
+    SDL_JoystickSetVirtualButton(first.handle, 2, 1);
+    SDL_JoystickSetVirtualButton(first.handle, 3, 1);
+    controllers_->backend().pollNow();
+    QApplication::processEvents();
+    if (emulator_->gb.joypad != 0xff || muteAction_->isChecked() != menuMute ||
+        !menuInputSuspended_)
+        return smokeFailure(__FILE__, __LINE__);
+    SDL_JoystickSetVirtualButton(first.handle, 2, 0);
+    SDL_JoystickSetVirtualButton(first.handle, 3, 0);
+    controllers_->backend().pollNow();
+    emulationMenu->hide();
+    if (!wait([&] { return !menuInputSuspended_; }))
+        return smokeFailure(__FILE__, __LINE__);
     controllers_->setFocused(true);
     controllers_->setDeliveryEnabled(true);
     cupid_gb_write_u8(&emulator_->gb, 0x4000, 8);
@@ -473,6 +573,164 @@ bool MainWindow::controllerSmokeTest(const QString &directory) {
     const QByteArray motor = captureState();
     cupid_gb_write_u8(&emulator_->gb, 0x4000, 0);
     if (!restoreState(motor, false) || first.amplitude || !cupid_gb_rumble_enabled(&emulator_->gb))
+        return smokeFailure(__FILE__, __LINE__);
+
+    // TPP1 exposes graded motor levels independently of its raw status register.
+    // Keep all host observations on virtual SDL devices and measured guest spans.
+    const auto motorConfiguration = controllers_->configuration();
+    const auto openMotorCartridge = [&](unsigned features) {
+        QByteArray fixture(32768, char(0));
+        fixture[0x100] = char(0xc3);
+        fixture[0x102] = 2;
+        fixture[0x147] = char(0xbc);
+        fixture[0x149] = char(0xc1);
+        fixture[0x14a] = 0x65;
+        fixture[0x150] = 1;
+        fixture[0x152] = 1;
+        fixture[0x153] = char(features);
+        fixture[0x200] = char(0x18);
+        fixture[0x201] = char(0xfe);
+        uint8_t checksum = 0;
+        for (unsigned address = 0x134; address <= 0x14c; ++address)
+            checksum = uint8_t(checksum - uint8_t(fixture[qsizetype(address)]) - 1u);
+        fixture[0x14d] = char(checksum);
+        QFile generated(
+            QDir(directory).filePath(QStringLiteral("controller-motor-%1.gb").arg(features)));
+        if (!generated.open(QIODevice::WriteOnly) || generated.write(fixture) != fixture.size())
+            return false;
+        generated.close();
+        if (!openRom(generated.fileName()))
+            return false;
+        timer_.stop();
+        controllers_->setFocused(true);
+        controllers_->setDeliveryEnabled(true);
+        return !first.amplitude;
+    };
+    const auto stepMotor = [this](unsigned instructions) {
+        for (unsigned i = 0; i < instructions; ++i)
+            if (!cupid_gb_step(&emulator_->gb))
+                return false;
+        return true;
+    };
+    const auto publishMotor = [this] {
+        // Make each observation immediate without relying on the host refresh timer.
+        // This clears SDL output only; the frontend's guest integration is retained.
+        controllers_->stopRumble();
+        finishControllerRumble();
+    };
+    const auto motorNear = [&first](int expected) {
+        return std::abs(int(first.amplitude) - expected) <= 1;
+    };
+    if (!openMotorCartridge(9))
+        return smokeFailure(__FILE__, __LINE__);
+    for (unsigned strength = 1; strength <= 3; ++strength) {
+        cupid_gb_write_u8(&emulator_->gb, 3, uint8_t(0x20u + strength));
+        if (!stepMotor(32))
+            return smokeFailure(__FILE__, __LINE__);
+        publishMotor();
+        if (!motorNear(int(strength * 21845u)))
+            return smokeFailure(__FILE__, __LINE__);
+    }
+
+    resetControllerRumble();
+    uint64_t weighted = 0;
+    const uint64_t motorStart = emulator_->gb.elapsed_cycles;
+    for (const auto &[strength, instructions] :
+         {std::pair<unsigned, unsigned>{1, 7}, {3, 11}, {2, 13}}) {
+        cupid_gb_write_u8(&emulator_->gb, 3, uint8_t(0x20u + strength));
+        const uint64_t start = emulator_->gb.elapsed_cycles;
+        if (!stepMotor(instructions))
+            return smokeFailure(__FILE__, __LINE__);
+        weighted += (emulator_->gb.elapsed_cycles - start) * strength;
+    }
+    publishMotor();
+    const int mixedAmplitude = int(std::lround(
+        65535.0 * double(weighted) / (3.0 * double(emulator_->gb.elapsed_cycles - motorStart))));
+    if (!motorNear(mixedAmplitude))
+        return smokeFailure(__FILE__, __LINE__);
+
+    const QByteArray gradedMotor = captureState();
+    cupid_gb_write_u8(&emulator_->gb, 3, 0x23);
+    if (!stepMotor(32))
+        return smokeFailure(__FILE__, __LINE__);
+    publishMotor();
+    if (!motorNear(65535) || !restoreState(gradedMotor, false) || first.amplitude ||
+        cupid_gb_rumble_strength(&emulator_->gb) != 2 || !stepMotor(32))
+        return smokeFailure(__FILE__, __LINE__);
+    publishMotor();
+    if (!motorNear(43690) || restoreState(QByteArray("invalid motor state"), false) ||
+        !motorNear(43690))
+        return smokeFailure(__FILE__, __LINE__);
+    setPaused(true);
+    if (first.amplitude)
+        return smokeFailure(__FILE__, __LINE__);
+    setPaused(false);
+    controllers_->setFocused(true);
+    if (!stepMotor(32))
+        return smokeFailure(__FILE__, __LINE__);
+    publishMotor();
+    if (!motorNear(43690))
+        return smokeFailure(__FILE__, __LINE__);
+
+    auto halfMotor = motorConfiguration;
+    halfMotor.rumbleStrength = 50;
+    controllers_->configure(halfMotor);
+    if (first.amplitude || !stepMotor(32))
+        return smokeFailure(__FILE__, __LINE__);
+    publishMotor();
+    if (!motorNear(21845))
+        return smokeFailure(__FILE__, __LINE__);
+    halfMotor.rumble = false;
+    controllers_->configure(halfMotor);
+    if (first.amplitude || !stepMotor(32))
+        return smokeFailure(__FILE__, __LINE__);
+    publishMotor();
+    if (first.amplitude)
+        return smokeFailure(__FILE__, __LINE__);
+    controllers_->configure(motorConfiguration);
+    controllers_->setFocused(true);
+    controllers_->setDeliveryEnabled(true);
+
+    for (const auto kind : {CUPID_GB_RESET_QUICK, CUPID_GB_RESET_HARD}) {
+        cupid_gb_write_u8(&emulator_->gb, 3, 0x22);
+        if (!stepMotor(32))
+            return smokeFailure(__FILE__, __LINE__);
+        publishMotor();
+        if (!motorNear(43690) || !resetConsole(kind) || first.amplitude ||
+            cupid_gb_rumble_strength(&emulator_->gb) || !stepMotor(32))
+            return smokeFailure(__FILE__, __LINE__);
+        publishMotor();
+        if (first.amplitude)
+            return smokeFailure(__FILE__, __LINE__);
+    }
+    for (const auto workflow :
+         {ResetWorkflow::Normal, ResetWorkflow::Quick, ResetWorkflow::Reload}) {
+        cupid_gb_write_u8(&emulator_->gb, 3, 0x23);
+        if (!stepMotor(32))
+            return smokeFailure(__FILE__, __LINE__);
+        publishMotor();
+        if (!motorNear(65535) || !resetCartridge(workflow) || first.amplitude ||
+            cupid_gb_rumble_strength(&emulator_->gb))
+            return smokeFailure(__FILE__, __LINE__);
+        controllers_->setFocused(true);
+        controllers_->setDeliveryEnabled(true);
+        cupid_gb_write_u8(&emulator_->gb, 3, 0x21);
+        if (!stepMotor(32))
+            return smokeFailure(__FILE__, __LINE__);
+        publishMotor();
+        if (!motorNear(21845))
+            return smokeFailure(__FILE__, __LINE__);
+    }
+
+    if (!openMotorCartridge(8))
+        return smokeFailure(__FILE__, __LINE__);
+    cupid_gb_write_u8(&emulator_->gb, 3, 0x23);
+    if (!cupid_gb_rumble_enabled(&emulator_->gb) ||
+        (cupid_gb_read_u8(&emulator_->gb, 0xa003) & 3u) != 3 ||
+        cupid_gb_rumble_strength(&emulator_->gb) || !stepMotor(32))
+        return smokeFailure(__FILE__, __LINE__);
+    publishMotor();
+    if (first.amplitude || second.amplitude)
         return smokeFailure(__FILE__, __LINE__);
     if (!closeRom() || first.amplitude)
         return smokeFailure(__FILE__, __LINE__);

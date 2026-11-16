@@ -210,16 +210,7 @@ bool MainWindow::loadDebuggerSymbols(const QString &path) {
     return true;
 }
 
-bool MainWindow::reloadRom() {
-    if (!emulator_)
-        return false;
-    QScopedValueRollback<bool> operation(stateOperation_, true);
-    const bool wasPaused = paused_;
-    std::unique_ptr<CupidGbDebugger> symbols;
-    const auto cleanup = qScopeGuard([&symbols] {
-        if (symbols)
-            cupid_gb_debugger_cleanup(symbols.get());
-    });
+bool MainWindow::prepareResetSymbols(std::unique_ptr<CupidGbDebugger> &symbols) {
     if (debugger_) {
         symbols = std::make_unique<CupidGbDebugger>();
         cupid_gb_debugger_init(symbols.get());
@@ -233,16 +224,11 @@ bool MainWindow::reloadRom() {
             return false;
         }
     }
-    if (!openRom(romPath_, true))
-        return false;
-    if (symbols) {
-        std::swap(debugger_->symbols, symbols->symbols);
-        std::swap(debugger_->symbol_count, symbols->symbol_count);
-    }
-    setPaused(wasPaused);
-    statusBar()->showMessage("Cartridge reloaded", 3000);
-    notifyOnScreen("Cartridge reloaded");
     return true;
+}
+
+bool MainWindow::reloadRom() {
+    return resetCartridge(ResetWorkflow::Reload);
 }
 
 bool MainWindow::rememberDebuggerStep() {
@@ -318,7 +304,7 @@ void MainWindow::debuggerSlice() {
         refreshDebugger();
         return;
     }
-    if (stateOperation_ || menuDepth_)
+    if (stateOperation_ || menuDepth_ || menuInputSuspended_)
         return;
     QScopedValueRollback<bool> operation(stateOperation_, true);
     QElapsedTimer slice;
@@ -421,7 +407,7 @@ void MainWindow::debuggerCommand(const QString &input) {
                "continue (c)   step (s)   next (n)   finish (f)   backstep (bs)\n"
                "registers (r)   print (p) expression   disassemble [address]\n"
                "x address [decimal count]\n"
-               "write address byte   set register value   symbols path   reset reload\n"
+               "write address byte   set register value   symbols path   reset [quick|reload]\n"
                "Numbers are decimal; use $ or 0x for hexadecimal. Symbols are supported.\n"
                "Backstep retains up to 128 explicit debugger steps within 32 MiB.\n"
                "Continuous playback does not record instruction history.\n"
@@ -446,12 +432,18 @@ void MainWindow::debuggerCommand(const QString &input) {
         return;
     }
     if (verb == "reset") {
-        if (words.size() != 2 || words[1].compare("reload", Qt::CaseInsensitive) != 0) {
-            output("Usage: reset reload");
-            return;
+        if (words.size() == 1) {
+            if (resetConsole(CUPID_GB_RESET_HARD))
+                output("Console reset; compatible rewind history retained.");
+        } else if (words.size() == 2 && words[1].compare("quick", Qt::CaseInsensitive) == 0) {
+            if (resetConsole(CUPID_GB_RESET_QUICK))
+                output("Console quick reset; compatible rewind history retained.");
+        } else if (words.size() == 2 && words[1].compare("reload", Qt::CaseInsensitive) == 0) {
+            if (reloadRom())
+                output("Cartridge and companion symbols reloaded; instruction history cleared.");
+        } else {
+            output("Usage: reset [quick|reload]");
         }
-        if (reloadRom())
-            output("Cartridge and companion symbols reloaded; instruction history cleared.");
         return;
     }
     const auto number = [](QString text, unsigned maximum, unsigned *value) {

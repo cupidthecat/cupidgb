@@ -81,15 +81,12 @@ MainWindow::MainWindow(bool isolated, bool automated, bool audioCheck,
     controllers_->configure(cupid::input::ControllerConfiguration::load(
         settings_.value("controllers/configuration").toByteArray(), &validControllers));
     controllers_->outputChanged = [this](const cupid::input::ControllerOutput &output) {
-        const auto previous = controllerOutput_;
-        controllerOutput_ = output;
-        controllerMotionChanged(previous);
-        reconcileControllerInput();
+        receiveControllerOutput(output);
     };
     controllers_->shortcutPressed = [this](const QString &id) {
         QTimer::singleShot(0, this, [this, id] {
-            if (!controllers_->deliveryEnabled() || stateOperation_ ||
-                QApplication::activeModalWidget())
+            if (!controllers_->deliveryEnabled() || stateOperation_ || menuInputSuspended_ ||
+                QApplication::activeModalWidget() || QApplication::activePopupWidget())
                 return;
             if (id == "menu") {
                 auto *menu = menuBar()->actions().value(1)->menu();
@@ -123,12 +120,14 @@ MainWindow::MainWindow(bool isolated, bool automated, bool audioCheck,
     for (auto *menu : findChildren<QMenu *>()) {
         connect(menu, &QMenu::aboutToShow, this, [this] {
             if (menuDepth_++ == 0) {
-                releaseKeys(false);
+                // The guest stops while a menu owns input. Keep existing holds,
+                // but allow their physical releases to reach the paused machine.
+                menuInputSuspended_ = true;
                 clearAudio();
                 resetControllerRumble();
                 resetPacing();
             }
-            controllers_->setDeliveryEnabled(false);
+            refreshControllerGate();
         });
         connect(menu, &QMenu::aboutToHide, this, [this] {
             if (menuDepth_)
@@ -136,7 +135,9 @@ MainWindow::MainWindow(bool isolated, bool automated, bool audioCheck,
             if (!menuDepth_)
                 QTimer::singleShot(0, this, [this] {
                     if (!menuDepth_) {
+                        menuInputSuspended_ = false;
                         refreshControllerGate();
+                        receiveControllerOutput(controllers_->output());
                         clearAudio();
                         resetPacing();
                     }
@@ -236,6 +237,9 @@ void MainWindow::buildMenus() {
     resetAction_ = emulation->addAction("&Reset", QKeySequence("Ctrl+R"));
     registerShortcut(resetAction_, "reset");
     connect(resetAction_, &QAction::triggered, this, [this] { restart(); });
+    quickResetAction_ = emulation->addAction("&Quick Reset", QKeySequence("Ctrl+Alt+R"));
+    registerShortcut(quickResetAction_, "quickReset");
+    connect(quickResetAction_, &QAction::triggered, this, [this] { quickReset(); });
     pauseAction_ = emulation->addAction("&Pause", QKeySequence("Ctrl+P"));
     registerShortcut(pauseAction_, "pause");
     pauseAction_->setCheckable(true);
@@ -402,7 +406,8 @@ void MainWindow::buildMenus() {
     recordingAction_ = audio->addAction("Start Audio &Recording…");
     recordingAction_->setToolTip(
         "Record forward stereo audio before host mute, volume, and resampling. "
-        "Pause and rewind add no audio. Reset or a sample-rate change ends the file.");
+        "Pause and rewind add no audio. Resets preserve recording; opening or closing "
+        "a cartridge or changing the sample rate ends the file.");
     registerShortcut(recordingAction_, "recording");
     connect(recordingAction_, &QAction::triggered, this, [this] {
         if (recorder_ && recorder_->active()) {
@@ -473,7 +478,7 @@ void MainWindow::buildMenus() {
             "Default controls: arrows, X (A), Z (B), Backspace (Select), Enter (Start).\n"
             "Hold Space for turbo. Hold Tab to rewind. Change button mappings in Settings.\n\n"
             "Hold Shift for slow motion. Rapid A/B keys are configurable and start unassigned.\n\n"
-            "Open: Ctrl+O   Reset: Ctrl+R   Pause: Ctrl+P\n"
+            "Open: Ctrl+O   Reset: Ctrl+R   Quick Reset: Ctrl+Alt+R   Pause: Ctrl+P\n"
             "Fullscreen: Ctrl+F   Mute: Ctrl+M   Screenshot: F12\n\n"
             "Audio channels: Alt+1–4. Change shortcuts and audio filters in Settings.\n\n"
             "Save state: Ctrl+0–9   Load state: Ctrl+Shift+0–9\n\n"
@@ -517,7 +522,7 @@ bool MainWindow::openRom(const QString &path) {
     return openRom(path, false);
 }
 
-bool MainWindow::openRom(const QString &path, bool reload) {
+bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflow) {
     if (isStatePath(path)) {
         reportError(
             "State files cannot be opened as cartridges. Open a cartridge, then load its state.");
@@ -681,13 +686,19 @@ bool MainWindow::openRom(const QString &path, bool reload) {
         cupid_emulator_shutdown(candidate.get());
         return false;
     }
-    if (!stopRecording()) {
+    const QByteArray savedBeforeReset = savedRam_;
+    if (workflow == ResetWorkflow::Open && !stopRecording()) {
         cupid_emulator_shutdown(candidate.get());
         return false;
     }
     // Initial firmware entry restores the same generation's cold memory after
     // cartridge loading and battery import have prepared persistent clock history.
-    if (!bootFolder.isEmpty())
+    if (workflow != ResetWorkflow::Open) {
+        if (!prepareResetCandidate(candidate.get(), workflow, liveBattery)) {
+            cupid_emulator_shutdown(candidate.get());
+            return false;
+        }
+    } else if (!bootFolder.isEmpty())
         cupid_gb_start_boot_rom(&candidate->gb);
     // Startup may rebuild the APU. Install host choices after its final reset,
     // before the candidate can execute or produce its first audio sample.
@@ -695,16 +706,27 @@ bool MainWindow::openRom(const QString &path, bool reload) {
     const bool sameCartridge = emulator_ && romData_ == data &&
                                romPath_.compare(absolute, pathCase) == 0 &&
                                emulator_->gb.model == candidate->gb.model;
-    if (!sameCartridge)
+    const bool sameFirmware =
+        emulator_ && emulator_->gb.boot_rom_size == candidate->gb.boot_rom_size &&
+        !std::memcmp(emulator_->gb.boot_rom, candidate->gb.boot_rom, candidate->gb.boot_rom_size);
+    const bool retainHistory =
+        sameCartridge && sameFirmware &&
+        (workflow == ResetWorkflow::Quick || workflow == ResetWorkflow::Reload);
+    const uint64_t previousGuestCycles = emulator_ ? emulator_->gb.elapsed_cycles : 0;
+    const bool resetChangedBattery =
+        workflow != ResetWorkflow::Open && sameBattery && emulator_ &&
+        candidate->gb.battery_write_generation != emulator_->gb.battery_write_generation;
+    if (!sameCartridge && workflow == ResetWorkflow::Open)
         setPrinterConnected(false);
     if (emulator_)
         cupid_emulator_shutdown(emulator_.get());
     emulator_ = std::move(candidate);
     {
-        // Device reclassification can emit output immediately. Clear old host
-        // keys and gate every callback before routing input into the new core.
+        // Device reclassification can emit output immediately. Gate callbacks
+        // through the commit; resetting a session does not release its controls.
         QScopedValueRollback<bool> operation(stateOperation_, true);
-        releaseKeys(false);
+        if (workflow == ResetWorkflow::Open)
+            releaseKeys(false);
         controllers_->setMotionEnabled(emulator_->gb.header.mbc_type == CUPID_GB_MBC7);
     }
     cheats_ = std::move(candidateCheats);
@@ -714,21 +736,31 @@ bool MainWindow::openRom(const QString &path, bool reload) {
     cupid_gb_set_cheats(&emulator_->gb, cheats_.get());
     refreshCheats(true);
     resetPrinter();
-    cupid_gb_set_rumble_callback(
-        &emulator_->gb,
-        [](const CupidGb *gb, bool enabled, uint64_t cycles, void *user) {
-            auto *window = static_cast<MainWindow *>(user);
-            if (!window->emulator_ || &window->emulator_->gb != gb)
-                return;
-            if (cycles >= window->rumbleLastCycles_ && window->rumbleMotor_)
-                window->rumbleOnCycles_ += cycles - window->rumbleLastCycles_;
-            window->rumbleLastCycles_ = cycles;
-            window->rumbleMotor_ = enabled;
-        },
-        this);
+    if (workflow == ResetWorkflow::Open)
+        cupid_gb_set_rumble_strength_callback(
+            &emulator_->gb,
+            [](const CupidGb *gb, uint8_t strength, uint64_t cycles, void *user) {
+                auto *window = static_cast<MainWindow *>(user);
+                if (!window->emulator_ || &window->emulator_->gb != gb)
+                    return;
+                if (cycles >= window->rumbleLastCycles_) {
+                    window->rumbleWeightedCycles_ +=
+                        (cycles - window->rumbleLastCycles_) * window->rumbleStrength_;
+                } else {
+                    window->rumbleWeightedCycles_ = 0;
+                    window->rumbleWindowCycles_ = cycles;
+                }
+                window->rumbleLastCycles_ = cycles;
+                window->rumbleStrength_ = strength;
+            },
+            this);
     resetControllerRumble();
-    resetMotionInput();
-    resetRewind();
+    if (workflow == ResetWorkflow::Open)
+        resetMotionInput();
+    if (retainHistory)
+        rebaseRewindAfterReset(previousGuestCycles);
+    else
+        resetRewind();
     ++sessionId_;
     resetDebuggerTimeline(!sameCartridge && !reload);
     if (inspectorsWindow_)
@@ -743,9 +775,14 @@ bool MainWindow::openRom(const QString &path, bool reload) {
     savePath_ = save;
     saveTimer_.stop();
     observedBatteryGeneration_ = emulator_->gb.battery_write_generation;
-    batteryDirty_ = false;
+    batteryDirty_ = resetChangedBattery;
     savedRam_.clear();
-    if (cupid_gb_battery_size(&emulator_->gb)) {
+    if (resetChangedBattery) {
+        // HuC3 clock/alarm digits reset with its controller. Keep the last committed
+        // bytes as the disk baseline so the ordinary autosave records that change.
+        savedRam_ = savedBeforeReset;
+        saveTimer_.start();
+    } else if (cupid_gb_battery_size(&emulator_->gb)) {
         savedRam_.resize(qsizetype(cupid_gb_battery_size(&emulator_->gb)));
         size_t written = 0;
         if (cupid_gb_save_battery(&emulator_->gb, reinterpret_cast<uint8_t *>(savedRam_.data()),
@@ -760,7 +797,9 @@ bool MainWindow::openRom(const QString &path, bool reload) {
     settings_.setValue("files/recent", recent);
     settings_.setValue("files/lastDirectory", info.absolutePath());
     updateRecentMenu();
-    setPaused(false);
+    // Reload keeps its existing pause choice without a transient resume. The
+    // reset transaction retains controls until an actual input event changes them.
+    setPaused(workflow == ResetWorkflow::Reload && paused_, workflow != ResetWorkflow::Open);
     setWindowTitle(info.fileName() + " — CupidGB");
     statusBar()->showMessage(bootFolder.isEmpty() ? "Post-boot startup; no boot ROM selected"
                                                   : "Boot ROM loaded");
@@ -859,16 +898,10 @@ bool MainWindow::closeRom() {
     return true;
 }
 
-bool MainWindow::restart() {
-    if (!emulator_)
-        return false;
-    return openRom(romPath_);
-}
-
 void MainWindow::refreshActions() {
-    for (auto *action :
-         {closeAction_, resetAction_, reloadAction_, pauseAction_, frameAction_, screenshotAction_,
-          screenshotAsAction_, copyScreenshotAction_, loadStateFileAction_, recordingAction_})
+    for (auto *action : {closeAction_, resetAction_, quickResetAction_, reloadAction_, pauseAction_,
+                         frameAction_, screenshotAction_, screenshotAsAction_,
+                         copyScreenshotAction_, loadStateFileAction_, recordingAction_})
         action->setEnabled(bool(emulator_));
     recordingAction_->setText(recorder_ && recorder_->active() ? "Stop Audio &Recording"
                                                                : "Start Audio &Recording…");

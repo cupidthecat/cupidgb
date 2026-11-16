@@ -63,7 +63,8 @@ Qt's debugger window presents commands and views through callbacks. MainWindow o
 | `src/gb/gb.c` | Instance lifecycle, boot overlay, memory access dispatch, top-level instruction stepping |
 | `src/gb/cpu.c` | Instruction decode, arithmetic/flags, bus phases, interrupts, HALT/STOP |
 | `src/gb/timer.c` | Divider consumers, TIMA reload windows, serial edges, CPU/base-clock coordination |
-| `src/gb/cartridge.c` | Header decode, controller identification, load-time banking/storage metadata |
+| `src/gb/cartridge.c`, `cartridge_internal.h` | Header decode, controller identification, shared post-boot and controller defaults |
+| `src/gb/reset.c` | Detached native reset, retained storage/output and committed accessory reset |
 | `src/gb/ppu.c`, `src/gb/pixels.c` | LCD timing and persistent pixel fetch/merge queues |
 | `src/gb/display_clock.c`, `src/gb/vram_bus.c` | LCD synchronization history and shared VRAM read ownership |
 | `src/gb/apu.c`, `src/gb/apu_noise.c` | Digital channel state, sequencer, noise feedback and pending-clock delivery |
@@ -77,7 +78,7 @@ Qt's debugger window presents commands and views through callbacks. MainWindow o
 | `src/gbc/cgb_palette.c`, `cgb_dma.c`, `cgb_render.c` | Compatibility colors and palette ports, color DMA, and the direct scanline API |
 | `src/gb/battery.c`, `src/gb/state.c` | Explicit battery and execution-state codecs |
 | `src/compat/native_v1.c` | Frozen older-state battery recovery |
-| `src/frontend/qt/main_window.cpp` | Desktop session lifecycle and menu actions |
+| `src/frontend/qt/main_window.cpp`, `main_window_reset.cpp` | Desktop session lifecycle, reset transactions and menu actions |
 | `src/frontend/qt/main_window_audio.cpp`, `main_window_input.cpp`, `main_window_motion.cpp`, `main_window_session.cpp` | Host audio, input/controller routing, motion, pacing, rewind and state files |
 | `src/frontend/qt/main_window_display.cpp`, `main_window_debugger.cpp`, `main_window_telemetry.cpp` | Display settings/presentation, debugger integration and bounded runtime reports |
 | `src/frontend/qt/main_window_*tests.cpp` | Generated native Qt workflow checks |
@@ -92,9 +93,11 @@ Serial completion calls an optional host observer with the byte latched at trans
 
 ## Host lifecycle and ownership
 
+Rewind age advances independently of the guest cycle counter. A retained-history reset takes guest time back to zero without making existing snapshots appear older by an unsigned wraparound. Restoring a snapshot restores its history age and guest-clock baseline together. Identical replacement cartridge bytes can retain snapshots, but their trusted codec context must be rebound to the new allocation.
+
 The frontend reads Unicode paths through Qt and constructs a candidate emulator before replacing the live session. Cartridge header/model checks, battery decoding, and optional boot loading must succeed before replacement. It flushes the previous cartridge's battery data first and preserves the current session if validation fails.
 
-The direct core loader resets its instance and is not a transactional session replacement API. Other hosts need the same candidate/swap pattern when failed loads must preserve execution. See [the core API](core-api.md) for allocation and ownership contracts.
+Shared cartridge defaults serve initial loading and native reset. The display observer projection runs after the cartridge header is available. Native reset prepares a detached core, preserves host output and registrations, and clears the attached printer only after commit. The direct core loader resets its instance and is not a transactional session replacement API. Other hosts need the same candidate/swap pattern when failed loads must preserve execution. See [the core API](core-api.md) for allocation and ownership contracts.
 
 Core execution and UI operations are serialized through the frontend event loop. Audio playback uses a separate host backend with a protected output queue. It must not access or mutate emulated hardware concurrently. Snapshot APIs require an instruction boundary without concurrent core access.
 

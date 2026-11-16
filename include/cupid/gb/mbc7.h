@@ -32,6 +32,7 @@ enum { CUPID_GB_MBC7_EEPROM_SIZE = 256 };
 void cupid_gb_mbc7_set_motion(CupidGb *gb, int16_t x, int16_t y);
 
 /* Internal cartridge bus entry points. */
+/* Reset sensor/serial controls without changing EEPROM or live host motion. */
 void cupid_gb_mbc7_reset(CupidGb *gb);
 void cupid_gb_mbc7_reset_serial(CupidGb *gb);
 uint8_t cupid_gb_mbc7_read(const CupidGb *gb, uint16_t address);

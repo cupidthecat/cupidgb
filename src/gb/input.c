@@ -58,15 +58,21 @@ static uint8_t electrical_lines(const CupidGb *gb) {
 uint8_t cupid_gb_input_read(const CupidGb *gb) {
     if (!gb)
         return 0xffu;
-    const uint8_t lines = electrical_lines(gb);
+    const uint8_t lines = cupid_gb_input_peek(gb);
     /* The select register is readable before the row's pull-up has settled.
      * Contact data and its interrupt detector still use the active row. */
     return gb->joyp_select_delay ? (uint8_t)((lines & (uint8_t)~0x30u) | gb->joyp_select_value)
                                  : lines;
 }
 
-static void request_line_edges(CupidGb *gb, uint8_t before) {
-    const uint8_t after = cupid_gb_input_read(gb);
+uint8_t cupid_gb_input_peek(const CupidGb *gb) {
+    return gb ? (uint8_t)(gb->io_registers[0] | 0xc0u) : 0xffu;
+}
+
+static void sample_lines(CupidGb *gb) {
+    const uint8_t before = gb->io_registers[0];
+    const uint8_t after = electrical_lines(gb);
+    gb->io_registers[0] = after;
     /* P10..P13 share an edge detector. Selecting an already-held button can
      * request an interrupt; only falling selected lines count, including a
      * held opposite direction exposed when its preferred contact is released. */
@@ -83,13 +89,12 @@ bool cupid_gb_set_buttons_for_player(CupidGb *gb, unsigned player, uint8_t relea
     if (!gb || player >= 4u) {
         return false;
     }
-    const uint8_t before = cupid_gb_input_read(gb);
     if (player == 0u) {
         gb->joypad = released_mask;
     } else {
         gb->joypad_extra[player - 1u] = released_mask;
     }
-    request_line_edges(gb, before);
+    gb->joyp_sample_pending = true;
     return true;
 }
 
@@ -100,7 +105,6 @@ void cupid_gb_input_select(CupidGb *gb, uint8_t value) {
     uint8_t active = gb->io_registers[0] & 0x30u;
     if (active == selected)
         return;
-    const uint8_t before = electrical_lines(gb);
     if (gb->model != CUPID_GB_MODEL_CGB && gb->model != CUPID_GB_MODEL_SGB &&
         gb->model != CUPID_GB_MODEL_SGB2 && !cupid_gb_sgb_active(gb)) {
         /* A second write starts from the previous requested row but cannot
@@ -128,19 +132,43 @@ void cupid_gb_input_select(CupidGb *gb, uint8_t value) {
     /* SGB packet reception must see the old select lines before the write. */
     cupid_gb_sgb_write_joyp(gb, active);
     gb->io_registers[0] = (uint8_t)((gb->io_registers[0] & 0x0fu) | active);
-    request_line_edges(gb, before);
+    /* A row write samples immediately, but it does not consume a pending host
+     * update. Reset can occur before the next ordinary delivery consumes it. */
+    sample_lines(gb);
+}
+
+static void advance_input(CupidGb *gb, unsigned base_cycles) {
+    bool sample = gb->joyp_sample_pending;
+    if (gb->joyp_select_delay) {
+        if (base_cycles < gb->joyp_select_delay) {
+            gb->joyp_select_delay = (uint8_t)(gb->joyp_select_delay - base_cycles);
+        } else {
+            gb->io_registers[0] = (uint8_t)((gb->io_registers[0] & 0x0fu) | gb->joyp_select_value);
+            gb->joyp_select_delay = 0;
+            gb->joyp_select_value = 0;
+            sample = true;
+        }
+    }
+    if (sample)
+        sample_lines(gb);
+    gb->joyp_sample_pending = false;
 }
 
 void cupid_gb_input_tick(CupidGb *gb, unsigned base_cycles) {
-    if (!gb || !gb->joyp_select_delay)
+    if (gb && base_cycles)
+        advance_input(gb, base_cycles);
+}
+
+void cupid_gb_input_tick_half_dots(CupidGb *gb, unsigned half_dots) {
+    /* Delayed row release belongs to monochrome hardware, whose deliveries
+     * contain whole dots. A color half-dot still samples pending host input. */
+    if (gb && half_dots)
+        advance_input(gb, half_dots / 2u);
+}
+
+void cupid_gb_input_import_legacy(CupidGb *gb) {
+    if (!gb)
         return;
-    if (base_cycles < gb->joyp_select_delay) {
-        gb->joyp_select_delay = (uint8_t)(gb->joyp_select_delay - base_cycles);
-        return;
-    }
-    const uint8_t before = electrical_lines(gb);
-    gb->io_registers[0] = (uint8_t)((gb->io_registers[0] & 0x0fu) | gb->joyp_select_value);
-    gb->joyp_select_delay = 0;
-    gb->joyp_select_value = 0;
-    request_line_edges(gb, before);
+    gb->io_registers[0] = electrical_lines(gb);
+    gb->joyp_sample_pending = false;
 }

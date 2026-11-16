@@ -29,6 +29,7 @@
 
 #include "cupid/gb/battery.h"
 #include "cupid/gb/cartridge.h"
+#include "cupid/gb/input.h"
 #include "cupid/gb/state.h"
 #include "cupid/gb/timer.h"
 
@@ -494,7 +495,7 @@ static void test_step_observation(CupidGb *gb) {
         } else if (scenario == 3 || scenario == 4) {
             gb->cpu.stopped = true;
             if (scenario == 4)
-                gb->joypad = 0;
+                cupid_gb_set_buttons(gb, 0);
         } else if (scenario == 5) {
             halt_at_vram_boundary(gb);
             address = 0x8000;

@@ -41,6 +41,8 @@ typedef enum CupidGbStateResult {
     CUPID_GB_STATE_NO_ROM
 } CupidGbStateResult;
 
+#define CUPID_GB_STATE_VERSION 16u
+
 /* Trusted in-memory snapshots may cache the immutable cartridge identity. Initialize
  * once for the current instance and discard the context on cartridge replacement,
  * model changes, or any mutation of ROM bytes, including future cheat/patch features.
@@ -68,6 +70,12 @@ CupidGbStateResult cupid_gb_load_state_with_context(CupidGb *gb, const uint8_t *
  * ROMs, boot ROMs, and save paths are session resources and are never included in state data.
  * Restoring an active boot overlay requires the same boot ROM to be available in the target.
  * The target's current boot-overlay enabled flag need not match the saved flag.
+ * Version 16 gives TPP1 an independent mapped ROM-bank cache. Control readback is
+ * zero immediately after native reset while bank 1 remains mapped until a control
+ * write. Older imports reconstruct the mapping from their TPP1 control register.
+ * It also appends one pending-input byte after the complete version 15 timing tail.
+ * JOYP retains its sampled contacts separately from host masks. Older imports
+ * reconstruct their formerly computed contact value without requesting an interrupt.
  * Version 15 appends retained display-clock phase and pending batches, then logical
  * pixel position and window timing latches, and VRAM address/read latches, after
  * version 14 audio history and before the accessory descriptor. It also retains a
@@ -101,7 +109,7 @@ CupidGbStateResult cupid_gb_load_state_with_context(CupidGb *gb, const uint8_t *
  * STOP access gates, the palette-port release edge, object fetch stage, pending
  * JOYP row release, and presentation events. Applicable SGB, MMM01, MBC7, Camera,
  * TPP1, and HuC3 sections are included.
- * Versions 2 through 14 remain readable. Versions 2 through 13 receive deterministic
+ * Versions 2 through 15 remain readable. Versions 2 through 13 receive deterministic
  * settled-channel defaults for missing reconstruction history; queued PCM, output rate, rational
  * credit and the disabled-filter flag survive import. Retired integer mixer/filter history is
  * validated but cannot reproduce the new reconstruction waveform exactly. Versions 2 through 12 use

@@ -48,9 +48,10 @@ static void all_masks_and_selection_edges(CupidGb *gb) {
         for (unsigned old_rows = 0; old_rows < 4; ++old_rows) {
             for (unsigned new_rows = 0; new_rows < 4; ++new_rows) {
                 gb->joypad = (uint8_t)mask;
-                gb->io_registers[0] = (uint8_t)(old_rows << 4u);
                 const uint8_t before = selected_lines(mask, old_rows);
                 const uint8_t after = selected_lines(mask, new_rows);
+                gb->io_registers[0] = before;
+                gb->joyp_sample_pending = false;
                 gb->interrupt_flags = 5u;
                 cupid_gb_write_u8(gb, 0xff00u, (uint8_t)((new_rows << 4u) | 0xcfu));
                 assert(cupid_gb_read_u8(gb, 0xff00u) == after);
@@ -67,16 +68,21 @@ static void all_masks_and_selection_edges(CupidGb *gb) {
 
 static void all_button_transitions(CupidGb *gb) {
     for (unsigned rows = 0; rows < 4; ++rows) {
-        gb->io_registers[0] = (uint8_t)(rows << 4u);
         for (unsigned before = 0; before < 256; ++before) {
             for (unsigned after = 0; after < 256; ++after) {
                 gb->joypad = (uint8_t)before;
+                gb->io_registers[0] = selected_lines(before, rows);
+                gb->joyp_sample_pending = false;
                 gb->interrupt_flags = 2u;
                 cupid_gb_set_buttons(gb, (uint8_t)after);
                 const uint8_t old_lines = selected_lines(before, rows);
                 const uint8_t new_lines = selected_lines(after, rows);
                 const bool edge = (old_lines & (uint8_t)~new_lines & 0x0fu) != 0u;
+                assert(cupid_gb_read_u8(gb, 0xff00u) == old_lines);
+                assert(gb->joyp_sample_pending && gb->interrupt_flags == 2u);
+                cupid_gb_input_tick(gb, 1u);
                 assert(cupid_gb_read_u8(gb, 0xff00u) == new_lines);
+                assert(!gb->joyp_sample_pending);
                 assert(gb->interrupt_flags == (edge ? 0x12u : 2u));
             }
         }
@@ -90,6 +96,7 @@ static void adapter_player_identity(CupidGb *gb) {
         gb->sgb.current_player = (uint8_t)player;
         gb->io_registers[0] = 0x30u;
         cupid_gb_set_buttons(gb, 0u);
+        cupid_gb_input_tick(gb, 1u);
         assert(cupid_gb_read_u8(gb, 0xff00u) == 0xffu - player);
     }
     gb->sgb.enabled = false;
@@ -105,14 +112,17 @@ static void adapter_player_buttons(CupidGb *gb) {
             for (unsigned player = 0; player < 4; ++player) {
                 assert(cupid_gb_set_buttons_for_player(gb, player, 0xff));
             }
+            cupid_gb_input_tick(gb, 1u);
             for (unsigned player = 0; player < 4; ++player) {
                 const uint8_t mask = (uint8_t)~(0x11u << player);
                 gb->interrupt_flags = 0;
                 assert(cupid_gb_set_buttons_for_player(gb, player, mask));
+                cupid_gb_input_tick(gb, 1u);
                 const uint8_t expected = selected_lines(player == selected ? mask : 0xff, rows);
                 assert(cupid_gb_input_read(gb) == expected);
                 assert(gb->interrupt_flags == (player == selected ? 0x10 : 0));
                 assert(cupid_gb_set_buttons_for_player(gb, player, 0xff));
+                cupid_gb_input_tick(gb, 1u);
             }
         }
     }
@@ -130,6 +140,7 @@ static void adapter_player_buttons(CupidGb *gb) {
     gb->io_registers[0] = 0x20;
     gb->sgb.current_player = 3;
     assert(cupid_gb_set_buttons_for_player(gb, 3, 0));
+    cupid_gb_input_tick(gb, 1u);
     assert(cupid_gb_input_read(gb) == 0xef);
     const uint8_t old = gb->joypad;
     assert(!cupid_gb_set_buttons_for_player(gb, 4, 0));
@@ -140,8 +151,9 @@ static void adapter_player_buttons(CupidGb *gb) {
 static void prepare_rows(CupidGb *gb, CupidGbModel model, uint8_t rows, uint8_t buttons) {
     gb->model = model;
     gb->sgb.enabled = false;
-    gb->io_registers[0] = rows;
+    gb->io_registers[0] = selected_lines(buttons, rows >> 4u);
     gb->joypad = buttons;
+    gb->joyp_sample_pending = false;
     gb->joyp_select_delay = 0;
     gb->joyp_select_value = 0;
     gb->interrupt_flags = 0;
@@ -233,9 +245,11 @@ static void settling_interrupts(CupidGb *gb) {
     prepare_rows(gb, CUPID_GB_MODEL_DMG_ABC, 0x10, 0xff);
     cupid_gb_input_select(gb, 0x30);
     cupid_gb_set_buttons(gb, 0xef);
+    assert(cupid_gb_input_read(gb) == 0xff && !gb->interrupt_flags);
+    cupid_gb_input_tick(gb, 1);
     assert(cupid_gb_input_read(gb) == 0xfe && gb->interrupt_flags == 0x10);
     gb->interrupt_flags = 0;
-    cupid_gb_input_tick(gb, 12);
+    cupid_gb_input_tick(gb, 11);
     assert(cupid_gb_input_read(gb) == 0xff && !gb->interrupt_flags);
 }
 

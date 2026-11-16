@@ -36,12 +36,14 @@
 #include <stdlib.h>
 #include <string.h>
 
+enum { INPUT_SAMPLE_BYTES = 1 };
+
 enum {
     HEADER_BYTES = 128,
     DESCRIPTOR_BYTES = 8,
     V11_BYTES = 300600,
     RTC_BYTES = 6,
-    CURRENT_BYTES = 305088,
+    CURRENT_BYTES = 305088 + INPUT_SAMPLE_BYTES,
     SGB_BYTES = 10119,
     PIXEL_LINE = 300392,
     PIXEL_X = 300393,
@@ -388,7 +390,7 @@ static size_t descriptor_offset(const Rig *rig, const Blob *blob) {
 }
 
 static size_t pixel_offset(const Rig *rig, const Blob *blob) {
-    return descriptor_offset(rig, blob) - CUPID_GB_VRAM_BUS_STATE_SIZE -
+    return descriptor_offset(rig, blob) - INPUT_SAMPLE_BYTES - CUPID_GB_VRAM_BUS_STATE_SIZE -
            CUPID_GB_PIXEL_TIMING_STATE_SIZE;
 }
 
@@ -530,7 +532,8 @@ static Blob legacy_blob(const Rig *rig, const Blob *source, unsigned version) {
     Blob old = copy_blob(source);
     if (version >= 12) {
         const size_t descriptor = descriptor_offset(rig, source);
-        const size_t removed = TIMING_BYTES + (version < 14 ? CUPID_GB_AUDIO_STATE_SIZE : 0) +
+        const size_t removed = INPUT_SAMPLE_BYTES + TIMING_BYTES +
+                               (version < 14 ? CUPID_GB_AUDIO_STATE_SIZE : 0) +
                                (version < 13 ? RTC_BYTES : 0);
         memmove(old.bytes + descriptor - removed, old.bytes + descriptor,
                 source->length - descriptor);

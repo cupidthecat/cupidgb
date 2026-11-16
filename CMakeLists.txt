@@ -38,7 +38,7 @@ endif()
 add_library(cupidgb_core STATIC
     src/common/log.c src/common/sha256.c src/core/emulator.c src/core/system.c
     src/compat/native_v1.c src/gb/battery.c
-    src/gb/gb.c src/gb/startup.c src/gb/rtc.c src/gb/state.c src/gb/cpu.c src/gb/ppu.c src/gb/pixels.c src/gb/apu.c
+    src/gb/gb.c src/gb/startup.c src/gb/reset.c src/gb/rtc.c src/gb/state.c src/gb/cpu.c src/gb/ppu.c src/gb/pixels.c src/gb/apu.c
     src/gb/timer.c src/gb/cartridge.c src/gb/camera.c src/gb/mbc7.c src/gb/input.c src/gb/debugger.c src/gb/sgb.c
     src/gbc/cgb.c src/gbc/cgb_palette.c src/gbc/cgb_dma.c src/gbc/cgb_render.c
     src/gb/printer.c src/gb/printer_state.c
@@ -124,6 +124,9 @@ if(CUPIDGB_BUILD_QT)
         src/frontend/qt/main_window_cheats.cpp
         src/frontend/qt/main_window_cheat_tests.cpp
         src/frontend/qt/main_window_audio.cpp
+        src/frontend/qt/main_window_reset.cpp
+        src/frontend/qt/main_window_reset_tests.cpp
+        src/frontend/qt/main_window_reset_audio_tests.cpp
         src/frontend/qt/main_window_audio_policy_tests.cpp
         src/frontend/qt/main_window_input.cpp
         src/frontend/qt/main_window_motion.cpp
@@ -195,7 +198,7 @@ if(CUPIDGB_BUILD_QT)
 endif()
 if(CUPIDGB_ENABLE_TESTS)
     enable_testing()
-    foreach(test_name IN ITEMS smoke gb startup rtc rtc_timing rtc_dma rtc_state divider_phase serial printer printer_state ppu pixel_timing pixel_timing_state stat apu audio_synthesis audio_filter audio_state audio_clock cpu_timing cpu_lockup dma video_bus vram_bus vram_quiet bus state battery native_v1_recovery sgb input cartridge camera mbc7 tpp1 huc3 infrared infrared_state infrared_guest cheats debugger sha256)
+    foreach(test_name IN ITEMS smoke gb startup reset rtc rtc_timing rtc_dma rtc_state divider_phase serial printer printer_state ppu pixel_timing pixel_timing_state stat apu audio_synthesis audio_filter audio_state audio_clock cpu_timing cpu_lockup dma video_bus vram_bus vram_quiet bus state battery native_v1_recovery sgb input input_sampling cartridge camera mbc7 tpp1 rumble huc3 infrared infrared_state infrared_guest cheats debugger sha256)
         add_executable(cupidgb_${test_name} tests/test_${test_name}.c)
         target_link_libraries(cupidgb_${test_name} PRIVATE cupidgb_core)
         # Tests use assert for setup and checks, including in Release builds.

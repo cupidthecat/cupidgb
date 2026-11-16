@@ -39,8 +39,7 @@ static CupidGb *screen(void) {
 }
 
 static void write_port(CupidGb *gb, uint8_t value) {
-    cupid_gb_sgb_write_joyp(gb, value);
-    gb->io_registers[0] = value;
+    cupid_gb_input_select(gb, value);
 }
 
 static void send_command(CupidGb *gb, const uint8_t *command) {

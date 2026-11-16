@@ -22,6 +22,7 @@
 
 #include "cupid/gb/apu.h"
 #include "cupid/gb/gb.h"
+#include "cupid/gb/input.h"
 #include "cupid/gb/ppu.h"
 #include "cupid/gb/timer.h"
 
@@ -480,7 +481,7 @@ static void test_halt_pending_enable_and_fetch_phase(void) {
 static void test_stop_clock_and_selected_input(void) {
     CupidGb gb = {0};
     prepare(&gb, 0x10, 0);
-    gb.joypad = 0xff;
+    cupid_gb_set_buttons(&gb, 0xff);
     cupid_gb_write_u8(&gb, 0xff00, 0x20); /* Select directions. */
     gb.div_counter = 7;
     step_cycles(&gb, 8);
@@ -501,10 +502,10 @@ static void test_stop_clock_and_selected_input(void) {
     gb.cpu.ime = true;
     step_cycles(&gb, 4);
     assert(gb.cpu.stopped && gb.cpu.pc == 0x102 && gb.cpu.ime);
-    gb.joypad = 0xef; /* A is held, but its P1 row is not selected. */
+    cupid_gb_set_buttons(&gb, 0xef); /* A is held, but its P1 row is not selected. */
     step_cycles(&gb, 4);
     assert(gb.cpu.stopped);
-    gb.joypad = 0xfe;
+    cupid_gb_set_buttons(&gb, 0xfe);
     step_cycles(&gb, 12);
     assert(!gb.cpu.stopped && gb.cpu.pc == 0x102);
     assert(gb.div_counter == 1 && gb.io_registers[5] == 0x42);
@@ -513,7 +514,7 @@ static void test_stop_clock_and_selected_input(void) {
 
     prepare(&gb, 0x10, 0);
     cupid_gb_write_u8(&gb, 0xff00, 0x20);
-    gb.joypad = 0xfe;
+    cupid_gb_set_buttons(&gb, 0xfe);
     gb.div_counter = 7;
     step_cycles(&gb, 8);
     assert(!gb.cpu.stopped && gb.cpu.halted && gb.cpu.just_halted && gb.cpu.pc == 0x102 &&
@@ -521,7 +522,7 @@ static void test_stop_clock_and_selected_input(void) {
 
     prepare(&gb, 0x10, 0);
     gb.interrupt_enable = gb.interrupt_flags = 4;
-    gb.joypad = 0xff;
+    cupid_gb_set_buttons(&gb, 0xff);
     step_cycles(&gb, 4);
     assert(gb.cpu.stopped && gb.cpu.pc == 0x101);
     cupid_gb_cleanup(&gb);
@@ -534,7 +535,7 @@ static void test_stop_key_prevents_speed_switch(void) {
     gb.speed_switch_armed = true;
     gb.interrupt_enable = gb.interrupt_flags = 4;
     cupid_gb_write_u8(&gb, 0xff00, 0x20);
-    gb.joypad = 0xfe;
+    cupid_gb_set_buttons(&gb, 0xfe);
     step_cycles(&gb, 4);
     assert(!gb.double_speed && gb.speed_switch_armed);
     assert(!gb.cpu.stopped && !gb.cpu.halted && gb.cpu.pc == 0x101);

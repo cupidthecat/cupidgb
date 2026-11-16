@@ -26,12 +26,17 @@
 
 #include <QScopeGuard>
 
+extern "C" {
+#include "cupid/gb/timer.h"
+}
+
 bool MainWindow::smokeTest() {
     QTemporaryDir directory;
     if (!directory.isValid())
         return smokeFailure(__FILE__, __LINE__);
     if (!playbackSmokeTest(directory.path()) || !startupSmokeTest(directory.path()) ||
-        !rtcSmokeTest(directory.path()) || !audioPolicySmokeTest(directory.path()))
+        !rtcSmokeTest(directory.path()) || !audioPolicySmokeTest(directory.path()) ||
+        !resetSmokeTest(directory.path()))
         return smokeFailure(__FILE__, __LINE__);
     QByteArray rom(32768, char(0));
     rom[0x100] = char(0x18);
@@ -94,14 +99,32 @@ bool MainWindow::smokeTest() {
     loop.exec();
     if (emulator_->gb.elapsed_cycles <= beforeTimer)
         return smokeFailure(__FILE__, __LINE__);
-    emulator_->gb.io_registers[0] = 0x10;
+    cupid_gb_write_u8(&emulator_->gb, 0xff00, 0x10);
+    // Let the monochrome row release settle before testing host input delivery.
+    cupid_gb_tick(&emulator_->gb, 6);
+    if (emulator_->gb.joyp_sample_pending || cupid_gb_input_peek(&emulator_->gb) != 0xdf)
+        return smokeFailure(__FILE__, __LINE__);
+    cupid_gb_write_u8(&emulator_->gb, 0xff0f, uint8_t(emulator_->gb.interrupt_flags & ~0x10u));
     QKeyEvent down(QEvent::KeyPress, Qt::Key_X, Qt::NoModifier);
     QApplication::sendEvent(display_, &down);
-    if ((emulator_->gb.joypad & 0x10) != 0 || !(emulator_->gb.interrupt_flags & 0x10))
+    // A host event changes the pending mask. The next hardware delivery samples
+    // the contacts and requests the falling-edge interrupt.
+    if ((emulator_->gb.joypad & 0x10) != 0 || !emulator_->gb.joyp_sample_pending ||
+        cupid_gb_input_peek(&emulator_->gb) != 0xdf || (emulator_->gb.interrupt_flags & 0x10))
         return smokeFailure(__FILE__, __LINE__);
+    cupid_gb_tick(&emulator_->gb, 1);
+    if (emulator_->gb.joyp_sample_pending || cupid_gb_input_peek(&emulator_->gb) != 0xde ||
+        !(emulator_->gb.interrupt_flags & 0x10))
+        return smokeFailure(__FILE__, __LINE__);
+    cupid_gb_write_u8(&emulator_->gb, 0xff0f, uint8_t(emulator_->gb.interrupt_flags & ~0x10u));
     QKeyEvent upWithControl(QEvent::KeyRelease, Qt::Key_X, Qt::ControlModifier);
     QApplication::sendEvent(display_, &upWithControl);
-    if ((emulator_->gb.joypad & 0x10) == 0)
+    if ((emulator_->gb.joypad & 0x10) == 0 || !emulator_->gb.joyp_sample_pending ||
+        cupid_gb_input_peek(&emulator_->gb) != 0xde || (emulator_->gb.interrupt_flags & 0x10))
+        return smokeFailure(__FILE__, __LINE__);
+    cupid_gb_tick(&emulator_->gb, 1);
+    if (emulator_->gb.joyp_sample_pending || cupid_gb_input_peek(&emulator_->gb) != 0xdf ||
+        (emulator_->gb.interrupt_flags & 0x10))
         return smokeFailure(__FILE__, __LINE__);
     QKeyEvent turboDown(QEvent::KeyPress, Qt::Key_Space, Qt::NoModifier);
     QKeyEvent turboUp(QEvent::KeyRelease, Qt::Key_Space, Qt::AltModifier);
@@ -189,11 +212,17 @@ bool MainWindow::smokeTest() {
         emulator_->gb.cartridge_ram[23] != 0x5a)
         return smokeFailure(__FILE__, __LINE__);
     setPaused(true);
-    const QByteArray checkpoint = captureState();
+    QByteArray checkpoint = captureState();
     const QByteArray checkpointHardware = hardwareSnapshotForTest(emulator_->gb);
     // Version 2 retains the frozen payload prefix but has no new timing latches.
     // Loading its file must preserve that file and let the core initialize missing history.
-    QByteArray version2 = checkpoint.first(300518);
+    // The legacy fixture carries a settled guest boundary and no host stream.
+    // The live receiver still owns the modern output history retained by Reset.
+    QByteArray version2 = checkpointHardware.first(300518);
+    auto legacyReceivingOutput = std::make_unique<CupidGbAudioOutput>(emulator_->gb.apu.output);
+    legacyReceivingOutput->buf_write = 0;
+    legacyReceivingOutput->sample_fraction = 0;
+    legacyReceivingOutput->fraction_half = false;
     auto putState32 = [](QByteArray &bytes, qsizetype offset, uint32_t value) {
         for (unsigned i = 0; i < 4; ++i)
             bytes[offset + i] = char(value >> (i * 8));
@@ -209,11 +238,19 @@ bool MainWindow::smokeTest() {
         return smokeFailure(__FILE__, __LINE__);
     version2File.close();
     if (!loadStateFile(version2File.fileName()) || !paused_ ||
-        captureState().mid(128, 300518 - 128) != version2.mid(128) ||
+        hardwareSnapshotForTest(emulator_->gb).mid(128, 300518 - 128) != version2.mid(128) ||
+        std::memcmp(&emulator_->gb.apu.output, legacyReceivingOutput.get(),
+                    sizeof(*legacyReceivingOutput)) ||
         !version2File.open(QIODevice::ReadOnly) || version2File.readAll() != version2 ||
-        !restoreState(checkpoint, false) || captureState() != checkpoint)
+        !restoreState(checkpoint, false) ||
+        !matchesHardwareForTest(emulator_->gb, checkpointHardware) ||
+        std::memcmp(&emulator_->gb.apu.output, legacyReceivingOutput.get(),
+                    sizeof(*legacyReceivingOutput)))
         return smokeFailure(__FILE__, __LINE__);
     version2File.close();
+    // Rejection checks below compare every byte of the actual post-load state,
+    // including its intentionally drained host queue.
+    checkpoint = captureState();
     // Frozen legacy wire offsets are used only to exercise explicit battery recovery.
     QByteArray olderState(300349, char(0));
     std::memcpy(olderState.data(), "CUPIDGB", 8);
@@ -820,8 +857,14 @@ bool MainWindow::smokeTest() {
         !stopRecording() || QFileInfo(loadRatePath).size() <= 44)
         return smokeFailure(__FILE__, __LINE__);
     const QString resetRecordingPath = directory.filePath("reset-audio.wav");
-    if (!startRecording(resetRecordingPath) || !runFrame() || !restart() || recorder_->active() ||
-        QFileInfo(resetRecordingPath).size() <= 44)
+    if (!startRecording(resetRecordingPath) || !runFrame())
+        return smokeFailure(__FILE__, __LINE__);
+    const uint64_t beforeResetFrames = recorder_->framesWritten();
+    if (!restart() || !recorder_->active() || recorder_->framesWritten() != beforeResetFrames ||
+        !runFrame() || recorder_->framesWritten() <= beforeResetFrames || !stopRecording() ||
+        QFileInfo(resetRecordingPath).size() != qint64(44 + recorder_->framesWritten() * 4))
+        return smokeFailure(__FILE__, __LINE__);
+    if (audioCheck_ && !resetAudioSmokeTest(directory.path()))
         return smokeFailure(__FILE__, __LINE__);
     const QString closingRecordingPath = directory.filePath("close-audio.wav");
     if (!startRecording(closingRecordingPath) || !runFrame())
@@ -1025,7 +1068,10 @@ bool MainWindow::audioLifecycleSmokeTest(const QString &path) {
     QEventLoop drain;
     QTimer::singleShot(75, Qt::PreciseTimer, &drain, &QEventLoop::quit);
     drain.exec();
-    if (session.audio_->bytesFree() < session.audio_->format().bytesPerFrame())
+    const auto drainedState = session.audio_ ? session.audio_->state() : QAudio::StoppedState;
+    if (!session.audio_ || !session.audioDevice_ ||
+        (drainedState != QAudio::ActiveState && drainedState != QAudio::IdleState) ||
+        session.audio_->bytesFree() < session.audio_->format().bytesPerFrame())
         return smokeFailure(__FILE__, __LINE__);
 
     class CallbackDevice final : public QIODevice {
@@ -1113,6 +1159,10 @@ bool MainWindow::audioLifecycleSmokeTest(const QString &path) {
                 break;
         }
         const auto readiness = [&] {
+            const auto state = session.audio_ ? session.audio_->state() : QAudio::StoppedState;
+            const bool capacityAvailable =
+                session.audio_ && session.audioDevice_ &&
+                (state == QAudio::ActiveState || state == QAudio::IdleState);
             return QJsonObject{
                 {"mode", int(mode)},
                 {"turbo", session.turbo_},
@@ -1120,15 +1170,16 @@ bool MainWindow::audioLifecycleSmokeTest(const QString &path) {
                 {"cap_quarters", int(session.turboCapQuarters_)},
                 {"sink", bool(session.audio_)},
                 {"device", bool(session.audioDevice_)},
-                {"state", session.audio_ ? int(session.audio_->state()) : -1},
-                {"idle", session.audio_ && session.audio_->state() == QAudio::IdleState},
+                {"state", session.audio_ ? int(state) : -1},
+                {"idle", session.audio_ && state == QAudio::IdleState},
                 {"error", session.audio_ ? int(session.audio_->error()) : -1},
                 {"host_rate", session.audio_ ? session.audio_->format().sampleRate() : 0},
                 {"host_frame_bytes", session.audio_ ? session.audio_->format().bytesPerFrame() : 0},
                 {"priming", session.audioPriming_},
                 {"prime_events", double(session.audioPrimeEvents_)},
                 {"processed_us", session.audio_ ? double(session.audio_->processedUSecs()) : 0},
-                {"bytes_free", session.audio_ ? double(session.audio_->bytesFree()) : 0},
+                {"bytes_free", capacityAvailable ? double(session.audio_->bytesFree()) : 0},
+                {"capacity_available", capacityAvailable},
                 {"phase", int(session.turboAudioWindow_.phase())},
                 {"queue",
                  session.audioBuffer_ ? session.audioBuffer_->telemetry() : QJsonObject{}}};
@@ -1152,7 +1203,8 @@ bool MainWindow::audioLifecycleSmokeTest(const QString &path) {
             QEventLoop played;
             QTimer::singleShot(1, Qt::PreciseTimer, &played, &QEventLoop::quit);
             played.exec();
-            if (session.audio_->state() != QAudio::ActiveState ||
+            if (!session.audio_ || !session.audioDevice_ ||
+                session.audio_->state() != QAudio::ActiveState ||
                 session.audio_->error() != QAudio::NoError || session.audioPriming_)
                 break;
             const qint64 available = session.audio_->bytesFree();

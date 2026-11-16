@@ -245,6 +245,8 @@ void cupid_gb_init(CupidGb *gb) {
     CupidGbSerialLink serial_link;
     CupidGbRumbleCallback rumble_callback;
     void *rumble_user_data;
+    CupidGbRumbleStrengthCallback rumble_strength_callback;
+    void *rumble_strength_user_data;
     CupidGbInfraredCallback infrared_callback;
     void *infrared_user_data;
 
@@ -259,6 +261,8 @@ void cupid_gb_init(CupidGb *gb) {
     serial_link = gb->serial_link;
     rumble_callback = gb->rumble_callback;
     rumble_user_data = gb->rumble_user_data;
+    rumble_strength_callback = gb->rumble_strength_callback;
+    rumble_strength_user_data = gb->rumble_strength_user_data;
     infrared_callback = gb->infrared_callback;
     infrared_user_data = gb->infrared_user_data;
     const int16_t motion_x = gb->mbc7.motion_x;
@@ -279,6 +283,8 @@ void cupid_gb_init(CupidGb *gb) {
     gb->serial_link = serial_link;
     gb->rumble_callback = rumble_callback;
     gb->rumble_user_data = rumble_user_data;
+    gb->rumble_strength_callback = rumble_strength_callback;
+    gb->rumble_strength_user_data = rumble_strength_user_data;
     gb->infrared_callback = infrared_callback;
     gb->infrared_user_data = infrared_user_data;
     cupid_gb_mbc7_set_motion(gb, motion_x, motion_y);
@@ -514,7 +520,7 @@ void cupid_gb_enter_boot_rom(CupidGb *gb) {
     cupid_gb_ppu_leave_stop(gb);
     gb->speed_switch_alignment = 0;
     memset(gb->io_registers, 0x00u, sizeof(gb->io_registers));
-    gb->io_registers[0x00u] = 0xcfu; /* P1: no buttons selected */
+    gb->io_registers[0x00u] = 0xcfu; /* P1: both rows selected, no contacts sampled yet. */
     gb->io_registers[0x02u] = 0x7eu; /* SC: disconnected, fast clock not selected. */
 
     /* Reset PPU state */
@@ -583,6 +589,8 @@ void cupid_gb_cleanup(CupidGb *gb) {
     gb->serial_link = (CupidGbSerialLink){0};
     gb->rumble_callback = NULL;
     gb->rumble_user_data = NULL;
+    gb->rumble_strength_callback = NULL;
+    gb->rumble_strength_user_data = NULL;
     gb->infrared_callback = NULL;
     gb->infrared_user_data = NULL;
     gb->cheats = NULL;
@@ -628,6 +636,26 @@ bool cupid_gb_rumble_enabled(const CupidGb *gb) {
     return gb && gb->header.has_rumble &&
            ((gb->header.mbc_type == CUPID_GB_MBC5 && gb->mbc5_rumble_on) ||
             (gb->header.mbc_type == CUPID_GB_TPP1 && gb->tpp1.motor_strength));
+}
+
+uint8_t cupid_gb_rumble_strength(const CupidGb *gb) {
+    if (!gb || !gb->loaded || !gb->rom || !gb->header.has_rumble)
+        return 0;
+    if (gb->header.mbc_type == CUPID_GB_MBC5)
+        return gb->mbc5_rumble_on ? 3u : 0u;
+    /* TPP1's status register remains writable when no motor is fitted. The
+     * extended header controls host feedback, independently of raw readback. */
+    if (gb->header.mbc_type == CUPID_GB_TPP1 && gb->rom_size > 0x153u && (gb->rom[0x153u] & 1u))
+        return gb->tpp1.motor_strength & 3u;
+    return 0;
+}
+
+void cupid_gb_set_rumble_strength_callback(CupidGb *gb, CupidGbRumbleStrengthCallback callback,
+                                           void *user_data) {
+    if (!gb)
+        return;
+    gb->rumble_strength_callback = callback;
+    gb->rumble_strength_user_data = callback ? user_data : NULL;
 }
 
 // Memory map: read
@@ -890,7 +918,7 @@ static uint8_t read_data_bus(const CupidGb *gb, uint16_t address, CupidGb *bus, 
     }
 
     if (address == 0xff00u) {
-        return cupid_gb_input_read(gb);
+        return bus ? cupid_gb_input_read(gb) : cupid_gb_input_peek(gb);
     }
 
     if (address == 0xff0fu) {
@@ -1156,11 +1184,16 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
                     gb->current_ram_bank = (size_t)(value & 0x07u);
                     const bool enabled = (value & 0x08u) != 0u;
                     if (enabled != gb->mbc5_rumble_on) {
+                        const uint8_t previous_strength = cupid_gb_rumble_strength(gb);
                         gb->mbc5_rumble_on = enabled;
                         if (gb->rumble_callback) {
                             gb->rumble_callback(gb, enabled, gb->elapsed_cycles,
                                                 gb->rumble_user_data);
                         }
+                        const uint8_t strength = cupid_gb_rumble_strength(gb);
+                        if (strength != previous_strength && gb->rumble_strength_callback)
+                            gb->rumble_strength_callback(gb, strength, gb->elapsed_cycles,
+                                                         gb->rumble_strength_user_data);
                     }
                 } else {
                     gb->current_ram_bank = (size_t)(value & 0x0fu);

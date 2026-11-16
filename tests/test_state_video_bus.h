@@ -407,7 +407,7 @@ static void test_stop_port_history(void) {
             assert(!b->stop_ppu_oam_blocked && !b->stop_ppu_palette_blocked &&
                    !b->ppu_transfer_end_dot &&
                    b->stop_ppu_vram_blocked == a->stop_ppu_vram_blocked);
-            put_u32(state + 8, 15);
+            put_u32(state + 8, CUPID_GB_STATE_VERSION);
             put_u32(state + 12, (uint32_t)length);
             const size_t offsets[] = {v11_length - 6, v11_length - 5, v11_length - 4,
                                       v11_length - 3};
@@ -520,8 +520,13 @@ static void test_object_fetch_stage_history(void) {
            b->pixels.object_high == 0x34);
     size_t restored_length;
     uint8_t *restored = encode(b, &restored_length);
-    assert(restored_length == length &&
-           memcmp(restored + 128, state + 128, old_length - 128) == 0 &&
+    /* The prepared legacy mask E7 exposes C6 on both selected rows. Only the
+     * stale JOYP byte changes in this retained prefix; every other byte is literal. */
+    const size_t joyp = 128 + 17 + sizeof(a->video_ram) + sizeof(a->cartridge_ram) +
+                        sizeof(a->work_ram) + sizeof(a->object_attribute_memory);
+    assert(state[joyp] == 0xcf && restored[joyp] == 0xc6 && !b->joyp_sample_pending);
+    assert(restored_length == length && memcmp(restored + 128, state + 128, joyp - 128) == 0 &&
+           memcmp(restored + joyp + 1, state + joyp + 1, old_length - joyp - 1) == 0 &&
            restored[v11_hardware_size(b, restored_length) - 7] == CUPID_GB_OBJECT_LEGACY);
     free(restored);
     free(state);

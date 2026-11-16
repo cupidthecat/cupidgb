@@ -156,7 +156,9 @@ Rewind restores and consumes history, then runs the restored guest forward for o
 
 Slow-motion playback changes the converter's effective input rate. This host resampling does not establish waveform equivalence to changing core sample timing. WAVE recording receives forward core PCM before that conversion and before host mute or volume. It records signed 16-bit, two-channel, little-endian RIFF/WAVE at the core rate. Pauses and rewind replay add no recorded audio, although replay is audible through the playback path. Forward debugger execution can append generated samples while paused playback remains silent.
 
-Loading or rewinding does not roll back bytes already written to a recording. Later forward execution appends its output. Reset, cartridge replacement, close and a changed core sample rate end the current file. The recorder bounds RIFF's 32-bit size fields, reports write failures and commits through `QSaveFile`. See [the user guide](user-guide.md) for recording controls.
+Loading or rewinding does not roll back bytes already written to a recording. Later forward execution appends its output. Reset, Quick Reset, Reload and native console resets retain the active recording at its existing rate. Cartridge replacement, close and an explicit core sample-rate change end the file. The recorder bounds RIFF's 32-bit size fields, reports write failures and commits through `QSaveFile`. See [the user guide](user-guide.md) for recording controls.
+
+Native reset restarts channel and digital execution state while retaining the complete receiving output subsystem: queued core PCM, partial reconstruction, filter and DAC history, rate, and listening policy. Qt clears stale host playback and resets pacing separately. When ordinary Reset changes the model clock, it updates oscillator-derived output coefficients without changing the recording rate or discarding its stream history. Initial cartridge loading and firmware startup remain separate lifecycle operations.
 
 ## Snapshots and continuation
 

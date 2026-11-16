@@ -25,6 +25,7 @@
 #include "../src/gb/vram_bus.h"
 #include "cupid/common/sha256.h"
 #include "cupid/gb/apu.h"
+#include "cupid/gb/cartridge.h"
 #include "cupid/gb/gb.h"
 #include "cupid/gb/input.h"
 #include "cupid/gb/ppu.h"
@@ -36,6 +37,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+enum { INPUT_SAMPLE_BYTES = 1 };
 
 static void digest_hex(const void *bytes, size_t length, char hex[65]) {
     uint8_t digest[32];
@@ -142,9 +145,9 @@ static size_t v11_hardware_size(const CupidGb *gb, size_t length) {
     enum { ACCESSORY_DESCRIPTOR_BYTES = 8, INFRARED_HISTORY_BYTES = 6, RTC_HISTORY_BYTES = 6 };
 
     /* These fixtures have no attached device. HuC3 keeps its existing IR section. */
-    const size_t tail = ACCESSORY_DESCRIPTOR_BYTES + RTC_HISTORY_BYTES + CUPID_GB_AUDIO_STATE_SIZE +
-                        CUPID_GB_DISPLAY_CLOCK_STATE_SIZE + CUPID_GB_PIXEL_TIMING_STATE_SIZE +
-                        CUPID_GB_VRAM_BUS_STATE_SIZE +
+    const size_t tail = INPUT_SAMPLE_BYTES + ACCESSORY_DESCRIPTOR_BYTES + RTC_HISTORY_BYTES +
+                        CUPID_GB_AUDIO_STATE_SIZE + CUPID_GB_DISPLAY_CLOCK_STATE_SIZE +
+                        CUPID_GB_PIXEL_TIMING_STATE_SIZE + CUPID_GB_VRAM_BUS_STATE_SIZE +
                         (gb->header.mbc_type == CUPID_GB_HUC3 ? 0 : INFRARED_HISTORY_BYTES);
     assert(length >= tail);
     return length - tail;
@@ -286,7 +289,7 @@ static void test_resume(void) {
                 size_t length;
                 uint8_t *state = encode(a, &length);
                 assert(length == cupid_gb_state_size(b) && length > 300518);
-                assert(state[8] == 15);
+                assert(state[8] == CUPID_GB_STATE_VERSION);
                 uint8_t *rom_pointer = b->rom;
                 strcpy(b->save_path, "host-session-save.sav");
                 assert(cupid_gb_load_state(b, state, length) == CUPID_GB_STATE_OK);
@@ -390,7 +393,7 @@ static void test_pulse_continuation(void) {
             size_t length;
             uint8_t *bytes = encode(a, &length);
             const size_t v11_length = v11_hardware_size(a, length);
-            assert(bytes[8] == 15);
+            assert(bytes[8] == CUPID_GB_STATE_VERSION);
             assert(bytes[v11_length - 2] == a->apu.pulse_dac_hold[0] &&
                    bytes[v11_length - 1] == a->apu.pulse_dac_hold[1]);
             if (stage == 2 || stage == 4)
@@ -659,6 +662,7 @@ static void test_v2_import(void) {
             cupid_gb_pixels_import_legacy(expected);
             cupid_gb_display_clock_import_legacy(expected);
             cupid_gb_vram_bus_import_legacy(expected);
+            cupid_gb_input_import_legacy(expected);
             if (expected->model == CUPID_GB_MODEL_SGB) {
                 expected->sgb.transfer.frame_dots = 0;
                 memcpy(expected->sgb.transfer.tiles, expected->sgb.border_tiles,
@@ -1215,7 +1219,7 @@ static void test_sgb_transfer_resume(void) {
     size_t length;
     uint8_t *bytes = encode(source, &length);
     const size_t v11_length = v11_hardware_size(source, length);
-    assert(v11_length == 310719 && bytes[8] == 15);
+    assert(v11_length == 310719 && bytes[8] == CUPID_GB_STATE_VERSION);
     assert(bytes[v4_length + 7 + 4096] == 0xa5);
     assert(bytes[v4_length + 7 + 8192] == 0x80 && bytes[v4_length + 7 + 8193] == 0x0c);
     assert(bytes[v11_length - 30] == 0x34 && bytes[v11_length - 29] == 0x12);
@@ -1396,8 +1400,9 @@ static void test_v5_sgb_mapper_sections(void) {
         size_t length;
         uint8_t *bytes = encode(source, &length);
         const size_t v11_length = v11_hardware_size(source, length);
-        assert(v11_length == mapper_offset + mapper_length + 28 && bytes[8] == 15 &&
-               bytes[mapper_offset - 2] == 0x34 && bytes[mapper_offset - 1] == 0x12);
+        assert(v11_length == mapper_offset + mapper_length + 28 &&
+               bytes[8] == CUPID_GB_STATE_VERSION && bytes[mapper_offset - 2] == 0x34 &&
+               bytes[mapper_offset - 1] == 0x12);
         assert(memcmp(bytes + mapper_offset, wire, mapper_length) == 0);
         assert(cupid_gb_load_state(target, bytes, length) == CUPID_GB_STATE_OK);
         assert_encoded_equal(source, target);
@@ -1413,6 +1418,14 @@ static void test_v5_sgb_mapper_sections(void) {
         cupid_gb_pixels_import_legacy(source);
         cupid_gb_display_clock_import_legacy(source);
         cupid_gb_vram_bus_import_legacy(source);
+        cupid_gb_input_import_legacy(source);
+        if (types[mapper] == 0xbc) {
+            /* Old controller readback determined mapping despite a stale generic
+             * cache. The imported machine must expose that same selected bank. */
+            assert(target->current_rom_bank == 0x4321 &&
+                   cupid_gb_selected_rom_bank(target, false) == 0x4321);
+            source->current_rom_bank = 0x4321;
+        }
         assert_encoded_equal(source, target);
         free(bytes);
         cupid_gb_cleanup(source);
@@ -1448,8 +1461,9 @@ static void test_sgb_sample_phase_and_legacy_filter(void) {
     source->apu.output.buf[0] = 1234;
     source->apu.output.buf[1] = -2345;
     state = encode(source, &length);
-    const size_t removed = CUPID_GB_AUDIO_STATE_SIZE + CUPID_GB_DISPLAY_CLOCK_STATE_SIZE +
-                           CUPID_GB_PIXEL_TIMING_STATE_SIZE + CUPID_GB_VRAM_BUS_STATE_SIZE;
+    const size_t removed = INPUT_SAMPLE_BYTES + CUPID_GB_AUDIO_STATE_SIZE +
+                           CUPID_GB_DISPLAY_CLOCK_STATE_SIZE + CUPID_GB_PIXEL_TIMING_STATE_SIZE +
+                           CUPID_GB_VRAM_BUS_STATE_SIZE;
     const size_t audio_offset = length - 8 - removed;
     memmove(state + audio_offset, state + audio_offset + removed, 8);
     length -= removed;
@@ -1475,6 +1489,7 @@ static void test_sgb_sample_phase_and_legacy_filter(void) {
     cupid_gb_pixels_import_legacy(source);
     cupid_gb_display_clock_import_legacy(source);
     cupid_gb_vram_bus_import_legacy(source);
+    cupid_gb_input_import_legacy(source);
     assert(target->apu.output.sample_rate == 0);
     assert(target->apu.output.filter.retention == source->apu.output.filter.retention);
     assert(target->apu.output.filter.capacitor[0] == 0 &&

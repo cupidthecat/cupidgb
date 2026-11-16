@@ -24,6 +24,8 @@ The action table also includes Menu, hold controls and the application's registe
 
 Directional bindings navigate an open native menu or dialog, A accepts, and B or Menu goes back. Turbo and Rewind bindings move to the next and previous native control; the standard defaults use the shoulder buttons. Movement requires a new directional press; stick jitter beyond a held threshold does not repeatedly move the selection. A mapping capture owns its input until completed or skipped. Keyboard and mouse navigation remain available.
 
+Opening a menu suspends guest execution while retaining controls already held by the keyboard, mouse and controllers. Real releases still update those holds. New navigation presses do not enter the guest while the menu is open. Closing the last menu reconciles current controller state before execution resumes. Reset, Quick Reset and Reload preserve unchanged held controls without creating another input sample. Switching to another application or tool window releases gameplay input.
+
 Open menus temporarily suspend guest execution and clear queued playback without changing the user's Pause choice. Nested menus keep that suspension active until all menus close. Choosing Pause or resuming through the menu changes the actual pause state and is not undone when the menu closes. Settings dialogs separately save, pause and restore the prior session state.
 
 ## Focus and reconnects
@@ -42,7 +44,9 @@ The core stores four independent active-low masks. Changing a nonselected mask l
 
 ## Cartridge feedback
 
-Cartridge rumble enables MBC5 motor output on eligible controllers in single-player, or assigned player 1 controllers in multiplayer. Strength scales the requested amplitude. The frontend integrates motor-on time over each forward guest interval, then sends bounded host requests. Normal pause, menus, background deactivation, state loading, rewind, target changes and closing stop or reset host feedback. A later forward interval can resume feedback when the restored cartridge motor latch is on. Host mute and playback volume do not change the cartridge motor.
+Cartridge rumble sends MBC5 and TPP1 motor output to eligible controllers in single-player, or assigned player 1 controllers in multiplayer. TPP1 cartridges must declare a motor in their extended header. Its three nonzero levels produce one-third, two-thirds and full amplitude before the controller Strength setting is applied. The frontend integrates the level over each forward guest interval, including changes between nonzero levels, then sends bounded host requests. Normal pause, menus, background deactivation, native and desktop resets, state loading, rewind, target changes and closing stop or reset host feedback. A later forward interval can resume feedback at the restored motor level. Host mute and playback volume do not change the cartridge motor.
+
+The current implementation averages levels by elapsed guest cycles and applies Strength as a linear percentage. The one-third, two-thirds and full-amplitude comparison covers constant levels at maximum Strength. Exact variable-level averaging, delivery cadence and nonmaximum strength response remain parity gaps, including mixed CPU access patterns, DMA, HALT and CGB speed transitions.
 
 Test rumble sends a short request to the selected device while the settings dialog owns gameplay input. The test is explicit and still requires application focus. A successful request means the driver accepted it; it does not establish physical force, motor duration or compatibility with every controller.
 
@@ -58,7 +62,7 @@ Tilt uses the full axis range without a dead zone. Gameplay button thresholds st
 
 For a mouse, enable Emulation > Motion-Controlled Games > Allow mouse control. It starts off and affects only MBC7 cartridges. The center of the displayed handheld image is neutral. Move the pointer away from the center to tilt. Letterboxing, scaling, borders and display pixel density use the same viewport as rendering. Any mouse button acts as A and combines with the normal keyboard/controller A binding. Start the game's calibration with the pointer centered or the stick released.
 
-A changed controller sample or pointer move becomes the current tilt source. Unchanged controller polling does not replace a newer pointer position. Controller fallback with different coordinates counts as a new sample. Pause, menus, settings and cartridge changes release mouse input; mouse control always requires the active game window. Controller tilt follows the explicit background-input choice. Native state loading restores guest sensor latches while retaining current host tilt and held input. These controls provide analog input; they do not read a controller's physical accelerometer.
+A changed controller sample or pointer move becomes the current tilt source. Unchanged controller polling does not replace a newer pointer position. Controller fallback with different coordinates counts as a new sample. Pause, settings and opening another cartridge release mouse input. Menus retain existing mouse holds and tilt while accepting releases; pointer movement during menu navigation does not change tilt. Mouse control requires the active game window. Controller tilt follows the explicit background-input choice. Native state loading restores guest sensor latches while retaining current host tilt and held input. These controls provide analog input; they do not read a controller's physical accelerometer.
 
 ## Backend and validation
 

@@ -68,7 +68,8 @@ void cupid_gb_mbc7_reset(CupidGb *gb) {
     gb->mbc7_sensor_y = SENSOR_RESET;
     gb->mbc7_latch = true;
     cupid_gb_mbc7_reset_serial(gb);
-    memset(gb->cartridge_ram, 0xff, CUPID_GB_MBC7_EEPROM_SIZE);
+    /* EEPROM is persistent storage. Cartridge creation fills it separately;
+     * a console reset changes only the sensor and serial-controller latches. */
 }
 
 void cupid_gb_mbc7_set_motion(CupidGb *gb, int16_t x, int16_t y) {

@@ -18,9 +18,13 @@ For a hardware choice that lasts only until the application exits, pass `--model
 
 The SGB profile uses its NTSC base clock of 4,295,454 Hz. SGB2 and the other current profiles use 4,194,304 Hz. Normal-speed playback and rewind duration follow the selected clock. A higher SGB image rate is part of that profile; SGB PAL is not available.
 
-Emulation > Reset saves the current battery and clock history, reloads the cartridge and battery data, and applies the selected hardware and boot settings. It discards rewind history. File > Close ROM saves that history and closes the current session. Failed cartridge or battery loads preserve the current session. A failed battery write prevents reset, reload, closing or replacement and keeps any audio recording active.
+Emulation > Reset saves the current battery and clock history, refreshes the cartridge, firmware and companion symbols, and applies the selected hardware settings. It starts execution again and clears rewind history. File > Close ROM saves the current battery and closes the session. A failed battery write prevents reset, reload, closing or replacement and keeps the session and any recording available for retry.
 
-File > Reload Cartridge rereads the current cartridge and its companion `.sym` file while keeping the active hardware model, breakpoints, and running or paused state. It clears rewind and instruction history after a successful reload. If the companion file is absent, the old symbols are cleared; malformed symbols or an unreadable cartridge leave the current session intact. Reload has no default shortcut; assign one in Settings if needed.
+Emulation > Quick Reset, or Ctrl+Alt+R, keeps the active hardware model and physical work RAM, high RAM, object memory and color palette memory while restarting the console. It refreshes the cartridge, firmware and companion symbols. VRAM and execution state restart. Quick Reset resumes play and retains rewind when the cartridge bytes, model and firmware are unchanged. Installed firmware executes again and can overwrite retained memory. Without firmware, the approximate color handoff clears WRAM bank 2 and object memory.
+
+File > Reload Cartridge refreshes the cartridge, firmware and companion symbols while keeping the active hardware model, breakpoints and running or paused choice. It performs a hard reset and retains compatible rewind history. A missing companion file clears the old symbols; malformed symbols or unreadable assets leave the session intact. Reload has no default shortcut; assign one in Settings if needed.
+
+All reset workflows keep an active audio recording and held input. Menus suspend guest execution while preserving existing holds and accepting releases. Closing a menu reconciles current controller state before play resumes. Battery storage survives both reset kinds; volatile cartridge storage survives Quick Reset and is erased by a hard reset. MBC3 and TPP1 clock values survive. HuC3 clock and alarm digits reset with their controller and are saved through the normal autosave path.
 
 ## Controls
 
@@ -36,6 +40,7 @@ File > Reload Cartridge rereads the current cartridge and its companion `.sym` f
 | Open / close cartridge | Ctrl+O / Ctrl+W |
 | Reload cartridge | Unassigned; configure in Settings |
 | Reset / pause | Ctrl+R / Ctrl+P |
+| Quick Reset | Ctrl+Alt+R |
 | Advance one interval | Ctrl+N |
 | Debugger | Ctrl+C |
 | Settings | Ctrl+, |
@@ -57,7 +62,7 @@ Ordinary focus loss releases input so returning to the window does not leave a k
 
 Open Emulation > Settings. Each game button and hold mode accepts one key, including a standalone modifier or Tab. Empty bindings disable that input. Command shortcuts may combine a key with modifiers. The dialog rejects duplicate mappings and conflicting unmodified command keys.
 
-Changes apply when you accept the dialog. Hardware and boot settings take effect on the next reset or cartridge open. Cancel keeps the previous settings. Keyboard layouts and platform shortcut handling need broader qualification.
+Changes apply when you accept the dialog. Hardware settings take effect on ordinary Reset or cartridge open. Quick Reset and Reload retain the active model; all three refresh boot inputs. Cancel keeps the previous settings. Keyboard layouts and platform shortcut handling need broader qualification.
 
 Open Emulation > Controllers for device selection, button/axis/hat capture, dead zones, player assignments, hold controls, command shortcuts, background input and cartridge rumble. Layouts and preferred devices persist separately from cartridge state. Keyboard and controller contributions combine. Single-player sessions accept eligible controllers regardless of their saved SGB player assignment; a multiplayer request switches to the assigned input slots at the next hardware-step boundary. [The controller guide](controllers.md) explains defaults, capture, weak device identities, native menu navigation and remaining physical/motion limits.
 
@@ -121,7 +126,7 @@ Settings > Highpass Filter offers None (Keep DC Offset), Accurate and Preserve W
 
 Audio > Audio Channels enables or mutes Square Channel 1, Square Channel 2, Wave Channel and Noise Channel. Alt+1 through Alt+4 are the default shortcuts; Settings can reassign them. Channel choices last for the current application session and also affect recordings. They do not change the game's sound registers. Global listening mute and volume remain separate.
 
-Audio > Start Audio Recording writes stereo 16-bit PCM into a WAVE file. Choose the action again to stop. Recording captures forward core output before host volume, mute, and resampling. Pause and rewind add no samples. Reset, cartridge replacement, closing, or a core sample-rate change ends the recording. Loading a state at the same rate continues the recording with the new forward timeline.
+Audio > Start Audio Recording writes stereo 16-bit PCM into a WAVE file. Choose the action again to stop. Recording captures forward core output before host volume, mute, and resampling. Pause and rewind add no samples. Reset, Quick Reset, Reload and native console resets keep the recording and its sample rate. Cartridge replacement, closing, or an explicit core sample-rate change ends the file. Loading a state continues the recording with the restored forward timeline.
 
 ## Game Boy Printer
 
@@ -129,7 +134,7 @@ With a cartridge open, choose Emulation > Connect > Game Boy Printer, then use t
 
 Current states retain pending printer packets and jobs when a printer is attached. Loading, rewind and debugger Backstep restore that work while keeping paper already emitted into the feed. Replaying a print request can add another strip. Loading a version 2–11 state, or a state saved without a printer, starts a fresh connected printer. State loading preserves your current connection choice.
 
-Reset clears pending printer work. Changing cartridges or closing the session disconnects the printer. Paper remains host output, and PNG export and system printing use their explicit controls.
+Reset clears pending printer work while retaining the attachment and existing paper, including when it refreshes cartridge assets. Opening a separate cartridge or closing the session disconnects the printer. Paper remains host output, and PNG export and system printing use their explicit controls.
 
 The interface reports unavailable audio devices. A successful file recording proves sample capture, not audible host playback quality. Backend idle events and hardware sound differences remain under investigation.
 

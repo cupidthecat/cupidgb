@@ -261,7 +261,10 @@ bool MainWindow::motionSmokeTest(const QString &directory) {
     mouseMotionAction_->setChecked(true);
     move(0, 0);
     button(true);
-    if (!restart() || !sampleIs(0, 0) || mouseButtonA_)
+    if (!restart() || !sampleIs(112, 112) || !mouseButtonA_ || (emulator_->gb.joypad & 0x10))
+        return smokeFailure(__FILE__, __LINE__);
+    button(false);
+    if (!(emulator_->gb.joypad & 0x10))
         return smokeFailure(__FILE__, __LINE__);
     timer_.stop();
     if (!closeRom())
@@ -399,8 +402,12 @@ bool MainWindow::motionSmokeTest(const QString &directory) {
     if ((emulator_->gb.joypad & 0x10) || !mouseButtonA_ || !restart())
         return smokeFailure(__FILE__, __LINE__);
     timer_.stop();
-    if (emulator_->gb.joypad != 0xff || (emulator_->gb.interrupt_flags & 0x10) || mouseButtonA_ ||
-        physicalJoypad_ != 0xff || !sampleIs(0, 0) || emulator_->gb.elapsed_cycles)
+    if (emulator_->gb.joypad != 0xef || (emulator_->gb.interrupt_flags & 0x10) || !mouseButtonA_ ||
+        physicalJoypad_ != 0xef || !sampleIs(112, 112) || emulator_->gb.elapsed_cycles)
+        return smokeFailure(__FILE__, __LINE__);
+    button(false);
+    QApplication::sendEvent(display_, &keyUp);
+    if (emulator_->gb.joypad != 0xff || mouseButtonA_ || physicalJoypad_ != 0xff)
         return smokeFailure(__FILE__, __LINE__);
     move(0, 0);
     button(true);

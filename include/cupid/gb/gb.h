@@ -324,6 +324,8 @@ typedef struct CupidGbSerialLink {
 
 typedef void (*CupidGbRumbleCallback)(const struct CupidGb *gb, bool enabled, uint64_t base_cycles,
                                       void *user_data);
+typedef void (*CupidGbRumbleStrengthCallback)(const struct CupidGb *gb, uint8_t strength,
+                                              uint64_t base_cycles, void *user_data);
 typedef void (*CupidGbInfraredCallback)(const struct CupidGb *gb, bool enabled,
                                         uint64_t base_cycles, void *user_data);
 
@@ -500,6 +502,8 @@ typedef struct CupidGb {
     CupidGbSerialLink serial_link;
     CupidGbRumbleCallback rumble_callback;
     void *rumble_user_data;
+    CupidGbRumbleStrengthCallback rumble_strength_callback;
+    void *rumble_strength_user_data;
     CupidGbInfraredCallback infrared_callback;
     void *infrared_user_data;
     uint16_t oam_vram_row;      /* Retained source-bus row; UINT16_MAX releases the latch. */
@@ -515,6 +519,8 @@ typedef struct CupidGb {
     CupidGbDisplayClock display_clock;
     CupidGbPixelTiming pixel_timing;
     CupidGbVramBus vram_bus;
+    /* Host masks await the next delivered input sample, including after reset. */
+    bool joyp_sample_pending;
 } CupidGb;
 
 /* Optional host observation for one hardware step. This output is not stored
@@ -556,12 +562,20 @@ void cupid_gb_set_serial_link(CupidGb *gb, CupidGbSerialLink link);
  * Clock requests shift SB only while an external-clock transfer is armed. */
 bool cupid_gb_serial_external_bit(const CupidGb *gb);
 void cupid_gb_serial_external_clock(CupidGb *gb, bool incoming);
-/* MBC5 motor transitions are observed at the current base-cycle timestamp.
+/* Raw MBC5 and TPP1 motor on/off transitions are observed at the current
+ * base-cycle timestamp. Positive TPP1 strength changes do not notify this observer.
  * Callbacks must not mutate or reenter the core. Registration survives resets
- * and state loading; state loading emits no callback. Resynchronize host output
- * with the getter after loading a state, resetting, or changing cartridges. */
+ * and state loading; those operations emit no callback. Resynchronize host output
+ * after loading a state, resetting, or changing cartridges. */
 void cupid_gb_set_rumble_callback(CupidGb *gb, CupidGbRumbleCallback callback, void *user_data);
 bool cupid_gb_rumble_enabled(const CupidGb *gb);
+/* Effective cartridge feedback is 0..3: MBC5 uses 0 or 3; TPP1 honors its motor
+ * capability bit and retains all three nonzero strengths. This observer also
+ * receives positive-to-positive strength changes. It has the same ownership and
+ * non-reentrancy rules as the raw observer and is never included in state data. */
+uint8_t cupid_gb_rumble_strength(const CupidGb *gb);
+void cupid_gb_set_rumble_strength_callback(CupidGb *gb, CupidGbRumbleStrengthCallback callback,
+                                           void *user_data);
 void cupid_gb_set_model(CupidGb *gb, CupidGbModel model);
 /* Physical base-speed T-cycles per second, independent of CGB double speed.
  * SGB uses its NTSC host-derived clock; other current models use 4194304 Hz.

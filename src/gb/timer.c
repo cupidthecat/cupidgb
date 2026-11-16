@@ -243,12 +243,16 @@ static void clock_cpu_span(CupidGb *gb, unsigned cycles) {
 
 static void advance_base_time(CupidGb *gb, unsigned dots) {
     gb->elapsed_cycles += dots;
-    if (gb->joyp_select_delay)
-        cupid_gb_input_tick(gb, dots);
 }
 
 static void finish_display_span(CupidGb *gb, unsigned half_dots) {
-    if (!half_dots || !cupid_gb_display_clock_capable(gb))
+    if (!half_dots)
+        return;
+    /* Input samples belong to completed CPU deliveries, including a lone color
+     * half-dot. Internal pixel/DMA subdivision must not sample host changes early. */
+    if (gb->joyp_sample_pending || gb->joyp_select_delay)
+        cupid_gb_input_tick_half_dots(gb, half_dots);
+    if (!cupid_gb_display_clock_capable(gb))
         return;
     /* Internal dot/M-cycle subdivision serves DMA arbitration. The receiver
      * samples one completed CPU delivery, after its display and DMA work. */

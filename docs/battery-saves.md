@@ -1,6 +1,6 @@
 # Battery saves
 
-Fresh cartridge storage starts at erased `FF`, after controller-specific RAM or EEPROM sizes are resolved. Loading a battery or native state replaces that cold data with the saved bytes. The Qt reset/reopen workflow restores the battery after loading the cartridge; entering the boot overlay leaves existing storage intact. The cold fill does not count as a guest battery write.
+Fresh cartridge storage starts at erased `FF`, after controller-specific RAM or EEPROM sizes are resolved. Loading a battery or native state replaces that cold data with the saved bytes. Qt asset-reset workflows commit the outgoing battery before refreshing the cartridge. Native console resets keep loaded battery storage; Quick Reset also keeps volatile storage. Entering the boot overlay leaves existing cartridge storage intact. The cold fill does not count as a guest battery write.
 
 CupidGB stores battery files beside the cartridge with a `.sav` extension. Validation runs use disposable copies of cartridges so existing saves remain untouched.
 
@@ -10,7 +10,7 @@ Saving stores the current live and latched MBC3 registers with the supplied host
 
 Settings offers Sync to System Clock and Accurate policies. The first follows host time; the second advances from delivered emulated clocks. Both retain the controller-specific battery import rules. See [cartridge clocks](rtc.md) for policy changes and core integration.
 
-The Qt frontend saves after a quiet period following guest writes. Natural clock progress and status-only clock commands do not schedule repeated autosaves. Reset, reload, cartridge replacement and close still commit the current battery and clock history, even when no guest write occurred. State loading and rewind mark the restored battery state dirty. Writes use atomic file replacement.
+The Qt frontend saves after a quiet period following guest writes. Natural clock progress and status-only clock commands do not schedule repeated autosaves. Menu Reset, Quick Reset, Reload, cartridge replacement and close commit the current battery and clock history, even when no guest write occurred. Native console resets keep loaded storage and use dirty tracking for persistent changes. HuC3's reset clock and alarm digits remain dirty until the cleared data reaches disk; refreshing the host callback baseline alone is not a battery write. State loading and rewind mark the restored battery state dirty. Writes use atomic file replacement.
 
 An invalid replacement cartridge, firmware file or battery leaves the current session intact. Resetting the same cartridge first commits its live battery, then imports the new file, so stale disk data does not replace current history. A failed battery commit preserves the session and any active audio recording so the operation can be retried. Errors are reported without replacing the existing file.
 

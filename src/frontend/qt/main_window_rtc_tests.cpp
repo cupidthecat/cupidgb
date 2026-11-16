@@ -531,6 +531,16 @@ bool MainWindow::rtcBatterySmokeTest(const QString &directory) {
                 readRtcFixture(save) != initial || QFileInfo(save).lastModified() != modified)
                 return smokeFailure(__FILE__, __LINE__);
             const QByteArray expected = rtcBatteryBytes(gb, clock.now);
+            const bool resetting = ending == 1 || ending == 2;
+            QByteArray expectedDisk = expected;
+            if (type == 0xfe && ending == 2) {
+                // Reload returns to the paused session, which flushes the HuC3
+                // reset's changed clock/alarm digits before returning to the user.
+                const qsizetype offset = qsizetype(gb.cartridge_ram_size);
+                std::fill(expectedDisk.begin() + offset, expectedDisk.end(), char(0));
+                for (unsigned byte = 0; byte < 8; ++byte)
+                    expectedDisk[offset + byte] = char(uint64_t(clock.now) >> (byte * 8));
+            }
             bool ended = true;
             switch (ending) {
                 case 0:
@@ -549,12 +559,21 @@ bool MainWindow::rtcBatterySmokeTest(const QString &directory) {
                     window.reset();
                     break;
             }
-            if (!ended || expected == initial || readRtcFixture(save) != expected ||
-                clock.calls != (type == 0xfe ? 0u : 1u)) {
+            const unsigned expectedCalls = type == 0xfe ? unsigned(resetting) : resetting ? 3u : 1u;
+            if (!ended || expected == initial || readRtcFixture(save) != expectedDisk ||
+                clock.calls != expectedCalls) {
                 qCritical("RTC lifecycle persistence failed for type 0x%02x during %s", type,
                           qPrintable(endings[ending]));
                 return smokeFailure(__FILE__, __LINE__);
             }
+            if (resetting && (window->emulator_->gb.rtc_policy.time_source != rtcTestTime ||
+                              window->emulator_->gb.rtc_policy.time_user_data != &clock ||
+                              window->emulator_->gb.rtc_cycles ||
+                              (type == 0x10 && window->emulator_->gb.rtc.s != 11) ||
+                              (type == 0xbc && window->emulator_->gb.tpp1.live[3] != 11) ||
+                              (type == 0xfe && (window->emulator_->gb.huc3.minutes ||
+                                                window->emulator_->gb.huc3.days))))
+                return smokeFailure(__FILE__, __LINE__);
         }
     }
 
@@ -642,9 +661,12 @@ bool MainWindow::rtcBatterySmokeTest(const QString &directory) {
         const QByteArray expected = rtcBatteryBytes(gb, clock.now);
         if (!writeRtcFixture(save, "stale invalid battery") || !window.restart() ||
             readRtcFixture(save) != expected || window.emulator_->gb.tpp1.live[3] != 23 ||
-            window.emulator_->gb.tpp1.rtc_base_time != clock.now || clock.calls != 1)
+            window.emulator_->gb.tpp1.rtc_base_time != clock.now || clock.calls != 3 ||
+            window.emulator_->gb.rtc_policy.time_source != rtcTestTime ||
+            window.emulator_->gb.rtc_policy.time_user_data != &clock)
             return smokeFailure(__FILE__, __LINE__);
-        cupid_gb_set_rtc_time_source(&window.emulator_->gb, rtcTestTime, &clock);
+        // Export the outgoing battery, rebase native reset, and cache the new
+        // session's battery through the same retained time-source registration.
     }
 
     // A failed lifecycle commit must retain the live cartridge and its retryable

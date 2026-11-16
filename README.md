@@ -21,12 +21,13 @@ Use `--model dmg`, `--model cgb`, or another supported profile to fix hardware f
 | Select / Start | Backspace / Enter |
 | Turbo / rewind / slow motion | Hold Space / Tab / Shift |
 | Open / reset / pause | Ctrl+O / Ctrl+R / Ctrl+P |
+| Quick Reset | Ctrl+Alt+R |
 | Save / load numbered slot | Ctrl+digit / Ctrl+Shift+digit |
 | Fullscreen / mute / screenshot | Ctrl+F / Ctrl+M / F12 |
 | Audio channels 1 through 4 | Alt+1 through Alt+4 |
 | Settings / debugger | Ctrl+, / Ctrl+C |
 
-Emulation > Settings controls hardware, the optional boot-ROM directory, input, display, volume, and rewind limits. Model and boot choices apply on the next reset or open. Without a boot binary, startup uses an approximate post-boot profile. Boot binaries and game inputs are not distributed.
+Emulation > Settings controls hardware, the optional boot-ROM directory, input, display, volume, and rewind limits. Hardware choices apply on ordinary Reset or cartridge open. Quick Reset and Reload keep the active model; all three refresh boot inputs. Without a boot binary, startup uses an approximate post-boot profile. Boot binaries and game inputs are not distributed.
 
 Power-on RAM varies by hardware profile. For a reproducible session, add `--power-on-seed 0x1234`; decimal values and zero are also valid. The option applies to each cold reset/open in that session and does not change saved preferences. Omit it or use `auto` for automatic choices. [Testing and runtime reports](docs/testing.md#headless-rom-runner) explains how to capture and replay the realized seed.
 
@@ -34,11 +35,13 @@ Emulation > Controllers selects devices and configures buttons, axes, hats, play
 
 Battery data uses `.sav` beside the cartridge. State slots use `.s0` through `.s9`, with the zero key selecting slot 10. Archive storage names include the archive extension, such as `game.zip.sav`. Settings offers system-time or Accurate emulated-time policies for supported [cartridge clocks](docs/rtc.md).
 
-New states use CupidGB native version 15 and retain hardware, peripheral, audio reconstruction, display synchronization, pixel-fetch and VRAM read history. Versions 2 through 14 remain loadable with explicit defaults for missing history. Desktop loads keep current listening settings. File > Recover Battery from Older State can export supported battery data from version 1. See [save states and rewind](docs/save-states.md) for compatibility and backup guidance.
+New states use CupidGB native version 16 and retain hardware, peripheral, audio reconstruction, display synchronization, pixel-fetch and VRAM read history. Versions 2 through 15 remain loadable with explicit defaults for missing history. Version 16 also retains pending input samples and TPP1's mapped bank separately from its reset control readback. Desktop loads keep current listening settings. File > Recover Battery from Older State can export supported battery data from version 1. See [save states and rewind](docs/save-states.md) for compatibility and backup guidance.
 
 Audio settings include Accurate, waveform-preserving and disabled high-pass filtering, optional interference and individual channel toggles. [The audio guide](docs/audio.md) explains how these controls affect playback and recording.
 
 Physical controller/motion qualification, advanced debugger commands/watchpoints, paired cable sessions and other accessories, custom cheat expressions, state interchange, individual hardware revisions, uncommon cartridge behavior, and advanced display/audio features remain incomplete. [The parity checklist](docs/parity.md) records the full scope.
+
+Ordinary Reset restarts play with the selected hardware settings and clears rewind. Quick Reset retains physical memory and compatible rewind; installed firmware executes again and can overwrite that memory. Reload refreshes assets while keeping the active model and pause choice. All reset workflows retain an active recording. See [the user guide](docs/user-guide.md#open-reset-and-close) for storage and firmware details.
 
 ## Build
 

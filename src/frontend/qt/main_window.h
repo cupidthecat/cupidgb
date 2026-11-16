@@ -45,6 +45,7 @@ extern "C" {
 #include "cupid/core/emulator.h"
 #include "cupid/gb/cheats.h"
 #include "cupid/gb/debugger.h"
+#include "cupid/gb/reset.h"
 #include "cupid/gb/state.h"
 }
 
@@ -102,6 +103,7 @@ class MainWindow final : public QMainWindow {
     void updateRecentMenu();
     void configure();
     void configureControllers();
+    void receiveControllerOutput(const cupid::input::ControllerOutput &output);
     void reconcileControllerInput(bool resetAudio = true);
     void refreshControllerGate();
     static std::optional<QPoint> pointerMotionSample(QPointF position, QSize source,
@@ -122,7 +124,7 @@ class MainWindow final : public QMainWindow {
     void finishControllerRumble();
     bool controllerSmokeTest(const QString &directory);
     QString bootDirectory() const;
-    void setPaused(bool paused);
+    void setPaused(bool paused, bool retainInput = false);
     void releaseKeys(bool resetAudio = true);
     void setJoypad(uint8_t mask);
     void applyHeldButtons();
@@ -131,9 +133,19 @@ class MainWindow final : public QMainWindow {
     void registerShortcut(QAction *action, const QString &id);
     bool flushBattery(bool forceWrite = false);
     bool closeRom();
+    enum class ResetWorkflow { Open, Normal, Quick, Reload };
     bool restart();
+    bool quickReset();
+    bool resetCartridge(ResetWorkflow workflow);
+    bool resetConsole(CupidGbResetKind kind);
+    bool prepareResetCandidate(CupidEmulator *candidate, ResetWorkflow workflow, bool sameStorage);
+    bool prepareResetSymbols(std::unique_ptr<CupidGbDebugger> &symbols);
+    bool resetSmokeTest(const QString &directory);
+    bool resetInputSmokeTest(const QString &directory);
+    bool resetMenuInputSmokeTest(const QString &directory);
+    bool resetAudioSmokeTest(const QString &directory);
     bool reloadRom();
-    bool openRom(const QString &path, bool reload);
+    bool openRom(const QString &path, bool reload, ResetWorkflow workflow = ResetWorkflow::Open);
     bool reloadSmokeTest(const QString &directory);
     void resetPacing();
     void refreshTimerInterval();
@@ -176,6 +188,8 @@ class MainWindow final : public QMainWindow {
     bool loadStateFile(const QString &path);
     bool recoverBattery(const QString &statePath, const QString &outputPath);
     void resetRewind();
+    void rebaseRewindAfterReset(uint64_t previousGuestCycles);
+    void trackRewindTime(uint64_t guestCycles);
     void rememberFrame();
     bool rewindFrame(PlaybackResult *result = nullptr);
     void reportError(const QString &message);
@@ -295,6 +309,7 @@ class MainWindow final : public QMainWindow {
     QAction *recordingAction_ = nullptr;
     QAction *closeAction_ = nullptr;
     QAction *resetAction_ = nullptr;
+    QAction *quickResetAction_ = nullptr;
     QAction *reloadAction_ = nullptr;
     QAction *frameAction_ = nullptr;
     QAction *screenshotAction_ = nullptr;
@@ -315,6 +330,7 @@ class MainWindow final : public QMainWindow {
     std::array<int, 5> specialKeys_{};
     std::unique_ptr<cupid::input::ControllerManager> controllers_;
     cupid::input::ControllerOutput controllerOutput_;
+    bool controllerInputDeferred_ = false;
     enum class MotionSource { None, Mouse, Controller };
     MotionSource motionSource_ = MotionSource::None;
     int16_t lastControllerMotionX_ = 0, lastControllerMotionY_ = 0;
@@ -325,9 +341,10 @@ class MainWindow final : public QMainWindow {
     std::array<std::array<unsigned, 2>, 4> controllerRapidPhase_{};
     std::array<uint8_t, 4> debuggerPlayerButtons_{0xff, 0xff, 0xff, 0xff};
     unsigned controllerPlayerCount_ = 1;
-    uint64_t rumbleLastCycles_ = 0, rumbleWindowCycles_ = 0, rumbleOnCycles_ = 0;
-    bool rumbleMotor_ = false;
+    uint64_t rumbleLastCycles_ = 0, rumbleWindowCycles_ = 0, rumbleWeightedCycles_ = 0;
+    uint8_t rumbleStrength_ = 0;
     unsigned menuDepth_ = 0;
+    bool menuInputSuspended_ = false;
     bool controllerSmokeActive_ = false;
     std::vector<QAction *> shortcutActions_;
     std::array<bool, 2> rapidHeld_{};
@@ -346,11 +363,13 @@ class MainWindow final : public QMainWindow {
 
     struct RewindSnapshot {
         QByteArray compressed;
-        uint64_t cycles;
+        uint64_t cycles; /* Ordered history age; independent of reset guest clocks. */
     };
 
     std::deque<RewindSnapshot> rewindStates_;
     std::unique_ptr<CupidGbStateContext> rewindContext_;
+    uint64_t rewindAgeCycles_ = 0;
+    uint64_t rewindGuestCycles_ = 0;
     qsizetype rewindBytes_ = 0;
     qint64 lastRewindBudgetNotice_ = 0;
     uint64_t rewindSnapshotsCaptured_ = 0;

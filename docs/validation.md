@@ -6,6 +6,8 @@ Earlier sections retain the results and assumptions of their original builds. A 
 
 The [audio and native-state checkpoint](validation-audio.md) records reconstruction, live-load, Camera and continuation results separately from these earlier builds. The subsequent [display and infrared checkpoint](validation-timing.md) records display-delivery, pixel and VRAM comparisons and distinguishes development probes from final integration gates.
 
+The [reset, input and native-state checkpoint](validation-reset.md) records the current Windows and Linux reset and recording workflows, version 16 continuation between both hosts, external suites, core throughput and bounded native runtime on both hosts. It also records the Linux sanitizer checks, the distinct application/raw-clock measurements, each host's validation limits and the remaining CGB row-selection and rumble gaps.
+
 ## Builds and automated checks
 
 | Environment | Configuration | Result |

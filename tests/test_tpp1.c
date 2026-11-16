@@ -180,7 +180,7 @@ static void test_state_restore(CupidGb *gb) {
     assert(size);
     uint8_t *state = malloc(size);
     assert(state && cupid_gb_save_state(gb, state, size, NULL) == CUPID_GB_STATE_OK);
-    assert(state[8] == 15);
+    assert(state[8] == CUPID_GB_STATE_VERSION);
     command(gb, 0x20);
     command(gb, 0);
     cupid_gb_write_u8(gb, 0, 0);

@@ -106,9 +106,14 @@ static void motor_command(CupidGb *gb, uint8_t command) {
     CupidGbTpp1 *device = &gb->tpp1;
     const uint8_t strength = command & CUPID_GB_TPP1_MOTOR;
     const bool was_active = device->motor_strength != 0;
+    const uint8_t previous_strength = cupid_gb_rumble_strength(gb);
     device->motor_strength = strength;
     if (was_active != (strength != 0) && gb->rumble_callback)
         gb->rumble_callback(gb, strength != 0, gb->elapsed_cycles, gb->rumble_user_data);
+    const uint8_t effective_strength = cupid_gb_rumble_strength(gb);
+    if (effective_strength != previous_strength && gb->rumble_strength_callback)
+        gb->rumble_strength_callback(gb, effective_strength, gb->elapsed_cycles,
+                                     gb->rumble_strength_user_data);
 }
 
 void cupid_gb_tpp1_write_register(CupidGb *gb, uint16_t address, uint8_t value) {
@@ -134,4 +139,9 @@ void cupid_gb_tpp1_write_register(CupidGb *gb, uint16_t address, uint8_t value) 
             }
             break;
     }
+    /* Reset leaves bank 1 mapped while control readback starts at zero. Every
+     * control-port write, including a mode or clock command, commits the latches. */
+    gb->current_rom_bank = device->rom_bank;
+    gb->current_ram_bank = device->ram_bank;
+    gb->ram_enabled = device->mode == READ_SRAM || device->mode == WRITE_SRAM;
 }

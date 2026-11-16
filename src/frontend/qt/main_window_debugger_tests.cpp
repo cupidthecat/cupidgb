@@ -199,7 +199,8 @@ bool MainWindow::debuggerSmokeTest(const QString &directory) {
     if (!runFrame() || !paused_ || emulator_->gb.cpu.pc != 0x158 || emulator_->gb.cpu.a != 3)
         return smokeFailure(__FILE__, __LINE__);
     debuggerWindow_->submitCommand("delete all");
-    const QString symbolsPath = QDir(directory).filePath("debugger.sym");
+    const QString symbolsPath =
+        QFileInfo(path).dir().filePath(QFileInfo(path).completeBaseName() + ".sym");
     QFile symbols(symbolsPath);
     if (!symbols.open(QIODevice::WriteOnly) ||
         symbols.write("00:0155 Subcall\n00:0160 Inner\n") <= 0)
@@ -743,7 +744,7 @@ bool MainWindow::reloadSmokeTest(const QString &directory) {
     cupid_gb_write_u8(&session.emulator_->gb, 0xa000, 0x6d);
     const QByteArray beforeInvalidCommand = session.captureState();
     session.debuggerWindow_->submitCommand("reset reload extra");
-    session.debuggerWindow_->submitCommand("reset quick");
+    session.debuggerWindow_->submitCommand("reset quick extra");
     if (session.captureState() != beforeInvalidCommand || session.debuggerHistory_.empty())
         return smokeFailure(__FILE__, __LINE__);
     rom[0x151] = char(0x42);

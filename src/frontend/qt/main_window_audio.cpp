@@ -127,7 +127,7 @@ void MainWindow::pumpAudio() {
     // Backend event dispatch can replace the session queue while a write is active.
     const auto buffer = audioBuffer_;
     const auto sink = audio_;
-    if (audio_ && !paused_) {
+    if (audio_ && !paused_ && !menuInputSuspended_) {
         // The event loop produces one guest frame at a time. Accumulate real samples
         // before starting the sink so frame-sized writes tolerate host scheduling jitter.
         // The 30 ms target stays below the 50 ms execution-backpressure limit.
@@ -143,9 +143,14 @@ void MainWindow::pumpAudio() {
                 audioDevice_ = device;
             }
             QIODevice *const device = audioDevice_;
+            const auto state = sink->state();
+            // A failed start can leave the backend without a native client.
+            // Capacity is only valid for a started, writable stream.
+            if (!device || (state != QAudio::ActiveState && state != QAudio::IdleState))
+                return;
             const qint64 capacity = sink->bytesFree();
             if (sink != audio_ || buffer != audioBuffer_ || device != audioDevice_ || paused_ ||
-                menuDepth_)
+                menuDepth_ || menuInputSuspended_)
                 return;
             const qint64 written = buffer->writeTo(device, capacity);
             if (written > 0 && sink == audio_ && buffer == audioBuffer_ && !paused_) {
@@ -156,9 +161,12 @@ void MainWindow::pumpAudio() {
         }
         if (audioDevice_) {
             QIODevice *const device = audioDevice_;
+            const auto state = sink->state();
+            if (state != QAudio::ActiveState && state != QAudio::IdleState)
+                return;
             const qint64 capacity = sink->bytesFree();
             if (sink != audio_ || buffer != audioBuffer_ || device != audioDevice_ || paused_ ||
-                menuDepth_)
+                menuDepth_ || menuInputSuspended_)
                 return;
             buffer->writeTo(device, capacity);
         }

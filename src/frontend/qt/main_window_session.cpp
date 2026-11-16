@@ -34,8 +34,8 @@ void MainWindow::resetPacing() {
 void MainWindow::refreshTimerInterval() {
     // A transient state operation may unwind without resetting pacing. Keep its active
     // interval so native audio callbacks cannot strand a running session at idle cadence.
-    const bool idle =
-        !emulator_ || paused_ || menuDepth_ || (rewind_ && (rewindFailed_ || rewindExhausted_));
+    const bool idle = !emulator_ || paused_ || menuDepth_ || menuInputSuspended_ ||
+                      (rewind_ && (rewindFailed_ || rewindExhausted_));
     const int interval = idle ? 16 : 1;
     if (timer_.interval() != interval)
         timer_.setInterval(interval);
@@ -56,7 +56,7 @@ void MainWindow::setTurboCap(unsigned quarters) {
 void MainWindow::tick() {
     const auto refreshInterval = qScopeGuard([this] { refreshTimerInterval(); });
     refreshControllerGate();
-    if (!emulator_ || paused_ || stateOperation_ || menuDepth_)
+    if (!emulator_ || paused_ || stateOperation_ || menuDepth_ || menuInputSuspended_)
         return;
     const uint64_t entrySession = sessionId_;
     const uint64_t entryTimeline = timelineId_;
@@ -65,8 +65,9 @@ void MainWindow::tick() {
         clearAudio();
     pumpAudio();
     // Starting a native audio stream may dispatch window/session actions.
-    if (!emulator_ || paused_ || stateOperation_ || menuDepth_ || sessionId_ != entrySession ||
-        timelineId_ != entryTimeline || pacingGeneration_ != entryPacing)
+    if (!emulator_ || paused_ || stateOperation_ || menuDepth_ || menuInputSuspended_ ||
+        sessionId_ != entrySession || timelineId_ != entryTimeline ||
+        pacingGeneration_ != entryPacing)
         return;
     if (rewind_ && (rewindFailed_ || rewindExhausted_))
         return;
@@ -86,8 +87,8 @@ void MainWindow::tick() {
     const unsigned speed = speedSteps_;
     PlaybackResult result;
     const bool ran = rewind ? rewindFrame(&result) : runFrame(Playback::Forward, &result);
-    if (!ran || paused_ || !emulator_ || stateOperation_ || menuDepth_ || sessionId_ != session ||
-        timelineId_ != result.timeline)
+    if (!ran || paused_ || !emulator_ || stateOperation_ || menuDepth_ || menuInputSuspended_ ||
+        sessionId_ != session || timelineId_ != result.timeline)
         return;
     // Audio callbacks can dispatch a speed preference or held-key change. Keep
     // the new deadline instead of charging an old-rate quantum to that timeline.
@@ -186,9 +187,11 @@ bool MainWindow::runFrame(Playback playback, PlaybackResult *result) {
     const uint64_t timeline = timelineId_;
     const bool wasPaused = paused_;
     const unsigned menuDepth = menuDepth_;
-    const auto unchanged = [this, session, timeline, wasPaused, menuDepth] {
+    const bool menuInputSuspended = menuInputSuspended_;
+    const auto unchanged = [this, session, timeline, wasPaused, menuDepth, menuInputSuspended] {
         return emulator_ && sessionId_ == session && timelineId_ == timeline &&
-               paused_ == wasPaused && menuDepth_ == menuDepth;
+               paused_ == wasPaused && menuDepth_ == menuDepth &&
+               menuInputSuspended_ == menuInputSuspended;
     };
     QByteArray converted;
     if (audio_ && audioConverter_ && !paused_)
@@ -442,6 +445,8 @@ bool MainWindow::recoverBattery(const QString &statePath, const QString &outputP
 void MainWindow::resetRewind() {
     rewindStates_.clear();
     rewindContext_.reset();
+    rewindAgeCycles_ = emulator_ ? emulator_->gb.elapsed_cycles : 0;
+    rewindGuestCycles_ = rewindAgeCycles_;
     rewindBytes_ = 0;
     rewindFailed_ = false;
     rewindExhausted_ = false;
@@ -451,10 +456,27 @@ void MainWindow::resetRewind() {
     rewindCaptureMaximumNanoseconds_ = 0;
 }
 
+void MainWindow::trackRewindTime(uint64_t guestCycles) {
+    if (guestCycles >= rewindGuestCycles_)
+        rewindAgeCycles_ += guestCycles - rewindGuestCycles_;
+    rewindGuestCycles_ = guestCycles;
+}
+
+void MainWindow::rebaseRewindAfterReset(uint64_t previousGuestCycles) {
+    trackRewindTime(previousGuestCycles);
+    rewindGuestCycles_ = emulator_ ? emulator_->gb.elapsed_cycles : 0;
+    /* Byte-identical replacement ROMs can retain snapshots, but trusted contexts
+     * still belong to a particular allocation and must be rebound after the swap. */
+    rewindContext_.reset();
+    rewindExhausted_ = false;
+    rewind_ = false;
+}
+
 void MainWindow::rememberFrame() {
     const int seconds = std::clamp(settings_.value("emulation/rewindSeconds", 120).toInt(), 0, 600);
     if (!emulator_ || !seconds || rewindFailed_)
         return;
+    trackRewindTime(emulator_->gb.elapsed_cycles);
     const uint32_t clockHz = cupid_gb_base_clock_hz(&emulator_->gb);
     if (!rewindContext_) {
         auto context = std::make_unique<CupidGbStateContext>();
@@ -465,8 +487,8 @@ void MainWindow::rememberFrame() {
                 "Rewind disabled: cartridge identity could not be initialized");
             return;
         }
-        // Cartridge bytes are immutable in this frontend. Reset this context whenever
-        // opening/resetting a cartridge, loading a disk state, or adding ROM-editing support.
+        // Cartridge bytes are immutable in this frontend. Replacement allocations
+        // need a new binding even when their byte-identical snapshots remain usable.
         rewindContext_ = std::move(context);
     }
     QElapsedTimer captureTimer;
@@ -484,7 +506,7 @@ void MainWindow::rememberFrame() {
     rewindCaptureNanoseconds_ += captureTime;
     rewindCaptureMaximumNanoseconds_ = std::max(rewindCaptureMaximumNanoseconds_, captureTime);
     rewindBytes_ += compressed.capacity() + qsizetype(sizeof(RewindSnapshot));
-    rewindStates_.push_back({std::move(compressed), emulator_->gb.elapsed_cycles});
+    rewindStates_.push_back({std::move(compressed), rewindAgeCycles_});
     const int budgetMiB = std::clamp(settings_.value("emulation/rewindMiB", 256).toInt(), 16, 256);
     const qsizetype budget = qsizetype(budgetMiB) * 1024 * 1024;
     if (rewindStates_.back().compressed.capacity() + qsizetype(sizeof(RewindSnapshot)) > budget) {
@@ -533,6 +555,8 @@ bool MainWindow::rewindFrame(PlaybackResult *result) {
             statusBar()->showMessage("Rewind disabled: stored state could not be restored");
             return false;
         }
+        rewindAgeCycles_ = rewindStates_[target].cycles;
+        rewindGuestCycles_ = emulator_->gb.elapsed_cycles;
         // Live restores retain the receiving output history. Discard pending
         // frames so only newly generated replay samples enter the host stream.
         int16_t discarded[CUPID_GB_APU_BUF_FRAMES * 2];

@@ -22,7 +22,18 @@
 
 #include "main_window_internal.h"
 
-void MainWindow::setPaused(bool value) {
+namespace {
+bool objectBelongsTo(const QObject *object, const QObject *owner) {
+    // Popup menus are separate windows. QWidget ancestry intentionally stops
+    // at that boundary, while QObject ownership retains their parent menu/window.
+    for (auto *ancestor = object; ancestor; ancestor = ancestor->parent())
+        if (ancestor == owner)
+            return true;
+    return false;
+}
+} // namespace
+
+void MainWindow::setPaused(bool value, bool retainInput) {
     if (!value)
         debuggerInputPaused_ = false;
     if (debugger_) {
@@ -42,7 +53,10 @@ void MainWindow::setPaused(bool value) {
     }
     paused_ = value;
     resetControllerRumble();
-    releaseKeys(false);
+    if (retainInput)
+        reconcileControllerInput(false);
+    else
+        releaseKeys(false);
     QSignalBlocker blocker(pauseAction_);
     pauseAction_->setChecked(value);
     resetPacing();
@@ -118,9 +132,13 @@ void MainWindow::applyPlayerButtons(const std::array<uint8_t, 4> &buttons) {
     if (controllerPlayerCount_ == 1)
         for (unsigned player = 1; player < 4; ++player)
             first &= buttons[player];
-    setJoypad(first);
+    // A UI resynchronization without a changed contact is not a new input
+    // event. In particular, closing a menu must retain a settled reset sample.
+    if (emulator_->gb.joypad != first)
+        setJoypad(first);
     for (unsigned player = 1; player < 4; ++player)
-        cupid_gb_set_buttons_for_player(&emulator_->gb, player, buttons[player]);
+        if (emulator_->gb.joypad_extra[player - 1] != buttons[player])
+            cupid_gb_set_buttons_for_player(&emulator_->gb, player, buttons[player]);
 }
 
 void MainWindow::refreshControllerPlayerCount() {
@@ -132,6 +150,33 @@ void MainWindow::refreshControllerPlayerCount() {
     // An SGB command can change routing inside one guest frame. Update before the next opcode.
     applyPlayerButtons(paused_ && debuggerInputPaused_ ? debuggerPlayerButtons_
                                                        : livePlayerButtons());
+}
+
+void MainWindow::receiveControllerOutput(const cupid::input::ControllerOutput &output) {
+    // Delivery gates synthesize a released output. A reset transaction retains
+    // its host controls until delivery reopens and reports the physical state.
+    if (stateOperation_ && !controllers_->deliveryEnabled()) {
+        controllerInputDeferred_ = true;
+        return;
+    }
+    const auto previous = controllerOutput_;
+    controllerOutput_ = output;
+    if (menuInputSuspended_) {
+        // Navigation can release an existing hold, but cannot introduce a new
+        // game press. The full current output is reconciled when the menu closes.
+        for (size_t player = 0; player < controllerOutput_.buttons.size(); ++player) {
+            controllerOutput_.buttons[player] |= previous.buttons[player];
+            for (size_t action = 0; action < controllerOutput_.rapid[player].size(); ++action)
+                controllerOutput_.rapid[player][action] &= previous.rapid[player][action];
+        }
+        for (size_t action = 0; action < controllerOutput_.held.size(); ++action)
+            controllerOutput_.held[action] &= previous.held[action];
+        controllerOutput_.motionAvailable &= previous.motionAvailable;
+        controllerOutput_.motionX = previous.motionX;
+        controllerOutput_.motionY = previous.motionY;
+    }
+    controllerMotionChanged(previous);
+    reconcileControllerInput();
 }
 
 void MainWindow::reconcileControllerInput(bool resetAudio) {
@@ -179,14 +224,26 @@ void MainWindow::refreshControllerGate() {
     const bool focused = QApplication::applicationState() == Qt::ApplicationActive;
     controllers_->setFocused(focused || (isolated_ && !isVisible()));
     const auto *active = QApplication::activeWindow();
-    const bool otherWindow = active && active != this;
-    const bool blocked = (isolated_ && !controllerSmokeActive_) || menuDepth_ || stateOperation_ ||
-                         QApplication::activeModalWidget() || QApplication::activePopupWidget() ||
+    const auto ownMenu = [this](const QWidget *widget) {
+        return qobject_cast<const QMenu *>(widget) && objectBelongsTo(widget, this);
+    };
+    const auto *popup = QApplication::activePopupWidget();
+    const bool otherWindow = active && active != this && !ownMenu(active);
+    // Menus keep physical delivery so releases cannot leave controls stuck.
+    // The receive path suppresses their new presses and command shortcuts.
+    const bool blocked = (isolated_ && !controllerSmokeActive_) || stateOperation_ ||
+                         QApplication::activeModalWidget() || (popup && !ownMenu(popup)) ||
                          otherWindow || !inputTrace_.empty();
     controllers_->setDeliveryEnabled(!blocked);
     // Classification belongs to the cartridge, independently of delivery gates.
     // A paused tilt axis must not become a digital direction on resume.
     controllers_->setMotionEnabled(emulator_ && emulator_->gb.header.mbc_type == CUPID_GB_MBC7);
+    if (!stateOperation_ && controllerInputDeferred_) {
+        // A real release during a blocked transaction may leave the manager at
+        // its already neutral output, so reopening need not emit another change.
+        controllerInputDeferred_ = false;
+        receiveControllerOutput(controllers_->output());
+    }
 }
 
 void MainWindow::navigateControllerMenu(const QString &action, SDL_JoystickID instance) {
@@ -236,9 +293,9 @@ void MainWindow::navigateControllerMenu(const QString &action, SDL_JoystickID in
 void MainWindow::resetControllerRumble() {
     if (controllers_)
         controllers_->stopRumble();
-    rumbleOnCycles_ = 0;
+    rumbleWeightedCycles_ = 0;
     rumbleWindowCycles_ = rumbleLastCycles_ = emulator_ ? emulator_->gb.elapsed_cycles : 0;
-    rumbleMotor_ = emulator_ && cupid_gb_rumble_enabled(&emulator_->gb);
+    rumbleStrength_ = emulator_ ? cupid_gb_rumble_strength(&emulator_->gb) : 0;
 }
 
 void MainWindow::finishControllerRumble() {
@@ -249,14 +306,14 @@ void MainWindow::finishControllerRumble() {
         resetControllerRumble();
         return;
     }
-    if (rumbleMotor_)
-        rumbleOnCycles_ += now - rumbleLastCycles_;
+    rumbleWeightedCycles_ += (now - rumbleLastCycles_) * rumbleStrength_;
     controllers_->setRumble(!paused_ && !rewind_ && !stateOperation_
-                                ? double(rumbleOnCycles_) / double(now - rumbleWindowCycles_)
+                                ? double(rumbleWeightedCycles_) /
+                                      (3.0 * double(now - rumbleWindowCycles_))
                                 : 0.0,
                             controllerPlayerCount_ == 1);
     rumbleWindowCycles_ = rumbleLastCycles_ = now;
-    rumbleOnCycles_ = 0;
+    rumbleWeightedCycles_ = 0;
 }
 
 void MainWindow::configureControllers() {
@@ -299,17 +356,27 @@ void MainWindow::advanceControls() {
 }
 
 bool MainWindow::eventFilter(QObject *object, QEvent *event) {
-    if (event->type() == QEvent::ApplicationDeactivate ||
-        (event->type() == QEvent::WindowDeactivate && object == this))
+    const auto *widget = qobject_cast<QWidget *>(object);
+    const bool ownMenu = qobject_cast<const QMenu *>(widget) && objectBelongsTo(widget, this);
+    const bool otherWindowActivated = menuInputSuspended_ &&
+                                      event->type() == QEvent::WindowActivate && widget &&
+                                      widget->isWindow() && widget != this && !ownMenu;
+    const bool deactivate =
+        event->type() == QEvent::ApplicationDeactivate || otherWindowActivated ||
+        (event->type() == QEvent::WindowDeactivate && object == this && !menuInputSuspended_);
+    if (deactivate)
         motionFocusActive_ = false;
     if (event->type() == QEvent::ApplicationActivate ||
         (event->type() == QEvent::WindowActivate && object == this))
         motionFocusActive_ = true;
     if (handleMotionEvent(object, event))
         return true;
-    if (event->type() == QEvent::ApplicationDeactivate ||
-        (event->type() == QEvent::WindowDeactivate && object == this))
+    if (deactivate) {
+        menuInputSuspended_ = false;
+        if (otherWindowActivated)
+            refreshControllerGate();
         releaseKeys();
+    }
     if (event->type() == QEvent::ApplicationDeactivate && controllers_) {
         controllers_->setFocused(false);
         resetControllerRumble();
@@ -318,11 +385,18 @@ bool MainWindow::eventFilter(QObject *object, QEvent *event) {
         controllers_->setFocused(true);
         resetControllerRumble();
     }
-    if ((object == display_ || object == this) && emulator_ &&
-        (event->type() == QEvent::KeyPress || event->type() == QEvent::KeyRelease)) {
+    const bool menuRelease = menuInputSuspended_ && widget && objectBelongsTo(widget, this);
+    if (menuRelease && event->type() == QEvent::MouseButtonRelease && mouseButtonA_) {
+        mouseButtonA_ = false;
+        if (!stateOperation_ && !(paused_ && debuggerInputPaused_))
+            applyHeldButtons();
+    }
+    if (((!menuInputSuspended_ && (object == display_ || object == this)) ||
+         (menuRelease && event->type() == QEvent::KeyRelease)) &&
+        emulator_ && (event->type() == QEvent::KeyPress || event->type() == QEvent::KeyRelease)) {
         auto *key = static_cast<QKeyEvent *>(event);
         if (key->isAutoRepeat())
-            return true;
+            return menuRelease ? QMainWindow::eventFilter(object, event) : true;
         const bool pressed = event->type() == QEvent::KeyPress;
         const int value = inputKey(key->key());
         // A modifier pressed after a game button must not suppress that button's release.
@@ -338,7 +412,7 @@ bool MainWindow::eventFilter(QObject *object, QEvent *event) {
             if (action == 1 && held && rewindStates_.size() < 2)
                 statusBar()->showMessage("No earlier rewind history");
             resetPacing();
-            return true;
+            return menuRelease ? QMainWindow::eventFilter(object, event) : true;
         }
         for (size_t i = 0; i < keys_.size(); ++i) {
             if (value == keys_[i]) {
@@ -350,7 +424,7 @@ bool MainWindow::eventFilter(QObject *object, QEvent *event) {
                 }
                 if (!(paused_ && debuggerInputPaused_))
                     applyHeldButtons();
-                return true;
+                return menuRelease ? QMainWindow::eventFilter(object, event) : true;
             }
         }
     }

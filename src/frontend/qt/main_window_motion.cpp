@@ -55,7 +55,7 @@ std::optional<QPoint> MainWindow::pointerMotionSample(QPointF position, QSize so
 
 bool MainWindow::motionInputAllowed(bool mouse) const {
     if (!emulator_ || emulator_->gb.header.mbc_type != CUPID_GB_MBC7 || paused_ ||
-        stateOperation_ || menuDepth_ || !inputTrace_.empty())
+        stateOperation_ || menuDepth_ || menuInputSuspended_ || !inputTrace_.empty())
         return false;
     if (QApplication::activeModalWidget() || QApplication::activePopupWidget())
         return false;
@@ -91,7 +91,7 @@ void MainWindow::resetMotionInput() {
 void MainWindow::refreshMotionGate() {
     // Atomic loads retain live host input. Backend event dispatch during a
     // state operation must not turn a delivery gate into a new neutral sample.
-    if (stateOperation_) {
+    if (stateOperation_ || menuInputSuspended_) {
         motionGateOpen_ = false;
         return;
     }
@@ -111,6 +111,14 @@ void MainWindow::controllerMotionChanged(const cupid::input::ControllerOutput &p
         previous.motionX == controllerOutput_.motionX &&
         previous.motionY == controllerOutput_.motionY)
         return;
+    if (menuInputSuspended_) {
+        if (!controllerOutput_.motionAvailable && motionSource_ == MotionSource::Controller) {
+            if (emulator_)
+                cupid_gb_mbc7_set_motion(&emulator_->gb, 0, 0);
+            motionSource_ = MotionSource::None;
+        }
+        return;
+    }
     const bool coordinatesChanged = lastControllerMotionX_ != controllerOutput_.motionX ||
                                     lastControllerMotionY_ != controllerOutput_.motionY;
     if (controllerOutput_.motionAvailable) {
@@ -147,6 +155,14 @@ bool MainWindow::handleMotionEvent(QObject *object, QEvent *event) {
     const bool released = event->type() == QEvent::MouseButtonRelease;
     if (!moved && !pressed && !released)
         return false;
+    if (menuInputSuspended_) {
+        if (released && mouseButtonA_) {
+            mouseButtonA_ = false;
+            if (!stateOperation_ && !(paused_ && debuggerInputPaused_))
+                applyHeldButtons();
+        }
+        return false;
+    }
     // Synchronize device mode before a pointer event so an initial controller
     // resynchronization cannot immediately replace this newer mouse sample.
     refreshControllerGate();
