@@ -742,6 +742,43 @@ static void test_stopped_compatibility_background_priority(void) {
         assert(gb.frame_buffer_color[pixel] == 0x1111);
 }
 
+static void test_palette_output_ignores_unused_bit(void) {
+    CupidGb gb;
+    for (unsigned color_mode = 0; color_mode < 2; ++color_mode) {
+        prepare(&gb, true, 1);
+        gb.cgb_mode = color_mode != 0;
+        for (unsigned shade = 0; shade < 4; ++shade) {
+            const uint16_t background = (uint16_t)(0x9230u + shade);
+            gb.cgb_bg_palette_ram[shade * 2] = (uint8_t)background;
+            gb.cgb_bg_palette_ram[shade * 2 + 1] = (uint8_t)(background >> 8);
+            if (!color_mode)
+                assert(cupid_cgb_compat_bg_color(&gb, (uint8_t)shade) == (background & 0x7fff));
+            for (unsigned palette = 0; palette < 2; ++palette) {
+                const uint16_t color = (uint16_t)(0xa340u + palette * 16 + shade);
+                const unsigned offset = palette * 8 + shade * 2;
+                gb.cgb_obj_palette_ram[offset] = (uint8_t)color;
+                gb.cgb_obj_palette_ram[offset + 1] = (uint8_t)(color >> 8);
+                if (!color_mode)
+                    assert(cupid_cgb_compat_obj_color(&gb, palette, (uint8_t)shade) ==
+                           (color & 0x7fff));
+            }
+        }
+        object(&gb, 0, 24, 1, 0);
+        uint8_t background[64], object_palette[64];
+        memcpy(background, gb.cgb_bg_palette_ram, sizeof(background));
+        memcpy(object_palette, gb.cgb_obj_palette_ram, sizeof(object_palette));
+        render(&gb);
+        assert(gb.frame_buffer_color[0] == 0x1231 && gb.frame_buffer_color[16] == 0x2341);
+        if (color_mode) {
+            memset(gb.frame_buffer_color, 0xff, sizeof(gb.frame_buffer_color));
+            cupid_cgb_render_scanline(&gb, gb.io_registers[CUPID_GB_IO_LCDC], 0, 0);
+            assert(gb.frame_buffer_color[0] == 0x1231 && gb.frame_buffer_color[16] == 0x2341);
+        }
+        assert(memcmp(background, gb.cgb_bg_palette_ram, sizeof(background)) == 0);
+        assert(memcmp(object_palette, gb.cgb_obj_palette_ram, sizeof(object_palette)) == 0);
+    }
+}
+
 static void test_pixel_output_preserves_object_queue_lanes(void) {
     CupidGb gb;
     for (unsigned color_mode = 0; color_mode < 2; ++color_mode) {
@@ -809,6 +846,7 @@ int main(void) {
     test_stop_oam_and_palette_ports();
     test_physical_color_attributes_in_compatibility_mode();
     test_stopped_compatibility_background_priority();
+    test_palette_output_ignores_unused_bit();
     test_pixel_output_preserves_object_queue_lanes();
     puts("PPU priority checks passed.");
     return 0;

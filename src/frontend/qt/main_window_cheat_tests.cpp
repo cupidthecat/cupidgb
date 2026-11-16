@@ -105,6 +105,8 @@ bool MainWindow::cheatSmokeTest(const QString &path, const QString &directory) {
     session.openCheats(true);
     auto &searchGb = session.emulator_->gb;
     std::memset(searchGb.work_ram, 0, sizeof(searchGb.work_ram));
+    std::memset(searchGb.cartridge_ram, 0, searchGb.cartridge_ram_size);
+    std::memset(searchGb.high_ram, 0, sizeof(searchGb.high_ram));
     searchGb.work_ram[0x5009] = 0x77;
     auto *condition = session.cheatsWindow_->findChild<QComboBox *>("cheatSearchCondition");
     auto *operand = session.cheatsWindow_->findChild<QLineEdit *>("cheatSearchOperand");

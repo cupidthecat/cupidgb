@@ -22,8 +22,9 @@ static uint16_t cupid_cgb_palette_color(const uint8_t *palette_ram, uint8_t pale
                                         uint8_t color_index) {
     size_t color_offset = (size_t)palette_number * 8u + (size_t)color_index * 2u;
 
-    return (uint16_t)((uint16_t)palette_ram[color_offset] |
-                      ((uint16_t)palette_ram[color_offset + 1u] << 8u));
+    return (uint16_t)(((uint16_t)palette_ram[color_offset] |
+                       ((uint16_t)palette_ram[color_offset + 1u] << 8u)) &
+                      0x7fffu);
 }
 
 /**

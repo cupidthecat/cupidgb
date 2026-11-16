@@ -102,6 +102,10 @@ On Windows, also set `QT_FORCE_STDERR_LOGGING=1` when capturing diagnostic outpu
 
 Create the output directory first. Model names are `dmg`, `mgb`, `cgb`, `sgb`, and `sgb2`. The runner defaults to `dmg` and protocol `none`; choose the actual test's model and success protocol deliberately. `--boot` accepts one local binary. Without it, the run uses the approximate post-boot profile.
 
+Both the runner and Qt frontend accept `--power-on-seed auto|UINT64`. Fixed values use unsigned decimal or `0x`/`0X` hexadecimal syntax, up to `18446744073709551615`; leading decimal zeros do not select octal. Signs, whitespace, malformed digits, and overflow are rejected. Zero selects a reproducible noisy generation. The default is `auto`. The Qt override lasts for the session, including reset, reload, and opening another cartridge, without changing persistent settings.
+
+Reports contain `power_on_seed_hex`, exactly sixteen lowercase hexadecimal digits for the realized generation. Replay an automatic run by prefixing that value with `0x` in the option. Pin the build and hardware profile too: the generator's byte sequence is not a cross-version compatibility promise. Explicit firmware startup reconstructs the same generation's cold memory before executing the loaded binary. Keep the firmware hash and startup mode equivalent across comparisons.
+
 `--frames N` limits elapsed guest time to approximately `N * 70,224` base-speed T-cycles, including LCD-off execution. It does not request N displayed images. Those intervals have different physical durations for SGB NTSC at 4,295,454 Hz and the other profiles at 4,194,304 Hz. The runner does not accept the Qt-only `auto`, `dmgabc`, or `dmg0` selections. `--max-steps N` adds a separate instruction/work bound; the default is derived from the frame limit.
 
 | Protocol | Required observation |
@@ -133,10 +137,12 @@ The Python wrapper accepts individual ROMs or directories containing `.gb` and `
 ```sh
 python3 scripts/run_rom_suite.py ./build/cupidgb_rom_runner /private/tests \
     --model dmg --protocol register --frames 600 --timeout 30 \
-    --boot /private/dmg_boot.bin --output .local-research/suite.json
+    --boot /private/dmg_boot.bin --power-on-seed 0 --output .local-research/suite.json
 ```
 
 The suite default protocol is `serial`, unlike the bare runner's `none`. The wrapper hashes each ROM, enforces a host timeout, checks the result record against the exit code, retains bounded output, and writes a private JSON report. It returns success only when every case explicitly passes. `bounded`, `step_limit`, `illegal_opcode`, `core_error`, `timeout`, launch errors, and missing or invalid result records are separate outcomes.
+
+The wrapper validates and forwards `--power-on-seed` with the same syntax. Use an explicit seed for reproducible case comparisons; retain each result's realized seed when testing automatic startup.
 
 Do not apply one protocol blindly to unrelated ROMs. Group cases by model, startup requirements, and result mechanism. Preserve failing and inconclusive cases in reports rather than excluding them from aggregate counts.
 
@@ -167,6 +173,8 @@ Use `--model dmg`, `--model cgb`, or another supported Qt profile to avoid autom
 `window_visible`, `window_capture_saved`, and the capture dimensions describe the Qt widget and its saved interface image. Inspect that image to verify menus and presentation as well as the game pixels. A visible widget under the `offscreen` platform remains a component test; require the native `windows` or `xcb` backend for the corresponding runtime scope. In-process capture avoids blank external readbacks from compositors, but does not measure physical display presentation.
 
 `requested_model` is null when the option is absent, `"auto"` for explicit automatic selection, or the canonical selected profile name for a fixed request. The `dmg` alias reports `"dmgabc"`. `hardware_model` records the actual hardware chosen for the cartridge. `base_clock_hz` records that model's physical clock, and the whole-run and post-warmup speed calculations use it. This distinction matters when comparing automatic, fixed DMG, and SGB runs.
+
+The frontend also records `power_on_seed_mode`, `power_on_seed_scope`, and `power_on_seed_is_state_ram_provenance`. Seed metadata belongs to the receiving session's last cold generation. Native-state loading restores the snapshot's actual memory while retaining that host metadata, so it must not be used to infer the seed that originally produced restored RAM.
 
 Reports describe guest-clock progress, images submitted to the widget, widget paint counts/intervals, host audio format, generated samples, queue depth, backend idle/error events, rewind storage/capture work, and input progress. Separate counters record replayed guest cycles, replay presentation events, Turbo window drops and Turbo queue-capacity drops. Dropped host playback frames are not skipped guest cycles. Check the exact report emitted by the current build rather than assuming a fixed schema.
 

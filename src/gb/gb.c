@@ -17,6 +17,7 @@
 #include "cupid/gb/battery.h"
 #include "cupid/gb/infrared.h"
 #include "printer_internal.h"
+#include "startup_internal.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -92,11 +93,11 @@ uint32_t cupid_gb_base_clock_hz(const CupidGb *gb) {
 }
 
 /**
- * @brief Applies the post-boot-ROM CPU and I/O register state for the selected model.
+ * @brief Applies approximate post-boot CPU and I/O state for the selected model.
  *
  * Sets the register file, DIV counter, PPU counter, and a handful of I/O
- * registers to the values they would have at the end of the boot ROM for
- * each supported hardware revision (DMG0, DMG-ABC, MGB, CGB, SGB, SGB2).
+ * registers to the modeled handoff values for the current hardware profiles
+ * (DMG0, DMG-ABC, MGB, CGB, SGB, SGB2).
  *
  * @param gb Pointer to the Game Boy state.
  */
@@ -141,11 +142,13 @@ static void cupid_gb_apply_boot_profile(CupidGb *gb) {
         gb->cpu.h = 0xc0u;
         gb->cpu.l = 0x60u;
         gb->io_registers[0x04u] = 0xd8u;
-        gb->io_registers[CUPID_GB_IO_STAT] = 0x00u;
+        /* The handoff is already in VBlank, 200 dots into line 144.
+         * LY must name a real scanline when the pixel pipeline first advances. */
+        gb->io_registers[CUPID_GB_IO_STAT] = 0x81u;
         gb->io_registers[CUPID_GB_IO_DMA] = 0xffu;
-        gb->io_registers[CUPID_GB_IO_LY] = 0xffu;
+        gb->io_registers[CUPID_GB_IO_LY] = 144u;
         gb->div_counter = 24u;
-        gb->ppu_counter = 0u;
+        gb->ppu_counter = 50u;
     } else if (gb->model == CUPID_GB_MODEL_SGB2) {
         gb->cpu.a = 0xffu;
         gb->cpu.f = 0x00u;
@@ -156,11 +159,11 @@ static void cupid_gb_apply_boot_profile(CupidGb *gb) {
         gb->cpu.h = 0xc0u;
         gb->cpu.l = 0x60u;
         gb->io_registers[0x04u] = 0xd8u;
-        gb->io_registers[CUPID_GB_IO_STAT] = 0x00u;
+        gb->io_registers[CUPID_GB_IO_STAT] = 0x81u;
         gb->io_registers[CUPID_GB_IO_DMA] = 0xffu;
-        gb->io_registers[CUPID_GB_IO_LY] = 0xffu;
+        gb->io_registers[CUPID_GB_IO_LY] = 144u;
         gb->div_counter = 24u;
-        gb->ppu_counter = 0u;
+        gb->ppu_counter = 50u;
     } else if (gb->model == CUPID_GB_MODEL_MGB) {
         gb->cpu.a = 0xffu;
         gb->cpu.f = 0xb0u;
@@ -208,7 +211,7 @@ static void cupid_gb_apply_boot_profile(CupidGb *gb) {
  * @param gb Pointer to the Game Boy state to initialize.
  *
  * @note The instance must be zero-initialized before its first initialization.
- * @note The `model`, `rom`, and host observer registrations survive a re-init.
+ * @note The model, ROM allocation, startup policy and host observers survive re-init.
  * @note Does nothing if @p gb is NULL.
  */
 void cupid_gb_init(CupidGb *gb) {
@@ -239,6 +242,7 @@ void cupid_gb_init(CupidGb *gb) {
     const int16_t motion_y = gb->mbc7.motion_y;
     const bool huc3_ir_input = gb->huc3_ir_input;
     const CupidGbCheats *cheats = gb->cheats;
+    const CupidGbPowerOn power_on = gb->power_on;
     memset(gb, 0, sizeof(*gb));
     gb->oam_vram_row = UINT16_MAX;
     gb->oam_search_word = 0;
@@ -256,6 +260,7 @@ void cupid_gb_init(CupidGb *gb) {
     cupid_gb_mbc7_set_motion(gb, motion_x, motion_y);
     gb->huc3_ir_input = huc3_ir_input;
     gb->cheats = cheats;
+    gb->power_on = power_on;
 
     if (gb->rom == 0) {
         gb->rom = malloc(CUPID_GB_MAX_ROM_SIZE);
@@ -332,6 +337,7 @@ void cupid_gb_init(CupidGb *gb) {
     gb->stat_irq_line = false;
     gb->window_line_counter = 0u;
     cupid_gb_sgb_init(gb);
+    cupid_gb_startup_memory(gb);
     cupid_gb_apu_import_legacy(gb);
     CupidGbPrinter *printer = cupid_gb_printer_attached(gb);
     if (printer)
@@ -346,7 +352,7 @@ void cupid_gb_init(CupidGb *gb) {
  * DMG boot ROMs must be exactly 256 (0x100) bytes.
  * CGB boot ROMs must be exactly 2304 (0x900) bytes.
  * The loaded data is stored in `gb->boot_rom` and the size in
- * `gb->boot_rom_size`. Call @ref cupid_gb_enter_boot_rom after
+ * `gb->boot_rom_size`. Call @ref cupid_gb_start_boot_rom after
  * this to activate the overlay.
  *
  * @param gb   Pointer to the Game Boy state.
@@ -413,13 +419,14 @@ void cupid_gb_clear_boot_rom(CupidGb *gb) {
 }
 
 /**
- * @brief Resets the CPU and hardware to true power-on state and activates the boot ROM.
+ * @brief Re-enters firmware while preserving live volatile memory.
  *
  * Zeroes all CPU registers, resets all I/O registers, APU, DIV, timer,
  * and serial state, then maps the boot ROM overlay so execution starts
- * at address 0x0000. Call this after loading both the boot ROM
- * (@ref cupid_gb_load_boot_rom_file) and the game ROM
- * (@ref cupid_gb_load_rom or @ref cupid_gb_load_rom_file).
+ * at address 0x0000. Wave/palette IO uses the current cold-start generation.
+ * WRAM, HRAM, OAM, VRAM, cartridge RAM and RTC data remain intact.
+ * For initial firmware startup after ROM loading, use @ref cupid_gb_start_boot_rom
+ * to reconstruct cold volatile memory before entering firmware.
  *
  * @param gb Pointer to the Game Boy state.
  *
@@ -504,6 +511,7 @@ void cupid_gb_enter_boot_rom(CupidGb *gb) {
 
     /* Reset APU to power-on state */
     memset(&gb->apu, 0, sizeof(gb->apu));
+    cupid_gb_startup_boot_io(gb);
 
     /* Activate boot ROM overlay */
     gb->boot_rom_enabled = true;
@@ -545,6 +553,7 @@ void cupid_gb_cleanup(CupidGb *gb) {
     gb->infrared_callback = NULL;
     gb->infrared_user_data = NULL;
     gb->cheats = NULL;
+    gb->power_on = (CupidGbPowerOn){0};
     gb->mbc5_rumble_on = false;
 }
 

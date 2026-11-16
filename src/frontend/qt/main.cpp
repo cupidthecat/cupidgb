@@ -22,6 +22,9 @@ int main(int argc, char **argv) {
     parser.addOption({"audio-check", "Require real audio during --smoke-test."});
     parser.addOption(
         {"boot-directory", "Use boot ROMs from this directory for this session.", "path"});
+    parser.addOption(
+        {"power-on-seed",
+         "Use auto, an unsigned decimal seed, or a 0x hexadecimal seed for this session.", "seed"});
     parser.addOption({"model",
                       "Use hardware for this session: auto, dmg, dmgabc, dmg0, mgb, "
                       "cgb, sgb, sgb2.",
@@ -36,6 +39,30 @@ int main(int argc, char **argv) {
     const bool smoke = parser.isSet("smoke-test");
     const bool audioCheck = parser.isSet("audio-check");
     const bool bootOverride = parser.isSet("boot-directory");
+    const bool seedOverride = parser.isSet("power-on-seed");
+    std::optional<uint64_t> powerOnSeedOverride;
+    for (const QString &argument : parser.values("power-on-seed")) {
+        if (argument == "auto") {
+            powerOnSeedOverride.reset();
+            continue;
+        }
+        const bool hexadecimal = argument.startsWith("0x", Qt::CaseInsensitive);
+        const QString digits = argument.mid(hexadecimal ? 2 : 0);
+        bool validDigits = !digits.isEmpty();
+        for (const QChar digit : digits) {
+            const bool decimal = digit >= '0' && digit <= '9';
+            const bool hexLetter = (digit >= 'a' && digit <= 'f') || (digit >= 'A' && digit <= 'F');
+            validDigits = validDigits && (decimal || (hexadecimal && hexLetter));
+        }
+        bool converted = false;
+        const quint64 seed = digits.toULongLong(&converted, hexadecimal ? 16 : 10);
+        if (!validDigits || !converted) {
+            qCritical("Invalid power-on seed. Use auto, unsigned decimal, or 0x hexadecimal "
+                      "within the 64-bit range.");
+            return 1;
+        }
+        powerOnSeedOverride = uint64_t(seed);
+    }
     std::optional<int> modelOverride;
     if (parser.isSet("model")) {
         const QString name = parser.value("model");
@@ -56,7 +83,7 @@ int main(int argc, char **argv) {
             return 1;
         }
     }
-    if ((audioCheck && !smoke) || (smoke && (bootOverride || modelOverride)))
+    if ((audioCheck && !smoke) || (smoke && (bootOverride || modelOverride || seedOverride)))
         parser.showHelp(1);
     const bool bounded = parser.isSet("run-seconds");
     QTemporaryDir temporary;
@@ -74,7 +101,8 @@ int main(int argc, char **argv) {
             return 1;
         }
     }
-    MainWindow window(smoke, bounded, audioCheck, bootDirectory, modelOverride);
+    MainWindow window(smoke, bounded, audioCheck, bootDirectory, modelOverride,
+                      powerOnSeedOverride);
     window.show();
     if (smoke)
         return window.smokeTest() ? 0 : 1;

@@ -677,8 +677,10 @@ uint16_t cupid_cgb_compat_bg_color(const CupidGb *gb, uint8_t shade) {
     }
 
     color_offset = (size_t)(shade & 0x03u) * 2u;
-    return (uint16_t)((uint16_t)gb->cgb_bg_palette_ram[color_offset] |
-                      ((uint16_t)gb->cgb_bg_palette_ram[color_offset + 1u] << 8u));
+    /* Palette storage retains bit 15; RGB555 output has only fifteen color lines. */
+    return (uint16_t)(((unsigned)gb->cgb_bg_palette_ram[color_offset] |
+                       ((unsigned)gb->cgb_bg_palette_ram[color_offset + 1u] << 8u)) &
+                      0x7fffu);
 }
 
 /**
@@ -704,8 +706,9 @@ uint16_t cupid_cgb_compat_obj_color(const CupidGb *gb, unsigned int palette, uin
 
     base_offset = (palette & 0x01u) * 8u;
     color_offset = base_offset + (size_t)(shade & 0x03u) * 2u;
-    return (uint16_t)((uint16_t)gb->cgb_obj_palette_ram[color_offset] |
-                      ((uint16_t)gb->cgb_obj_palette_ram[color_offset + 1u] << 8u));
+    return (uint16_t)(((unsigned)gb->cgb_obj_palette_ram[color_offset] |
+                       ((unsigned)gb->cgb_obj_palette_ram[color_offset + 1u] << 8u)) &
+                      0x7fffu);
 }
 
 /**
@@ -741,8 +744,8 @@ bool cupid_cgb_palettes_cpu_blocked(const CupidGb *gb) {
  * @brief Reads one byte from CGB BG or OBJ palette RAM via the index register.
  *
  * The index is taken from 0xFF68 (BG) or 0xFF6A (OBJ), bits 5–0.
- * Color boot firmware can access palette data after selecting compatibility
- * mode. After boot, data ports require color mode; index ports remain visible.
+ * While boot firmware is mapped, data ports remain accessible on every model.
+ * After boot they require color mode; index ports always require color hardware.
  *
  * @param gb             Pointer to the Game Boy state.
  * @param object_palette `true` to read from OBJ palette RAM, `false` for BG.
@@ -753,8 +756,7 @@ uint8_t cupid_cgb_palette_read(const CupidGb *gb, bool object_palette) {
     const uint8_t *palette_ram;
     uint8_t index;
 
-    if (gb == 0 || gb->model != CUPID_GB_MODEL_CGB || (!gb->cgb_mode && !gb->boot_rom_enabled) ||
-        cupid_cgb_palettes_cpu_blocked(gb)) {
+    if (gb == 0 || (!gb->cgb_mode && !gb->boot_rom_enabled) || cupid_cgb_palettes_cpu_blocked(gb)) {
         return 0xffu;
     }
 
@@ -784,7 +786,7 @@ void cupid_cgb_palette_write(CupidGb *gb, bool object_palette, uint8_t value) {
     uint8_t index;
     bool auto_increment;
 
-    if (gb == 0 || gb->model != CUPID_GB_MODEL_CGB || (!gb->cgb_mode && !gb->boot_rom_enabled)) {
+    if (gb == 0 || (!gb->cgb_mode && !gb->boot_rom_enabled)) {
         return;
     }
 

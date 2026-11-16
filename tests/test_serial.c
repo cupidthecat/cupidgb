@@ -404,6 +404,9 @@ static void test_observer_host_lifetime_and_snapshot_identity(void) {
     SerialPeer cable = {0};
     cupid_gb_set_model(observed, CUPID_GB_MODEL_CGB);
     cupid_gb_set_model(silent, CUPID_GB_MODEL_CGB);
+    /* Both executions need the same guest memory to isolate host observation. */
+    cupid_gb_set_power_on_seed(observed, 0);
+    cupid_gb_set_power_on_seed(silent, 0);
     cupid_gb_set_serial_output_callback(observed, capture_byte, &capture);
     cupid_gb_set_serial_link(observed,
                              (CupidGbSerialLink){.launch = launch_bit, .user_data = &cable});

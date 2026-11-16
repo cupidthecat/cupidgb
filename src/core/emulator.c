@@ -20,10 +20,10 @@ void cupid_emulator_init(CupidEmulator *emulator, CupidSystem target_system) {
     emulator->initialized = true;
 
     if (target_system == CUPID_SYSTEM_GB || target_system == CUPID_SYSTEM_GBC) {
-        cupid_gb_init(&emulator->gb);
         if (target_system == CUPID_SYSTEM_GBC) {
             cupid_gb_set_model(&emulator->gb, CUPID_GB_MODEL_CGB);
         }
+        cupid_gb_init(&emulator->gb);
     }
 
     cupid_log_info("CupidGB core initialized.");

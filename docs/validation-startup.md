@@ -1,0 +1,303 @@
+# Startup validation, 2026-11-16
+
+This checkpoint covers cold memory, firmware entry, startup controls, and
+continuation from the modeled SGB handoff. It does not establish complete
+hardware, firmware, audio, or game compatibility. The comparison revision and
+remaining requirements are recorded in the [parity checklist](parity.md).
+
+Cold initialization now generates model-specific WRAM, HRAM, OAM, wave memory,
+and color palette contents. The core API, Qt frontend, and runner can select a
+fixed 64-bit seed or report an automatically chosen seed for replay. Zero is a
+valid seed. Seed policy and the last realized generation belong to the host
+session; native loading restores actual guest memory while retaining that host
+metadata. The V12 wire layout is unchanged.
+
+Initial firmware startup reconstructs the same cold generation after cartridge
+and battery loading. It preserves cartridge storage and host registrations.
+The approximate CGB post-boot profile clears physical WRAM bank 2 in both color
+and monochrome compatibility modes. Executed firmware receives the original
+cold bytes and performs its own writes. Color output masks the unused RGB555
+high bit while raw palette memory and state files retain all eight stored bits.
+
+## Cold-memory comparison
+
+The final core was compared with the pinned revision across five qualified
+profiles: grouped DMG-B, Pocket, SGB NTSC, SGB2, and CGB-E. Each engine contributes
+256 seeds per profile, or 1,280 cold generations and 29,780,736 observed bytes.
+The probe observes memory at boot-overlay entry before executing firmware.
+
+All declared criteria pass across 52 populated model/domain classes, including
+304 nonzero per-bit class comparisons, 342 byte-popcount histogram-bin
+comparisons, 14 exact-zero classes, and eight full-byte-domain uniform classes.
+The largest corresponding bit-mean difference is 0.030692, within the declared
+finite-sample margin. The retained pre-change control fails 848 individual
+conditions under the same criteria. It has no seed API and repeats its old
+initialization; its repetitions are not independent random generations.
+
+The generators are independent. These results compare modeled distributions,
+not identical random sequences. They do not establish default entropy quality,
+all random correlations, physical-hardware measurements, DMG0 behavior, or
+other CGB revisions. The audited SGB startup profile itself remains unverified
+on physical hardware. All 115 protected original control files retained their
+hashes and modification times.
+
+The final core archive has SHA-256
+`4475967a317f04b301cae90765d8542a8dd690beb03df20276a2cda4fba19a99`.
+The distribution receipt has SHA-256
+`1e72f8024d1359af70e07f980024b19c3bf849a98e65378fde2afa348e5db9ee`.
+
+## SGB startup and older states
+
+The continuation checks exposed an existing SGB/SGB2 post-boot defect:
+LY started at 255, and the first pixel update copied that value into an internal
+scanline field that must remain below 154. A subsequent native save correctly
+rejected the invalid state. Measured firmware handoffs establish VBlank on line
+144 at dot 200 for the tested profiles. The HLE profiles now start there.
+
+The regression covers immediate and first-step saves, six checkpoints through
+12,000 steps, the return to visible lines, and two new VBlanks over 144,000 base
+cycles. Restored execution produces byte-identical states while retaining fixed
+or automatic host seed policy. The frozen old core fails the new startup
+assertion. State validation remains strict.
+
+Older untouched SGB and SGB2 files need the same correction when loaded. The
+loader matches the initial CPU/LCD signature at guest cycle zero after strict
+validation, then changes only LY, STAT, and the display counter. The divider's
+subphase depends on cartridge header packets and remains as saved. It also
+preserves memory, host callbacks, attached printer ownership, seed policy,
+battery generation, and host observation counters.
+
+Two generated fixtures match every byte written by the frozen prior writer.
+Eight combinations cover both models, ordinary and trusted loads, and fixed
+or automatic host seed policy. They check immediate saves, the first step,
+16 steps, and two frames of continued execution. Eighteen nearby signatures
+remain byte-identical through loading. These are generated prior-writer
+fixtures; they do not establish coverage of historical user saves.
+
+## Cold registers and palette access
+
+Firmware comparisons exposed a WRAM selector readback defect. Writing FF70
+with zero selected physical bank 1 but changed the readable selector to one.
+The corrected register keeps those values separate: zero reads as `F8`, while
+one reads as `F9`. Both select the same physical bank. At cold firmware entry,
+the register reads `00` until a write sets its unused upper bits.
+
+The selector regression covers all 256 writes in both HLE and boot contexts,
+fixed and selected banks, echo reads and writes, a zero-selector native round
+trip, and compatibility-mode write gating. The existing I/O array and effective
+bank field already preserve both values in V12.
+
+Monochrome boot entry clears both palette arrays. During boot, data ports FF69
+and FF6B address byte zero; inaccessible index ports cannot enable auto-increment.
+Removing the boot overlay hides the data ports and ignores subsequent writes.
+The regression checks both cold entry and memory-preserving re-entry on DMG,
+Pocket, SGB, and SGB2. The unchanged isolated cold-register tests fail on the
+preceding core and pass on the final archive. Their final receipt has SHA-256
+`eaa18094fc9160cc9fa99b48543aad6ac66c5ab621969f64538e1671658bf02e`.
+
+A separate paired matrix covers six model/header combinations and four seeds:
+24 pairs, 48 engine observations, and 216 paired phases with 129 mapped
+registers per phase. It includes cold entry, repeated reads, initial writes,
+mode selection, and direct boot-overlay release. All 256 previously recorded
+deterministic mismatch observations now agree. No deterministic mapped
+differences remain in this matrix.
+
+Random wave and palette values remain separate observations. Stable repeated
+reads and unchanged raw I/O bytes do not prove the absence of internal joypad
+observation or PPU/APU synchronization effects. This matrix executes no guest
+instructions; its direct FF50 write is distinct from an executed boot handoff.
+
+## Executed firmware
+
+The final firmware matrix uses one local DMG image and two distinct local CGB
+images, with monochrome and color cartridges and four seeds per profile. All
+20 paired cases, or 40 fresh engine observations, reach PC `0100`. CPU register
+files, mapped interrupt observations, instruction counts, base-cycle counts,
+and generated audio-frame counts agree in every pair.
+
+Physical CGB WRAM bank 2 is byte-identical between engines for each image and
+cartridge mode. Both images first clear all 4,096 bytes. One image later writes
+scratch data, leaving 714 nonzero bytes in compatibility mode and 697 in color
+mode; every final nonzero byte has a verified firmware write. The other image
+leaves the bank zero. Write provenance was measured in an earlier frozen probe;
+the final archive reproduces those complete handoff bytes in all four seeds.
+
+The remaining CGB display-phase difference is consistent across the matrix:
+
+| Image and mode | Reference PPU dot | CupidGB PPU dot |
+| --- | ---: | ---: |
+| Local image A, compatibility | 144 | 140 |
+| Local image A, color | 172 | 168 |
+| Local image B, compatibility | 148 | 144 |
+| Local image B, color | 180 | 176 |
+
+Equal CPU cycle totals do not resolve this four-dot difference. The approximate
+SGB handoff and its historical boot controls are separate from this final
+DMG/CGB firmware matrix; SGB host introduction behavior remains incomplete.
+
+Both engines use 44,100 Hz audio and accurate/enabled high-pass filtering, with
+reference interference disabled. PCM still differs: peak absolute deltas range
+from 9,111 to 9,500, and RMS deltas from 1,815.924471 to 2,441.082255 across the
+five firmware/cartridge profiles. Equal sample-frame counts establish scheduling
+agreement for these runs, not matching audio reconstruction. Each engine exactly
+reproduces its own earlier frozen PCM.
+
+The compact firmware receipt has SHA-256
+`1eff1b179d8f96f992a01224bc1cf02b9748ba53c9b3bfff2754b84428ccb592`.
+Protected source inputs, archives, original ROMs, boot images, saves, and earlier
+observations retained their recorded hashes and modification times.
+
+## Frozen startup regression gates
+
+The V7 source manifest covers 199 build/test inputs and has SHA-256
+`7029ba8702be298d65c9fa53ec8182afc91e18ecc3f61b2100bf29dc42d92715`.
+Every input retained its hash throughout the following builds and tests.
+
+| Configuration | Result |
+| --- | ---: |
+| Windows MSVC Release with Qt | 51/51 pass |
+| Linux GCC Release with Qt | 49/49 pass |
+| Linux AddressSanitizer and UndefinedBehaviorSanitizer | 30/30 pass |
+
+The desktop runs require archive checks. The sanitizer run enables leak
+detection and stops on undefined behavior. All 176 project C/C++ source and
+header files follow the supplied formatting configuration; the largest is
+1,976 lines. A provenance check confirms that the paired-probe core and both
+desktop binaries are byte-identical to the V7 artifacts. The V7 test
+freeze also removes an obsolete monochrome palette-preservation exception
+while retaining the full-memory comparison.
+
+Other fixture changes initialize bytes required by a test or choose the same
+seed when comparing complete snapshots. The memory editor still proves that
+pending edits do not write until committed, and the cheat search still requires
+its unique banked result. These gates cover the tested startup, state, runner,
+and Qt contracts; they do not establish complete firmware, model, or game parity.
+
+## Installed desktop workflows
+
+Fresh V7 Windows and Linux installations pass the native Qt workflow checks with
+real audio. The runs verify fixed and captured automatic seed replay, restart
+and reload behavior, failed-open preservation, native-state host metadata,
+initial firmware memory, and loaded cartridge SRAM. Separate assertions in
+each run require a real audio sink during save/load, rewind, resume, and closure
+of a cartridge during an audio write. Exact-memory fixtures stop their timers
+and suppress their own audio while comparing bytes.
+
+Each platform also passes 32 seed command-line cases: 12 valid inputs and
+20 rejected inputs. These cover zero, leading decimal zeros, hexadecimal,
+the maximum 64-bit value, overflow, malformed input, and repeated valid options.
+The later repeated-option correction and its expanded checks are qualified
+separately below.
+Both installations load the expected Qt and SDL libraries. Linux uses Xcb and
+the existing WSLg audio server.
+
+The native runs retain ten captures per platform. Visual inspection of the
+memory editor, debugger, startup overlay, and map overlay on both platforms
+found legible controls without clipping or overlap. All 199 product inputs
+and 317 installed files retained their hashes. The combined desktop receipt
+has SHA-256
+`f07c58f6c46627ced98eba530d15c9b35f481751df3a0576dcbacb5916ce4810`.
+
+These are integration checks, not speed measurements. They do not establish
+audible quality, coverage of every display scale or desktop environment,
+commercial firmware completion, or a portable Linux bundle.
+
+## External test programs
+
+The final Windows runner executes 243 external cases with power-on seed zero:
+
+| Group | Pass | Frame limit without a verdict |
+| --- | ---: | ---: |
+| Hardware acceptance | 119 | 0 |
+| Audio | 24 | 0 |
+| CPU | 22 | 0 |
+| Cartridge controllers | 56 | 0 |
+| OAM | 7 | 1 |
+| Timing | 14 | 0 |
+
+The unresolved OAM timing logger remains at memory result `80` after 3,600
+frame budgets, or 252,806,400 base cycles. That bounded observation is not a
+pass. The runner, frozen suite, 199 product inputs, and 147 protected original
+files remain unchanged; every result records the requested zero seed.
+
+## Local cartridge scan
+
+The frozen Windows runner processes 880 local inputs, representing 878 unique
+ROM images. Each uses its recorded model and firmware with power-on seed zero,
+a 3,600-frame budget, and a 90-second host timeout. The inventory includes
+556 CGB, 198 DMG, and 126 SGB model selections.
+
+| Controller family | Reached frame limit | Illegal-opcode stop |
+| --- | ---: | ---: |
+| ROM | 12 | 0 |
+| MBC1 | 272 | 0 |
+| MBC2 | 11 | 0 |
+| MBC3 | 81 | 0 |
+| MBC5 | 494 | 6 |
+| MBC7 | 1 | 0 |
+| HuC3 | 1 | 0 |
+| Camera | 1 | 0 |
+| Unidentified header | 1 | 0 |
+| Total | 874 | 6 |
+
+These are bounded execution results without scripted controls or guest test
+verdicts. They do not establish successful gameplay, saving, real-time speed,
+or universal cartridge compatibility. No local commercial inputs cover HuC1,
+MBC6, MMM01, or TPP1; generated controller checks have a separate scope.
+
+The runner and suite, all 199 source inputs, and 1,284 protected original files
+retain their hashes and modification times. Every result reports the requested
+seed. The scan summary has SHA-256
+`3144f3e0e8d611746c13983ead6c017c71aa1a05fd30e9e86ee52312deb6bc8d`.
+
+The six illegal stops receive a separate 18-observation investigation. All six
+target probes reproduce the scan's steps, cycles, terminal address, and opcode.
+With independent seed-zero cold generations, both engines reach illegal opcodes
+in all six cases, but only three pairs have identical final 256 fetched
+instruction/register records. One other pair has earlier register differences,
+one takes a different instruction count, and one reaches a different terminal.
+
+For those three cases, a second control gives the reference exactly the target's
+49,583 cold volatile bytes before executing the first instruction. All three then
+match the complete final 256 records, instruction counts, cycles, and illegal
+terminal; the target observations do not change. This isolates sensitivity to
+startup memory in these controls. Equal seed values do not imply equal random
+streams, and matching illegal stops are neither compatibility passes nor proof
+that an input is malformed. The checks do not compare every earlier instruction
+or qualify post-opcode peripheral behavior. All 135 protected inputs and prior
+receipts remain unchanged. The combined qualification has SHA-256
+`027ce00f341adaf9d3c959f630a717178410b2c912888484338e6b42ad6e6f7a`.
+
+## Repeated seed options and final desktop gates
+
+The last review found that Qt validated only the last repeated seed argument.
+An earlier invalid value followed by a valid value could therefore be accepted.
+Qt now validates every occurrence in order. Any malformed value rejects the
+command; otherwise the last value selects the policy. A final `auto` clears
+fixed seeding, and fixed zero remains valid.
+
+The V8 freeze changes only `main.cpp` and the Qt command-line test script from
+V7. Its 199-input manifest has SHA-256
+`1982baf95ea766d7e3cc7e2316ca05361cec967999bfb20f09c022d09a385d75`.
+Fresh Release builds pass all 51 Windows and 49 Linux desktop tests. Fresh
+installed native Qt workflows also pass on both hosts with real audio, the
+expected runtime libraries, and ten retained captures per platform. Inspection
+of the memory editor, debugger, startup overlay, and map overlay finds no
+clipping or overlap in those captures.
+
+Each installed application passes 42 seed command-line cases. These include
+all twelve cases paired with its V7 control: five formerly accepted malformed
+earlier or middle arguments now exit with status 1 and produce no report.
+Valid repeated choices and the already rejected malformed endings retain
+their expected behavior.
+
+All 199 V8 inputs and 317 installed files remain unchanged during these checks.
+Both core libraries and both ROM runners are byte-identical to V7. The earlier
+sanitizer, paired-core, external-suite, and cartridge-scan results retain their
+V7 execution scope and apply to those identical artifacts; they were not
+rerun for this parser-only correction. The final desktop receipt has SHA-256
+`c1ce054c58296c5fdda1b3d120b31801abcd456591a9214bc4ffba0e21e95c72`.
+
+Native workflow duration is not a speed benchmark. Audio readiness and state
+transitions are asserted, while audible quality and broader desktop coverage
+remain unqualified by these integration checks.

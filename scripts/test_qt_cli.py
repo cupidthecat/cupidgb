@@ -74,6 +74,30 @@ def main():
             assert int.from_bytes(window[20:24], "big") == result["window_capture_height"] > 0
             return result
 
+        def seed_options(values):
+            return tuple(argument for value in values for argument in ("--power-on-seed", value))
+
+        for values, mode, seed in (
+            (("0",), "fixed", "0000000000000000"),
+            (("1", "0"), "fixed", "0000000000000000"),
+            (("0", "auto"), "auto", None),
+            (("auto", "0"), "fixed", "0000000000000000"),
+            (("0xabc", "auto", "08"), "fixed", "0000000000000008"),
+        ):
+            result = run(plain, *seed_options(values))
+            assert result["power_on_seed_mode"] == mode, (values, result)
+            realized = result["power_on_seed_hex"]
+            assert realized == f"{int(realized, 16):016x}", (values, result)
+            if seed is not None:
+                assert realized == seed, (values, result)
+            assert result["power_on_seed_scope"] == "realized cold generation", result
+            assert result["power_on_seed_is_state_ram_provenance"] is False, result
+        # Every occurrence must be valid even when a later value would replace it.
+        for values in (("18446744073709551616", "0"), ("+1", "auto"),
+                       ("0", "0x10000000000000000"), ("", "auto"),
+                       ("0x", "1"), ("auto", "1_000"), ("0", "-1", "1")):
+            run(plain, *seed_options(values), expected=1)
+
         for requested, actual in (("dmg", "dmgabc"), ("dmgabc", "dmgabc"),
                                   ("dmg0", "dmg0"), ("mgb", "mgb"),
                                   ("cgb", "cgb"), ("sgb", "sgb"), ("sgb2", "sgb2")):

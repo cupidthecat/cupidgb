@@ -117,7 +117,7 @@ size_t cupid_cgb_wram_offset(const CupidGb *gb, uint16_t address) {
  *   - 0xFF68, 0xFF6A — BG/OBJ palette index registers (bit 6 forced to 1)
  *   - 0xFF69, 0xFF6B — BG/OBJ palette data (via @ref cupid_cgb_palette_read)
  *   - 0xFF6C — Object priority mode (bits 7–1 forced to 1)
- *   - 0xFF70 — WRAM bank register (bits 7–3 forced to 1)
+ *   - 0xFF70 — WRAM bank latch (writes set bits 7–3)
  *
  * Non-CGB-aware addresses return `false` so the caller can fall through
  * to DMG register handling.
@@ -188,8 +188,8 @@ bool cupid_cgb_handle_read_register(const CupidGb *gb, uint16_t address, uint8_t
                          : 0xffu;
             return true;
         case 0xff70u:
-            *value =
-                gb != 0 && gb->cgb_mode ? (uint8_t)(0xf8u | (gb->cgb_wram_bank & 0x07u)) : 0xffu;
+            /* Cold boot retains zero here until the first write sets the unused bits. */
+            *value = gb != 0 && gb->cgb_mode ? gb->io_registers[0x70u] : 0xffu;
             return true;
         case 0xff72u:
         case 0xff73u:
@@ -271,7 +271,7 @@ bool cupid_cgb_handle_write_register(CupidGb *gb, uint16_t address, uint8_t valu
             return true;
         case 0xff51u:
             if (gb->cgb_mode) {
-                gb->hdma_source = (uint16_t)((gb->hdma_source & 0xf0u) | (value << 8u));
+                gb->hdma_source = (uint16_t)((gb->hdma_source & 0xf0u) | ((unsigned)value << 8u));
                 if (gb->hdma_source >= 0xe000u)
                     gb->hdma_source |= 0xf000u;
             }
@@ -282,7 +282,8 @@ bool cupid_cgb_handle_write_register(CupidGb *gb, uint16_t address, uint8_t valu
             return true;
         case 0xff53u:
             if (gb->cgb_mode)
-                gb->hdma_destination = (uint16_t)((gb->hdma_destination & 0xf0u) | (value << 8u));
+                gb->hdma_destination =
+                    (uint16_t)((gb->hdma_destination & 0xf0u) | ((unsigned)value << 8u));
             return true;
         case 0xff54u:
             if (gb->cgb_mode) {
@@ -343,7 +344,8 @@ bool cupid_cgb_handle_write_register(CupidGb *gb, uint16_t address, uint8_t valu
                 if (gb->cgb_wram_bank == 0u) {
                     gb->cgb_wram_bank = 1u;
                 }
-                gb->io_registers[0x70u] = (uint8_t)(0xf8u | gb->cgb_wram_bank);
+                /* Selector zero maps bank 1 without changing the readable selector. */
+                gb->io_registers[0x70u] = (uint8_t)(0xf8u | value);
             }
             return true;
         default:

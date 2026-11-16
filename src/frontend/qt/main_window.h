@@ -49,7 +49,8 @@ class MainWindow final : public QMainWindow {
   public:
     explicit MainWindow(bool isolated = false, bool automated = false, bool audioCheck = false,
                         const QString &bootDirectoryOverride = QString(),
-                        std::optional<int> modelOverride = std::nullopt);
+                        std::optional<int> modelOverride = std::nullopt,
+                        std::optional<uint64_t> powerOnSeedOverride = std::nullopt);
     ~MainWindow() override;
     bool openRom(const QString &path);
     bool smokeTest();
@@ -180,6 +181,7 @@ class MainWindow final : public QMainWindow {
     bool displayCadenceSmokeTest(const QString &path);
     bool playbackSmokeTest(const QString &directory);
     bool modelSmokeTest(const QString &directory);
+    bool startupSmokeTest(const QString &directory);
     void openCheats(bool search = false);
     void refreshCheats(bool newSession = false);
     bool mutateCheats(const std::function<bool(CupidGbCheats *)> &operation);
@@ -193,6 +195,7 @@ class MainWindow final : public QMainWindow {
     QSettings settings_;
     QString bootDirectoryOverride_;
     const std::optional<int> modelOverride_;
+    const std::optional<uint64_t> powerOnSeedOverride_;
     std::unique_ptr<CupidEmulator> emulator_;
     using CheatCollection = std::unique_ptr<CupidGbCheats, decltype(&cupid_gb_cheats_destroy)>;
     CheatCollection cheats_{nullptr, cupid_gb_cheats_destroy};

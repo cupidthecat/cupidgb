@@ -27,6 +27,8 @@ Use `--model dmg`, `--model cgb`, or another supported profile to fix hardware f
 
 Emulation > Settings controls hardware, the optional boot-ROM directory, input, display, volume, and rewind limits. Model and boot choices apply on the next reset or open. Without a boot binary, startup uses an approximate post-boot profile. Boot binaries and game inputs are not distributed.
 
+Power-on RAM varies by hardware profile. For a reproducible session, add `--power-on-seed 0x1234`; decimal values and zero are also valid. The option applies to each cold reset/open in that session and does not change saved preferences. Omit it or use `auto` for automatic choices. [Testing and runtime reports](docs/testing.md#headless-rom-runner) explains how to capture and replay the realized seed.
+
 Emulation > Controllers selects devices and configures buttons, axes, hats, player assignments, dead zones, hold controls, shortcuts and cartridge rumble. Recognized controllers have a default layout; generic joysticks need layout verification. See [the controller guide](docs/controllers.md) for capture, focus, menus, reconnects and SGB input. Physical devices and motion input remain unqualified.
 
 Battery data uses `.sav` beside the cartridge. State slots use `.s0` through `.s9`, with the zero key selecting slot 10. Archive storage names include the archive extension, such as `game.zip.sav`. New states use CupidGB native version 12, including infrared receiver history and pending work in an attached printer. Versions 2 through 11 remain loadable with defaults for history those builds did not record. File > Recover Battery from Older State can export supported battery data from version 1. Keep backups of saves you need to preserve.

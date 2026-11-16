@@ -380,6 +380,7 @@ void testOverlayWorkflows() {
 
 void testWindowWorkflows() {
     auto gb = machine(true);
+    const uint8_t originalByte = gb->work_ram[0];
     CupidGb *session = gb.get();
     bool paused = false, invalidated = false;
     unsigned writes = 0;
@@ -416,7 +417,7 @@ void testWindowWorkflows() {
     QEventLoop editing;
     QTimer::singleShot(350, &editing, &QEventLoop::quit);
     editing.exec();
-    assert(editor && editor->text() == "7c" && writes == 0 && gb->work_ram[0] == 0);
+    assert(editor && editor->text() == "7c" && writes == 0 && gb->work_ram[0] == originalByte);
     QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
     QApplication::sendEvent(editor.data(), &enter);
     QApplication::processEvents();

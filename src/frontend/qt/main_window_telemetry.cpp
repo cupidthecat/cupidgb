@@ -182,6 +182,13 @@ void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
             report.insert("requested_model", requestedModel);
             report.insert("guest_double_speed", emulator_->gb.double_speed);
             report.insert("startup_mode", emulator_->gb.boot_rom_size ? "boot-rom" : "post-boot");
+            report.insert(
+                "power_on_seed_hex",
+                QString::number(qulonglong(cupid_gb_get_power_on_seed(&emulator_->gb)), 16)
+                    .rightJustified(16, QLatin1Char('0')));
+            report.insert("power_on_seed_mode", powerOnSeedOverride_ ? "fixed" : "auto");
+            report.insert("power_on_seed_scope", "realized cold generation");
+            report.insert("power_on_seed_is_state_ram_provenance", false);
             report.insert("boot_rom_bytes", int(emulator_->gb.boot_rom_size));
             if (emulator_->gb.boot_rom_size)
                 report.insert("boot_rom_sha256",

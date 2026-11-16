@@ -16,6 +16,8 @@ The version identifies the wire encoding, not a promise to preserve emulation bu
 
 Subsequent execution follows the current engine. SGB states continue under the selected model's corrected NTSC clock. A legacy cached SGB filter coefficient is refreshed without discarding pending samples or partial sample integration. The wire format stores the model and guest cycle count, not a separate clock-frequency field. Exact continuation comparisons must use the same qualified build and inputs.
 
+Older builds could save the untouched SGB or SGB2 post-boot profile with LY at `FF` and an uninitialized pixel pipeline. Continuing that state produced an invalid internal scanline. The loader recognizes the initial CPU, divider-register, and display signature at guest cycle zero and restores the modeled VBlank entry on line 144 at dot 200. It changes only LY, STAT, and the display phase; the ROM-dependent DIV subphase, memory, host registrations, and battery bookkeeping remain intact. Other states retain their literal saved values. This recovery uses the existing version 12 layout.
+
 Version 1 execution states cannot continue in the changed pixel and audio core. File > Recover Battery from Older State validates the older file and exports supported battery data to a separate file. Recovery preserves the original file and running session. It does not restore execution. See [battery saves](battery-saves.md).
 
 ## Rewind

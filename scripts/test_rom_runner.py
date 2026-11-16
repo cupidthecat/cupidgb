@@ -8,6 +8,9 @@ import sys
 import tempfile
 
 
+FIXED_POWER_ON_SEED = "0"
+
+
 def make_rom(program, *, color=False):
     rom = bytearray(32768)
     rom[0x100:0x104] = bytes((0x00, 0xC3, 0x50, 0x01))
@@ -49,6 +52,8 @@ def memory_rom(code, *, running=True, signature=True):
 
 
 def run(runner, rom, *options, expected_code=0):
+    if "--power-on-seed" not in options:
+        options = ("--power-on-seed", FIXED_POWER_ON_SEED, *options)
     completed = subprocess.run([str(runner), *options, str(rom)], capture_output=True, timeout=15)
     if completed.returncode != expected_code:
         raise AssertionError((completed.returncode, expected_code, completed.stdout, completed.stderr))
@@ -58,6 +63,142 @@ def run(runner, rom, *options, expected_code=0):
     if len(records) != 1:
         raise AssertionError(completed.stdout)
     return records[0]
+
+
+def stable_result(record):
+    return {key: value for key, value in record.items() if key != "host_seconds"}
+
+
+def memory_serial_program(address, *, bank=None):
+    program = bytearray((0xF3, 0xAF, 0xE0, 0x40))  # DI; LCD off
+    if bank is not None:
+        program.extend((0x3E, bank, 0xE0, 0x70))
+    program.extend((0x21, address & 255, address >> 8, 0x06, 16))
+    # Send sixteen untouched bytes; wait for each transfer before the next read.
+    program.extend((0x2A, 0xE0, 0x01, 0x3E, 0x81, 0xE0, 0x02,
+                    0xF0, 0x02, 0xCB, 0x7F, 0x20, 0xFA, 0x05, 0x20, 0xF0,
+                    0x76, 0x18, 0xFD))
+    return program
+
+
+def memory_serial_sample(runner, rom, *options):
+    # Leave the startup option absent when testing the automatic default.
+    completed = subprocess.run([str(runner), "--model", "cgb", "--frames", "2",
+                                "--serial-output", *options, str(rom)],
+                               capture_output=True, timeout=15)
+    assert completed.returncode == 0, (completed.stdout, completed.stderr)
+    separator = b"\r\nCUPIDGB_RESULT " if sys.platform == "win32" else b"\nCUPIDGB_RESULT "
+    serial, result = completed.stdout.rsplit(separator, 1)
+    if sys.platform == "win32":
+        # The runner's diagnostic stream uses the Windows CRT's text mode.
+        serial = serial.replace(b"\r\n", b"\n")
+    record = json.loads(result)
+    assert record["status"] == "bounded" and record["serial_bytes"] == 16, record
+    # ROM-loading diagnostics precede the serial bytes counted by the result.
+    assert len(serial) >= record["serial_bytes"], serial
+    serial = serial[-record["serial_bytes"]:]
+    assert len(serial) == 16, serial
+    seed_hex = record["power_on_seed_hex"]
+    assert seed_hex == f"{int(seed_hex, 16):016x}", seed_hex
+    return serial, record
+
+
+def startup_checks(runner, root):
+    rom = root / "startup.gbc"
+    rom.write_bytes(make_rom(bytes((0xF3, 0x76, 0x18, 0xFD)), color=True))
+    valid_seeds = ("0", "08", "0008", "0x123456789abcdef0", "0XABCDEF0000000001",
+                   "18446744073709551615", "0xffffffffffffffff")
+    for seed in valid_seeds:
+        first = run(runner, rom, "--power-on-seed", seed, "--frames", "1")
+        second = run(runner, rom, "--power-on-seed", seed, "--frames", "1")
+        expected = int(seed, 16 if seed.lower().startswith("0x") else 10)
+        assert first["power_on_seed_hex"] == f"{expected:016x}", first
+        assert stable_result(first) == stable_result(second), seed
+    overridden = run(runner, rom, "--power-on-seed", "auto", "--power-on-seed", "0",
+                     "--frames", "1")
+    assert overridden["power_on_seed_hex"] == "0000000000000000", overridden
+
+    suite = Path(__file__).with_name("run_rom_suite.py")
+    invalid_report = root / "invalid-seed-report.json"
+    invalid_seeds = ("", "-1", "+1", " 1", "1 ", "\t1", "0x", "0X", "0x-1", "0x+1",
+                     "12x", "0b1", "1_000", "AUTO", "18446744073709551616",
+                     "18446744073709551615999", "0x10000000000000000",
+                     "0xfffffffffffffffff")
+    for seed in invalid_seeds:
+        invalid = subprocess.run([str(runner), "--power-on-seed", seed, str(rom)],
+                                 capture_output=True, timeout=15)
+        assert invalid.returncode == 2 and b"CUPIDGB_RESULT " not in invalid.stdout, seed
+        invalid_suite = subprocess.run(
+            [sys.executable, str(suite), str(runner), str(rom),
+             "--output", str(invalid_report), "--power-on-seed", seed],
+            capture_output=True, timeout=15)
+        assert invalid_suite.returncode == 2, (seed, invalid_suite.stderr)
+        assert not invalid_report.exists(), seed
+    missing = subprocess.run([str(runner), str(rom), "--power-on-seed"],
+                             capture_output=True, timeout=15)
+    assert missing.returncode == 2 and b"CUPIDGB_RESULT " not in missing.stdout
+    for option in ("--frames", "--max-steps"):
+        for value in ("0", "-1", "10000000001", "18446744073709551616"):
+            invalid = subprocess.run([str(runner), option, value, str(rom)],
+                                     capture_output=True, timeout=15)
+            assert invalid.returncode == 2, (option, value, invalid.stderr)
+    largest_frames = run(runner, rom, "--frames", "10000000000", "--max-steps", "1")
+    largest_steps = run(runner, rom, "--frames", "1", "--max-steps", "10000000000")
+    assert largest_frames["status"] == "step_limit" and largest_steps["status"] == "bounded"
+
+    rom.write_bytes(make_rom(memory_serial_program(0xC000), color=True))
+    observed = [memory_serial_sample(runner, rom, "--power-on-seed", seed)
+                for seed in ("0", "0", "1")]
+    assert observed[0][0] == observed[1][0] and observed[0][0] != observed[2][0]
+    assert any(observed[0][0]), "A fixed zero seed must still generate power-on noise."
+    assert stable_result(observed[0][1]) == stable_result(observed[1][1])
+    for options in ((), ("--power-on-seed", "auto")):
+        automatic, automatic_record = memory_serial_sample(runner, rom, *options)
+        replay, replay_record = memory_serial_sample(
+            runner, rom, "--power-on-seed", "0x" + automatic_record["power_on_seed_hex"])
+        assert automatic == replay
+        assert stable_result(automatic_record) == stable_result(replay_record)
+
+    # HLE clears CGB WRAM bank 2. Fresh firmware must see this generation's
+    # original cold bytes instead of inheriting that post-boot memory edit.
+    program = memory_serial_program(0xD000, bank=2)
+    rom.write_bytes(make_rom(program, color=True))
+    hle, _ = memory_serial_sample(runner, rom, "--power-on-seed", "0")
+    assert hle == bytes(16), hle
+    boot = root / "startup-boot.bin"
+    firmware = bytearray(0x900)
+    firmware[:len(program)] = program
+    boot.write_bytes(firmware)
+    cold, cold_record = memory_serial_sample(runner, rom, "--power-on-seed", "0",
+                                             "--boot", str(boot))
+    repeated, repeated_record = memory_serial_sample(runner, rom, "--power-on-seed", "0",
+                                                     "--boot", str(boot))
+    assert any(cold) and cold == repeated
+    assert cold_record["power_on_seed_hex"] == "0000000000000000"
+    assert stable_result(cold_record) == stable_result(repeated_record)
+    automatic, automatic_record = memory_serial_sample(runner, rom, "--boot", str(boot))
+    replay, replay_record = memory_serial_sample(
+        runner, rom, "--boot", str(boot),
+        "--power-on-seed", "0x" + automatic_record["power_on_seed_hex"])
+    assert automatic == replay
+    assert stable_result(automatic_record) == stable_result(replay_record)
+
+    report = root / "startup-report.json"
+    for seed in ("0", "auto", "0XFFFFFFFFFFFFFFFF"):
+        completed = subprocess.run(
+            [sys.executable, str(suite), str(runner), str(rom), "--model", "cgb",
+             "--protocol", "none", "--frames", "2", "--boot", str(boot),
+             "--power-on-seed", seed, "--output", str(report)],
+            capture_output=True, timeout=15)
+        assert completed.returncode == 1, completed.stderr
+        result = json.loads(report.read_text())
+        assert result["counts"] == {"bounded": 1}, result
+        suite_record = result["results"][0]
+        replay_seed = "0x" + suite_record["power_on_seed_hex"] if seed == "auto" else seed
+        _, direct = memory_serial_sample(runner, rom, "--boot", str(boot),
+                                          "--power-on-seed", replay_seed)
+        for field, value in stable_result(direct).items():
+            assert suite_record[field] == value, (seed, field, suite_record, direct)
 
 
 def illegal_opcode_checks(runner, root):
@@ -132,6 +273,7 @@ def illegal_opcode_checks(runner, root):
     report = root / "illegal-report.json"
     suite = Path(__file__).with_name("run_rom_suite.py")
     completed = subprocess.run([sys.executable, str(suite), str(runner), str(rom),
+                                "--power-on-seed", FIXED_POWER_ON_SEED,
                                 "--output", str(report)], capture_output=True, timeout=15)
     assert completed.returncode == 1, completed.stderr
     result = json.loads(report.read_text())
@@ -152,10 +294,12 @@ def main():
         assert passed["status"] == "pass"
         assert passed["base_clock_hz"] == 4194304
         assert passed["serial_bytes"] == len(b"Passed")
-        quiet = subprocess.run([str(runner), "--protocol", "serial", str(rom)],
+        quiet = subprocess.run([str(runner), "--power-on-seed", FIXED_POWER_ON_SEED,
+                                "--protocol", "serial", str(rom)],
                                capture_output=True, check=True)
         assert b"Passed" not in quiet.stdout.split(b"CUPIDGB_RESULT", 1)[0]
-        printed = subprocess.run([str(runner), "--protocol", "serial", "--serial-output",
+        printed = subprocess.run([str(runner), "--power-on-seed", FIXED_POWER_ON_SEED,
+                                  "--protocol", "serial", "--serial-output",
                                   str(rom)], capture_output=True, check=True)
         assert b"Passed" in printed.stdout.split(b"CUPIDGB_RESULT", 1)[0]
         printed_record = json.loads(next(line.removeprefix("CUPIDGB_RESULT ")
@@ -167,7 +311,8 @@ def main():
         if sys.platform.startswith("linux"):
             # A buffered stream can accept every byte and fail only at the final flush.
             with open("/dev/full", "wb") as failed_output:
-                failed = subprocess.run([str(runner), "--protocol", "serial", "--serial-output",
+                failed = subprocess.run([str(runner), "--power-on-seed", FIXED_POWER_ON_SEED,
+                                         "--protocol", "serial", "--serial-output",
                                          str(rom)], stdout=failed_output, stderr=subprocess.PIPE,
                                         timeout=15)
             assert failed.returncode == 2, failed.stderr
@@ -233,16 +378,19 @@ def main():
         suite = Path(__file__).with_name("run_rom_suite.py")
         report = root / "report.json"
         suite_run = subprocess.run([sys.executable, str(suite), str(runner), str(rom),
-                                   "--frames", "1", "--output", str(report)],
+                                   "--frames", "1", "--power-on-seed", "0x1234",
+                                   "--output", str(report)],
                                   capture_output=True, timeout=15)
         assert suite_run.returncode == 1
         assert json.loads(report.read_text())["counts"] == {"bounded": 1}, report.read_text()
+        assert json.loads(report.read_text())["results"][0]["power_on_seed_hex"] == "0000000000001234"
         trace = root / "input.trace"
         trace.write_text("0 ff\n10 7f\n12 ff\n")
         run(runner, rom, "--input-trace", str(trace), "--frames", "20")
         trace.write_text("10 ff\n9 ff\n")
         assert subprocess.run([str(runner), "--input-trace", str(trace), str(rom)],
                               capture_output=True).returncode == 2
+        startup_checks(runner, root)
     print("Runner integration checks passed.")
 
 

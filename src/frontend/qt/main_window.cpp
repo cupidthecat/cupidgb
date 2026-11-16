@@ -2,9 +2,11 @@
 #include "main_window_internal.h"
 
 MainWindow::MainWindow(bool isolated, bool automated, bool audioCheck,
-                       const QString &bootDirectoryOverride, std::optional<int> modelOverride)
+                       const QString &bootDirectoryOverride, std::optional<int> modelOverride,
+                       std::optional<uint64_t> powerOnSeedOverride)
     : bootDirectoryOverride_(bootDirectoryOverride), modelOverride_(modelOverride),
-      isolated_(isolated), automated_(automated), audioCheck_(audioCheck) {
+      powerOnSeedOverride_(powerOnSeedOverride), isolated_(isolated), automated_(automated),
+      audioCheck_(audioCheck) {
     setWindowTitle("CupidGB");
     setAcceptDrops(true);
     display_ = new DisplayWidget(this);
@@ -507,6 +509,10 @@ bool MainWindow::openRom(const QString &path, bool reload) {
         reportError("This cartridge requires Game Boy Color. Select Automatic or Game Boy Color.");
         return false;
     }
+    if (powerOnSeedOverride_)
+        cupid_gb_set_power_on_seed(&candidate->gb, *powerOnSeedOverride_);
+    else
+        cupid_gb_clear_power_on_seed(&candidate->gb);
     cupid_emulator_init(candidate.get(),
                         model == CUPID_GB_MODEL_CGB ? CUPID_SYSTEM_GBC : CUPID_SYSTEM_GB);
     cupid_gb_set_model(&candidate->gb, CupidGbModel(model));
@@ -560,7 +566,8 @@ bool MainWindow::openRom(const QString &path, bool reload) {
             return false;
         }
     }
-    // Loading a cartridge initializes post-boot state. Apply the boot overlay afterwards.
+    // Cartridge loading applies post-boot defaults. Initial firmware entry restores
+    // the same generation's cold memory before firmware starts at address zero.
     const QString bootFolder = bootDirectory();
     if (!bootFolder.isEmpty()) {
         QString name = "dmg_boot.bin";
@@ -587,7 +594,7 @@ bool MainWindow::openRom(const QString &path, bool reload) {
         }
         std::memcpy(candidate->gb.boot_rom, bytes.constData(), size_t(bytes.size()));
         candidate->gb.boot_rom_size = size_t(bytes.size());
-        cupid_gb_enter_boot_rom(&candidate->gb);
+        cupid_gb_start_boot_rom(&candidate->gb);
     }
     const bool sameCheatSession =
         emulator_ && romData_ == data && romPath_.compare(absolute, pathCase) == 0;

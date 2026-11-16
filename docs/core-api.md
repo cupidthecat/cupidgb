@@ -58,6 +58,29 @@ extern "C" {
 
 Loading a cartridge resets hardware. The direct loader is not a transactional session-replacement API. To preserve a running session after a failed load, build a separate candidate and swap it in only after cartridge, battery, and boot inputs validate. The Qt frontend uses that pattern.
 
+## Cold memory and firmware startup
+
+Initialization creates model-specific WRAM, HRAM, OAM, and wave-memory contents. The default chooses an automatic seed. `cupid/gb/startup.h` provides `cupid_gb_set_power_on_seed(gb, seed)` for a reproducible generation and `cupid_gb_clear_power_on_seed(gb)` to return to automatic choices. Set the policy before initialization or cartridge loading. Zero is a valid seed that still produces modeled memory variation.
+
+Both setters affect the next cold initialization; they leave current memory and the last realized seed intact. `cupid_gb_get_power_on_seed` returns that realized seed, including an automatic choice. Policy survives initialization and native-state loading, while cleanup clears it. A loaded state restores its own memory without replacing the receiving instance's seed metadata. The getter therefore describes the host's last cold generation, not the provenance of restored RAM. This metadata is excluded from native V12; the realized guest memory is already serialized.
+
+Ordinary initialization and cartridge loading apply the approximate post-boot profile. On physical CGB, it clears WRAM bank 2 and supplies the post-boot wave pattern. Initial firmware execution needs the original cold memory instead:
+
+```c
+cupid_gb_set_model(gb, CUPID_GB_MODEL_CGB);
+cupid_gb_set_power_on_seed(gb, UINT64_C(0x1234));
+if (cupid_gb_load_rom_file(gb, cartridge_path) &&
+    cupid_gb_load_boot_rom_file(gb, boot_path)) {
+    cupid_gb_start_boot_rom(gb);
+}
+```
+
+Call `cupid_gb_start_boot_rom` after loading the cartridge, optional battery data, and firmware, before guest execution. It reconstructs WRAM, HRAM, OAM, and VRAM from the same realized generation, then initializes boot-entry registers and wave/palette memory. It draws no new seed and preserves cartridge storage, RTC data, seed policy, and host registrations. A null instance or missing firmware changes nothing. This operation deliberately replaces volatile memory and is not a native hard or quick reset.
+
+The lower-level `cupid_gb_enter_boot_rom` retains live WRAM, HRAM, OAM, and VRAM while resetting its boot-entry registers and reconstructing wave/palette memory from the realized generation. Use it only when that memory-preserving re-entry contract is intended. The Qt frontend and ROM runner use the explicit cold operation for initial firmware startup.
+
+The startup header supplies its own C++ linkage guard. General hardware headers still use the caller's `extern "C"` wrapper described above. Fixed seeds reproduce the current generator's bytes for the same profile; byte sequences are not a stable cross-version file format. Record the build, model, seed, firmware hash, and input trace when comparing runs. See [hardware profiles](hardware.md#cold-start-memory) for the qualified distributions and remaining model limits.
+
 ## Execution and clocks
 
 `cupid_gb_step` and `cupid_emulator_step` execute one hardware step: an instruction, interrupt entry, or bounded HALT/STOP work. A true result means that step completed. It does not establish instruction progress or successful gameplay. False reports an invalid instance, an absent cartridge, or a decoder failure. These functions do not sleep or synchronize with a display.

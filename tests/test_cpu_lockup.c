@@ -40,6 +40,8 @@ static void prepare(CupidGb *gb, Profile profile, uint8_t opcode) {
         rom[0x14d] = (uint8_t)(rom[0x14d] - rom[i] - 1u);
     cupid_gb_set_serial_output_callback(gb, NULL, NULL);
     cupid_gb_set_model(gb, profile.model);
+    /* Plain and observed stepping compare complete snapshots of one cold image. */
+    cupid_gb_set_power_on_seed(gb, 0);
     assert(cupid_gb_load_rom(gb, rom, sizeof(rom)));
     gb->cpu.pc = 0x100;
     gb->cpu.sp = 0xfffe;

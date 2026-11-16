@@ -3,6 +3,7 @@
 #include "cupid/common/sha256.h"
 #include "cupid/gb/apu.h"
 #include "cupid/gb/camera.h"
+#include "cupid/gb/cartridge.h"
 #include "cupid/gb/huc3.h"
 #include "cupid/gb/infrared.h"
 #include "cupid/gb/mbc7.h"
@@ -1057,6 +1058,37 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
     return CUPID_GB_STATE_OK;
 }
 
+static void import_legacy_sgb_startup(CupidGb *gb) {
+    const CupidGbCpu *cpu = &gb->cpu;
+    const CupidGbPixels *pixels = &gb->pixels;
+    /* Older writers could save the untouched SGB HLE profile with LY=FF and
+     * an uninitialized pixel pipeline. Its first tick then copied FF into the
+     * internal scanline. Recognize that pre-execution profile, not arbitrary
+     * raw LY bytes or an already-running display, and restore the valid HLE
+     * VBlank phase. The DIV subphase depends on the cartridge header packet
+     * stream, so retain that validated value. No memory or host configuration
+     * belongs to this migration. */
+    if ((gb->model != CUPID_GB_MODEL_SGB && gb->model != CUPID_GB_MODEL_SGB2) ||
+        gb->boot_rom_enabled || gb->elapsed_cycles ||
+        cpu->a != (gb->model == CUPID_GB_MODEL_SGB ? 0x01u : 0xffu) || cpu->f || cpu->b ||
+        cpu->c != 0x14u || cpu->d || cpu->e || cpu->h != 0xc0u || cpu->l != 0x60u ||
+        cpu->sp != 0xfffeu || cpu->pc != CUPID_GB_ENTRY_POINT || cpu->ime || cpu->ime_delay ||
+        cpu->halt_bug || cpu->halted || cpu->just_halted || cpu->stopped || gb->interrupt_enable ||
+        gb->interrupt_flags != 1u || gb->io_registers[0x04] != 0xd8u || gb->timer_counter ||
+        gb->ppu_counter || gb->io_registers[CUPID_GB_IO_LCDC] != 0x91u ||
+        gb->io_registers[CUPID_GB_IO_STAT] != 0 || gb->io_registers[CUPID_GB_IO_LY] != 0xffu ||
+        gb->ppu_lcd_startup || gb->ppu_lcd_warmup_lines || gb->ppu_line_boundary_hold ||
+        gb->stat_irq_delay || gb->stat_irq_line || gb->window_line_counter || gb->frame_ready ||
+        pixels->initialized || pixels->active || pixels->line || pixels->dot || pixels->x ||
+        pixels->read || pixels->count || pixels->phase || pixels->object_count ||
+        pixels->object_delay || pixels->window_armed || pixels->window_active ||
+        pixels->window_used || pixels->lyc_irq)
+        return;
+    gb->io_registers[CUPID_GB_IO_LY] = 144;
+    gb->io_registers[CUPID_GB_IO_STAT] = 0x81;
+    gb->ppu_counter = 50;
+}
+
 static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t length,
                                      const uint8_t *rom_digest) {
     if (!ready(gb)) {
@@ -1323,6 +1355,7 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
         free(candidate);
         return CUPID_GB_STATE_INVALID;
     }
+    import_legacy_sgb_startup(candidate);
     if (version < STATE_VERSION_V11) {
         /* Those writers maintained the pulse latches only for color hardware.
          * Validate first, then derive missing monochrome history from the file. */

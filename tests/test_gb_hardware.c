@@ -162,6 +162,63 @@ static void test_cgb_vram_and_wram_banking(void) {
     cupid_gb_cleanup(&gb);
 }
 
+static void test_cgb_wram_selector_readback(void) {
+    uint8_t rom[32768];
+    build_test_rom(rom, sizeof(rom));
+    rom[0x143] = 0xc0;
+    rom[0x14d] = compute_header_checksum(rom);
+    for (unsigned boot = 0; boot < 2; ++boot) {
+        CupidGb gb = {0};
+        cupid_gb_set_model(&gb, CUPID_GB_MODEL_CGB);
+        assert(cupid_gb_load_rom(&gb, rom, sizeof(rom)));
+        if (boot) {
+            gb.boot_rom_size = 0x900;
+            cupid_gb_start_boot_rom(&gb);
+            assert(cupid_gb_read_u8(&gb, 0xff70) == 0);
+            assert(gb.cgb_wram_bank == 1);
+        }
+        cupid_gb_write_u8(&gb, 0xc000, 0x35);
+        for (unsigned bank = 1; bank < 8; ++bank) {
+            cupid_gb_write_u8(&gb, 0xff70, (uint8_t)bank);
+            cupid_gb_write_u8(&gb, 0xd000, (uint8_t)(0x40u | bank));
+        }
+        for (unsigned value = 0; value < 256; ++value) {
+            const unsigned bank = (value & 7u) ? value & 7u : 1u;
+            cupid_gb_write_u8(&gb, 0xff70, (uint8_t)value);
+            assert(cupid_gb_read_u8(&gb, 0xff70) == (0xf8u | value));
+            assert(gb.cgb_wram_bank == bank);
+            assert(cupid_gb_read_u8(&gb, 0xd000) == (0x40u | bank));
+            assert(cupid_gb_read_u8(&gb, 0xf000) == (0x40u | bank));
+            assert(cupid_gb_read_u8(&gb, 0xc000) == 0x35);
+            cupid_gb_write_u8(&gb, 0xd123, (uint8_t)value);
+            assert(cupid_gb_read_u8(&gb, 0xf123) == value);
+            assert(gb.work_ram[bank * 0x1000u + 0x123u] == value);
+        }
+        /* The native format already retains the raw IO byte and effective bank. */
+        cupid_gb_write_u8(&gb, 0xff70, 0);
+        const size_t capacity = cupid_gb_state_size(&gb);
+        uint8_t *state = malloc(capacity);
+        size_t written = 0;
+        assert(state);
+        assert(cupid_gb_save_state(&gb, state, capacity, &written) == CUPID_GB_STATE_OK);
+        cupid_gb_write_u8(&gb, 0xff70, 1);
+        assert(cupid_gb_read_u8(&gb, 0xff70) == 0xf9);
+        assert(cupid_gb_load_state(&gb, state, written) == CUPID_GB_STATE_OK);
+        assert(cupid_gb_read_u8(&gb, 0xff70) == 0xf8 && gb.cgb_wram_bank == 1);
+        assert(cupid_gb_read_u8(&gb, 0xd000) == 0x41);
+        free(state);
+        if (boot) {
+            cupid_gb_write_u8(&gb, 0xff4c, 4);
+            cupid_gb_write_u8(&gb, 0xff70, 0);
+            assert(!gb.cgb_mode && cupid_gb_read_u8(&gb, 0xff70) == 0xff);
+            cupid_gb_write_u8(&gb, 0xff50, 1);
+            cupid_gb_write_u8(&gb, 0xff70, 7);
+            assert(gb.cgb_wram_bank == 1 && cupid_gb_read_u8(&gb, 0xd000) == 0x41);
+        }
+        cupid_gb_cleanup(&gb);
+    }
+}
+
 static void test_cgb_palette_registers_and_gdma(void) {
     uint8_t rom[32u * 1024u];
     CupidGb gb = {0};
@@ -303,6 +360,60 @@ static void test_color_boot_mode_selection_and_storage(void) {
     }
 }
 
+static void test_monochrome_boot_palette_data_ports(void) {
+    const CupidGbModel models[] = {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_MGB, CUPID_GB_MODEL_SGB,
+                                   CUPID_GB_MODEL_SGB2};
+    uint8_t rom[32768];
+    build_test_rom(rom, sizeof(rom));
+    for (size_t model = 0; model < sizeof(models) / sizeof(models[0]); ++model) {
+        CupidGb gb = {0};
+        cupid_gb_set_model(&gb, models[model]);
+        assert(cupid_gb_load_rom(&gb, rom, sizeof(rom)));
+        const uint8_t hle_bg = gb.cgb_bg_palette_ram[0];
+        const uint8_t hle_obj = gb.cgb_obj_palette_ram[0];
+        cupid_gb_write_u8(&gb, 0xff69, 0x12);
+        cupid_gb_write_u8(&gb, 0xff6b, 0x34);
+        assert(cupid_gb_read_u8(&gb, 0xff69) == 0xff);
+        assert(cupid_gb_read_u8(&gb, 0xff6b) == 0xff);
+        assert(gb.cgb_bg_palette_ram[0] == hle_bg && gb.cgb_obj_palette_ram[0] == hle_obj);
+        gb.boot_rom_size = 0x100;
+        for (unsigned entry = 0; entry < 2; ++entry) {
+            if (entry)
+                cupid_gb_enter_boot_rom(&gb);
+            else
+                cupid_gb_start_boot_rom(&gb);
+            for (size_t byte = 0; byte < sizeof(gb.cgb_bg_palette_ram); ++byte)
+                assert(gb.cgb_bg_palette_ram[byte] == 0 && gb.cgb_obj_palette_ram[byte] == 0);
+            assert(cupid_gb_read_u8(&gb, 0xff69) == 0);
+            assert(cupid_gb_read_u8(&gb, 0xff6b) == 0);
+            /* Index writes remain unavailable, so data writes address byte zero
+             * and cannot enable auto-increment on monochrome hardware. */
+            cupid_gb_write_u8(&gb, 0xff68, 0x85);
+            cupid_gb_write_u8(&gb, 0xff6a, 0xff);
+            cupid_gb_write_u8(&gb, 0xff69, 0xa5);
+            cupid_gb_write_u8(&gb, 0xff6b, 0x5a);
+            assert(cupid_gb_read_u8(&gb, 0xff68) == 0xff);
+            assert(cupid_gb_read_u8(&gb, 0xff6a) == 0xff);
+            assert(gb.io_registers[0x68] == 0 && gb.io_registers[0x6a] == 0);
+            assert(cupid_gb_read_u8(&gb, 0xff69) == 0xa5);
+            assert(cupid_gb_read_u8(&gb, 0xff6b) == 0x5a);
+            cupid_gb_write_u8(&gb, 0xff69, 0x3c);
+            cupid_gb_write_u8(&gb, 0xff6b, 0x96);
+            assert(cupid_gb_read_u8(&gb, 0xff69) == 0x3c);
+            assert(cupid_gb_read_u8(&gb, 0xff6b) == 0x96);
+            for (size_t byte = 1; byte < sizeof(gb.cgb_bg_palette_ram); ++byte)
+                assert(gb.cgb_bg_palette_ram[byte] == 0 && gb.cgb_obj_palette_ram[byte] == 0);
+            cupid_gb_write_u8(&gb, 0xff50, 1);
+            cupid_gb_write_u8(&gb, 0xff69, 0x12);
+            cupid_gb_write_u8(&gb, 0xff6b, 0x34);
+            assert(cupid_gb_read_u8(&gb, 0xff69) == 0xff);
+            assert(cupid_gb_read_u8(&gb, 0xff6b) == 0xff);
+            assert(gb.cgb_bg_palette_ram[0] == 0x3c && gb.cgb_obj_palette_ram[0] == 0x96);
+        }
+        cupid_gb_cleanup(&gb);
+    }
+}
+
 static void test_color_boot_preserves_selected_memory_banks(void) {
     const uint8_t flags[] = {0, 0x80, 0xc0};
     const uint8_t keys[] = {0, 4, 8, 12};
@@ -318,6 +429,8 @@ static void test_color_boot_preserves_selected_memory_banks(void) {
                 assert(cupid_gb_load_rom(&gb, rom, sizeof(rom)));
                 gb.boot_rom_size = physical ? 0x900 : 0x100;
                 cupid_gb_enter_boot_rom(&gb);
+                const uint8_t untouched_wram = gb.work_ram[0x1000];
+                const uint8_t untouched_echo = gb.work_ram[0x1123];
                 cupid_gb_write_u8(&gb, 0xff4f, 1);
                 cupid_gb_write_u8(&gb, 0xff70, 3);
                 cupid_gb_write_u8(&gb, 0xff4c, keys[key]);
@@ -357,7 +470,8 @@ static void test_color_boot_preserves_selected_memory_banks(void) {
                 assert(gb.work_ram[wram] == 0xbb && gb.work_ram[wram + 0x123] == 0xbc);
                 if (physical) {
                     assert(gb.video_ram[vram ^ 0x2000] == (color ? 0x99 : 0));
-                    assert(gb.work_ram[0x1000] == 0 && gb.work_ram[0x1123] == 0);
+                    assert(gb.work_ram[0x1000] == untouched_wram &&
+                           gb.work_ram[0x1123] == untouched_echo);
                 }
                 cupid_gb_cleanup(&gb);
             }
@@ -1555,9 +1669,11 @@ void test_gb_hardware(void) {
     test_dual_mode_rom_enters_cgb_when_model_selected();
     test_color_header_preserves_selected_hardware();
     test_cgb_vram_and_wram_banking();
+    test_cgb_wram_selector_readback();
     test_cgb_palette_registers_and_gdma();
     test_model_specific_register_read_routing();
     test_color_boot_mode_selection_and_storage();
+    test_monochrome_boot_palette_data_ports();
     test_color_boot_preserves_selected_memory_banks();
     test_cgb_dmg_compatibility_palette_for_pokemon_red();
     test_cgb_dmg_compatibility_palette_requires_nintendo_licensee();

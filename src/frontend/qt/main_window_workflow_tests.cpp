@@ -7,7 +7,7 @@ bool MainWindow::smokeTest() {
     QTemporaryDir directory;
     if (!directory.isValid())
         return smokeFailure(__FILE__, __LINE__);
-    if (!playbackSmokeTest(directory.path()))
+    if (!playbackSmokeTest(directory.path()) || !startupSmokeTest(directory.path()))
         return smokeFailure(__FILE__, __LINE__);
     QByteArray rom(32768, char(0));
     rom[0x100] = char(0x18);

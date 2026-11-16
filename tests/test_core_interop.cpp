@@ -1,3 +1,5 @@
+#include "cupid/gb/startup.h"
+
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -87,7 +89,9 @@ void serial_output(const CupidGb *gb, uint8_t byte, void *user_data) {
 void live_state(const std::vector<uint8_t> &rom, CupidGbModel model) {
     Hardware gb(new CupidGb{});
     cupid_gb_set_model(gb.get(), model);
+    cupid_gb_set_power_on_seed(gb.get(), UINT64_C(0x0123456789abcdef));
     assert(cupid_gb_load_rom(gb.get(), rom.data(), rom.size()));
+    assert(cupid_gb_get_power_on_seed(gb.get()) == UINT64_C(0x0123456789abcdef));
     assert(gb->loaded && gb->header.has_battery && gb->cartridge_ram_size == 8192);
     assert(cupid_gb_battery_size(gb.get()) == 8192);
     gb->cpu.a = 0x17;
@@ -114,6 +118,11 @@ void live_state(const std::vector<uint8_t> &rom, CupidGbModel model) {
 } // namespace
 
 int main() {
+    // This header declares C linkage even when included outside the caller's wrapper.
+    cupid_gb_set_power_on_seed(nullptr, 0);
+    cupid_gb_clear_power_on_seed(nullptr);
+    cupid_gb_start_boot_rom(nullptr);
+    assert(cupid_gb_get_power_on_seed(nullptr) == 0);
     const auto rom = cartridge();
     legacy_recovery(rom);
     live_state(rom, CUPID_GB_MODEL_DMG_ABC);

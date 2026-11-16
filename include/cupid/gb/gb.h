@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #include "cupid/gb/sgb.h"
+#include "cupid/gb/startup.h"
 
 #define CUPID_GB_MAX_ROM_SIZE (8u * 1024u * 1024u)
 #define CUPID_GB_MAX_RAM_SIZE (128u * 1024u)
@@ -456,6 +457,7 @@ typedef struct CupidGb {
     bool stop_ppu_palette_blocked;
     uint16_t ppu_transfer_end_dot; /* Palette access remains blocked after the last pixel. */
     CupidGbObjectFetchStage object_fetch_stage;
+    CupidGbPowerOn power_on; /* Host startup policy; realized memory is serialized separately. */
 } CupidGb;
 
 /* Optional host observation for one hardware step. This output is not stored
@@ -542,9 +544,11 @@ void cupid_gb_set_save_path(CupidGb *gb, const char *rom_path);
 void cupid_gb_load_save(CupidGb *gb);
 void cupid_gb_save(CupidGb *gb);
 
-/* Boot ROM support: load an external boot ROM dump for authentic startup */
+/* Load an external boot ROM before initial execution via cupid_gb_start_boot_rom. */
 bool cupid_gb_load_boot_rom_file(CupidGb *gb, const char *path);
 void cupid_gb_clear_boot_rom(CupidGb *gb);
+/* Low-level firmware re-entry preserves WRAM, HRAM, OAM, VRAM, SRAM and RTC data.
+ * It resets boot-entry registers and wave/palette IO using the realized generation. */
 void cupid_gb_enter_boot_rom(CupidGb *gb);
 
 #endif

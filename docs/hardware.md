@@ -19,6 +19,29 @@ The SGB profile uses a 4,295,454 Hz base clock. The other five profiles, includi
 
 Automatic desktop selection is a convenience policy, not a new hardware profile. Reproducible comparisons should select the model explicitly and record whether startup used a boot binary or the approximate post-boot profile.
 
+## Cold-start memory
+
+Cold memory varies by model. An independent per-instance generator supplies the following distributions; the percentages describe each bit's probability of being set across seeds.
+
+| Profile | WRAM | HRAM | OAM | Wave RAM before firmware |
+| --- | --- | --- | --- | --- |
+| Grouped DMG and SGB | 75% where address bit 8 is clear, 25% where set | Even bytes 12.5%, odd bytes 87.5% | 87.5% where address bit 1 is clear, 12.5% where set | Even bytes 87.5%, odd bytes 12.5% |
+| Pocket | Uniform bytes | Same monochrome bias | Same monochrome bias | Even bytes 75%, odd bytes 25% |
+| SGB2 | `0x55` baseline, each bit flipped with 12.5% probability | Same monochrome bias | Same monochrome bias | Same grouped monochrome bias |
+| CGB | Uniform bytes | Uniform bytes | Zero | Zero |
+
+The wave biases cover FF30–FF3E; FF3F starts at zero. Cold VRAM is zero. Physical CGB palette bytes vary across their full eight-bit storage range, including the unused high color bit. RGB555 output masks that bit while palette reads and native states retain it. Unmapped monochrome backing banks remain zero.
+
+The grouped monochrome distribution corresponds to the audited DMG-B behavior, and the current uniform CGB distribution corresponds to CGB-E. DMG0 uses the grouped fallback without separate qualification. Other CGB revision distributions remain pending. The SGB comparison profile is itself unverified on physical hardware; matching its modeled distribution does not resolve that limit.
+
+Without external firmware, startup applies an approximate post-boot state: physical CGB WRAM bank 2 is cleared and wave RAM has the expected alternating `00`/`FF` pattern. This bank clear applies to both color and monochrome cartridges on CGB. Initial firmware startup reconstructs the original cold generation so firmware performs its own writes, including any scratch data it leaves in bank 2. Other post-boot memory effects and independently written startup firmware remain incomplete. [The core API](core-api.md#cold-memory-and-firmware-startup) documents the separate cold-start and memory-preserving re-entry operations.
+
+SGB and SGB2 post-boot profiles enter VBlank on line 144 at dot 200. This gives the pixel pipeline a valid starting scanline and permits immediate native save/load followed by continued rendering. The profile does not reproduce the host introduction sequence or every firmware timing effect.
+
+The CGB WRAM selector retains its raw register value separately from the effective memory bank. At cold firmware entry FF70 reads `00` while bank 1 is selected. A write sets the unused upper bits: writing zero reads back `F8`, and writing one reads back `F9`; both select bank 1. Echo RAM uses that same physical bank. Native states already store the raw I/O byte and effective bank independently, so this correction does not change the V12 layout.
+
+Palette data ports FF69 and FF6B are accessible while the boot overlay is mapped, including on the current monochrome profiles. Monochrome palette storage starts at zero, but its index ports remain unavailable: index writes are ignored, so data writes address byte zero without auto-increment. Removing the overlay hides the data ports and ignores further writes in monochrome mode. Physical CGB retains its separate index, compatibility-mode, and PPU access rules.
+
 ## Cartridge controllers
 
 The core decodes ROM-only, MBC1, MBC2, MBC3, MBC5, MMM01, MBC6, MBC7, HuC1, HuC3, Camera, and TPP1 cartridges. Coverage differs by controller.

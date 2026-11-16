@@ -47,6 +47,36 @@ static bool positive_integer(const char *text, uint64_t *value) {
     return !errno && end && !*end && *value > 0 && *value <= UINT64_C(10000000000);
 }
 
+static bool power_on_seed_value(const char *text, uint64_t *value) {
+    unsigned base = 10;
+    if (text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) {
+        base = 16;
+        text += 2;
+    }
+    if (!*text) {
+        return false;
+    }
+    uint64_t parsed = 0;
+    for (; *text; ++text) {
+        unsigned digit;
+        if (*text >= '0' && *text <= '9') {
+            digit = (unsigned)(*text - '0');
+        } else if (*text >= 'a' && *text <= 'f') {
+            digit = (unsigned)(*text - 'a') + 10;
+        } else if (*text >= 'A' && *text <= 'F') {
+            digit = (unsigned)(*text - 'A') + 10;
+        } else {
+            return false;
+        }
+        if (digit >= base || parsed > (UINT64_MAX - digit) / base) {
+            return false;
+        }
+        parsed = parsed * base + digit;
+    }
+    *value = parsed;
+    return true;
+}
+
 static int register_result(const CupidGb *gb, const CupidGbStepTrace *trace) {
     /* The debug opcode is meaningful only when this protocol is explicitly selected. */
     if (trace->event != CUPID_GB_STEP_INSTRUCTION || trace->opcode != 0x40) {
@@ -192,14 +222,17 @@ int main(int argc, char **argv) {
     const char *rom = NULL, *boot = NULL, *image_path = NULL, *audio_path = NULL;
     const char *protocol = "none", *model_name = "dmg", *trace_path = NULL;
     uint64_t frames = 600, max_steps = 0;
+    uint64_t power_on_seed = 0;
+    bool fixed_power_on_seed = false;
     bool serial_output = false;
     CupidGbModel model = CUPID_GB_MODEL_DMG_ABC;
     for (int i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "--help")) {
-            puts(
-                "CupidGB ROM runner: [--model dmg|mgb|cgb|sgb|sgb2] [--frames N] "
-                "[--max-steps N] [--protocol none|serial|register|fibonacci|memory] [--boot FILE] "
-                "[--image FILE.ppm] [--audio FILE.pcm] [--input-trace FILE] [--serial-output] ROM");
+            puts("CupidGB ROM runner: [--model dmg|mgb|cgb|sgb|sgb2] [--frames N] "
+                 "[--max-steps N] [--protocol none|serial|register|fibonacci|memory] [--boot FILE] "
+                 "[--image FILE.ppm] [--audio FILE.pcm] [--input-trace FILE] "
+                 "[--power-on-seed auto|UINT64] [--serial-output] ROM\n"
+                 "Power-on seeds accept decimal or 0x hexadecimal; the default is auto.");
             return 0;
         }
         if (!strcmp(argv[i], "--serial-output")) {
@@ -216,6 +249,14 @@ int main(int argc, char **argv) {
             if (!strcmp(option, "--frames") || !strcmp(option, "--max-steps")) {
                 if (!positive_integer(value, !strcmp(option, "--frames") ? &frames : &max_steps)) {
                     fprintf(stderr, "Invalid numeric limit.\n");
+                    return 2;
+                }
+            } else if (!strcmp(option, "--power-on-seed")) {
+                fixed_power_on_seed = strcmp(value, "auto") != 0;
+                if (fixed_power_on_seed && !power_on_seed_value(value, &power_on_seed)) {
+                    fprintf(stderr,
+                            "Invalid power-on seed. Use auto or an unsigned 64-bit decimal or "
+                            "hexadecimal value.\n");
                     return 2;
                 }
             } else if (!strcmp(option, "--model")) {
@@ -276,13 +317,18 @@ int main(int argc, char **argv) {
         return 2;
     }
     cupid_gb_set_model(gb, model);
+    if (fixed_power_on_seed) {
+        cupid_gb_set_power_on_seed(gb, power_on_seed);
+    } else {
+        cupid_gb_clear_power_on_seed(gb);
+    }
     if (!cupid_gb_load_rom_file(gb, rom) || (boot && !cupid_gb_load_boot_rom_file(gb, boot))) {
         cupid_gb_cleanup(gb);
         free(gb);
         return 2;
     }
     if (boot) {
-        cupid_gb_enter_boot_rom(gb);
+        cupid_gb_start_boot_rom(gb);
     }
     FILE *audio = audio_path ? fopen(audio_path, "wb") : NULL;
     if (audio_path && !audio) {
@@ -418,11 +464,13 @@ int main(int argc, char **argv) {
            "\"audio_frames\":%" PRIu64 ",\"serial_bytes\":%" PRIu64 ","
            "\"audio_crc32\":\"%08" PRIx32 "\","
            "\"image_crc32\":\"%08" PRIx32 "\",\"host_seconds\":%.9f,"
+           "\"power_on_seed_hex\":\"%016" PRIx64 "\","
            "\"memory_result_code\":%d,\"memory_text_hex\":\"%s\","
            "\"illegal_opcode\":%d,\"illegal_address\":%d}\n",
            status, model_name, protocol, steps, gb->elapsed_cycles, cupid_gb_base_clock_hz(gb),
            vblank_frames, presentation_events, audio_frames, serial.bytes, audio_crc ^ UINT32_MAX,
-           image_crc, elapsed, memory_code, memory_text, illegal_opcode, illegal_address);
+           image_crc, elapsed, cupid_gb_get_power_on_seed(gb), memory_code, memory_text,
+           illegal_opcode, illegal_address);
     if (!strcmp(status, "fail")) {
         result = 1;
     } else if (strcmp(protocol, "none") && strcmp(status, "pass") && !result) {

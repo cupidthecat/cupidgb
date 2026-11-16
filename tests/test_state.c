@@ -66,6 +66,7 @@ static void prepare(CupidGb *gb, CupidGbModel model, bool boot) {
         rom[0x14d] = (uint8_t)(rom[0x14d] - rom[i] - 1);
     }
     cupid_gb_set_model(gb, model);
+    cupid_gb_set_power_on_seed(gb, UINT64_C(0x534d38332d535441));
     assert(cupid_gb_load_rom(gb, rom, sizeof(rom)));
     if (boot) {
         memset(gb->boot_rom, 0, sizeof(gb->boot_rom));
@@ -614,6 +615,16 @@ static void test_v2_import(void) {
             expected->display_frame_type = CUPID_GB_FRAME_NORMAL;
             expected->cartridge_bus_expiry = 0;
             expected->cartridge_bus_data = 0xff;
+            /* Version 2 lacks sampled video-port history. Noisy OAM may leave
+             * nonzero words in the current source's later bus latches. */
+            expected->oam_vram_row = UINT16_MAX;
+            expected->oam_search_word = 0;
+            expected->stop_ppu_vram_blocked = false;
+            expected->object_fetch_stage =
+                expected->pixels.object_delay ? CUPID_GB_OBJECT_LEGACY : CUPID_GB_OBJECT_IDLE;
+            expected->stop_ppu_oam_blocked = false;
+            expected->stop_ppu_palette_blocked = false;
+            expected->ppu_transfer_end_dot = 0;
             cupid_gb_apu_import_legacy(expected);
             cupid_gb_apu_import_monochrome_pulses(expected);
             memset(expected->apu.pulse_dac_hold, 0, sizeof(expected->apu.pulse_dac_hold));
@@ -1418,6 +1429,14 @@ static void print_fixture(const char *path) {
     CupidGb *gb = calloc(1, sizeof(*gb));
     assert(gb);
     prepare(gb, CUPID_GB_MODEL_CGB, true);
+    /* The frozen wire fixture supplies its historical bytes explicitly.
+     * Startup variation is covered separately from the codec contract. */
+    memset(gb->high_ram, 0, sizeof(gb->high_ram));
+    memset(gb->cgb_obj_palette_ram, 0, sizeof(gb->cgb_obj_palette_ram));
+    for (size_t index = 0; index < sizeof(gb->cgb_bg_palette_ram); index += 2) {
+        gb->cgb_bg_palette_ram[index] = 0xff;
+        gb->cgb_bg_palette_ram[index + 1] = 0x7f;
+    }
     /* Preserve the original divider phase of this compatibility fixture. */
     gb->div_counter = 0;
     gb->double_speed = true;

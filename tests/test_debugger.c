@@ -14,6 +14,8 @@ static void prepare(CupidGb *gb) {
     memcpy(rom + 0x134, "DEBUGGER TEST", 13);
     for (size_t offset = 0x134; offset < 0x14d; ++offset)
         rom[0x14d] = (uint8_t)(rom[0x14d] - rom[offset] - 1u);
+    /* Independently allocated control cores use the same noisy startup fixture. */
+    cupid_gb_set_power_on_seed(gb, UINT64_C(0x736d38332d646267));
     assert(cupid_gb_load_rom(gb, rom, sizeof(rom)));
     gb->cpu.pc = 0x100;
     gb->cpu.sp = 0xdff0;

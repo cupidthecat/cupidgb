@@ -118,6 +118,9 @@ static void test_read_interception_and_bank_aliases(void) {
 
 static void test_priority_and_transactional_files(void) {
     CupidGb *gb = cartridge(0x1b);
+    /* These conditional rules deliberately match zero at both test addresses. */
+    cupid_gb_write_u8(gb, 0xc000, 0);
+    cupid_gb_write_u8(gb, 0xc100, 0);
     CupidGbCheats *cheats = cupid_gb_cheats_create();
     assert(cheats);
     cupid_gb_set_cheats(gb, cheats);

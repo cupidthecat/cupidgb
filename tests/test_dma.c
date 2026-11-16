@@ -142,6 +142,7 @@ static void test_oam_dma_restart_at_completion(void) {
     for (unsigned model = 0; model < sizeof(models) / sizeof(models[0]); ++model) {
         for (unsigned copied = 159; copied <= 160; ++copied) {
             CupidGb *gb = hardware(models[model], true, false, 0);
+            cupid_gb_write_u8(gb, 0xd000, 0x6d);
             cupid_gb_write_u8(gb, 0xff46, 0xc0);
             cupid_gb_tick(gb, (uint16_t)(copied + 1));
             assert(gb->dma_active && gb->dma_index == copied);
@@ -154,7 +155,7 @@ static void test_oam_dma_restart_at_completion(void) {
              * Restarting before the last byte keeps OAM inaccessible at destination zero. */
             assert(cupid_gb_read_u8(gb, 0xfe00) == (copied == 160 ? 4 : 0xff));
             cupid_gb_tick_dma_tcycles(gb, 4);
-            assert(gb->dma_index == 1 && gb->object_attribute_memory[0] == 0);
+            assert(gb->dma_index == 1 && gb->object_attribute_memory[0] == 0x6d);
             release(gb);
         }
     }

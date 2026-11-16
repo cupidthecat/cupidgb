@@ -1764,3 +1764,7 @@ these snapshots, cartridges, traces, and one Windows/WSLg host. Audible quality,
 physical refresh, longer active play, and wider cartridge coverage remain
 unmeasured by this set. The idle result establishes reduced idle work; it does
 not establish an active-game throughput gain or universal full speed.
+
+## Cold memory and firmware startup, 2026-11-16
+
+The [startup validation record](validation-startup.md) covers model-specific cold memory, seed controls, SGB handoff and older-state recovery, mapped register comparisons, executed firmware, and the final Windows/Linux regression gates. It records the remaining display-phase and PCM differences explicitly.
