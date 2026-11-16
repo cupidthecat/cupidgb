@@ -1682,3 +1682,85 @@ the installed ELF hash is
 The installation receipt retains the normal Linux RPATH change and runtime
 dependencies. All 171 project C/C++ source and header files remain below 2,000
 lines, with formatting and whitespace checks passing.
+
+## Native pacing and idle measurements, 2026-11-16
+
+The CPU implementation is committed as
+`07fb75b7df5b303899e4b11df2360c9a2ffb469c`. Its 194 frozen build/test inputs
+match the committed Git blobs. All six hosted Windows, Linux, and sanitizer
+checks pass on that exact head in workflow runs `43780966953` and `43780963140`.
+
+### Idle work
+
+The idle-timer change delivered in `40c299b` was measured separately with frozen
+frontend sources, identical core libraries within each platform, identical
+instrumentation, and a generated DMG loop cartridge. Eight sequential runs
+followed baseline/candidate/candidate/baseline order on Windows and Ubuntu under
+WSLg/Xcb. All 48 phases completed. Each phase measured five Qt elapsed seconds
+after settling. Mean main-timer deliveries per Qt second were:
+
+| Idle state | Windows before | Windows after | Linux before | Linux after |
+| --- | ---: | ---: | ---: | ---: |
+| Paused | 929.7 | 62.6 | 909.8 | 62.6 |
+| Menu open | 932.2 | 62.6 | 917.4 | 62.6 |
+| Rewind exhausted | 924.5 | 62.4 | 899.5 | 62.4 |
+| No cartridge | 930.5 | 62.6 | 902.3 | 62.6 |
+
+Main-timer deliveries fell by about 93%. The independent controller timer
+continued near 125 deliveries per second. All 32 idle phases advanced no guest
+cycles or generated audio frames; all 16 active/recovery phases advanced both.
+Both variants retained the 1 ms active timer, and no measured phase added an
+audio error or idle event. Linux process CPU time averaged 44.8–50.3 ms per idle
+phase before the change and 19.6–28.6 ms afterward. Sources, executables, and
+deployment files retained their recorded hashes.
+
+This comparison used no physical controller. Application timer and dispatcher
+events do not measure physical wakeups or energy use. Windows thread-cycle
+readings remain raw observations without a CPU-utilization conversion. The
+private idle receipt has SHA-256
+`e2754b39dad6af6ac102e864af10d4c0d6c8ed3c1bc14011db01df086481c5b5`.
+
+### Bounded commercial sessions
+
+The installed CPU-checkpoint applications ran two local commercial cartridges
+on each platform with explicit post-boot startup, normal audio, scripted inputs,
+and rewind recording. Each of the four sessions completed its 120-second
+application-time limit with exit 0. Statistics below exclude the first five
+seconds, leaving approximately 115 application seconds per session.
+
+| Session | Guest speed against app clock | Paint p95 | Paint p99 | Peak RSS |
+| --- | ---: | ---: | ---: | ---: |
+| Windows DMG | 100.0023% | 17.68 ms | 18.24 ms | 103.5 MiB |
+| Windows CGB | 100.0047% | 17.72 ms | 18.41 ms | 143.9 MiB |
+| Linux/Xcb DMG | 100.0021% | 17.68 ms | 18.08 ms | 126.4 MiB |
+| Linux/Xcb CGB | 100.0042% | 17.52 ms | 18.24 ms | 159.0 MiB |
+
+Guest speed divides measured base-speed cycles by application elapsed time and
+the selected model clock. Paint intervals count Qt widget paint events
+separately from guest execution; they do not measure physical display refresh.
+The largest post-warmup paint interval was 25.64 ms. Peak RSS includes the
+interface, audio, and accumulating rewind history. Retained rewind data reached
+about 61.0 MiB for DMG and 97.8 MiB for CGB.
+
+All four sessions recorded zero audio errors and zero audio-idle events after
+startup, with active device processing and no illegal-opcode diagnostic. The
+traces applied 14 input events for DMG and 22 for CGB. Both final DMG captures
+show Game Over; both CGB captures show an active course. CGB sessions flushed
+fresh private 8 KiB battery files, without a battery reload round trip in this
+measurement. Original ROM, trace, existing-save bytes and modification times,
+and installed executable hashes remained unchanged.
+
+Linux guest percentages and paint intervals use adjusted monotonic time. The
+harness also retained `CLOCK_MONOTONIC_RAW`: whole-process durations were
+122.496 seconds for DMG and 121.988 seconds for CGB, including startup and
+shutdown. Sampled adjusted-to-RAW interval ratios ranged from 0.917 to 1.023.
+Those process durations do not share the application's measurement window and
+cannot replace it in a guest-speed calculation. Both clocks are retained for
+the idle comparison as well; its callback table uses Qt elapsed time.
+
+The combined private receipt binds each result, image, trace, source manifest,
+and installation manifest to the recorded binaries. Coverage is limited to
+these snapshots, cartridges, traces, and one Windows/WSLg host. Audible quality,
+physical refresh, longer active play, and wider cartridge coverage remain
+unmeasured by this set. The idle result establishes reduced idle work; it does
+not establish an active-game throughput gain or universal full speed.
