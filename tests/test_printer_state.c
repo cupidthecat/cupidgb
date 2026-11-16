@@ -11,6 +11,11 @@
 enum {
     NATIVE_HEADER_BYTES = 128,
     DEVICE_DESCRIPTOR_BYTES = 8,
+    INFRARED_HISTORY_BYTES = 6,
+    RTC_HISTORY_BYTES = 6,
+    MOTOR_HISTORY_OFFSET = 4,
+    BARE_STATE_BYTES =
+        300600 + INFRARED_HISTORY_BYTES + RTC_HISTORY_BYTES + DEVICE_DESCRIPTOR_BYTES,
     PRINTER_WIRE_BYTES = 32687,
     WIRE_PHASE = 0,
     WIRE_HEADER = 1,
@@ -211,7 +216,7 @@ static Blob save_rig(const Rig *rig, bool trusted) {
                                                    &rig->context)
                 : cupid_gb_save_state(rig->gb, blob.bytes, blob.length, &written);
     assert(result == CUPID_GB_STATE_OK && written == blob.length);
-    assert(read_le(blob.bytes + 8, 4) == 12);
+    assert(read_le(blob.bytes + 8, 4) == 13);
     return blob;
 }
 
@@ -621,7 +626,8 @@ static void test_attachment_matrix(void) {
                 attach_kind(target, live_kind);
                 advance_clock(source, 20000000, false);
                 Blob saved = save_rig(source, api != 0);
-                assert(saved.length == (saved_kind == 1 ? 333301u : 300614u));
+                assert(saved.length ==
+                       BARE_STATE_BYTES + (saved_kind == 1 ? PRINTER_WIRE_BYTES : 0));
                 assert(load_rig(target, &saved, api != 0) == CUPID_GB_STATE_OK);
                 if (live_kind == 1) {
                     Blob loaded = save_rig(target, false);
@@ -633,7 +639,7 @@ static void test_attachment_matrix(void) {
                     free_blob(loaded);
                 } else {
                     Blob detached = save_rig(target, false);
-                    assert(detached.length == 300614);
+                    assert(detached.length == BARE_STATE_BYTES);
                     const uint8_t none[DEVICE_DESCRIPTOR_BYTES] = {0};
                     assert(memcmp(detached.bytes + detached.length - sizeof(none), none,
                                   sizeof(none)) == 0);
@@ -775,7 +781,7 @@ static void test_malformed_devices(void) {
             reject_unchanged(target, &bad, api != 0);
             free_blob(bad);
         }
-        for (unsigned scenario = 0; scenario < 9; ++scenario) {
+        for (unsigned scenario = 0; scenario < 10; ++scenario) {
             const size_t length = valid.length + (scenario == 6) - (scenario == 7);
             Blob bad = copy_blob(&valid, length);
             switch (scenario) {
@@ -800,7 +806,11 @@ static void test_malformed_devices(void) {
                 case 8:
                     /* Valid accessory data must not commit before a later
                      * hardware validation failure has been resolved. */
-                    bad.bytes[descriptor - 1] = 16;
+                    bad.bytes[descriptor - RTC_HISTORY_BYTES - 1] = 16;
+                    break;
+                case 9:
+                    /* A non-TPP1 core must reject even an otherwise valid motor value. */
+                    bad.bytes[descriptor - RTC_HISTORY_BYTES + MOTOR_HISTORY_OFFSET] = 1;
                     break;
                 default:
                     break;
@@ -980,7 +990,7 @@ static void test_origins_and_lifecycle(void) {
     cupid_gb_set_serial_link(rig->gb, foreign);
     const External before = rig->external;
     Blob unrecognized = save_rig(rig, false);
-    assert(unrecognized.length == 300614);
+    assert(unrecognized.length == BARE_STATE_BYTES);
     assert(memcmp(&before, &rig->external, sizeof(before)) == 0);
     const uint8_t none[DEVICE_DESCRIPTOR_BYTES] = {0};
     assert(memcmp(unrecognized.bytes + unrecognized.length - sizeof(none), none, sizeof(none)) ==
@@ -1030,7 +1040,8 @@ static void test_legacy_fresh_device(void) {
     source->gb->elapsed_cycles = 0x1234567;
     memset(source->gb->apu.pulse_timing, 0, sizeof(source->gb->apu.pulse_timing));
     Blob current = save_rig(source, false);
-    const size_t hardware_size = current.length - DEVICE_DESCRIPTOR_BYTES - 6;
+    const size_t hardware_size =
+        current.length - DEVICE_DESCRIPTOR_BYTES - RTC_HISTORY_BYTES - INFRARED_HISTORY_BYTES;
     const size_t lengths[] = {300518,
                               300568,
                               300572,

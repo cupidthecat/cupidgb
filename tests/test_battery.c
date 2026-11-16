@@ -10,6 +10,17 @@
 
 static const int64_t test_time = INT64_C(1700000000);
 
+typedef struct BatteryClock {
+    int64_t now;
+    unsigned calls;
+} BatteryClock;
+
+static int64_t battery_time(void *context) {
+    BatteryClock *clock = context;
+    ++clock->calls;
+    return clock->now;
+}
+
 static CupidGb *cartridge(uint8_t type, uint8_t ram_size) {
     CupidGb *gb = calloc(1, sizeof(*gb));
     uint8_t rom[32768] = {0};
@@ -151,10 +162,10 @@ static void test_clock_advance(void) {
     rtc.dh |= 0x40;
     rtc.s = 7;
     cupid_gb_rtc_advance(&rtc, test_time + 100000);
-    assert(rtc.s == 7 && rtc.dh == 0xc0 && rtc.base_time == test_time + 100000);
+    assert(rtc.s == 7 && rtc.dh == 0xc0 && rtc.base_time == test_time + 1);
     rtc.dh &= 0xbfu;
     cupid_gb_rtc_advance(&rtc, test_time);
-    assert(rtc.s == 7 && rtc.dh == 0x80 && rtc.base_time == test_time);
+    assert(rtc.s == 7 && rtc.dh == 0x80 && rtc.base_time == test_time + 1);
     rtc = (CupidGbRtc){.s = 63, .m = 63, .h = 31, .base_time = test_time};
     cupid_gb_rtc_advance(&rtc, test_time + 192);
     assert(rtc.s == 255 && rtc.m == 63 && rtc.h == 31);
@@ -164,10 +175,7 @@ static void test_clock_advance(void) {
     assert(rtc.s == 0 && rtc.m == 64 && rtc.h == 31);
     rtc = (CupidGbRtc){.base_time = INT64_MIN};
     cupid_gb_rtc_advance(&rtc, INT64_MAX);
-    uint64_t distance = UINT64_MAX;
-    assert(rtc.s == distance % 60 && rtc.m == distance / 60 % 60 && rtc.h == distance / 3600 % 24 &&
-           rtc.dl == (uint8_t)(distance / 86400));
-    assert(rtc.dh == (uint8_t)(0x80u | ((distance / 86400 >> 8) & 1)));
+    assert(rtc.base_time == INT64_MIN && !rtc.s && !rtc.m && !rtc.h && !rtc.dl && !rtc.dh);
 }
 
 static void test_running_and_legacy_clock(void) {
@@ -176,9 +184,9 @@ static void test_running_and_legacy_clock(void) {
     size_t size;
     uint8_t *bytes = saved(gb, &size);
     assert(gb->rtc.s == 59 && gb->rtc.ls == 17);
-    assert(bytes[8192] == 0 && bytes[8196] == 1 && bytes[8212] == 17);
+    assert(bytes[8192] == 59 && bytes[8196] == 0 && bytes[8212] == 17);
     assert(cupid_gb_load_battery_at(gb, bytes, size, test_time + 125) == CUPID_GB_BATTERY_OK);
-    assert(gb->rtc.s == 5 && gb->rtc.m == 3 && gb->rtc.ls == 17);
+    assert(gb->rtc.s == 4 && gb->rtc.m == 3 && gb->rtc.ls == 17);
     for (unsigned i = 0; i < 8; ++i)
         bytes[8232 + i] = 0xff;
     assert(cupid_gb_load_battery_at(gb, bytes, size, test_time) == CUPID_GB_BATTERY_OK);
@@ -248,6 +256,38 @@ static void test_write_generation(void) {
     destroy(gb);
 }
 
+static void test_clock_policy_roundtrip(void) {
+    for (unsigned mode = 0; mode < 2; ++mode) {
+        CupidGb *gb = cartridge(0x10, 2);
+        BatteryClock host = {test_time, 0};
+        cupid_gb_set_rtc_time_source(gb, battery_time, &host);
+        assert(cupid_gb_set_rtc_mode(gb, (CupidGbRtcMode)mode));
+        assert(cupid_gb_set_rtc_multiplier(gb, 2));
+        gb->rtc = (CupidGbRtc){.s = 59, .m = 1, .h = 2, .ls = 7, .base_time = test_time - 900};
+        gb->rtc_cycles = UINT32_MAX - 123;
+        const CupidGbRtc live = gb->rtc;
+        const uint64_t generation = gb->battery_write_generation;
+        const unsigned calls = host.calls;
+        const size_t size = cupid_gb_battery_size(gb);
+        uint8_t *bytes = malloc(size);
+        assert(bytes);
+        assert(cupid_gb_save_battery(gb, bytes, size, NULL) == CUPID_GB_BATTERY_OK);
+        assert(host.calls == calls + 1 && memcmp(&gb->rtc, &live, sizeof(live)) == 0);
+        assert(bytes[8192] == 59 && bytes[8196] == 1 && bytes[8200] == 2);
+        host.now += 61;
+        assert(cupid_gb_load_battery(gb, bytes, size) == CUPID_GB_BATTERY_OK);
+        assert(host.calls == calls + 2 && gb->rtc.base_time == host.now);
+        assert(gb->rtc.s == 0 && gb->rtc.m == 3 && gb->rtc.h == 2 && gb->rtc.ls == 7);
+        assert(gb->rtc_cycles == UINT32_MAX - 123 && gb->battery_write_generation == generation);
+        assert(gb->rtc_policy.mode == (CupidGbRtcMode)mode &&
+               gb->rtc_policy.second_length == 16777216u &&
+               gb->rtc_policy.time_source == battery_time &&
+               gb->rtc_policy.time_user_data == &host);
+        free(bytes);
+        destroy(gb);
+    }
+}
+
 static void test_legacy_files(void) {
     CupidGb *gb = cartridge(0x10, 2);
     struct timespec now;
@@ -312,6 +352,7 @@ int main(int argc, char **argv) {
     assert(argc == 1 || argc == 2);
     test_raw_ram();
     test_write_generation();
+    test_clock_policy_roundtrip();
     test_legacy_files();
     test_rtc_format();
     test_clock_advance();

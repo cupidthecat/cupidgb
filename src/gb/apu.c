@@ -232,6 +232,14 @@ static void color_envelope_fall(CupidGb *gb) {
     }
 }
 
+void cupid_gb_apu_finish_divider_period(CupidGb *gb) {
+    if (!gb || !gb->apu.envelope_delay)
+        return;
+    gb->apu.envelope_delay = 0;
+    if (gb->apu.apu_on && gb->model == CUPID_GB_MODEL_CGB)
+        color_envelope_fall(gb);
+}
+
 void cupid_gb_apu_div_secondary_event(CupidGb *gb) {
     if (!gb || !gb->apu.apu_on || gb->model != CUPID_GB_MODEL_CGB) {
         return;
@@ -1770,6 +1778,17 @@ void cupid_gb_tick_apu(CupidGb *gb, uint16_t cycles) {
         ++pending;
     }
     cupid_gb_apu_integrate(gb, sample_rate, clock_hz, left, right, pending);
+}
+
+void cupid_gb_tick_apu_divider(CupidGb *gb, uint16_t cycles) {
+    if (!gb)
+        return;
+    /* A delayed color envelope belongs to the next divider period. Supplying
+     * the current event's audio clocks must not consume that pending latch. */
+    const uint8_t delay = gb->apu.envelope_delay;
+    gb->apu.envelope_delay = 0;
+    cupid_gb_tick_apu(gb, cycles);
+    gb->apu.envelope_delay = delay;
 }
 
 /**

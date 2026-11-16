@@ -18,7 +18,7 @@ For a hardware choice that lasts only until the application exits, pass `--model
 
 The SGB profile uses its NTSC base clock of 4,295,454 Hz. SGB2 and the other current profiles use 4,194,304 Hz. Normal-speed playback and rewind duration follow the selected clock. A higher SGB image rate is part of that profile; SGB PAL is not available.
 
-Emulation > Reset reloads the cartridge and battery data and applies the selected hardware and boot settings. It discards rewind history. File > Close ROM flushes battery data and closes the current session. Failed cartridge or battery loads preserve the current session; failed battery writes are reported and can prevent closing or replacement.
+Emulation > Reset saves the current battery and clock history, reloads the cartridge and battery data, and applies the selected hardware and boot settings. It discards rewind history. File > Close ROM saves that history and closes the current session. Failed cartridge or battery loads preserve the current session. A failed battery write prevents reset, reload, closing or replacement and keeps any audio recording active.
 
 File > Reload Cartridge rereads the current cartridge and its companion `.sym` file while keeping the active hardware model, breakpoints, and running or paused state. It clears rewind and instruction history after a successful reload. If the companion file is absent, the old symbols are cleared; malformed symbols or an unreadable cartridge leave the current session intact. Reload has no default shortcut; assign one in Settings if needed.
 
@@ -139,9 +139,13 @@ View > Save Screenshot As or Shift+F12 opens a PNG destination dialog and can re
 
 ## Battery saves, states, and rewind
 
-Battery saves preserve a game's own save memory and supported cartridge clock. They use `<cartridge-name>.sav` beside the cartridge. The frontend saves after writes settle and before reset, cartridge replacement, or close. Natural clock progression alone does not repeatedly write the file. Keep backups before moving saves between versions or tools. [Battery saves](battery-saves.md) explains the exact accepted encodings and recovery workflow.
+Settings > Real Time Clock controls timer-equipped MBC3, HuC3 and TPP1 cartridges. Sync to System Clock is the default; scheduled updates use elapsed host time. Accurate uses emulated hardware clocks, so pause, Turbo and slow motion affect its progress. Changing this setting preserves the cartridge's counter and latch values and starts a new timing baseline. Canceling Settings leaves it unchanged. HuC3 has a specific Accurate-mode minute-counter quirk described in [cartridge clocks](rtc.md).
+
+Battery saves preserve a game's own save memory and supported cartridge clock. They use `<cartridge-name>.sav` beside the cartridge. The frontend saves after writes settle and before reset, reload, cartridge replacement or close. These session changes save current clock data even when the game has not written to save memory. Natural clock progression alone does not repeatedly write the file during play. Keep backups before moving saves between versions or tools. [Battery saves](battery-saves.md) explains the exact accepted encodings and recovery workflow.
 
 Native save states preserve execution at a point in time. Use Emulation > Save State or Load State for ten numbered slots. Slot 10 uses the zero key and `.s0` suffix. File > Load State File and state-file drag/drop require the matching cartridge to be open. State loads validate input identity and preserve the session on rejection. Native states do not provide a general state interchange format. See [save states and rewind](save-states.md).
+
+State loading, rewind and debugger Backstep restore saved clock history while keeping your current clock policy. Changing that policy keeps rewind history. Battery imports have separate timestamp rules and can account for elapsed host time even when Accurate is selected.
 
 Hold Tab to rewind. With enough history, the first interval returns to the current frame position, then later intervals move back one frame at a time. Hold Space as well to move back one frame initially, then two per interval. The Turbo cap and slow-motion controls also set replay pacing. Rewind runs each restored interval forward to produce its image and sound using current input. At the end of the available history it waits for you to release rewind. Releasing resumes forward play with current physical input. Replay audio is excluded from WAVE recordings.
 

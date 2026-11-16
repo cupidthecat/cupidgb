@@ -18,12 +18,12 @@ void cupid_cgb_run_pending_dma(CupidGb *gb) {
         return;
 
     const size_t bank = gb->cgb_vram_bank ? 0x2000u : 0;
-    unsigned slot = 0;
+    const unsigned slot_cycles = gb->double_speed ? 4u : 2u;
+    unsigned phase = 0;
     gb->hdma_running = true;
-    /* Every byte uses two LCD dots. Normal speed adds a final two-dot slot so
-     * the complete stall ends on a CPU machine-cycle boundary in either speed. */
-    cupid_gb_tick_color_dma_slot(gb, true);
-    ++slot;
+    /* The transfer keeps its starting CPU slot length. A speed change alters
+     * oscillator time without changing the duration of later byte slots. */
+    phase = cupid_gb_tick_color_dma_slot(gb, slot_cycles, phase);
     while (gb->hdma_pending && gb->hdma_blocks_remaining) {
         gb->hdma_vram_fetch = UINT16_MAX;
         const uint16_t source = gb->hdma_source++;
@@ -35,8 +35,7 @@ void cupid_cgb_run_pending_dma(CupidGb *gb) {
         if ((gb->dma_active || gb->dma_start_delay) && (gb->double_speed || gb->dma_phase == 2u) &&
             oam_address < 160u)
             gb->object_attribute_memory[oam_address] = bus_value;
-        cupid_gb_tick_color_dma_slot(gb, gb->double_speed || !(slot & 1u));
-        ++slot;
+        phase = cupid_gb_tick_color_dma_slot(gb, slot_cycles, phase);
         /* A fetch on the shared VRAM port can pull destination address lines low.
          * Slots without a fetch leave the programmed destination unchanged. */
         const size_t destination = gb->hdma_destination & gb->hdma_vram_fetch & 0x1fffu;
@@ -58,8 +57,9 @@ void cupid_cgb_run_pending_dma(CupidGb *gb) {
         }
     }
     gb->hdma_running = false;
+    /* This final two-T-cycle span follows the speed at transfer completion. */
     if (!gb->double_speed)
-        cupid_gb_tick_color_dma_slot(gb, !(slot & 1u));
+        (void)cupid_gb_tick_color_dma_slot(gb, 2u, phase);
     gb->io_registers[0x55u] = cupid_cgb_dma_status(gb);
 }
 

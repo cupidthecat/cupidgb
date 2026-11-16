@@ -11,7 +11,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
 static void digest_hex(const void *bytes, size_t length, char hex[65]) {
     uint8_t digest[32];
@@ -115,10 +114,10 @@ static uint8_t *encode(const CupidGb *gb, size_t *length) {
 }
 
 static size_t v11_hardware_size(const CupidGb *gb, size_t length) {
-    enum { ACCESSORY_DESCRIPTOR_BYTES = 8, INFRARED_HISTORY_BYTES = 6 };
+    enum { ACCESSORY_DESCRIPTOR_BYTES = 8, INFRARED_HISTORY_BYTES = 6, RTC_HISTORY_BYTES = 6 };
 
     /* These fixtures have no attached device. HuC3 keeps its existing IR section. */
-    const size_t tail = ACCESSORY_DESCRIPTOR_BYTES +
+    const size_t tail = ACCESSORY_DESCRIPTOR_BYTES + RTC_HISTORY_BYTES +
                         (gb->header.mbc_type == CUPID_GB_HUC3 ? 0 : INFRARED_HISTORY_BYTES);
     assert(length >= tail);
     return length - tail;
@@ -260,7 +259,7 @@ static void test_resume(void) {
                 size_t length;
                 uint8_t *state = encode(a, &length);
                 assert(length == cupid_gb_state_size(b) && length > 300518);
-                assert(state[8] == 12);
+                assert(state[8] == 13);
                 uint8_t *rom_pointer = b->rom;
                 strcpy(b->save_path, "host-session-save.sav");
                 assert(cupid_gb_load_state(b, state, length) == CUPID_GB_STATE_OK);
@@ -364,7 +363,7 @@ static void test_pulse_continuation(void) {
             size_t length;
             uint8_t *bytes = encode(a, &length);
             const size_t v11_length = v11_hardware_size(a, length);
-            assert(bytes[8] == 12);
+            assert(bytes[8] == 13);
             assert(bytes[v11_length - 2] == a->apu.pulse_dac_hold[0] &&
                    bytes[v11_length - 1] == a->apu.pulse_dac_hold[1]);
             if (stage == 2 || stage == 4)
@@ -1165,7 +1164,7 @@ static void test_sgb_transfer_resume(void) {
     size_t length;
     uint8_t *bytes = encode(source, &length);
     const size_t v11_length = v11_hardware_size(source, length);
-    assert(v11_length == 310719 && bytes[8] == 12);
+    assert(v11_length == 310719 && bytes[8] == 13);
     assert(bytes[v4_length + 7 + 4096] == 0xa5);
     assert(bytes[v4_length + 7 + 8192] == 0x80 && bytes[v4_length + 7 + 8193] == 0x0c);
     assert(bytes[v11_length - 30] == 0x34 && bytes[v11_length - 29] == 0x12);
@@ -1331,6 +1330,7 @@ static void test_v5_sgb_mapper_sections(void) {
             source->tpp1.ram_bank = 3;
             source->tpp1.mode = 5;
             source->tpp1.status = 0x0b;
+            source->tpp1.motor_strength = 3;
             const uint8_t live[] = {10, 20, 30, 40};
             const uint8_t latched[] = {11, 21, 31, 41};
             memcpy(source->tpp1.live, live, sizeof(live));
@@ -1345,7 +1345,7 @@ static void test_v5_sgb_mapper_sections(void) {
         size_t length;
         uint8_t *bytes = encode(source, &length);
         const size_t v11_length = v11_hardware_size(source, length);
-        assert(v11_length == mapper_offset + mapper_length + 28 && bytes[8] == 12 &&
+        assert(v11_length == mapper_offset + mapper_length + 28 && bytes[8] == 13 &&
                bytes[mapper_offset - 2] == 0x34 && bytes[mapper_offset - 1] == 0x12);
         assert(memcmp(bytes + mapper_offset, wire, mapper_length) == 0);
         assert(cupid_gb_load_state(target, bytes, length) == CUPID_GB_STATE_OK);
@@ -1453,7 +1453,7 @@ static void print_fixture(const char *path) {
     size_t length;
     uint8_t *bytes = encode(gb, &length);
     const size_t v11_length = v11_hardware_size(gb, length);
-    assert(v11_length == 300600 && bytes[8] == 12 && !bytes[v11_length - 28] &&
+    assert(v11_length == 300600 && bytes[8] == 13 && !bytes[v11_length - 28] &&
            !bytes[v11_length - 27]);
     length = v11_length - 28;
     put_u32(bytes + 8, 4);
@@ -1652,13 +1652,20 @@ static void test_mapper_snapshots(void) {
     free(b);
 }
 
+static int64_t restored_rtc_time(void *user_data) {
+    ++*(unsigned *)user_data;
+    return INT64_C(1800000000);
+}
+
 static void test_restored_rtc_extreme_timestamps(void) {
     CupidGb *gb = calloc(1, sizeof(*gb));
     assert(gb);
-    const int64_t now = (int64_t)time(NULL);
+    unsigned clock_reads = 0;
+    cupid_gb_set_rtc_time_source(gb, restored_rtc_time, &clock_reads);
+    const int64_t now = INT64_C(1800000000);
     const int64_t timestamps[] = {INT64_MIN, INT64_MIN + 1, INT64_MAX,
                                   now - INT64_C(86400) * 514 - 3671, 0};
-    const uint64_t seconds_per_cycle = UINT64_C(512) * 86400;
+    const uint8_t latch_values[] = {0, 1, 1, 0xff};
     for (unsigned i = 0; i < sizeof(timestamps) / sizeof(timestamps[0]); ++i) {
         for (unsigned halted = 0; halted < 2; ++halted) {
             prepare_mapper(gb, 0x10);
@@ -1668,39 +1675,32 @@ static void test_restored_rtc_extreme_timestamps(void) {
             gb->rtc.dl = 255;
             gb->rtc.dh = (uint8_t)(1 | (halted ? 0x40 : 0));
             gb->rtc.base_time = timestamps[i];
+            gb->rtc_cycles = UINT32_C(0x13579bdf);
+            const unsigned reads = clock_reads;
             size_t length;
             uint8_t *state = encode(gb, &length);
             gb->rtc.base_time = 1;
             gb->rtc.s = 0;
+            gb->rtc_cycles = 0;
             assert(cupid_gb_load_state(gb, state, length) == CUPID_GB_STATE_OK);
-            assert(gb->rtc.base_time == timestamps[i] && gb->rtc.s == 58);
+            assert(gb->rtc.base_time == timestamps[i] && gb->rtc.s == 58 &&
+                   gb->rtc_cycles == UINT32_C(0x13579bdf) && clock_reads == reads);
             free(state);
 
-            cupid_gb_write_u8(gb, 0x6000, 0);
-            cupid_gb_write_u8(gb, 0x6000, 1);
-            /* Derive elapsed time from the exact host timestamp used by the latch,
-             * rather than assuming execution cannot cross a wall-clock second. */
-            const int64_t latched_at = gb->rtc.base_time;
-            assert(latched_at >= now);
-            uint64_t expected = seconds_per_cycle - 2;
-            uint8_t expected_carry = 0;
-            if (!halted && timestamps[i] != 0 && latched_at > timestamps[i]) {
-                const uint64_t elapsed = (uint64_t)latched_at - (uint64_t)timestamps[i];
-                if (elapsed >= 2) {
-                    expected_carry = 0x80;
-                }
-                expected = (expected + elapsed % seconds_per_cycle) % seconds_per_cycle;
+            /* A restored timestamp is literal history. Each latch write copies
+             * counters without polling host time or consuming fractional phase. */
+            for (unsigned latch = 0; latch < sizeof(latch_values); ++latch) {
+                gb->rtc.s = (uint8_t)(58 - latch);
+                gb->rtc.ls = 0;
+                cupid_gb_write_u8(gb, 0x6000, latch_values[latch]);
+                assert(gb->rtc.base_time == timestamps[i] && clock_reads == reads &&
+                       gb->rtc_cycles == UINT32_C(0x13579bdf));
+                assert(gb->rtc.s == 58 - latch && gb->rtc.m == 59 && gb->rtc.h == 23 &&
+                       gb->rtc.dl == 255 && gb->rtc.dh == (uint8_t)(1 | (halted ? 0x40 : 0)));
+                assert(gb->rtc.ls == gb->rtc.s && gb->rtc.lm == gb->rtc.m);
+                assert(gb->rtc.lh == gb->rtc.h && gb->rtc.ldl == gb->rtc.dl &&
+                       gb->rtc.ldh == gb->rtc.dh && gb->rtc.latch_prev == latch_values[latch]);
             }
-            assert(gb->rtc.s == expected % 60);
-            assert(gb->rtc.m == expected / 60 % 60);
-            assert(gb->rtc.h == expected / 3600 % 24);
-            const uint64_t expected_days = expected / 86400;
-            assert(gb->rtc.dl == (expected_days & 255));
-            assert(gb->rtc.dh ==
-                   (uint8_t)((expected_days >> 8) | expected_carry | (halted ? 0x40 : 0)));
-            assert(gb->rtc.ls == gb->rtc.s && gb->rtc.lm == gb->rtc.m);
-            assert(gb->rtc.lh == gb->rtc.h && gb->rtc.ldl == gb->rtc.dl);
-            assert(gb->rtc.ldh == gb->rtc.dh);
         }
     }
     cupid_gb_cleanup(gb);

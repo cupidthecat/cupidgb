@@ -11,6 +11,7 @@ CupidGB emulates Game Boy and Game Boy Color hardware with a C core and a Qt des
 | [Debugger and inspectors](debugging.md) | CPU execution controls, breakpoints, symbols, memory editing, and graphics views |
 | [Cheats and memory search](cheats.md) | Codes, banked rules, persistence, physical memory searches, and host integration |
 | [Battery saves](battery-saves.md) | Save locations, clock behavior, file encoding, and recovery |
+| [Cartridge clocks](rtc.md) | Host and emulated clock policies, counter behavior, time providers, and period controls |
 | [Save states and rewind](save-states.md) | Numbered slots, validation, rewind limits, and the native state format |
 | [Troubleshooting](troubleshooting.md) | Loading, input, display, sound, saving, and build problems |
 | [Architecture](architecture.md) | Subsystem ownership, clock domains, and host integration |
@@ -21,5 +22,6 @@ CupidGB emulates Game Boy and Game Boy Color hardware with a C core and a Qt des
 | [Contributing](contributing.md) | Source changes, formatting, documentation, private inputs, and review requirements |
 | [Parity checklist](parity.md) | Implemented behavior and remaining hardware and desktop requirements |
 | [Validation record](validation.md) | Recorded environments, test results, runtime measurements, and their limits |
+| [Cartridge-clock validation](validation-rtc.md) | Counter comparisons, clock policies, divider timing, native continuation, and remaining qualification |
 
 Start with the build guide if you have a source checkout. For an executable that already runs, use the user guide. A result in the validation record applies to the stated revision, inputs, settings, and duration; it does not qualify every later build.

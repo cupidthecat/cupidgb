@@ -10,7 +10,7 @@ Load a native state file through File > Load State File or drop a `.s0` through 
 
 Writes use an atomic file replacement. Loading checks the complete cartridge identity and hardware model. A state captured with an active boot overlay requires the matching local boot binary. Failed validation preserves the running session and its host audio queue. A successful load replaces the emulated state, reapplies current physical input, clears queued host audio, and realigns pacing.
 
-New files use CupidGB native version 12. Versions 2 through 11 remain loadable. Interoperable BESS state imports remain pending.
+New files use CupidGB native version 13. Versions 2 through 12 remain loadable. Interoperable BESS state imports remain pending.
 
 The version identifies the wire encoding, not a promise to preserve emulation bugs between builds. Version 3 records pending CGB DMA work, CPU speed-switch sequencing, and audio clock, held-output, envelope, sweep, and noise latches. Version 2 has no values for these latches. Its loader initializes them deterministically after validating the old payload; it never takes missing history from the target's running session. Pending DMA and speed-switch delays start cleared, while an old armed HBlank transfer retains its saved block count. On color hardware, pulse clock startup follows the saved channel enable, and held pulse output follows the saved duty position. Monochrome pulse history uses the import rules described under version 11 below. Noise gates and held output derive from the saved channel/DAC and LFSR state, with a canonical prescaler phase. The old LFSR, timer, queued PCM, partial integration, and filter state remain intact. This cannot reproduce timing history the old format did not record. Keep the original state if you need to revisit its earlier build.
 
@@ -28,7 +28,7 @@ Replay uses current physical input and produces a new image and audio. Entering 
 
 Settings control the requested history duration and memory budget. The default requests up to 120 seconds within a 256 MiB budget. The buffer evicts its oldest snapshots when either limit is reached. History age uses the model's base T-cycle frequency, so the duration limit represents guest seconds on SGB as well as the other profiles. Enabled rewind captures each completed frame before applying the history limits. Actual retained duration depends on how well the cartridge's state compresses; the interface reports shorter history when the memory limit is reached. Set the duration to zero to disable capture.
 
-History resets on cartridge replacement, reset, successful disk-state loading, or relevant configuration changes. Failed disk-state loading preserves history. Rewind snapshots stay in memory.
+History resets on cartridge replacement, reset, successful disk-state loading, or relevant configuration changes. Failed disk-state loading preserves history. Changing the cartridge clock policy keeps existing rewind history; replay restores guest clock values while retaining the current policy. Rewind snapshots stay in memory.
 
 The debugger has a separate, smaller instruction snapshot history. It captures only explicit debugger stepping and is invalidated when ordinary playback or session-changing operations resume. Breakpoints, symbols, tool windows, and pending host commands are excluded from native state files. See [debugger history](debugging.md#instruction-history-and-playback).
 
@@ -124,13 +124,31 @@ The loader validates the entire console and accessory before committing either. 
 
 The Qt feed remains host output. A successful disk load, rewind or debugger Backstep preserves paper already emitted into the current feed; executing a print request again can append another strip. Closing the feed still starts a new roll when the next image arrives. PNG export and system printing use their explicit controls. Queued widget work renders the current feed and cannot reopen it for a replacement cartridge.
 
+### Cartridge clocks and divider phase in version 13
+
+Version 13 inserts six hardware-history bytes after the version 12 infrared history and before the accessory descriptor. They are present on every cartridge:
+
+| Relative offset | Bytes | Added state |
+| --- | --- | --- |
+| 0 | 4 | Little-endian RTC phase in half-base-clock units |
+| 4 | 1 | TPP1 motor strength, zero through three; zero on other controllers |
+| 5 | 1 | Unheld CPU T-cycles since the last divider edge, zero through three |
+
+An ordinary version 13 state without model or cartridge extensions occupies 300,620 bytes without a printer and 333,307 bytes with one. Hosts must query the size for each capture. The earlier hardware field order and accessory descriptor remain intact.
+
+RTC phase can exceed the receiver's current clock period. Loading restores that literal debt without polling time, advancing counters or applying a mode change. Clock mode, period multiplier, time provider and provider context remain those of the receiving instance. Rewind and debugger Backstep follow the same ownership rule. TPP1 motor strength is separate from its stored clock status, so motor commands no longer overwrite those status bits.
+
+The divider remainder belongs to guest execution even when a CPU instruction has completed. A partial DMA interval can leave two CPU T-cycles toward its next edge. Restoring this remainder preserves later timer, serial and audio scheduling. It is independent of the CPU's temporary bus cursor, LCD phase, STOP hold and RTC fraction. DIV writes restart it at zero. Invalid divider or motor bytes reject the complete load without changing the live core or attached device.
+
+Versions 2 through 12 initialize the missing RTC phase and divider remainder to zero. They preserve the literal legacy `timer_counter` field. If an older file contains a TPP1 section, its stored status remains intact and its low two bits also initialize motor strength. A missing section starts with zero motor strength. Native timestamp values remain literal, including zero; loading does not reinterpret zero as an uninitialized host clock. The old formats cannot recover subcycle or fractional-clock history they never recorded.
+
 ## Validation scope
 
 Generated-ROM tests exercise deterministic continuation across the current six hardware profiles, active boot overlays, LCD modes, CGB double speed, pending timer reloads, DMA starts/restarts, and serial phases. Another 64 continuation scenarios capture pending background/object fetches and window work, then apply scroll and palette writes after restoration. Checks compare CPU and memory state, framebuffers, emitted PCM, and the encoded continuation. Additional tests reject every truncation boundary, damaged or invalid fields, wrong inputs, and stale cache bindings while preserving the live instance. Word-array tests construct expected bytes at every v2 array boundary, cover values crossing byte and sign-bit boundaries, and check unaligned input/output with guard bytes. They compare complete encoded files rather than relying only on encode/decode symmetry.
 
 The frozen 300,572-byte version 4 fixture has SHA-256 `652af4f40504c86dd59eff09f0997f5b60b654816a0908d7802704f981b43be5`, checked by Windows and Linux regressions. The frozen 300,568-byte version 3 fixture has SHA-256 `e4fdd3d7ebfdd04aec94ce7b85f0f2d7d83de1416242fa89f26ccf5dfaf71eb2`. The earlier portable version 2 fixture has SHA-256 `6106c038f80d9ef4ca4417f31305dc05bb714d9252e6caff3eec0205ea4ec0eb`. Older-format import tests cover active and inactive boot overlays, ordinary and trusted-context loaders, preservation of known recorded state, and unrelated live history. Native continuation checks do not establish state interoperability or complete underlying hardware accuracy.
 
-Continuation tests also capture LCD startup before its comparison refresh and a pending HBlank transition after a coincidence interrupt. Restored state must preserve the same mode change, combined-line behavior, and IF bits. The interrupt-entry scheduler consumes its local subcycle cursor before returning to the host; it adds no persistent half-dot field or wire-format revision.
+Continuation tests also capture LCD startup before its comparison refresh and a pending HBlank transition after a coincidence interrupt. Restored state must preserve the same mode change, combined-line behavior, and IF bits. The interrupt-entry bus cursor remains local to CPU execution. Version 13 separately retains the divider remainder that can survive a completed instruction.
 
 Additional captures cover delayed and ready CGB blocks, HALT/STOP wake permission, pulse startup combined with DMA, 128 audio pipeline phases, full-width noise-divider carry, and speed-switch freeze/toggle/wait expiry. The timed-switch cases include both directions, LCD on/off, IME clear/set, EI maturation and early interrupt cancellation. They compare complete resumed state and pending PCM, rather than only a final CPU register.
 

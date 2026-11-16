@@ -1,6 +1,6 @@
 # Validation record
 
-This record starts with the desktop and timing checks on 2026-11-04 and includes later work through 2026-11-15. Results apply to each stated build, input set, and scope. They do not establish complete hardware or frontend parity. The comparison source revision is `ea667ad79aa28409f034b1fd6da7304e1844750d`.
+This record starts with the desktop and timing checks on 2026-11-04 and includes later work through 2026-11-16. Results apply to each stated build, input set, and scope. They do not establish complete hardware or frontend parity. The comparison source revision is `ea667ad79aa28409f034b1fd6da7304e1844750d`.
 
 Earlier sections retain the results and assumptions of their original builds. A result without a recorded model clock does not qualify the corrected SGB clock. Use the current model-clock reports when comparing physical speed across profiles.
 
@@ -1767,4 +1767,8 @@ not establish an active-game throughput gain or universal full speed.
 
 ## Cold memory and firmware startup, 2026-11-16
 
-The [startup validation record](validation-startup.md) covers model-specific cold memory, seed controls, SGB handoff and older-state recovery, mapped register comparisons, executed firmware, and the final Windows/Linux regression gates. It records the remaining display-phase and PCM differences explicitly.
+The [startup validation record](validation-startup.md) covers model-specific cold memory, seed controls, SGB handoff and older-state recovery, mapped register comparisons, executed firmware, and the final Windows/Linux regression gates. It retains the raw display-phase and PCM differences. The later [clock validation record](validation-rtc.md) qualifies the four-dot display offset as a coordinate difference for the tested normal-speed CGB startup edges; PCM equality remains open.
+
+## Cartridge clocks and divider continuation, 2026-11-16
+
+The [cartridge-clock validation record](validation-rtc.md) covers host and emulated clock policies, controller-specific battery behavior, bounded raw-counter arithmetic, logical clock delivery, the STOP/HBlank DMA divider repair, and native version 13 continuation. It distinguishes frozen comparisons, negative controls, current integration results and remaining qualification.

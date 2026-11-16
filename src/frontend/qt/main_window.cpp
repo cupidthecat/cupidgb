@@ -147,7 +147,7 @@ MainWindow::~MainWindow() {
         qCritical("Cannot finalize audio recording: %s", qPrintable(recorder_->errorString()));
     setPrinterConnected(false);
     if (emulator_) {
-        flushBattery();
+        flushBattery(true);
         cupid_emulator_shutdown(emulator_.get());
     }
 }
@@ -513,6 +513,8 @@ bool MainWindow::openRom(const QString &path, bool reload) {
         cupid_gb_set_power_on_seed(&candidate->gb, *powerOnSeedOverride_);
     else
         cupid_gb_clear_power_on_seed(&candidate->gb);
+    // Select host policy before initialization and battery import can establish clock history.
+    cupid_gb_set_rtc_mode(&candidate->gb, configuredRtcMode(settings_));
     cupid_emulator_init(candidate.get(),
                         model == CUPID_GB_MODEL_CGB ? CUPID_SYSTEM_GBC : CUPID_SYSTEM_GB);
     cupid_gb_set_model(&candidate->gb, CupidGbModel(model));
@@ -538,36 +540,7 @@ bool MainWindow::openRom(const QString &path, bool reload) {
         reportError("The battery save path points to the cartridge. Choose separate files.");
         return false;
     }
-    // Flush the running cartridge before reading the same battery file during reset.
-    if (!flushBattery()) {
-        cupid_emulator_shutdown(candidate.get());
-        return false;
-    }
-    QFile battery(save);
-    if (cupid_gb_battery_size(&candidate->gb) && battery.exists()) {
-        if (!battery.open(QIODevice::ReadOnly) || battery.size() > 128 * 1024 + 48) {
-            cupid_emulator_shutdown(candidate.get());
-            reportError("Cannot load battery save or its size does not match cartridge RAM: " +
-                        save);
-            return false;
-        }
-        const QByteArray ram = battery.readAll();
-        if (ram.size() != battery.size()) {
-            cupid_emulator_shutdown(candidate.get());
-            reportError("Battery save read failed: " + save);
-            return false;
-        }
-        const auto result = cupid_gb_load_battery(
-            &candidate->gb, reinterpret_cast<const uint8_t *>(ram.constData()), size_t(ram.size()));
-        if (result != CUPID_GB_BATTERY_OK) {
-            cupid_emulator_shutdown(candidate.get());
-            reportError("Cannot load battery save: " +
-                        QString::fromLatin1(cupid_gb_battery_result_name(result)));
-            return false;
-        }
-    }
-    // Cartridge loading applies post-boot defaults. Initial firmware entry restores
-    // the same generation's cold memory before firmware starts at address zero.
+    // Reject unavailable firmware before exporting the current cartridge's clock.
     const QString bootFolder = bootDirectory();
     if (!bootFolder.isEmpty()) {
         QString name = "dmg_boot.bin";
@@ -594,7 +567,44 @@ bool MainWindow::openRom(const QString &path, bool reload) {
         }
         std::memcpy(candidate->gb.boot_rom, bytes.constData(), size_t(bytes.size()));
         candidate->gb.boot_rom_size = size_t(bytes.size());
-        cupid_gb_start_boot_rom(&candidate->gb);
+    }
+    const auto batteryIdentity = [](const QString &path) {
+        const QFileInfo file(path);
+        const QString canonical = file.canonicalFilePath();
+        return canonical.isEmpty() ? file.absoluteFilePath() : canonical;
+    };
+    const bool sameBattery =
+        emulator_ && batteryIdentity(save).compare(batteryIdentity(savePath_), pathCase) == 0;
+    const bool liveBattery = sameBattery && romData_ == data;
+    const auto loadBattery = [&] {
+        QFile battery(save);
+        if (!cupid_gb_battery_size(&candidate->gb) || !battery.exists())
+            return true;
+        if (!battery.open(QIODevice::ReadOnly) || battery.size() > 128 * 1024 + 48) {
+            reportError("Cannot load battery save or its size does not match cartridge RAM: " +
+                        save);
+            return false;
+        }
+        const QByteArray ram = battery.readAll();
+        if (ram.size() != battery.size()) {
+            reportError("Battery save read failed: " + save);
+            return false;
+        }
+        const auto result = cupid_gb_load_battery(
+            &candidate->gb, reinterpret_cast<const uint8_t *>(ram.constData()), size_t(ram.size()));
+        if (result != CUPID_GB_BATTERY_OK) {
+            reportError("Cannot load battery save: " +
+                        QString::fromLatin1(cupid_gb_battery_result_name(result)));
+            return false;
+        }
+        return true;
+    };
+    // A different candidate must validate its existing battery before the current
+    // clock is polled. Resetting the same cartridge instead commits live history
+    // first, replacing stale disk bytes before the new session imports them.
+    if (!liveBattery && !loadBattery()) {
+        cupid_emulator_shutdown(candidate.get());
+        return false;
     }
     const bool sameCheatSession =
         emulator_ && romData_ == data && romPath_.compare(absolute, pathCase) == 0;
@@ -625,10 +635,18 @@ bool MainWindow::openRom(const QString &path, bool reload) {
         }
     }
     cupid_gb_cheats_set_enabled(candidateCheats.get(), cupid_gb_cheats_enabled(cheats_.get()));
+    if (!flushBattery(true) || (sameBattery && !loadBattery())) {
+        cupid_emulator_shutdown(candidate.get());
+        return false;
+    }
     if (!stopRecording()) {
         cupid_emulator_shutdown(candidate.get());
         return false;
     }
+    // Initial firmware entry restores the same generation's cold memory after
+    // cartridge loading and battery import have prepared persistent clock history.
+    if (!bootFolder.isEmpty())
+        cupid_gb_start_boot_rom(&candidate->gb);
     const bool sameCartridge = emulator_ && romData_ == data &&
                                romPath_.compare(absolute, pathCase) == 0 &&
                                emulator_->gb.model == candidate->gb.model;
@@ -714,11 +732,13 @@ bool MainWindow::openRom(const QString &path, bool reload) {
     return true;
 }
 
-bool MainWindow::flushBattery() {
+bool MainWindow::flushBattery(bool forceWrite) {
     if (!emulator_ || !cupid_gb_battery_size(&emulator_->gb))
         return true;
-    // The generation excludes natural RTC advancement. Clock reads alone must not rewrite saves.
-    if (!batteryDirty_ && observedBatteryGeneration_ == emulator_->gb.battery_write_generation)
+    // Natural RTC progress and status-only commands do not schedule autosaves.
+    // Lifecycle boundaries still export them, including a new session with no file yet.
+    if (!forceWrite && !batteryDirty_ &&
+        observedBatteryGeneration_ == emulator_->gb.battery_write_generation)
         return true;
     QByteArray ram(qsizetype(cupid_gb_battery_size(&emulator_->gb)), Qt::Uninitialized);
     size_t written = 0;
@@ -729,7 +749,8 @@ bool MainWindow::flushBattery() {
                     QString::fromLatin1(cupid_gb_battery_result_name(result)));
         return false;
     }
-    if (ram != savedRam_) {
+    // savedRam_ also caches newly initialized bytes that may never have reached disk.
+    if (forceWrite || ram != savedRam_) {
         QSaveFile file(savePath_);
         if (!file.open(QIODevice::WriteOnly) || file.write(ram) != ram.size() || !file.commit()) {
             reportError("Cannot save cartridge RAM: " + file.errorString());
@@ -752,7 +773,7 @@ void MainWindow::watchBattery() {
 }
 
 bool MainWindow::closeRom() {
-    if (!flushBattery() || !stopRecording())
+    if (!flushBattery(true) || !stopRecording())
         return false;
     resetMotionInput();
     setPrinterConnected(false);

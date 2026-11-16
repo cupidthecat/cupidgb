@@ -62,7 +62,7 @@ Loading a cartridge resets hardware. The direct loader is not a transactional se
 
 Initialization creates model-specific WRAM, HRAM, OAM, and wave-memory contents. The default chooses an automatic seed. `cupid/gb/startup.h` provides `cupid_gb_set_power_on_seed(gb, seed)` for a reproducible generation and `cupid_gb_clear_power_on_seed(gb)` to return to automatic choices. Set the policy before initialization or cartridge loading. Zero is a valid seed that still produces modeled memory variation.
 
-Both setters affect the next cold initialization; they leave current memory and the last realized seed intact. `cupid_gb_get_power_on_seed` returns that realized seed, including an automatic choice. Policy survives initialization and native-state loading, while cleanup clears it. A loaded state restores its own memory without replacing the receiving instance's seed metadata. The getter therefore describes the host's last cold generation, not the provenance of restored RAM. This metadata is excluded from native V12; the realized guest memory is already serialized.
+Both setters affect the next cold initialization; they leave current memory and the last realized seed intact. `cupid_gb_get_power_on_seed` returns that realized seed, including an automatic choice. Policy survives initialization and native-state loading, while cleanup clears it. A loaded state restores its own memory without replacing the receiving instance's seed metadata. The getter therefore describes the host's last cold generation, not the provenance of restored RAM. Native states exclude this metadata; the realized guest memory is already serialized.
 
 Ordinary initialization and cartridge loading apply the approximate post-boot profile. On physical CGB, it clears WRAM bank 2 and supplies the post-boot wave pattern. Initial firmware execution needs the original cold memory instead:
 
@@ -92,6 +92,12 @@ An IME-clear HALT wake can return successfully with an unchanged PC and no fetch
 `CupidGb.elapsed_cycles` counts base-speed T-cycles. Query `cupid_gb_base_clock_hz(gb)` to convert those cycles to seconds: the SGB NTSC profile uses 4,295,454 Hz, and the other current profiles use 4,194,304 Hz. A null instance returns the default 4,194,304 Hz. SGB PAL is not implemented. A regular LCD frame spans 70,224 base-speed T-cycles for every current profile. Do not infer guest time from CPU instruction count or host paint count. CGB double speed changes CPU-domain work while the base-speed clock remains the timekeeping domain.
 
 Use both a cycle bound and an execution-step bound for unattended runs. The LCD can be disabled, so waiting only for `frame_ready` can leave a host loop without a useful presentation bound. Host stalls must not be corrected by silently dropping guest hardware work.
+
+## Cartridge clock policy
+
+`cupid/gb/rtc.h` exposes host synchronization and Accurate emulated-clock policies, an optional Unix-time provider, and a core-only period multiplier. Configure them before cartridge and battery loading. Policy/provider registration survives initialization and native loads; cleanup clears it. A native state restores guest clock history without changing the current host policy or calling its provider.
+
+Mode changes preserve counter and latch values while clearing fractional progress and rebasing the active timestamp. A same-mode call is an exact no-op. Period changes preserve phase and baseline. Providers must not mutate or reenter the core. The [cartridge clock guide](rtc.md) describes validation, scheduling, controller behavior and the bounded exception for raw timestamp histories without a reachable stopping value.
 
 ## Pixels and sound
 
@@ -134,7 +140,7 @@ Registration survives initialization, cartridge loading, boot reset, and native-
 
 ## Battery data
 
-`cupid/gb/battery.h` provides size, encode, decode, result-name, and clock helpers. The ordinary save/load functions use host time; `_at` variants accept an explicit timestamp for reproducible checks.
+`cupid/gb/battery.h` provides size, encode, decode, result-name, and clock helpers. Ordinary save/load functions use the registered time provider when their controller's format requires host time; `_at` variants accept an explicit timestamp for reproducible checks. HuC3 export stores its internal baseline without polling the provider. Battery operations preserve host clock policy and fractional phase.
 
 `cupid_gb_battery_size` returns zero when the loaded cartridge has no supported battery payload. Allocate sufficient independent storage and check both the result and returned length. Rejected loads preserve the instance. The caller handles file I/O and atomic replacement; the codec does not choose paths. Prefer this explicit result-bearing API for new hosts over the older convenience file-save helpers.
 
@@ -148,7 +154,7 @@ Normal disk-state APIs recompute cartridge identity. A rejected load leaves the 
 
 `CupidGbStateContext` caches cartridge identity for trusted in-memory rewind. It binds to one owner, ROM pointer, ROM size, and model. Discard it after cartridge/model changes or any in-place ROM patch. Binding checks cannot detect a patch that preserves the pointer and size. Never use the cached context to validate an untrusted disk file.
 
-The codec checks a complete word-array range before reading or writing its little-endian elements. It accepts unaligned state buffers. New snapshots use version 12. Versions 2 through 11 remain loadable with deterministic defaults for absent history, including monochrome pulse gates that older builds did not maintain. Query the size for every capture: a printer attachment also changes the required length. Identity, integrity, final-offset, and hardware-domain checks apply to every accepted version.
+The codec checks a complete word-array range before reading or writing its little-endian elements. It accepts unaligned state buffers. New snapshots use version 13. Versions 2 through 12 remain loadable with deterministic defaults for absent history, including monochrome pulse gates that older builds did not maintain. Version 13 retains fractional RTC progress, TPP1 motor strength and the divider's partial CPU cycle separately from host clock policy. Earlier versions initialize both phases to zero and derive motor strength from a recorded TPP1 status. Query the size for every capture: a printer attachment also changes the required length. Identity, integrity, final-offset, and hardware-domain checks apply to every accepted version.
 
 `cupid_gb_set_serial_link` registers bit-launch and sample callbacks for an internal-clock transfer. A host can read an external-clock peer with `cupid_gb_serial_external_bit`, then deliver the sender's bit with `cupid_gb_serial_external_clock`. Both cores need a shared host schedule. Serial registrations survive reset and state loading. External cable state remains the host's responsibility.
 

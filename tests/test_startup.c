@@ -333,6 +333,34 @@ static void load_legacy_sgb_profile(CupidGb *gb, CupidGbModel model) {
     gb->io_registers[CUPID_GB_IO_LY] = 0xff;
     gb->io_registers[CUPID_GB_IO_STAT] = 0;
     gb->ppu_counter = 0;
+    /* The archived writer retained zero baselines in this non-clock cartridge. */
+    gb->rtc.base_time = 0;
+    gb->tpp1.rtc_base_time = 0;
+    gb->huc3.rtc_base_time = 0;
+}
+
+static uint8_t *encode_legacy_sgb_profile(const CupidGb *gb, size_t *length) {
+    enum { NATIVE_HEADER_BYTES = 128, RTC_HISTORY_BYTES = 6, ACCESSORY_DESCRIPTOR_BYTES = 8 };
+
+    const size_t current = cupid_gb_state_size(gb);
+    uint8_t *bytes = malloc(current);
+    size_t written = 0;
+    assert(bytes);
+    assert(cupid_gb_save_state(gb, bytes, current, &written) == CUPID_GB_STATE_OK);
+    assert(written == current && bytes[8] == 13);
+    const uint8_t empty[ACCESSORY_DESCRIPTOR_BYTES] = {0};
+    const size_t descriptor = current - ACCESSORY_DESCRIPTOR_BYTES;
+    assert(memcmp(bytes + descriptor, empty, sizeof(empty)) == 0);
+    /* Remove only the new history before the descriptor. The archived V12
+     * receiver history and empty accessory descriptor remain byte-for-byte. */
+    memmove(bytes + descriptor - RTC_HISTORY_BYTES, bytes + descriptor, ACCESSORY_DESCRIPTOR_BYTES);
+    *length = current - RTC_HISTORY_BYTES;
+    bytes[8] = 12;
+    for (unsigned i = 0; i < 4; ++i)
+        bytes[12 + i] = (uint8_t)(*length >> (8 * i));
+    cupid_sha256_parts(bytes, 96, bytes + NATIVE_HEADER_BYTES, *length - NATIVE_HEADER_BYTES,
+                       bytes + 96);
+    return bytes;
 }
 
 static void test_legacy_sgb_startup_recovery(void) {
@@ -350,13 +378,10 @@ static void test_legacy_sgb_startup_recovery(void) {
             for (unsigned trusted = 0; trusted < 2; ++trusted) {
                 load_legacy_sgb_profile(expected, (CupidGbModel)model);
                 load_legacy_sgb_profile(restored, (CupidGbModel)model);
-                const size_t legacy_length = cupid_gb_state_size(expected);
+                size_t legacy_length;
                 size_t written = 0;
-                uint8_t *legacy = malloc(legacy_length);
-                assert(legacy);
-                assert(cupid_gb_save_state(expected, legacy, legacy_length, &written) ==
-                       CUPID_GB_STATE_OK);
-                assert(written == legacy_length && legacy[8] == 12);
+                uint8_t *legacy = encode_legacy_sgb_profile(expected, &legacy_length);
+                assert(legacy[8] == 12);
                 uint8_t digest[32];
                 char hexadecimal[65];
                 cupid_sha256(legacy, legacy_length, digest);
@@ -679,13 +704,14 @@ static void test_policy_and_state_lifetime(void) {
             NATIVE_HEADER_BYTES = 128,
             ACCESSORY_DESCRIPTOR_BYTES = 8,
             INFRARED_HISTORY_BYTES = 6,
+            RTC_HISTORY_BYTES = 6,
             PULSE_DAC_BYTES = 2,
             STOP_PORT_BYTES = 4
         };
 
-        assert(bytes[8] == 12 && length > NATIVE_HEADER_BYTES);
-        const size_t stop_offset = length - ACCESSORY_DESCRIPTOR_BYTES - INFRARED_HISTORY_BYTES -
-                                   PULSE_DAC_BYTES - STOP_PORT_BYTES;
+        assert(bytes[8] == 13 && length > NATIVE_HEADER_BYTES);
+        const size_t stop_offset = length - ACCESSORY_DESCRIPTOR_BYTES - RTC_HISTORY_BYTES -
+                                   INFRARED_HISTORY_BYTES - PULSE_DAC_BYTES - STOP_PORT_BYTES;
         assert(bytes[stop_offset] <= 1);
         bytes[stop_offset] = 2;
         cupid_sha256_parts(bytes, 96, bytes + 128, length - 128, bytes + 96);
@@ -723,6 +749,7 @@ static void test_printer_state_policy(void) {
         NATIVE_HEADER_BYTES = 128,
         ACCESSORY_DESCRIPTOR_BYTES = 8,
         INFRARED_HISTORY_BYTES = 6,
+        RTC_HISTORY_BYTES = 6,
         PULSE_DAC_BYTES = 2,
         STOP_PORT_BYTES = 4
     };
@@ -750,8 +777,8 @@ static void test_printer_state_policy(void) {
                 const CupidGbPowerOn policy = b->power_on;
                 const size_t empty_size = cupid_gb_state_size(a);
                 const size_t stop_offset = empty_size - ACCESSORY_DESCRIPTOR_BYTES -
-                                           INFRARED_HISTORY_BYTES - PULSE_DAC_BYTES -
-                                           STOP_PORT_BYTES;
+                                           RTC_HISTORY_BYTES - INFRARED_HISTORY_BYTES -
+                                           PULSE_DAC_BYTES - STOP_PORT_BYTES;
                 unsigned callbacks = 0;
                 register_observers(b, &callbacks);
                 CupidGbPrinter *source =
@@ -769,7 +796,7 @@ static void test_printer_state_policy(void) {
                 uint8_t *bytes = malloc(length), *roundtrip = malloc(length);
                 assert(bytes && roundtrip && length > empty_size);
                 assert(cupid_gb_save_state(a, bytes, length, &written) == CUPID_GB_STATE_OK);
-                assert(written == length && bytes[8] == 12);
+                assert(written == length && bytes[8] == 13);
                 assert(cupid_gb_save_state_with_context(a, roundtrip, length, &written,
                                                         &source_context) == CUPID_GB_STATE_OK);
                 assert(written == length && memcmp(bytes, roundtrip, length) == 0);

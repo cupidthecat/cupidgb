@@ -339,7 +339,7 @@ static void test_interrupt_if_ie_stack_aliases(void) {
                     uint8_t final_if = alias == 1 ? (uint8_t)(low & 31u) : requested;
                     final_if &= (uint8_t)~selected;
                     if (divider == 0) {
-                        final_if |= 4; /* Reload at T19 survives the T18 acknowledge. */
+                        final_if |= 4; /* Reload at T20 survives the T18 acknowledge. */
                     }
                     assert(gb.cpu.pc == vector && gb.cpu.sp == (uint16_t)(stack[alias] - 2u));
                     assert(gb.interrupt_flags == final_if);
@@ -370,12 +370,24 @@ static void test_double_speed_clock_domains(void) {
     doubled.double_speed = true;
     for (unsigned cycle = 1; cycle <= 2200; ++cycle) {
         cupid_gb_tick(&doubled, 1);
+        if (cycle == 2049u)
+            assert(doubled.apu.envelope_delay == 0);
         assert(doubled.elapsed_cycles == cycle * 4u - 2u);
         cupid_gb_tick(&doubled, 1);
         cupid_gb_tick(&gb, 1);
         assert(gb.elapsed_cycles == cycle * 4u);
         assert(doubled.elapsed_cycles == gb.elapsed_cycles);
-        assert(memcmp(&gb.apu, &doubled.apu, sizeof(gb.apu)) == 0);
+        if (cycle == 2048u) {
+            /* The first DIV fall leaves a double-speed envelope latch until
+             * the next timer period. This tone has no envelope clock pending;
+             * all other state matches and the following iteration rejoins. */
+            assert(gb.apu.envelope_delay == 0 && doubled.apu.envelope_delay == 2);
+            CupidGbApu current = doubled.apu;
+            current.envelope_delay = 0;
+            assert(memcmp(&gb.apu, &current, sizeof(gb.apu)) == 0);
+        } else {
+            assert(memcmp(&gb.apu, &doubled.apu, sizeof(gb.apu)) == 0);
+        }
     }
     assert(gb.apu.buf_write > 0 && gb.apu.fs_step != 0);
     assert(gb.div_counter == 2200u % 64u);
@@ -1037,7 +1049,7 @@ static void test_cb_memory_bus_phases(void) {
             gb.cpu.l = 4;
             gb.div_counter = 62;
             const bool bit_test = group >= 8 && group < 16;
-            step_cycles(&gb, (bit_test ? 3 : 4) * (fast ? 2 : 4));
+            step_cycles(&gb, (bit_test ? 3u : 4u) * (fast ? 2u : 4u));
             /* All CB memory forms read DIV at M3. BIT leaves it running;
              * the other groups reset it with their M4 write. */
             assert(gb.io_registers[4] == (bit_test ? 1 : 0));

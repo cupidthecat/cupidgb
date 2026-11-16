@@ -390,9 +390,11 @@ bool cupid_gb_service_interrupt(CupidGb *gb) {
     const uint16_t return_address = gb->cpu.pc;
     gb->cpu.ime = false;
     gb->cpu.ime_delay = 0;
+    gb->speed_switch_halt_cycles = 0;
     /* Entry releases one pending OAM transfer slot without advancing the LCD clock. */
     cupid_gb_tick_dma(gb);
-    cupid_gb_tick(gb, 2);
+    /* The initial read ends before the two-cycle internal/high-stack span. */
+    cupid_gb_tick(gb, 1);
     cupid_gb_trigger_oam_bug_write(gb, gb->cpu.sp);
     cupid_gb_interrupt_tail(gb, return_address);
     return true;
@@ -1505,9 +1507,8 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode, CupidGbCpuBus *
             gb->cpu.pc = (uint16_t)(gb->cpu.pc + 1u);
 
             if (cupid_gb_check_condition(&gb->cpu, (uint8_t)((opcode >> 3u) & 0x03u))) {
-                cupid_gb_tick(gb, 1u);
                 gb->cpu.pc = address;
-                return 1u;
+                return 2u; /* Operand and internal cycle have no intervening bus access. */
             }
             return 1u;
         }
@@ -1520,9 +1521,8 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode, CupidGbCpuBus *
             cupid_gb_tick(gb, 1u);
             address |= (uint16_t)(cupid_gb_read_bus_u8(gb, gb->cpu.pc) << 8u);
             gb->cpu.pc = (uint16_t)(gb->cpu.pc + 1u);
-            cupid_gb_tick(gb, 1u);
             gb->cpu.pc = address;
-            return 1u;
+            return 2u; /* Operand and internal cycle have no intervening bus access. */
         }
         case 0xc4u:
         case 0xccu:
@@ -1718,9 +1718,8 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode, CupidGbCpuBus *
              * matters when the operand crosses into OAM as access restrictions change. */
             cupid_gb_tick(gb, 1u);
             int8_t offset = (int8_t)cupid_gb_fetch_u8(gb);
-            cupid_gb_tick(gb, 2u); /* M2 operand and M3 internal. */
             gb->cpu.sp = cupid_gb_add_sp_offset(&gb->cpu, offset);
-            return 1u; /* M4 internal. */
+            return 3u; /* M2 operand and the two internal cycles share one span. */
         }
         case 0xe9u:
             gb->cpu.pc = cupid_gb_get_hl(&gb->cpu);
@@ -1779,9 +1778,8 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode, CupidGbCpuBus *
         case 0xf8u: {
             cupid_gb_tick(gb, 1u); /* M1 opcode, then the M2 displacement read. */
             int8_t offset = (int8_t)cupid_gb_fetch_u8(gb);
-            cupid_gb_tick(gb, 1u); /* M2 operand. */
             cupid_gb_set_hl(&gb->cpu, cupid_gb_add_sp_offset(&gb->cpu, offset));
-            return 1u; /* M3 internal. */
+            return 2u; /* M2 operand and M3 internal share one span. */
         }
         case 0xf9u:
             cupid_gb_tick(gb, 1u);

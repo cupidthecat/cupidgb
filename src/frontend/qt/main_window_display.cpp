@@ -322,6 +322,12 @@ void MainWindow::configure() {
             boot->setText(path);
     });
     form->addRow("Boot ROM directory", bootRow);
+    auto *rtcMode = new QComboBox;
+    rtcMode->setObjectName("rtcMode");
+    rtcMode->addItem("Sync to System Clock", int(CUPID_GB_RTC_SYNC_TO_HOST));
+    rtcMode->addItem("Accurate", int(CUPID_GB_RTC_ACCURATE));
+    rtcMode->setCurrentIndex(rtcMode->findData(int(configuredRtcMode(settings_))));
+    form->addRow("Real Time Clock:", rtcMode);
     auto *turboCap = new QComboBox;
     turboCap->setObjectName("turboSpeedCap");
     for (const unsigned quarters : turboCapChoices)
@@ -558,6 +564,10 @@ void MainWindow::configure() {
         }
         if (!modelOverride_)
             settings_.setValue("emulation/model", model->currentData());
+        const auto clockMode = CupidGbRtcMode(rtcMode->currentData().toInt());
+        settings_.setValue("emulation/rtcMode", int(clockMode));
+        if (emulator_)
+            cupid_gb_set_rtc_mode(&emulator_->gb, clockMode);
         setTurboCap(turboCap->currentData().toUInt());
         settings_.setValue("emulation/bootDirectory", boot->text());
         bootDirectoryOverride_ = QString();

@@ -71,7 +71,7 @@ MMM01 menu detection uses the final 32 KiB of the padded physical ROM geometry, 
 
 Two-KiB SRAM mirrors across the eight-KiB RAM window. Ordinary timer-equipped MBC3 RAM banks 4 through 7 are disconnected; the wider RAM wiring applies to extended inputs larger than 2 MiB ROM or 32 KiB RAM. These rules have targeted regression coverage, but do not qualify every undocumented board or decaying open-bus behavior.
 
-The frontend saves battery SRAM, MBC3, TPP1 and HuC3 clock data, and MBC7 EEPROM to `.sav` files. See [battery saves](battery-saves.md) for the supported encodings.
+The frontend saves battery SRAM, MBC3, TPP1 and HuC3 clock data, and MBC7 EEPROM to `.sav` files. Clock cartridges support host-time synchronization or Accurate emulated-time scheduling. Counter and latch rules remain controller-specific, including HuC3 minute behavior and separate TPP1 clock status and motor strength. See [cartridge clocks](rtc.md) and [battery saves](battery-saves.md) for the policy, counter and persistence contracts.
 
 ## CPU, memory, and timing
 

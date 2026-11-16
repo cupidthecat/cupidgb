@@ -7,6 +7,11 @@
 
 void cupid_gb_apu_on_write(CupidGb *gb, uint8_t off, uint8_t val);
 void cupid_gb_tick_apu(CupidGb *gb, uint16_t cycles);
+/* Timer delivery completes a pending envelope before the next divider event.
+ * Clocks supplied by the current event preserve any envelope it just latched;
+ * direct APU ticking retains its separate cycle-by-cycle delay semantics. */
+void cupid_gb_apu_finish_divider_period(CupidGb *gb);
+void cupid_gb_tick_apu_divider(CupidGb *gb, uint16_t cycles);
 void cupid_gb_apu_div_event(CupidGb *gb);
 void cupid_gb_apu_div_secondary_event(CupidGb *gb);
 

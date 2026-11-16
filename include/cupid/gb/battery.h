@@ -19,7 +19,8 @@ typedef enum CupidGbBatteryResult {
 /* RAM is stored verbatim. Timer-equipped MBC3 cartridges append 48 bytes: ten
  * little-endian 32-bit register values followed by a 64-bit Unix timestamp.
  * The first five register values are live; the following five are latched.
- * Saving does not mutate the running cartridge or its latched clock.
+ * Saving copies current registers without advancing them. MBC3 and TPP1
+ * trailers use the configured host time; HuC3 keeps its internal baseline.
  */
 size_t cupid_gb_battery_size(const CupidGb *gb);
 CupidGbBatteryResult cupid_gb_save_battery(const CupidGb *gb, uint8_t *data, size_t capacity,
@@ -35,7 +36,9 @@ CupidGbBatteryResult cupid_gb_save_battery_at(const CupidGb *gb, uint8_t *data, 
 CupidGbBatteryResult cupid_gb_load_battery_at(CupidGb *gb, const uint8_t *data, size_t size,
                                               int64_t host_seconds);
 const char *cupid_gb_battery_result_name(CupidGbBatteryResult result);
-/* Advances only the live clock. The latch and write-generation counter are independent. */
+/* Advances only the live clock using literal uint64_t timestamp history stored
+ * in int64_t. Zero is epoch history; ordinary rollback and stopped clocks keep
+ * their baseline. The latch and write-generation counter are independent. */
 void cupid_gb_rtc_advance(CupidGbRtc *rtc, int64_t host_seconds);
 
 #ifdef __cplusplus

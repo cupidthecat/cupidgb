@@ -218,7 +218,7 @@ void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
             report.insert("window_capture_height", windowCapture.height());
             report.insert("window_capture_saved",
                           windowCapture.save(reportPath + ".window.png", "PNG"));
-            report.insert("battery_flushed", flushBattery());
+            report.insert("battery_flushed", flushBattery(true));
             QSaveFile file(reportPath);
             const QByteArray bytes = QJsonDocument(report).toJson();
             const bool written = file.open(QIODevice::WriteOnly) &&

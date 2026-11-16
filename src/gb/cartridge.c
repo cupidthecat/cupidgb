@@ -24,6 +24,7 @@
 #include "cupid/gb/gb.h"
 #include "cupid/gb/huc3.h"
 #include "cupid/gb/mbc7.h"
+#include "rtc_internal.h"
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -949,7 +950,6 @@ bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size) {
     gb->mbc1_ram_banking_mode = false;
     gb->mbc5_rom_bank = (uint16_t)(gb->header.mbc_type != CUPID_GB_HUC1);
     gb->rtc_register = 0u;
-    gb->rtc.base_time = 0;
     /* Keep the reserved sensor fields stable in non-MBC7 native states. */
     gb->mbc7_sensor_x = 0x81d0u;
     gb->mbc7_sensor_y = 0x81d0u;
@@ -963,7 +963,6 @@ bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size) {
     gb->huc3_value = 0u;
     if (gb->header.mbc_type == CUPID_GB_HUC3) {
         gb->current_rom_bank = HUC3_STARTUP_BANK;
-        cupid_gb_huc3_advance(&gb->huc3, (int64_t)time(NULL));
     }
 
     if (gb->header.mbc_type == CUPID_GB_MBC7) {
@@ -975,6 +974,7 @@ bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size) {
     memset(gb->cartridge_ram, 0xff, gb->cartridge_ram_size);
 
     gb->loaded = true;
+    cupid_gb_rtc_bind_cartridge(gb);
 
     cupid_log_infof("Loaded Game Boy ROM: %s",
                     gb->header.title[0] != '\0' ? gb->header.title : "<untitled>");

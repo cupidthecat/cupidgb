@@ -62,8 +62,6 @@ bool cupid_gb_oam_dma_blocks_bus(const CupidGb *gb);
 void cupid_gb_tick_ppu(CupidGb *gb, uint16_t cycles);
 /* Advances LCD dots without advancing the CPU, timer, DMA, or audio clocks. */
 void cupid_gb_tick_ppu_dots(CupidGb *gb, uint16_t dots);
-/* Advances one monochrome HALT M-cycle and samples enabled requests after two dots. */
-uint8_t cupid_gb_tick_ppu_halt(CupidGb *gb);
 void cupid_gb_pixels_begin_line(CupidGb *gb);
 void cupid_gb_pixels_scan_object(CupidGb *gb, unsigned index);
 void cupid_gb_pixels_begin_transfer(CupidGb *gb);

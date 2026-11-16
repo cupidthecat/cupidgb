@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "cupid/gb/rtc.h"
 #include "cupid/gb/sgb.h"
 #include "cupid/gb/startup.h"
 
@@ -183,17 +184,18 @@ typedef struct CupidGbRtc {
     uint8_t s, m, h, dl, dh;      /* live registers */
     uint8_t ls, lm, lh, ldl, ldh; /* latched copies */
     uint8_t latch_prev;           /* last value written to latch port */
-    int64_t base_time;            /* system clock snapshot for elapsed-time calc */
+    int64_t base_time;            /* Signed storage of the clock's uint64_t timestamp bits. */
 } CupidGbRtc;
 
 typedef struct CupidGbTpp1 {
     uint16_t rom_bank;
     uint8_t ram_bank;
     uint8_t mode;
-    uint8_t status;  /* Rumble strength, RTC running, and RTC overflow. */
+    uint8_t status;  /* MR4, including literal imported low bits, RTC running and overflow. */
     uint8_t live[4]; /* Weeks, packed weekday/hour, minutes, seconds. */
     uint8_t latched[4];
     int64_t rtc_base_time;
+    uint8_t motor_strength; /* Independent command-selected strength, 0..3. */
 } CupidGbTpp1;
 
 typedef struct CupidGbCpu {
@@ -377,6 +379,7 @@ typedef struct CupidGb {
     uint8_t serial_tx_latch;
     uint16_t div_counter;
     uint16_t timer_counter;
+    uint8_t divider_subcycle;    /* Unheld CPU T-cycles since the last divider edge, 0..3. */
     uint8_t tima_overflow_delay; /* M-cycles remaining until TMA reload + timer IRQ */
     bool tima_reload_just_happened;
     uint16_t dma_source_base;
@@ -458,6 +461,8 @@ typedef struct CupidGb {
     uint16_t ppu_transfer_end_dot; /* Palette access remains blocked after the last pixel. */
     CupidGbObjectFetchStage object_fetch_stage;
     CupidGbPowerOn power_on; /* Host startup policy; realized memory is serialized separately. */
+    CupidGbRtcPolicy rtc_policy; /* Host clock policy and provider, never serialized. */
+    uint32_t rtc_cycles;         /* Guest fractional phase in half-base-clock units. */
 } CupidGb;
 
 /* Optional host observation for one hardware step. This output is not stored

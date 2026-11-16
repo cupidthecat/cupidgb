@@ -22,13 +22,15 @@ Core tests exercise lifecycle, CPU/memory behavior, serial, timer/bus phases, gr
 
 The CPU lockup target covers all eleven illegal primary bytes, model/speed/IME combinations, fetch timing, IE clearing, pending requests, explicit debugger release, and state continuation. It also checks CB operands, the actual fetched address during the HALT bug, peripheral progress, and OAM DMA suspension and release. Runner regressions require an explicit illegal-opcode result even when a protocol success or duration limit occurs on the same fetch. Qt workflows cover debugger inspection and Backstep as well as continued graphics/audio generation during ordinary halted playback.
 
+The cartridge-clock targets separate policy and counter arithmetic (`rtc`), logical CPU and bus delivery (`rtc_timing`, `rtc_dma`), and native continuation (`rtc_state`). Exercise both host policies with a controlled time provider; changing the operating-system clock is unnecessary. Include stopped and invalid writable digits, rollback, phase wrap and debt, battery imports, and mode changes before cartridge binding. The state target checks all divider remainders, legacy defaults and invalid history through ordinary and trusted APIs. Qt workflow checks cover Settings cancellation and validation, cartridge replacement, state loading, rewind and debugger Backstep with the receiving policy retained.
+
 The standalone `cupidgb_turbo_audio_window` target checks complete-frame selection, phase and block boundaries, every cap, normal bypass, host-rate changes, capacity drops and transactional rejection. It has no Qt dependency. Integrated playback workflows check history consumption and forward replay, exhaustion/release, current input, recording isolation, invalid snapshots, combined pacing, integer/float host formats, queue boundaries and focus-loss resets. These checks do not establish audible output or total device latency.
 
 Run the generated mapper, persistence, and SGB continuation checks together:
 
 ```sh
 ctest --test-dir build --output-on-failure \
-    -R 'cupidgb_(gb|cartridge|battery|camera|mbc7|huc3|infrared|tpp1|sgb|state|printer_state)$'
+    -R 'cupidgb_(gb|cartridge|rtc|rtc_timing|rtc_dma|rtc_state|divider_phase|battery|camera|mbc7|huc3|infrared|tpp1|sgb|state|printer_state)$'
 ```
 
 For a library scan, inventory cartridge type bytes separately from the selected hardware model. Give each ROM a fixed guest-clock budget and retain its exact result, including an execution error or incomplete boot. Run banking and peripheral probes for hardware absent from the library. Use separate gameplay and persistence checks before claiming compatibility for a title.

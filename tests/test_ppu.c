@@ -1,5 +1,6 @@
 #include "cupid/gb/gb.h"
 #include "cupid/gb/ppu.h"
+#include "cupid/gb/timer.h"
 #include "cupid/gbc/cgb.h"
 
 #include <assert.h>
@@ -226,30 +227,38 @@ static void test_lcd_power_preserves_stat_interrupt_latch(void) {
 static void test_halt_midpoint_samples_interrupt_phase(void) {
     CupidGb gb, control;
     prepare(&gb, false, 0);
+    gb.cpu.halted = true;
+    gb.cpu.just_halted = false; /* Steady monochrome HALT polls after two T-cycles. */
     gb.interrupt_enable = 1;
     gb.pixels.initialized = true;
     gb.pixels.line = 144;
     gb.pixels.dot = 0;
     gb.io_registers[CUPID_GB_IO_LY] = 144;
-    assert(cupid_gb_tick_ppu_halt(&gb) == 1); /* VBlank arrives in the first two dots. */
+    assert(cupid_gb_tick_halt(&gb) == 1); /* VBlank arrives in the first two dots. */
     assert(gb.interrupt_flags & 1);
+    assert(gb.elapsed_cycles == 4);
 
     prepare(&gb, false, 0);
+    gb.cpu.halted = true;
+    gb.cpu.just_halted = false;
     gb.interrupt_enable = 1;
     gb.pixels.initialized = true;
     gb.pixels.line = 143;
     gb.pixels.dot = 455;
     gb.io_registers[CUPID_GB_IO_LY] = 143;
     control = gb;
-    assert(cupid_gb_tick_ppu_halt(&gb) == 0); /* The request arrives after the midpoint. */
+    assert(cupid_gb_tick_halt(&gb) == 0); /* The request arrives after the midpoint. */
     assert(gb.interrupt_flags & 1);
-    cupid_gb_tick_ppu(&control, 1);
+    assert(gb.elapsed_cycles == 4);
+    cupid_gb_tick(&control, 1);
     assert(memcmp(&gb, &control, sizeof(gb)) == 0); /* Sampling does not change the elapsed work. */
 }
 
 static void test_hblank_interrupt_follows_visible_mode(void) {
     CupidGb gb;
     prepare(&gb, false, 0);
+    gb.cpu.halted = true;
+    gb.cpu.just_halted = false;
     gb.io_registers[CUPID_GB_IO_STAT] = 0x8a;
     gb.io_registers[CUPID_GB_IO_SCX] = 3;
     gb.interrupt_enable = 2;
@@ -257,9 +266,10 @@ static void test_hblank_interrupt_follows_visible_mode(void) {
         cupid_gb_tick_ppu(&gb, 1);
     assert((gb.interrupt_flags & 2) == 0);
     assert(gb.stat_irq_delay == 1); /* Mode 0 begins on the final dot of this M-cycle. */
-    assert(cupid_gb_tick_ppu_halt(&gb) == 2);
+    assert(cupid_gb_tick_halt(&gb) == 2);
     assert(gb.interrupt_flags & 2);
     assert(gb.stat_irq_delay == 0);
+    assert(gb.elapsed_cycles == 4);
 }
 
 static void test_objects_share_background_fetch_wait(void) {

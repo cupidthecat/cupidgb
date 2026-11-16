@@ -46,8 +46,12 @@ CupidGbStateResult cupid_gb_load_state_with_context(CupidGb *gb, const uint8_t *
  * ROMs, boot ROMs, and save paths are session resources and are never included in state data.
  * Restoring an active boot overlay requires the same boot ROM to be available in the target.
  * The target's current boot-overlay enabled flag need not match the saved flag.
- * Version 12 appends shared receiver history after the unchanged version 11 payload on non-HuC3
- * cartridges, followed by a built-in accessory descriptor. HuC3 keeps its existing receiver fields.
+ * Version 13 retains the version 11 hardware payload and version 12 receiver history, then adds
+ * uint32 fractional RTC phase, one TPP1 motor byte and one divider subcycle byte before the
+ * built-in accessory descriptor. Divider subcycles retain zero through three unheld CPU T-cycles.
+ * Shared receiver history is present on non-HuC3 cartridges; HuC3 keeps its existing fields.
+ * RTC phase is restored literally, even above the live clock period. Host clock mode, period,
+ * time-provider registration and startup policy remain those of the receiving instance.
  * A factory-tagged printer includes its parser, bits, image buffer, clock debt and job timer.
  * Loading preserves the live attachment and callbacks, emits no image/completion callback,
  * and validates the saved device even when that kind is not currently attached.
@@ -57,7 +61,10 @@ CupidGbStateResult cupid_gb_load_state_with_context(CupidGb *gb, const uint8_t *
  * STOP access gates, the palette-port release edge, object fetch stage, pending
  * JOYP row release, and presentation events. Applicable SGB, MMM01, MBC7, Camera,
  * TPP1, and HuC3 sections are included.
- * Versions 2 through 11 remain readable with defaults for absent history. Older
+ * Versions 2 through 12 remain readable with defaults for absent history. Their RTC phase
+ * and divider subcycle start at zero; a saved TPP1 section supplies motor strength from its
+ * status low bits. The older timer_counter field retains its literal saved value.
+ * Missing TPP1 sections and other controllers start with zero motor strength. Older
  * monochrome pulse latches are derived from saved channel state; unknown duty
  * sampling, trigger suppression and expired-clock history cannot be recovered.
  * Absent disconnected-DAC codes default to zero on every hardware model.

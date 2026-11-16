@@ -107,7 +107,7 @@ class MainWindow final : public QMainWindow {
     void advanceControls();
     void watchBattery();
     void registerShortcut(QAction *action, const QString &id);
-    bool flushBattery();
+    bool flushBattery(bool forceWrite = false);
     bool closeRom();
     bool restart();
     bool reloadRom();
@@ -182,6 +182,8 @@ class MainWindow final : public QMainWindow {
     bool playbackSmokeTest(const QString &directory);
     bool modelSmokeTest(const QString &directory);
     bool startupSmokeTest(const QString &directory);
+    bool rtcSmokeTest(const QString &directory);
+    bool rtcBatterySmokeTest(const QString &directory);
     void openCheats(bool search = false);
     void refreshCheats(bool newSession = false);
     bool mutateCheats(const std::function<bool(CupidGbCheats *)> &operation);

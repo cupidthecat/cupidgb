@@ -79,7 +79,7 @@ static uint8_t *save(const CupidGb *gb, size_t *size) {
     assert(bytes && cupid_gb_save_state(gb, bytes, *size, &written) == CUPID_GB_STATE_OK);
     assert(written == *size);
     /* The corrected hardware state fits the existing native schema. */
-    assert(bytes[8] == 12 && bytes[9] == 0 && bytes[10] == 0 && bytes[11] == 0);
+    assert(bytes[8] == 13 && bytes[9] == 0 && bytes[10] == 0 && bytes[11] == 0);
     return bytes;
 }
 

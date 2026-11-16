@@ -1,38 +1,6 @@
 #include "cupid/gb/huc3.h"
 
-#include <time.h>
-
 enum { MINUTES_PER_DAY = 1440, SECONDS_PER_MINUTE = 60 };
-
-void cupid_gb_huc3_advance(CupidGbHuc3 *device, int64_t host_seconds) {
-    if (host_seconds <= 0)
-        return;
-    if (device->rtc_base_time <= 0) {
-        device->rtc_base_time = host_seconds;
-        return;
-    }
-    const int64_t elapsed =
-        host_seconds / SECONDS_PER_MINUTE - device->rtc_base_time / SECONDS_PER_MINUTE;
-    if (elapsed <= 0)
-        return;
-
-    const int64_t distance = elapsed * SECONDS_PER_MINUTE;
-    device->rtc_base_time = distance <= INT64_MAX - device->rtc_base_time
-                                ? device->rtc_base_time + distance
-                                : host_seconds;
-    /* Writes can leave the minute counter above its normal modulus. It must
-     * wrap through zero before it can carry into the day counter again. */
-    const uint32_t next_carry =
-        (device->minutes < MINUTES_PER_DAY ? MINUTES_PER_DAY : 65536u + MINUTES_PER_DAY) -
-        device->minutes;
-    if ((uint64_t)elapsed < next_carry) {
-        device->minutes = (uint16_t)(device->minutes + (uint64_t)elapsed);
-        return;
-    }
-    const uint64_t remaining = (uint64_t)elapsed - next_carry;
-    device->days = (uint16_t)(device->days + 1u + remaining / MINUTES_PER_DAY);
-    device->minutes = (uint16_t)(remaining % MINUTES_PER_DAY);
-}
 
 typedef struct Huc3Register {
     uint16_t *value;
@@ -77,15 +45,12 @@ static void command(CupidGb *gb, uint8_t value) {
         case 1: {
             const Huc3Register reg = clock_register(device, device->index++);
             if (reg.value) {
-                cupid_gb_huc3_advance(device, (int64_t)time(NULL));
                 gb->huc3_value = (uint8_t)((*reg.value >> reg.shift) & 0x0fu);
             }
             break;
         }
         case 2:
         case 3:
-            if (device->index < 7u)
-                cupid_gb_huc3_advance(device, (int64_t)time(NULL));
             write_clock_register(gb, digit);
             if (value >> 4 == 3)
                 ++device->index;
@@ -127,8 +92,7 @@ uint32_t cupid_gb_huc3_seconds_to_alarm(const CupidGb *gb, int64_t host_seconds)
     if (!gb || !gb->loaded || gb->header.mbc_type != CUPID_GB_HUC3 || host_seconds < 0 ||
         !gb->huc3.alarm_enabled || !(gb->huc3.alarm_days & ALARM_SET))
         return 0;
-    CupidGbHuc3 clock = gb->huc3;
-    cupid_gb_huc3_advance(&clock, host_seconds);
+    const CupidGbHuc3 clock = gb->huc3;
     const uint32_t now =
         (((unsigned)clock.days & DAY_MASK) * MINUTES_PER_DAY + clock.minutes) * SECONDS_PER_MINUTE +
         (uint32_t)(host_seconds % SECONDS_PER_MINUTE);

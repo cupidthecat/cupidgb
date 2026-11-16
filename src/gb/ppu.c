@@ -306,7 +306,7 @@ void cupid_gb_tick_dma(CupidGb *gb) {
 
 /* LCD dots use the base clock; the caller converts double-speed CPU time.
  * Partial machine-cycle calls preserve pixel queues, bus locks, and IRQ delays. */
-static void tick_ppu(CupidGb *gb, uint32_t dots, uint8_t *midpoint) {
+static void tick_ppu(CupidGb *gb, uint32_t dots) {
     if (!gb)
         return;
     CupidGbPixels *p = &gb->pixels;
@@ -474,23 +474,14 @@ static void tick_ppu(CupidGb *gb, uint32_t dots, uint8_t *midpoint) {
              * dot. CGB starts refreshing on its first advancing clock edge. */
             if (!gb->ppu_lcd_startup || gb->model == CUPID_GB_MODEL_CGB || p->dot != 1)
                 cupid_gb_update_stat_irq(gb);
-            if (midpoint && subcycle == 1) {
-                *midpoint = gb->interrupt_enable & gb->interrupt_flags & 0x1f;
-            }
         }
     }
 }
 
 void cupid_gb_tick_ppu(CupidGb *gb, uint16_t cycles) {
-    tick_ppu(gb, (uint32_t)cycles * 4, 0);
+    tick_ppu(gb, (uint32_t)cycles * 4);
 }
 
 void cupid_gb_tick_ppu_dots(CupidGb *gb, uint16_t dots) {
-    tick_ppu(gb, dots, 0);
-}
-
-uint8_t cupid_gb_tick_ppu_halt(CupidGb *gb) {
-    uint8_t pending = gb ? gb->interrupt_enable & gb->interrupt_flags & 0x1f : 0;
-    tick_ppu(gb, 4, &pending);
-    return pending;
+    tick_ppu(gb, dots);
 }

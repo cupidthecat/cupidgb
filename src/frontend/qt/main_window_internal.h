@@ -95,6 +95,21 @@ unsigned configuredTurboCapQuarters(const QSettings &settings) {
                                                                           : 0;
 }
 
+CupidGbRtcMode configuredRtcMode(const QSettings &settings) {
+    const QVariant value = settings.value("emulation/rtcMode");
+    // INI values may be strings. Do not round malformed floating-point preferences.
+    switch (value.metaType().id()) {
+        case QMetaType::Int:
+        case QMetaType::UInt:
+        case QMetaType::LongLong:
+        case QMetaType::ULongLong:
+        case QMetaType::QString:
+            return value.toString() == "1" ? CUPID_GB_RTC_ACCURATE : CUPID_GB_RTC_SYNC_TO_HOST;
+        default:
+            return CUPID_GB_RTC_SYNC_TO_HOST;
+    }
+}
+
 FrameBlending configuredFrameBlending(const QSettings &settings) {
     bool valid = false;
     const int mode = settings.value("video/blendingMode").toInt(&valid);

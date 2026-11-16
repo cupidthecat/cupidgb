@@ -41,6 +41,17 @@ typedef struct RumbleProbe {
     bool enabled;
 } RumbleProbe;
 
+typedef struct ClockProbe {
+    int64_t now;
+    unsigned calls;
+} ClockProbe;
+
+static int64_t clock_time(void *context) {
+    ClockProbe *probe = context;
+    ++probe->calls;
+    return probe->now;
+}
+
 static void observe_motor(const CupidGb *gb, bool enabled, uint64_t cycles, void *user_data) {
     RumbleProbe *probe = user_data;
     assert(cupid_gb_rumble_enabled(gb) == enabled);
@@ -129,7 +140,7 @@ static void test_clock_and_battery(CupidGb *gb) {
     assert(cupid_gb_load_battery_at(gb, battery, length, INT64_C(1800000000)) ==
            CUPID_GB_BATTERY_OK);
     assert(cupid_gb_read_u8(gb, 0xa123) == 0x29);
-    assert(cupid_gb_rumble_enabled(gb) && motor.transitions == 0);
+    assert(!cupid_gb_rumble_enabled(gb) && motor.transitions == 0);
     command(gb, 0);
     assert(cupid_gb_read_u8(gb, 0xa003) == 2);
     assert(cupid_gb_save_battery_at(gb, battery, length, NULL, INT64_C(1800000000)) ==
@@ -147,7 +158,7 @@ static void test_state_restore(CupidGb *gb) {
     assert(size);
     uint8_t *state = malloc(size);
     assert(state && cupid_gb_save_state(gb, state, size, NULL) == CUPID_GB_STATE_OK);
-    assert(state[8] == 12);
+    assert(state[8] == 13);
     command(gb, 0x20);
     command(gb, 0);
     cupid_gb_write_u8(gb, 0, 0);
@@ -157,6 +168,90 @@ static void test_state_restore(CupidGb *gb) {
     assert(cupid_gb_read_u8(gb, 0xa003) == 0x58);
     assert(cupid_gb_read_u8(gb, 0x4000) == 7);
     free(state);
+}
+
+static void test_clock_commands_and_motor_storage(CupidGb *gb) {
+    const CupidGbTpp1 original = gb->tpp1;
+    const CupidGbRtc original_rtc = gb->rtc;
+    const CupidGbRtcPolicy original_policy = gb->rtc_policy;
+    const uint32_t original_phase = gb->rtc_cycles;
+    const uint64_t original_generation = gb->battery_write_generation;
+    ClockProbe clock = {5000, 0};
+    cupid_gb_set_rtc_time_source(gb, clock_time, &clock);
+    const size_t size = cupid_gb_battery_size(gb);
+    uint8_t *battery = malloc(size);
+    assert(battery);
+    for (unsigned mode = 0; mode < 2; ++mode) {
+        assert(cupid_gb_set_rtc_mode(gb, (CupidGbRtcMode)mode));
+        for (unsigned mr4 = 0; mr4 < 16; ++mr4) {
+            for (unsigned strength = 0; strength < 4; ++strength) {
+                gb->tpp1 = original;
+                gb->tpp1.status = (uint8_t)mr4;
+                gb->tpp1.motor_strength = 0;
+                gb->tpp1.rtc_base_time = 1000;
+                gb->rtc_cycles = 1234;
+                RumbleProbe motor = {0};
+                cupid_gb_set_rumble_callback(gb, observe_motor, &motor);
+                const unsigned calls = clock.calls;
+                command(gb, (uint8_t)(0x20 + strength));
+                command(gb, 0);
+                assert(gb->tpp1.status == mr4 && gb->tpp1.motor_strength == strength);
+                assert(cupid_gb_read_u8(gb, 0xa003) == (mr4 | strength));
+                assert(cupid_gb_rumble_enabled(gb) == (strength != 0));
+                assert(motor.transitions == (strength != 0));
+                assert(cupid_gb_save_battery_at(gb, battery, size, NULL, 6000) ==
+                       CUPID_GB_BATTERY_OK);
+                assert(battery[size - 14] == mr4 && gb->tpp1.rtc_base_time == 1000);
+                assert(cupid_gb_load_battery_at(gb, battery, size, 9000) == CUPID_GB_BATTERY_OK);
+                assert(gb->tpp1.status == mr4 && gb->tpp1.motor_strength == strength &&
+                       gb->tpp1.rtc_base_time == 6000 && gb->rtc_cycles == 1234);
+                assert(clock.calls == calls && motor.transitions == (strength != 0));
+                cupid_gb_set_rumble_callback(gb, NULL, NULL);
+            }
+        }
+        gb->tpp1 = original;
+        gb->tpp1.status = 4;
+        gb->tpp1.live[0] = 3;
+        gb->tpp1.live[1] = 4;
+        gb->tpp1.live[2] = 5;
+        gb->tpp1.live[3] = 6;
+        gb->tpp1.rtc_base_time = 1000;
+        gb->rtc.dh = 0x40;
+        gb->rtc.ldh = 0;
+        gb->rtc_cycles = 4321;
+        clock.now = 1061;
+        const unsigned calls = clock.calls;
+        const uint64_t generation = gb->battery_write_generation;
+        command(gb, 0x10);
+        command(gb, 0x10);
+        assert(gb->rtc.ldh == 0x40 && gb->battery_write_generation == generation + 2);
+        gb->rtc.dh = 0;
+        command(gb, 0x11);
+        command(gb, 0x11);
+        assert(gb->rtc.dh == 0x40 && gb->rtc_cycles == 4321 && gb->tpp1.rtc_base_time == 1000 &&
+               gb->tpp1.live[3] == 6);
+        assert(gb->battery_write_generation == generation + 4 && clock.calls == calls);
+        gb->tpp1.status = 12;
+        command(gb, 0x14);
+        assert(gb->tpp1.status == 4 && gb->battery_write_generation == generation + 4);
+        command(gb, 0x18);
+        assert(gb->tpp1.status == 0 && gb->rtc_cycles == 4321);
+        assert(gb->tpp1.rtc_base_time == (mode ? 1000 : 1061));
+        assert(gb->tpp1.live[3] == (mode ? 6 : 7));
+        assert(clock.calls == calls + (mode ? 0 : 1));
+        clock.now = 2000;
+        command(gb, 0x19);
+        command(gb, 0x19);
+        assert(gb->tpp1.rtc_base_time == (mode ? 1000 : 2000) && gb->rtc_cycles == 4321);
+        assert(clock.calls == calls + (mode ? 0 : 2));
+        assert(gb->battery_write_generation == generation + 4);
+    }
+    free(battery);
+    gb->tpp1 = original;
+    gb->rtc = original_rtc;
+    gb->rtc_policy = original_policy;
+    gb->rtc_cycles = original_phase;
+    gb->battery_write_generation = original_generation;
 }
 
 static void test_absent_sram_bus(CupidGb *gb) {
@@ -324,6 +419,7 @@ int main(void) {
         test_bank_modes_and_rumble(gb);
         test_clock_and_battery(gb);
         test_state_restore(gb);
+        test_clock_commands_and_motor_storage(gb);
         rom[0x152] = 6; /* 256 KiB exceeds the current core SRAM capacity. */
         assert(!cupid_gb_load_rom(gb, rom, length));
         assert(cupid_gb_read_u8(gb, 0x4000) == 7 && gb->tpp1.mode == 5);

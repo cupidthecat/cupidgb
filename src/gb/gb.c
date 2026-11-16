@@ -17,12 +17,12 @@
 #include "cupid/gb/battery.h"
 #include "cupid/gb/infrared.h"
 #include "printer_internal.h"
+#include "rtc_internal.h"
 #include "startup_internal.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 
 #include "cupid/common/log.h"
 #include "cupid/gb/apu.h"
@@ -243,6 +243,7 @@ void cupid_gb_init(CupidGb *gb) {
     const bool huc3_ir_input = gb->huc3_ir_input;
     const CupidGbCheats *cheats = gb->cheats;
     const CupidGbPowerOn power_on = gb->power_on;
+    const CupidGbRtcPolicy rtc_policy = gb->rtc_policy;
     memset(gb, 0, sizeof(*gb));
     gb->oam_vram_row = UINT16_MAX;
     gb->oam_search_word = 0;
@@ -261,6 +262,7 @@ void cupid_gb_init(CupidGb *gb) {
     gb->huc3_ir_input = huc3_ir_input;
     gb->cheats = cheats;
     gb->power_on = power_on;
+    gb->rtc_policy = rtc_policy;
 
     if (gb->rom == 0) {
         gb->rom = malloc(CUPID_GB_MAX_ROM_SIZE);
@@ -504,6 +506,7 @@ void cupid_gb_enter_boot_rom(CupidGb *gb) {
 
     /* Firmware begins eight T-cycles into the divider phase, stored in M-cycles. */
     gb->div_counter = 2u;
+    gb->divider_subcycle = 0u;
     gb->ppu_counter = 0u;
     gb->serial_master_clock = false;
     gb->interrupt_flags = 0x00u;
@@ -554,6 +557,7 @@ void cupid_gb_cleanup(CupidGb *gb) {
     gb->infrared_user_data = NULL;
     gb->cheats = NULL;
     gb->power_on = (CupidGbPowerOn){0};
+    gb->rtc_policy = (CupidGbRtcPolicy){0};
     gb->mbc5_rumble_on = false;
 }
 
@@ -593,7 +597,7 @@ void cupid_gb_set_rumble_callback(CupidGb *gb, CupidGbRumbleCallback callback, v
 bool cupid_gb_rumble_enabled(const CupidGb *gb) {
     return gb && gb->header.has_rumble &&
            ((gb->header.mbc_type == CUPID_GB_MBC5 && gb->mbc5_rumble_on) ||
-            (gb->header.mbc_type == CUPID_GB_TPP1 && (gb->tpp1.status & CUPID_GB_TPP1_MOTOR)));
+            (gb->header.mbc_type == CUPID_GB_TPP1 && gb->tpp1.motor_strength));
 }
 
 // Memory map: read
@@ -954,31 +958,15 @@ uint8_t cupid_gb_read_bus_u8(CupidGb *gb, uint16_t address) {
 // MBC3 real-time clock helpers
 
 /**
- * @brief Advances the MBC3 RTC registers using wall-clock time.
- *
- * Computes the elapsed real time since `gb->rtc.base_time`, carries it
- * through seconds → minutes → hours → days, and updates the live RTC
- * registers. Sets the carry flag in DH if the day counter overflows 511.
- * Leaves counters unchanged when halted or when the wall clock moves backward.
- * The host-time baseline is refreshed in both cases.
- *
- * @param gb Pointer to the Game Boy state.
- */
-static void cupid_gb_rtc_update(CupidGb *gb) {
-    cupid_gb_rtc_advance(&gb->rtc, (int64_t)time(NULL));
-}
-
-/**
  * @brief Latches a snapshot of the live MBC3 RTC registers.
  *
- * Calls @ref cupid_gb_rtc_update to bring the live registers current,
- * then copies S/M/H/DL/DH into the latched shadow registers (LS/LM/LH/LDL/LDH).
+ * Copies S/M/H/DL/DH into the latched shadow registers (LS/LM/LH/LDL/LDH)
+ * without introducing a host-clock poll outside the RTC scheduler.
  * The latched values are what the game reads via the 0xA000–0xBFFF window.
  *
  * @param gb Pointer to the Game Boy state.
  */
 static void cupid_gb_rtc_latch(CupidGb *gb) {
-    cupid_gb_rtc_update(gb);
     gb->rtc.ls = gb->rtc.s;
     gb->rtc.lm = gb->rtc.m;
     gb->rtc.lh = gb->rtc.h;
@@ -1222,17 +1210,17 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
         if (gb->header.mbc_type == CUPID_GB_MBC3 && gb->rtc_register >= 0x08u) {
             if (!gb->header.has_timer || gb->rtc_register > 0x0cu)
                 return;
-            const int64_t previous_time = gb->rtc.base_time;
-            cupid_gb_rtc_update(gb);
+            if (gb->rtc_register == 0x0cu && ((gb->rtc.dh ^ value) & 0x40u) &&
+                gb->rtc_policy.mode == CUPID_GB_RTC_SYNC_TO_HOST) {
+                const int64_t now = cupid_gb_rtc_now(gb);
+                cupid_gb_rtc_advance(&gb->rtc, now);
+                gb->rtc.base_time = now;
+            }
+            if (gb->rtc_register == 0x08u)
+                gb->rtc_cycles = 0;
             uint8_t *registers[] = {&gb->rtc.s, &gb->rtc.m, &gb->rtc.h, &gb->rtc.dl, &gb->rtc.dh};
             uint8_t *selected = registers[gb->rtc_register - 0x08u];
-            /* The seconds port also starts a new clock interval. Clock latches
-             * and host time updates must not count as cartridge writes.
-             */
-            if (gb->header.has_battery &&
-                (*selected != value ||
-                 (gb->rtc_register == 0x08u && previous_time != gb->rtc.base_time &&
-                  !(gb->rtc.dh & 0x40u))))
+            if (gb->header.has_battery && *selected != value)
                 ++gb->battery_write_generation;
             *selected = value;
             return;
