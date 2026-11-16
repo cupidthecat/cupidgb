@@ -103,6 +103,13 @@ bool MainWindow::modelSmokeTest(const QString &directory) {
         MainWindow sized(true);
         sized.show();
         QApplication::processEvents();
+        const auto initialCanvasFits = [&] {
+            return sized.display_->width() >= 320 && sized.display_->height() >= 288;
+        };
+        if (!initialCanvasFits()) {
+            qWarning() << "Initial 2x canvas is too small:" << sized.display_->size();
+            return smokeFailure(__FILE__, __LINE__);
+        }
         const QRect available = sized.screen()->availableGeometry();
         sized.move(available.center() - QPoint(sized.width() / 2, sized.height() / 2));
         QApplication::processEvents();
@@ -116,6 +123,11 @@ bool MainWindow::modelSmokeTest(const QString &directory) {
         if (!sized.openRom(enhanced))
             return smokeFailure(__FILE__, __LINE__);
         sized.setPaused(true);
+        QApplication::processEvents();
+        if (!initialCanvasFits()) {
+            qWarning() << "First cartridge reduced the 2x canvas:" << sized.display_->size();
+            return smokeFailure(__FILE__, __LINE__);
+        }
         const QSize handheldSize = sized.size();
         const QPoint handheldCenter = doubledCenter();
         settings_.setValue("emulation/model", int(CUPID_GB_MODEL_SGB2));
@@ -231,6 +243,30 @@ bool MainWindow::modelSmokeTest(const QString &directory) {
         if (!sized.openRom(enhanced) || sized.size() != automaticBorderedSize)
             return smokeFailure(__FILE__, __LINE__);
         sized.setPaused(true);
+    }
+    {
+        const bool hadGeometry = settings_.contains("window/geometry");
+        const QVariant savedGeometry = settings_.value("window/geometry");
+        const auto restoreGeometrySetting = qScopeGuard([&] {
+            if (hadGeometry)
+                settings_.setValue("window/geometry", savedGeometry);
+            else
+                settings_.remove("window/geometry");
+        });
+        MainWindow remembered(true);
+        remembered.show();
+        remembered.resize(517, 389);
+        QApplication::processEvents();
+        const QSize rememberedSize = remembered.size();
+        settings_.setValue("window/geometry", remembered.saveGeometry());
+        MainWindow restored(false, true);
+        restored.show();
+        QApplication::processEvents();
+        if (restored.size() != rememberedSize) {
+            qWarning() << "Startup replaced restored geometry:" << restored.size() << "expected"
+                       << rememberedSize;
+            return smokeFailure(__FILE__, __LINE__);
+        }
     }
     settings_.setValue("video/defaultScale", savedScale);
     settings_.setValue("video/sgbBorder", savedBorder);

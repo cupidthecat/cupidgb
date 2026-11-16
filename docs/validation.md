@@ -1772,3 +1772,7 @@ The [startup validation record](validation-startup.md) covers model-specific col
 ## Cartridge clocks and divider continuation, 2026-11-16
 
 The [cartridge-clock validation record](validation-rtc.md) covers host and emulated clock policies, controller-specific battery behavior, bounded raw-counter arithmetic, logical clock delivery, the STOP/HBlank DMA divider repair, and native version 13 continuation. It distinguishes frozen comparisons, negative controls, current integration results and remaining qualification.
+
+## Initial display sizing, 2026-11-16
+
+The [display validation record](validation-display.md) covers the initial-window status-bar correction, an old-constructor negative control, focused Windows/Linux frontend suites, installed native UI/audio checks, and before/after viewport captures. Earlier timed gameplay samples retain their original executables and render sizes.

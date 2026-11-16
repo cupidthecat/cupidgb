@@ -22,6 +22,9 @@ MainWindow::MainWindow(bool isolated, bool automated, bool audioCheck,
                                                 : int(DisplayScaling::Aspect));
     turboCapQuarters_ = configuredTurboCapQuarters(settings_);
     buildMenus();
+    // Include the status bar before sizing the first guest canvas. Creating it
+    // later takes height from the display and can drop integer scaling a step.
+    statusBar();
     applyDisplaySettings();
     resizeDisplay(std::clamp(settings_.value("video/defaultScale", 2).toInt(), 1, 8));
     if (!isolated_)
