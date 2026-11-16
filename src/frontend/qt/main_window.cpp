@@ -736,24 +736,41 @@ bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflo
     cupid_gb_set_cheats(&emulator_->gb, cheats_.get());
     refreshCheats(true);
     resetPrinter();
-    if (workflow == ResetWorkflow::Open)
-        cupid_gb_set_rumble_strength_callback(
+    const auto &gb = emulator_->gb;
+    const bool motorCapable =
+        gb.header.has_rumble &&
+        (gb.header.mbc_type == CUPID_GB_MBC5 ||
+         (gb.header.mbc_type == CUPID_GB_TPP1 && gb.rom_size > 0x153u && (gb.rom[0x153u] & 1u)));
+    cupid_gb_set_rumble_strength_callback(&emulator_->gb, nullptr, nullptr);
+    if (motorCapable)
+        cupid_gb_set_rumble_sample_callback(
             &emulator_->gb,
-            [](const CupidGb *gb, uint8_t strength, uint64_t cycles, void *user) {
+            [](const CupidGb *gb, uint8_t strength, void *user) {
                 auto *window = static_cast<MainWindow *>(user);
                 if (!window->emulator_ || &window->emulator_->gb != gb)
                     return;
-                if (cycles >= window->rumbleLastCycles_) {
-                    window->rumbleWeightedCycles_ +=
-                        (cycles - window->rumbleLastCycles_) * window->rumbleStrength_;
-                } else {
-                    window->rumbleWeightedCycles_ = 0;
-                    window->rumbleWindowCycles_ = cycles;
-                }
-                window->rumbleLastCycles_ = cycles;
-                window->rumbleStrength_ = strength;
+                window->rumbleSampleSum_ += strength;
+                ++window->rumbleSampleCount_;
             },
             this);
+    else
+        cupid_gb_set_rumble_sample_callback(&emulator_->gb, nullptr, nullptr);
+    if (motorCapable)
+        cupid_gb_set_presentation_callback(
+            &emulator_->gb,
+            [](const CupidGb *gb, uint8_t type, void *user) {
+                (void)type;
+                auto *window = static_cast<MainWindow *>(user);
+                if (!window->emulator_ || &window->emulator_->gb != gb ||
+                    !window->rumbleSampleCount_)
+                    return;
+                window->rumblePublishedAmplitudes_.push_back(
+                    double(window->rumbleSampleSum_) / (3.0 * double(window->rumbleSampleCount_)));
+                window->rumbleSampleSum_ = window->rumbleSampleCount_ = 0;
+            },
+            this);
+    else
+        cupid_gb_set_presentation_callback(&emulator_->gb, nullptr, nullptr);
     resetControllerRumble();
     if (workflow == ResetWorkflow::Open)
         resetMotionInput();

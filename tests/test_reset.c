@@ -188,7 +188,8 @@ static void install_history(CupidGb *gb, unsigned rate) {
     fill_pattern(gb->cgb_obj_palette_ram, sizeof(gb->cgb_obj_palette_ram), 0x79);
     fill_pattern(gb->cartridge_ram, sizeof(gb->cartridge_ram), 0x8a);
     memset(gb->video_ram, 0xab, sizeof(gb->video_ram));
-    gb->pixel_timing = (CupidGbPixelTiming){.logical_x = 37, .flags = CUPID_GB_PIXEL_FRACTIONAL};
+    gb->pixel_timing =
+        (CupidGbPixelTiming){.logical_x = 37, .flags = CUPID_GB_PIXEL_FRACTIONAL, .fetch_y = 201};
     gb->vram_bus = (CupidGbVramBus){.map_address = 0x1823,
                                     .data_address = 0x2456,
                                     .read_value = 0xab,
@@ -293,8 +294,8 @@ static void check_boundary(const CupidGb *gb, const CupidGb *before, CupidGbRese
           cupid_gb_vram_bus_state_valid(gb));
     CHECK(before->display_clock.frame_age_dots && !gb->display_clock.frame_age_dots &&
           !gb->display_clock.batch_half_dots && !gb->display_clock.fine_wait_half_dots);
-    CHECK(!gb->pixel_timing.logical_x && !gb->pixel_timing.flags && !gb->vram_bus.map_address &&
-          !gb->vram_bus.data_address && !gb->vram_bus.read_value &&
+    CHECK(!gb->pixel_timing.logical_x && !gb->pixel_timing.flags && !gb->pixel_timing.fetch_y &&
+          !gb->vram_bus.map_address && !gb->vram_bus.data_address && !gb->vram_bus.read_value &&
           !gb->vram_bus.fetch_map_address && !gb->vram_bus.fetch_data_address);
     if (firmware)
         CHECK(gb->display_clock.phase == CUPID_GB_DISPLAY_CLOCK_RESET &&
@@ -568,6 +569,8 @@ static size_t legacy_tpp1(uint8_t *legacy, const uint8_t *saved, size_t size, un
     memcpy(legacy, saved, size);
     const size_t descriptor = size - ACCESSORY_DESCRIPTOR_BYTES;
     CHECK(filled(saved + descriptor, ACCESSORY_DESCRIPTOR_BYTES, 0));
+    if (version == 15)
+        legacy[descriptor - INPUT_SAMPLE_BYTES - CUPID_GB_VRAM_BUS_STATE_SIZE - 1u] = 0;
     /* Both versions precede sampled input; V14 also predates display timing. */
     const size_t removed = INPUT_SAMPLE_BYTES + (version == 14 ? TIMING_BYTES : 0);
     memmove(legacy + descriptor - removed, legacy + descriptor, ACCESSORY_DESCRIPTOR_BYTES);
@@ -605,6 +608,12 @@ static void test_tpp1_legacy_states(void) {
                 cupid_gb_vram_bus_import_legacy(expected);
                 CHECK(!expected->display_clock.batch_half_dots &&
                       (expected->display_clock.flags & CUPID_GB_DISPLAY_CLOCK_FORCED_FINE));
+            } else {
+                /* V15 did not store the row latch. This fixture selects line 1,
+                 * SCY zero, with no active window, so import projects row 1. */
+                CHECK(expected->pixels.line == 1 && !expected->io_registers[CUPID_GB_IO_SCY] &&
+                      !expected->pixels.window_active);
+                expected->pixel_timing.fetch_y = 1;
             }
             cupid_gb_tick(gb, 211);
             cupid_gb_write_u8(gb, 0, 3);

@@ -1,6 +1,6 @@
 /**
  * @file    main_window_controller_tests.cpp
- * @brief   Qt workflow regression checks for controller routing and held inputs.
+ * @brief   Controller routing, dialog workflows, and motor feedback regression checks.
  * @author  cupidthecat
  * @date    2026-11-16
  *
@@ -24,6 +24,10 @@
 
 #include <cmath>
 
+extern "C" {
+#include "cupid/gb/ppu.h"
+}
+
 bool MainWindow::controllerSmokeTest(const QString &directory) {
     using namespace cupid::input;
     controllerSmokeActive_ = true;
@@ -33,9 +37,12 @@ bool MainWindow::controllerSmokeTest(const QString &directory) {
         SDL_Joystick *handle = nullptr;
         bool attached = false;
         uint16_t amplitude = 0;
+        unsigned rumbleCalls = 0;
 
         static int SDLCALL feedback(void *user, Uint16 low, Uint16 high) {
-            static_cast<VirtualPad *>(user)->amplitude = std::max(low, high);
+            auto *pad = static_cast<VirtualPad *>(user);
+            pad->amplitude = std::max(low, high);
+            ++pad->rumbleCalls;
             return 0;
         }
 
@@ -313,11 +320,54 @@ bool MainWindow::controllerSmokeTest(const QString &directory) {
                     return;
                 }
                 command.stop();
-                checked = controllers_->output().buttons == ControllerOutput{}.buttons &&
-                          emulator_->gb.elapsed_cycles == beforeCycles &&
-                          background->isChecked() != backgroundBefore;
                 auto *device = dialog->findChild<QComboBox *>("controllerDevice");
                 device->setCurrentIndex(device->findData(first.id));
+                bool rumbleTestChecked = true;
+                if (initialPaused && accept) {
+                    auto *strength = dialog->findChild<QSlider *>("controllerStrength");
+                    auto *test = dialog->findChild<QPushButton *>("controllerTestRumble");
+                    auto *status = dialog->findChild<QLabel *>("controllerStatus");
+                    if (!strength || !test || !status) {
+                        rumbleTestChecked = false;
+                    } else {
+                        controllers_->setFocused(true);
+                        strength->setValue(0);
+                        const unsigned beforeTest = first.rumbleCalls;
+                        test->click();
+                        const bool zeroStrengthHonest =
+                            first.rumbleCalls == beforeTest && !first.amplitude &&
+                            status->text().contains("0%") &&
+                            status->text().contains("increase", Qt::CaseInsensitive);
+                        strength->setValue(50);
+                        test->click();
+                        const bool positiveTestSent =
+                            first.rumbleCalls > beforeTest && first.amplitude > 0 &&
+                            status->text().startsWith("Sent a 150 ms rumble test.");
+                        const unsigned beforeStop = first.rumbleCalls;
+                        strength->setValue(0);
+                        test->click();
+                        DeviceState stopped;
+                        const bool zeroStrengthStopsActive =
+                            first.rumbleCalls > beforeStop && !first.amplitude &&
+                            controllers_->backend().state(first.id, &stopped) &&
+                            !stopped.rumbleActive && status->text().contains("0%");
+                        strength->setValue(50);
+                        controllers_->setFocused(false);
+                        const unsigned beforeBlocked = first.rumbleCalls;
+                        test->click();
+                        const bool focusBlocksTest =
+                            first.rumbleCalls == beforeBlocked && !first.amplitude &&
+                            status->text().contains("focus", Qt::CaseInsensitive);
+                        controllers_->setFocused(true);
+                        strength->setValue(controllers_->configuration().rumbleStrength);
+                        rumbleTestChecked = zeroStrengthHonest && positiveTestSent &&
+                                            zeroStrengthStopsActive && focusBlocksTest;
+                    }
+                }
+                checked = rumbleTestChecked &&
+                          controllers_->output().buttons == ControllerOutput{}.buttons &&
+                          emulator_->gb.elapsed_cycles == beforeCycles &&
+                          background->isChecked() != backgroundBefore;
                 dialog->findChild<QSpinBox *>("controllerPressThreshold")->setValue(19000);
                 if (accept) {
                     dialog->findChild<QDialogButtonBox *>("controllerDialogButtons")
@@ -582,14 +632,21 @@ bool MainWindow::controllerSmokeTest(const QString &directory) {
         QByteArray fixture(32768, char(0));
         fixture[0x100] = char(0xc3);
         fixture[0x102] = 2;
+        fixture[0x143] = char(0x80);
         fixture[0x147] = char(0xbc);
         fixture[0x149] = char(0xc1);
         fixture[0x14a] = 0x65;
         fixture[0x150] = 1;
         fixture[0x152] = 1;
         fixture[0x153] = char(features);
-        fixture[0x200] = char(0x18);
-        fixture[0x201] = char(0xfe);
+        // NEXT and FINISH should each traverse enough instructions for more than
+        // one debugger slice, then return to the normal idle loop.
+        fixture[0x200] = char(0xcd); // CALL $0220
+        fixture[0x201] = char(0x20);
+        fixture[0x202] = char(0x02);
+        fixture[0x203] = char(0x18); // JR $0203
+        fixture[0x204] = char(0xfe);
+        fixture[0x3a0] = char(0xc9); // RET after 384 NOPs
         uint8_t checksum = 0;
         for (unsigned address = 0x134; address <= 0x14c; ++address)
             checksum = uint8_t(checksum - uint8_t(fixture[qsizetype(address)]) - 1u);
@@ -612,52 +669,94 @@ bool MainWindow::controllerSmokeTest(const QString &directory) {
                 return false;
         return true;
     };
-    const auto publishMotor = [this] {
-        // Make each observation immediate without relying on the host refresh timer.
-        // This clears SDL output only; the frontend's guest integration is retained.
-        controllers_->stopRumble();
+    const auto publishMotor = [this, &first] {
+        // An incomplete guest interval must never reach the controller.
+        const unsigned calls = first.rumbleCalls;
         finishControllerRumble();
+        if (first.rumbleCalls != calls)
+            return false;
+        // A pending LCD-enable presentation closes this interval without
+        // advancing the guest oscillator or inventing another motor sample.
+        const bool hadSamples = rumbleSampleCount_ != 0;
+        const size_t queued = rumblePublishedAmplitudes_.size();
+        emulator_->gb.display_cycles_since_frame = 4561;
+        cupid_gb_prepare_lcd_enable(&emulator_->gb);
+        if (first.rumbleCalls != calls ||
+            rumblePublishedAmplitudes_.size() != queued + size_t(hadSamples))
+            return false;
+        finishControllerRumble();
+        return true;
     };
     const auto motorNear = [&first](int expected) {
         return std::abs(int(first.amplitude) - expected) <= 1;
     };
-    if (!openMotorCartridge(9))
+    settings_.setValue("emulation/model", int(CUPID_GB_MODEL_CGB));
+    if (!openMotorCartridge(9) || emulator_->gb.model != CUPID_GB_MODEL_CGB ||
+        !emulator_->gb.cgb_mode)
         return smokeFailure(__FILE__, __LINE__);
     for (unsigned strength = 1; strength <= 3; ++strength) {
         cupid_gb_write_u8(&emulator_->gb, 3, uint8_t(0x20u + strength));
         if (!stepMotor(32))
             return smokeFailure(__FILE__, __LINE__);
-        publishMotor();
+        if (!publishMotor())
+            return smokeFailure(__FILE__, __LINE__);
         if (!motorNear(int(strength * 21845u)))
             return smokeFailure(__FILE__, __LINE__);
     }
 
     resetControllerRumble();
-    uint64_t weighted = 0;
-    const uint64_t motorStart = emulator_->gb.elapsed_cycles;
+    unsigned levelInstructions = 0, totalInstructions = 0;
     for (const auto &[strength, instructions] :
          {std::pair<unsigned, unsigned>{1, 7}, {3, 11}, {2, 13}}) {
         cupid_gb_write_u8(&emulator_->gb, 3, uint8_t(0x20u + strength));
-        const uint64_t start = emulator_->gb.elapsed_cycles;
         if (!stepMotor(instructions))
             return smokeFailure(__FILE__, __LINE__);
-        weighted += (emulator_->gb.elapsed_cycles - start) * strength;
+        levelInstructions += instructions * strength;
+        totalInstructions += instructions;
     }
-    publishMotor();
-    const int mixedAmplitude = int(std::lround(
-        65535.0 * double(weighted) / (3.0 * double(emulator_->gb.elapsed_cycles - motorStart))));
+    if (!publishMotor())
+        return smokeFailure(__FILE__, __LINE__);
+    const int mixedAmplitude =
+        int(std::lround(65535.0 * levelInstructions / (3.0 * totalInstructions)));
     if (!motorNear(mixedAmplitude))
         return smokeFailure(__FILE__, __LINE__);
 
+    resetControllerRumble();
+    auto &motorGb = emulator_->gb;
+    cupid_gb_write_u8(&motorGb, 3, 0x21);
+    const uint64_t normalStart = motorGb.elapsed_cycles;
+    if (!stepMotor(16))
+        return smokeFailure(__FILE__, __LINE__);
+    const uint64_t normalCycles = motorGb.elapsed_cycles - normalStart;
+    const uint64_t normalSamples = rumbleSampleCount_;
+    motorGb.double_speed = true;
+    motorGb.io_registers[0x4d] |= 0x80u;
+    cupid_gb_write_u8(&motorGb, 3, 0x23);
+    const uint64_t fastStart = motorGb.elapsed_cycles;
+    if (!stepMotor(16))
+        return smokeFailure(__FILE__, __LINE__);
+    const uint64_t fastCycles = motorGb.elapsed_cycles - fastStart;
+    const uint64_t fastSamples = rumbleSampleCount_ - normalSamples;
+    if (!publishMotor())
+        return smokeFailure(__FILE__, __LINE__);
+    if (!normalSamples || fastSamples != normalSamples || normalCycles <= fastCycles ||
+        !motorNear(43690))
+        return smokeFailure(__FILE__, __LINE__);
+    motorGb.double_speed = false;
+    motorGb.io_registers[0x4d] &= uint8_t(~0x80u);
+
+    cupid_gb_write_u8(&motorGb, 3, 0x22);
     const QByteArray gradedMotor = captureState();
     cupid_gb_write_u8(&emulator_->gb, 3, 0x23);
     if (!stepMotor(32))
         return smokeFailure(__FILE__, __LINE__);
-    publishMotor();
+    if (!publishMotor())
+        return smokeFailure(__FILE__, __LINE__);
     if (!motorNear(65535) || !restoreState(gradedMotor, false) || first.amplitude ||
         cupid_gb_rumble_strength(&emulator_->gb) != 2 || !stepMotor(32))
         return smokeFailure(__FILE__, __LINE__);
-    publishMotor();
+    if (!publishMotor())
+        return smokeFailure(__FILE__, __LINE__);
     if (!motorNear(43690) || restoreState(QByteArray("invalid motor state"), false) ||
         !motorNear(43690))
         return smokeFailure(__FILE__, __LINE__);
@@ -668,7 +767,8 @@ bool MainWindow::controllerSmokeTest(const QString &directory) {
     controllers_->setFocused(true);
     if (!stepMotor(32))
         return smokeFailure(__FILE__, __LINE__);
-    publishMotor();
+    if (!publishMotor())
+        return smokeFailure(__FILE__, __LINE__);
     if (!motorNear(43690))
         return smokeFailure(__FILE__, __LINE__);
 
@@ -677,14 +777,43 @@ bool MainWindow::controllerSmokeTest(const QString &directory) {
     controllers_->configure(halfMotor);
     if (first.amplitude || !stepMotor(32))
         return smokeFailure(__FILE__, __LINE__);
-    publishMotor();
-    if (!motorNear(21845))
+    if (!publishMotor())
+        return smokeFailure(__FILE__, __LINE__);
+    if (!motorNear(26754))
+        return smokeFailure(__FILE__, __LINE__);
+    for (const auto &[level, expected] :
+         {std::pair<unsigned, int>{1, 18918}, {3, 32767}, {2, 26754}}) {
+        const unsigned calls = first.rumbleCalls;
+        cupid_gb_write_u8(&emulator_->gb, 3, uint8_t(0x20u + level));
+        if (!stepMotor(32))
+            return smokeFailure(__FILE__, __LINE__);
+        if (!publishMotor())
+            return smokeFailure(__FILE__, __LINE__);
+        if (!motorNear(expected) || first.rumbleCalls <= calls)
+            return smokeFailure(__FILE__, __LINE__);
+    }
+    halfMotor.rumbleStrength = 0;
+    controllers_->configure(halfMotor);
+    if (first.amplitude || !stepMotor(32))
+        return smokeFailure(__FILE__, __LINE__);
+    if (!publishMotor())
+        return smokeFailure(__FILE__, __LINE__);
+    if (first.amplitude)
+        return smokeFailure(__FILE__, __LINE__);
+    halfMotor.rumbleStrength = 100;
+    controllers_->configure(halfMotor);
+    if (first.amplitude || !stepMotor(32))
+        return smokeFailure(__FILE__, __LINE__);
+    if (!publishMotor())
+        return smokeFailure(__FILE__, __LINE__);
+    if (!motorNear(43690))
         return smokeFailure(__FILE__, __LINE__);
     halfMotor.rumble = false;
     controllers_->configure(halfMotor);
     if (first.amplitude || !stepMotor(32))
         return smokeFailure(__FILE__, __LINE__);
-    publishMotor();
+    if (!publishMotor())
+        return smokeFailure(__FILE__, __LINE__);
     if (first.amplitude)
         return smokeFailure(__FILE__, __LINE__);
     controllers_->configure(motorConfiguration);
@@ -695,11 +824,13 @@ bool MainWindow::controllerSmokeTest(const QString &directory) {
         cupid_gb_write_u8(&emulator_->gb, 3, 0x22);
         if (!stepMotor(32))
             return smokeFailure(__FILE__, __LINE__);
-        publishMotor();
+        if (!publishMotor())
+            return smokeFailure(__FILE__, __LINE__);
         if (!motorNear(43690) || !resetConsole(kind) || first.amplitude ||
             cupid_gb_rumble_strength(&emulator_->gb) || !stepMotor(32))
             return smokeFailure(__FILE__, __LINE__);
-        publishMotor();
+        if (!publishMotor())
+            return smokeFailure(__FILE__, __LINE__);
         if (first.amplitude)
             return smokeFailure(__FILE__, __LINE__);
     }
@@ -708,7 +839,8 @@ bool MainWindow::controllerSmokeTest(const QString &directory) {
         cupid_gb_write_u8(&emulator_->gb, 3, 0x23);
         if (!stepMotor(32))
             return smokeFailure(__FILE__, __LINE__);
-        publishMotor();
+        if (!publishMotor())
+            return smokeFailure(__FILE__, __LINE__);
         if (!motorNear(65535) || !resetCartridge(workflow) || first.amplitude ||
             cupid_gb_rumble_strength(&emulator_->gb))
             return smokeFailure(__FILE__, __LINE__);
@@ -717,10 +849,116 @@ bool MainWindow::controllerSmokeTest(const QString &directory) {
         cupid_gb_write_u8(&emulator_->gb, 3, 0x21);
         if (!stepMotor(32))
             return smokeFailure(__FILE__, __LINE__);
-        publishMotor();
+        if (!publishMotor())
+            return smokeFailure(__FILE__, __LINE__);
         if (!motorNear(21845))
             return smokeFailure(__FILE__, __LINE__);
     }
+
+    // Paused debugger execution still clocks cartridge hardware. All completed
+    // and partial feedback belongs to the debugger operation, never to a later
+    // resumed frame or a controller request while the debugger is stopped.
+    resetControllerRumble();
+    pauseDebugger();
+    cupid_gb_write_u8(&emulator_->gb, 3, 0x23);
+    if (!stepMotor(2) || !rumbleSampleCount_)
+        return smokeFailure(__FILE__, __LINE__);
+    emulator_->gb.display_cycles_since_frame = 4561;
+    cupid_gb_prepare_lcd_enable(&emulator_->gb);
+    if (rumblePublishedAmplitudes_.empty() || rumbleSampleCount_)
+        return smokeFailure(__FILE__, __LINE__);
+    const unsigned debuggerRumbleCalls = first.rumbleCalls;
+    const auto feedbackCleared = [this] {
+        return !rumbleSampleSum_ && !rumbleSampleCount_ && rumblePublishedAmplitudes_.empty();
+    };
+    debuggerCommand("step");
+    if (!debuggerTimer_.isActive())
+        return smokeFailure(__FILE__, __LINE__);
+    debuggerSlice();
+    if (!paused_ || debuggerTimer_.isActive() || !feedbackCleared() ||
+        first.rumbleCalls != debuggerRumbleCalls)
+        return smokeFailure(__FILE__, __LINE__);
+
+    const auto finishDebuggerCommand = [this, &feedbackCleared, &first,
+                                        debuggerRumbleCalls](const char *command) {
+        debuggerCommand(command);
+        if (!debuggerTimer_.isActive())
+            return false;
+        unsigned slices = 0;
+        do {
+            debuggerSlice();
+            ++slices;
+            if (!feedbackCleared() || first.rumbleCalls != debuggerRumbleCalls)
+                return false;
+        } while (debuggerTimer_.isActive() && slices < 256);
+        return !debuggerTimer_.isActive() && slices > 1 && paused_ && emulator_->gb.cpu.pc == 0x203;
+    };
+    debuggerCommand("set pc $0200");
+    debuggerCommand("set sp $fffe");
+    if (!finishDebuggerCommand("next"))
+        return smokeFailure(__FILE__, __LINE__);
+    debuggerCommand("set pc $0200");
+    debuggerCommand("set sp $fffe");
+    debuggerCommand("step");
+    if (!debuggerTimer_.isActive())
+        return smokeFailure(__FILE__, __LINE__);
+    debuggerSlice();
+    if (!feedbackCleared() || debuggerTimer_.isActive() || emulator_->gb.cpu.pc != 0x220 ||
+        first.rumbleCalls != debuggerRumbleCalls || !finishDebuggerCommand("finish"))
+        return smokeFailure(__FILE__, __LINE__);
+
+    cupid_gb_write_u8(&emulator_->gb, 3, 0x20);
+    debuggerCommand("continue");
+    if (paused_ || !feedbackCleared() || first.rumbleCalls != debuggerRumbleCalls || !runFrame() ||
+        first.amplitude)
+        return smokeFailure(__FILE__, __LINE__);
+    cupid_gb_write_u8(&emulator_->gb, 3, 0x22);
+    // JR $0203 has three four-T-cycle deliveries at normal speed. The previous
+    // off-motor presentation left two level-zero samples in the next interval.
+    // The first level-two frame therefore publishes a mixed mean; only the
+    // following complete interval can publish the steady level-two amplitude.
+    constexpr uint64_t frameCycles = 70224;
+    constexpr uint64_t frameDeliveries = frameCycles / 4u;
+    constexpr uint64_t carriedZeroSamples = 2;
+    constexpr uint64_t expectedCompletedCount = frameDeliveries;
+    constexpr uint64_t expectedCompletedSum = 2u * (frameDeliveries - carriedZeroSamples);
+    constexpr uint16_t mixedExpected =
+        uint16_t((uint64_t(65535) * expectedCompletedSum) / (3u * expectedCompletedCount));
+    static_assert(mixedExpected == 43685);
+    if (emulator_->gb.double_speed || emulator_->gb.cpu.pc != 0x203 ||
+        cupid_gb_rumble_strength(&emulator_->gb) != 2)
+        return smokeFailure(__FILE__, __LINE__);
+    const uint64_t mixedCyclesBefore = emulator_->gb.elapsed_cycles;
+    const uint64_t mixedCountBefore = rumbleSampleCount_;
+    const uint64_t mixedSumBefore = rumbleSampleSum_;
+    const unsigned mixedCallsBefore = first.rumbleCalls;
+    const bool mixedFrameRan = runFrame();
+    const uint64_t mixedCycles = emulator_->gb.elapsed_cycles - mixedCyclesBefore;
+    const uint64_t newDeliveries = mixedCycles / 4u;
+    const uint64_t completedCount = mixedCountBefore + newDeliveries - rumbleSampleCount_;
+    const uint64_t completedSum = mixedSumBefore + 2u * newDeliveries - rumbleSampleSum_;
+    if (!mixedFrameRan || mixedCycles != frameCycles || newDeliveries != frameDeliveries ||
+        mixedCountBefore != carriedZeroSamples || mixedSumBefore ||
+        rumbleSampleCount_ != carriedZeroSamples || rumbleSampleSum_ != 4 ||
+        completedCount != expectedCompletedCount || completedSum != expectedCompletedSum ||
+        first.amplitude != mixedExpected || first.rumbleCalls != mixedCallsBefore + 1 ||
+        !rumblePublishedAmplitudes_.empty() || emulator_->gb.double_speed ||
+        emulator_->gb.cpu.pc != 0x203) {
+        qCritical("Controller mixed motor interval: frame=%d amplitude=%u expected=%u "
+                  "cycles=%llu partial=%llu/%llu->%llu/%llu completed=%llu/%llu calls=%u->%u",
+                  int(mixedFrameRan), unsigned(first.amplitude), unsigned(mixedExpected),
+                  static_cast<unsigned long long>(mixedCycles),
+                  static_cast<unsigned long long>(mixedCountBefore),
+                  static_cast<unsigned long long>(mixedSumBefore),
+                  static_cast<unsigned long long>(rumbleSampleCount_),
+                  static_cast<unsigned long long>(rumbleSampleSum_),
+                  static_cast<unsigned long long>(completedCount),
+                  static_cast<unsigned long long>(completedSum), mixedCallsBefore,
+                  first.rumbleCalls);
+        return smokeFailure(__FILE__, __LINE__);
+    }
+    if (!runFrame() || !motorNear(43690))
+        return smokeFailure(__FILE__, __LINE__);
 
     if (!openMotorCartridge(8))
         return smokeFailure(__FILE__, __LINE__);
@@ -729,7 +967,8 @@ bool MainWindow::controllerSmokeTest(const QString &directory) {
         (cupid_gb_read_u8(&emulator_->gb, 0xa003) & 3u) != 3 ||
         cupid_gb_rumble_strength(&emulator_->gb) || !stepMotor(32))
         return smokeFailure(__FILE__, __LINE__);
-    publishMotor();
+    if (!publishMotor())
+        return smokeFailure(__FILE__, __LINE__);
     if (first.amplitude || second.amplitude)
         return smokeFailure(__FILE__, __LINE__);
     if (!closeRom() || first.amplitude)

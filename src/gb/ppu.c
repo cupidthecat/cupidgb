@@ -123,6 +123,8 @@ static void publish_frame(CupidGb *gb, uint8_t type, uint32_t remaining_dots) {
         for (size_t pixel = 0; pixel < CUPID_GB_SCREEN_WIDTH * CUPID_GB_SCREEN_HEIGHT; ++pixel)
             gb->frame_buffer_color[pixel] = 0x7fff;
     }
+    if (gb->presentation_callback)
+        gb->presentation_callback(gb, type, gb->presentation_user_data);
 }
 
 void cupid_gb_prepare_lcd_enable(CupidGb *gb) {

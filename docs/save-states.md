@@ -10,7 +10,7 @@ Load a native state file through File > Load State File or drop a `.s0` through 
 
 Writes use an atomic file replacement. Loading checks the complete cartridge identity and hardware model. A state captured with an active boot overlay requires the matching local boot binary. Failed validation preserves the running session and its host audio queue. A successful load replaces the emulated state, reapplies current physical input, clears queued host audio, and realigns pacing.
 
-New files use CupidGB native version 16. Versions 2 through 15 remain loadable. Desktop loads retain the current audio filter, interference level, channel choices, sample rate and receiving output history. Interoperable BESS state imports remain pending.
+New files use CupidGB native version 17. Versions 2 through 16 remain loadable. Desktop loads retain the current audio filter, interference level, channel choices, sample rate and receiving output history. Interoperable BESS state imports remain pending.
 
 The version identifies the wire encoding. Subsequent execution follows the current engine. Version 3 records pending CGB DMA work, CPU speed-switch sequencing, and audio clock, held-output, envelope, sweep, and noise latches. Version 2 has no values for these latches. Its loader initializes them deterministically after validating the old payload; it never takes missing hardware history from the target's running session. Pending DMA and speed-switch delays start cleared, while an old armed HBlank transfer retains its saved block count. On color hardware, pulse clock startup follows the saved channel enable, and held pulse output follows the saved duty position. Monochrome pulse history uses the import rules described under version 11 below. Noise gates and held output derive from the saved channel/DAC and LFSR state, with a canonical prescaler phase. The old LFSR, timer and queued PCM remain intact. Version 14 initializes missing reconstruction and filter history as described below. Keep the original state if you need to revisit its earlier build.
 
@@ -209,13 +209,21 @@ Versions 2 through 14 have no exact record of this scheduling history. After all
 
 Version 16 separates TPP1 ROM-control readback from its currently mapped ROM bank. The existing generic mapped-bank field stores the 16-bit mapping. A native reset exposes control value `0000` while bank `0001` remains mapped. The next controller write commits the raw bank latches to mapping.
 
-Versions 2 through 15 selected ROM from the TPP1 control register and could leave the generic field stale. Import first validates that older field under its original bounds, then projects the control register into the mapped-bank field. Other controllers keep their existing bounds. V15 timing records remain literal; only versions below 15 receive the missing-timing projections above. Older payload bytes and frozen V3/V4 fixture hashes stay unchanged.
+Versions 2 through 15 selected ROM from the TPP1 control register and could leave the generic field stale. Import first validates that older field under its original bounds, then projects the control register into the mapped-bank field. Other controllers keep their existing bounds. V15 retains its recorded timing fields; versions below 15 receive the missing-timing projections above. The absent tile-row latch follows the version 17 import rule below. Older payload bytes and frozen V3/V4 fixture hashes stay unchanged.
 
 Version 16 appends one pending-input byte after the complete V15 display, pixel and VRAM records and before the accessory descriptor. Only `00` and `01` are valid. The sampled JOYP register remains in its existing I/O payload slot. Exact and live loads preserve both the sample and pending update, including a capture made after a host event but before hardware sampling. Their separate audio ownership rules remain unchanged.
 
 Versions 2 through 15 stored input masks without a sampled JOYP cache. The loader reconstructs that cache from the saved masks, active row and SGB player state, then clears the absent pending flag. It preserves recorded row-settling history and emits no interrupt or callback. This migration uses only the loaded state. It cannot recover an input event that the older file did not distinguish from its settled sample.
 
 An ordinary version 16 state without model or cartridge extensions occupies 305,089 bytes without a printer and 337,776 bytes with one. Query the complete encoded size for each capture.
+
+### Tile-row retention in version 17
+
+Version 17 uses the previously reserved fourth byte of the pixel-timing record for the retained tile row. The current CGB profile selects this row during the tile-map address half of a background or window fetch. Both tile-data planes use that selection, including vertical flipping. A later SCY write does not change the row of a fetch already in progress. This also applies when color hardware runs a monochrome cartridge.
+
+The encoded size and all other field offsets stay the same as version 16. The loader still requires that byte to be zero in version 15 and 16 files. Older versions reconstruct the missing row from their saved scanline and SCY, or the saved window line when the window is active. That deterministic projection cannot recover a prior SCY value changed after the original tile-map selection. Keep the older build and state when exact historical continuation is required.
+
+The row latch belongs to guest state. Motor sample callback registrations and the frontend's accumulated samples remain host state and add no serialized fields. Exact, live and trusted loading paths retain registrations without emitting samples; the frontend clears its pending feedback at a successful timeline change.
 
 ## Validation scope
 

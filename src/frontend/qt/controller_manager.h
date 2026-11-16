@@ -135,8 +135,6 @@ class ControllerManager final : public QObject {
     QMap<SDL_JoystickID, int> players_;
     SDL_JoystickID preferredInstance_ = -1;
     ControllerOutput output_;
-    QElapsedTimer rumbleClock_;
-    qint64 lastRumbleRefresh_ = -250;
     bool focused_ = true;
     bool delivery_ = true;
     bool motionEnabled_ = false;

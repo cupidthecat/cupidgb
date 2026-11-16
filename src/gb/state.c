@@ -44,7 +44,8 @@
 
 enum {
     STATE_HEADER_SIZE = 128,
-    STATE_VERSION_V16 = CUPID_GB_STATE_VERSION,
+    STATE_VERSION_V17 = CUPID_GB_STATE_VERSION,
+    STATE_VERSION_V16 = 16,
     STATE_VERSION_V15 = 15,
     STATE_VERSION_V14 = 14,
     STATE_VERSION_V13 = 13,
@@ -948,7 +949,7 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
     }
     memset(data, 0, STATE_HEADER_SIZE);
     memcpy(data, state_magic, sizeof(state_magic));
-    put_u32(data + 8, STATE_VERSION_V16);
+    put_u32(data + 8, STATE_VERSION_V17);
     put_u32(data + 12, (uint32_t)size);
     put_u32(data + 16, (uint32_t)gb->model);
     put_u32(data + 20, (uint32_t)gb->rom_size);
@@ -963,7 +964,7 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
         cupid_sha256(gb->boot_rom, gb->boot_rom_size, data + 64);
     }
     StateIo io = {NULL, data, STATE_HEADER_SIZE, hardware_size, false};
-    state_fields(&io, (CupidGb *)gb, STATE_VERSION_V16);
+    state_fields(&io, (CupidGb *)gb, STATE_VERSION_V17);
     state_extension_v3(&io, (CupidGb *)gb);
     state_extension_v4(&io, (CupidGb *)gb);
     state_extension_v5(&io, (CupidGb *)gb, sections);
@@ -974,7 +975,7 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
     if (gb->dma_phase > 3u)
         io.invalid = true;
     state_input_and_display(&io, (CupidGb *)gb);
-    state_video_bus(&io, (CupidGb *)gb, STATE_VERSION_V16);
+    state_video_bus(&io, (CupidGb *)gb, STATE_VERSION_V17);
     state_stop_ports(&io, (CupidGb *)gb);
     bytes(&io, ((CupidGb *)gb)->apu.pulse_dac_hold, 2);
     if (!(sections & STATE_SECTION_HUC3))
@@ -1065,7 +1066,7 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
         return CUPID_GB_STATE_INVALID;
     }
     const uint32_t version = get_u32(data + 8);
-    if (version < STATE_VERSION_V2 || version > STATE_VERSION_V16) {
+    if (version < STATE_VERSION_V2 || version > STATE_VERSION_V17) {
         return CUPID_GB_STATE_UNSUPPORTED_VERSION;
     }
     const size_t infrared_size =
@@ -1302,6 +1303,7 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
     }
     if (pixel_timing_size) {
         if (!reserve(&io, pixel_timing_size) ||
+            (version < STATE_VERSION_V17 && data[io.offset + 3]) ||
             !cupid_gb_pixels_timing_decode(candidate, data + io.offset, pixel_timing_size))
             io.invalid = true;
         io.offset += pixel_timing_size;
@@ -1401,6 +1403,14 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
          * nibble is stale; reconstruct its old visible value after SGB migration.
          * Import must not turn that projection into a new input interrupt. */
         cupid_gb_input_import_legacy(candidate);
+    }
+    if (version >= STATE_VERSION_V15 && version < STATE_VERSION_V17) {
+        /* V15-V16 retained other pixel timing but not the tile-map row.
+         * Older formats reconstruct that missing row in the legacy importer. */
+        candidate->pixel_timing.fetch_y =
+            candidate->pixels.window_active
+                ? candidate->window_line_counter
+                : (uint8_t)(candidate->pixels.line + candidate->io_registers[CUPID_GB_IO_SCY]);
     }
     if (!cupid_gb_audio_state_valid(candidate) || !cupid_gb_display_clock_state_valid(candidate) ||
         !cupid_gb_pixels_timing_valid(candidate) || !cupid_gb_vram_bus_state_valid(candidate)) {

@@ -261,8 +261,13 @@ ControllerDialog::ControllerDialog(ControllerManager &manager,
     });
     connect(test, &QPushButton::clicked, this, [this] {
         manager_.backend().stopRumble(current_);
-        if (!manager_.backend().rumble(current_, uint16_t(65535 * strength_->value() / 100),
-                                       uint16_t(65535 * strength_->value() / 100), 150, true))
+        const int strength = strength_->value();
+        if (!strength) {
+            status_->setText("Rumble strength is 0%; increase it to test the selected controller.");
+            return;
+        }
+        const auto amplitude = uint16_t(65535 * strength / 100);
+        if (!manager_.backend().rumble(current_, amplitude, amplitude, 150, true))
             status_->setText(
                 "Rumble is unavailable, disabled by focus, or unsupported by this device.");
         else

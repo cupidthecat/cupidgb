@@ -293,27 +293,24 @@ void MainWindow::navigateControllerMenu(const QString &action, SDL_JoystickID in
 void MainWindow::resetControllerRumble() {
     if (controllers_)
         controllers_->stopRumble();
-    rumbleWeightedCycles_ = 0;
-    rumbleWindowCycles_ = rumbleLastCycles_ = emulator_ ? emulator_->gb.elapsed_cycles : 0;
-    rumbleStrength_ = emulator_ ? cupid_gb_rumble_strength(&emulator_->gb) : 0;
+    rumbleSampleSum_ = rumbleSampleCount_ = 0;
+    rumblePublishedAmplitudes_.clear();
+    rumbleLastCycles_ = emulator_ ? emulator_->gb.elapsed_cycles : 0;
 }
 
 void MainWindow::finishControllerRumble() {
     if (!emulator_ || !controllers_)
         return;
     const uint64_t now = emulator_->gb.elapsed_cycles;
-    if (now < rumbleLastCycles_ || now <= rumbleWindowCycles_) {
+    if (now < rumbleLastCycles_) {
         resetControllerRumble();
         return;
     }
-    rumbleWeightedCycles_ += (now - rumbleLastCycles_) * rumbleStrength_;
-    controllers_->setRumble(!paused_ && !rewind_ && !stateOperation_
-                                ? double(rumbleWeightedCycles_) /
-                                      (3.0 * double(now - rumbleWindowCycles_))
-                                : 0.0,
-                            controllerPlayerCount_ == 1);
-    rumbleWindowCycles_ = rumbleLastCycles_ = now;
-    rumbleWeightedCycles_ = 0;
+    rumbleLastCycles_ = now;
+    for (const double amplitude : rumblePublishedAmplitudes_)
+        controllers_->setRumble(!paused_ && !rewind_ && !stateOperation_ ? amplitude : 0.0,
+                                controllerPlayerCount_ == 1);
+    rumblePublishedAmplitudes_.clear();
 }
 
 void MainWindow::configureControllers() {

@@ -245,6 +245,13 @@ static void advance_base_time(CupidGb *gb, unsigned dots) {
     gb->elapsed_cycles += dots;
 }
 
+static void sample_rumble_delivery(CupidGb *gb, uint32_t pending_half_dots) {
+    /* A delivery contributes one motor sample before its first PPU edge.
+     * All subsequent subdivisions share that sample until the delivery ends. */
+    if (!pending_half_dots && gb->rumble_sample_callback)
+        gb->rumble_sample_callback(gb, cupid_gb_rumble_strength(gb), gb->rumble_sample_user_data);
+}
+
 static void finish_display_span(CupidGb *gb, unsigned half_dots) {
     if (!half_dots)
         return;
@@ -288,6 +295,7 @@ static void switch_clock_segment(CupidGb *gb, unsigned cycles, unsigned *half_do
     *half_dot = (*half_dot + ticks) & 1u;
     if (frozen == cycles)
         return;
+    sample_rumble_delivery(gb, *display_half_cycles);
     cupid_gb_apu_run(gb, false);
     *rtc_half_cycles += ticks;
     *display_half_cycles += ticks;
@@ -392,6 +400,7 @@ static void tick_mcycles(CupidGb *gb, uint16_t cycles, bool cpu_delivery) {
                 gb->speed_switch_alignment ^= 4u;
         }
         const uint16_t dots = gb->double_speed ? 2u : 4u;
+        sample_rumble_delivery(gb, display_half_cycles);
         half_cycles += (uint32_t)dots * 2u;
         display_half_cycles += (uint32_t)dots * 2u;
         const bool shared = (gb->dma_active || gb->dma_start_delay) &&
@@ -445,6 +454,7 @@ uint8_t cupid_gb_tick_halt(CupidGb *gb) {
          * A carried divider period can finish in either half. */
         clock_cpu_span(gb, 2u);
         cupid_gb_apu_run(gb, false);
+        sample_rumble_delivery(gb, 0);
         advance_base_time(gb, 2u);
         cupid_gb_tick_ppu_dots(gb, 2u);
         cupid_gb_tick_dma_tcycles(gb, 2u);
@@ -473,6 +483,7 @@ void cupid_gb_acknowledge_interrupt(CupidGb *gb, uint8_t mask) {
     const bool shared = shared_vram_dma(gb);
     clock_cpu_span(gb, 2u);
     cupid_gb_apu_run(gb, false);
+    sample_rumble_delivery(gb, 0);
     for (unsigned dot = 0; dot < half; ++dot) {
         clock_lcd_dot(gb);
         if (shared)
@@ -485,6 +496,7 @@ void cupid_gb_acknowledge_interrupt(CupidGb *gb, uint8_t mask) {
     gb->interrupt_flags &= (uint8_t)~mask;
     clock_cpu_span(gb, 2u);
     cupid_gb_apu_run(gb, false);
+    sample_rumble_delivery(gb, 0);
     if (gb->double_speed)
         gb->speed_phase = !gb->speed_phase;
     for (unsigned dot = 0; dot < half; ++dot) {
@@ -562,6 +574,7 @@ static unsigned bus_clock_span(CupidGb *gb, unsigned phase, unsigned cycles) {
         phase = (phase + 1u) & 3u;
         const bool divider_edge = consume_divider_cycles(gb, 1u) != 0;
         if (!switching) {
+            sample_rumble_delivery(gb, half_cycles);
             bus_clock_dot(gb, phase);
             half_cycles += gb->double_speed ? 1u : 2u;
         } else {
@@ -572,6 +585,7 @@ static unsigned bus_clock_span(CupidGb *gb, unsigned phase, unsigned cycles) {
                 --gb->speed_switch_freeze_cycles;
             const bool dot = !gb->double_speed || !(phase & 1u);
             if (!frozen) {
+                sample_rumble_delivery(gb, half_cycles);
                 half_cycles += gb->double_speed ? 1u : 2u;
                 if (cupid_gb_lcd_enabled(gb))
                     gb->speed_switch_alignment =

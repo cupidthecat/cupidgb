@@ -247,6 +247,10 @@ void cupid_gb_init(CupidGb *gb) {
     void *rumble_user_data;
     CupidGbRumbleStrengthCallback rumble_strength_callback;
     void *rumble_strength_user_data;
+    CupidGbRumbleSampleCallback rumble_sample_callback;
+    void *rumble_sample_user_data;
+    CupidGbPresentationCallback presentation_callback;
+    void *presentation_user_data;
     CupidGbInfraredCallback infrared_callback;
     void *infrared_user_data;
 
@@ -263,6 +267,10 @@ void cupid_gb_init(CupidGb *gb) {
     rumble_user_data = gb->rumble_user_data;
     rumble_strength_callback = gb->rumble_strength_callback;
     rumble_strength_user_data = gb->rumble_strength_user_data;
+    rumble_sample_callback = gb->rumble_sample_callback;
+    rumble_sample_user_data = gb->rumble_sample_user_data;
+    presentation_callback = gb->presentation_callback;
+    presentation_user_data = gb->presentation_user_data;
     infrared_callback = gb->infrared_callback;
     infrared_user_data = gb->infrared_user_data;
     const int16_t motion_x = gb->mbc7.motion_x;
@@ -285,6 +293,10 @@ void cupid_gb_init(CupidGb *gb) {
     gb->rumble_user_data = rumble_user_data;
     gb->rumble_strength_callback = rumble_strength_callback;
     gb->rumble_strength_user_data = rumble_strength_user_data;
+    gb->rumble_sample_callback = rumble_sample_callback;
+    gb->rumble_sample_user_data = rumble_sample_user_data;
+    gb->presentation_callback = presentation_callback;
+    gb->presentation_user_data = presentation_user_data;
     gb->infrared_callback = infrared_callback;
     gb->infrared_user_data = infrared_user_data;
     cupid_gb_mbc7_set_motion(gb, motion_x, motion_y);
@@ -591,6 +603,10 @@ void cupid_gb_cleanup(CupidGb *gb) {
     gb->rumble_user_data = NULL;
     gb->rumble_strength_callback = NULL;
     gb->rumble_strength_user_data = NULL;
+    gb->rumble_sample_callback = NULL;
+    gb->rumble_sample_user_data = NULL;
+    gb->presentation_callback = NULL;
+    gb->presentation_user_data = NULL;
     gb->infrared_callback = NULL;
     gb->infrared_user_data = NULL;
     gb->cheats = NULL;
@@ -656,6 +672,22 @@ void cupid_gb_set_rumble_strength_callback(CupidGb *gb, CupidGbRumbleStrengthCal
         return;
     gb->rumble_strength_callback = callback;
     gb->rumble_strength_user_data = callback ? user_data : NULL;
+}
+
+void cupid_gb_set_rumble_sample_callback(CupidGb *gb, CupidGbRumbleSampleCallback callback,
+                                         void *user_data) {
+    if (!gb)
+        return;
+    gb->rumble_sample_callback = callback;
+    gb->rumble_sample_user_data = callback ? user_data : NULL;
+}
+
+void cupid_gb_set_presentation_callback(CupidGb *gb, CupidGbPresentationCallback callback,
+                                        void *user_data) {
+    if (!gb)
+        return;
+    gb->presentation_callback = callback;
+    gb->presentation_user_data = callback ? user_data : NULL;
 }
 
 // Memory map: read

@@ -117,8 +117,12 @@ void cupid_gb_pixels_begin_transfer(CupidGb *gb) {
 static uint16_t tile_address(CupidGb *gb, bool upper) {
     CupidGbPixels *p = &gb->pixels;
     uint8_t lcdc = gb->io_registers[CUPID_GB_IO_LCDC];
-    unsigned row = p->window_active ? gb->window_line_counter
-                                    : (uint8_t)(p->line + gb->io_registers[CUPID_GB_IO_SCY]);
+    unsigned row;
+    if (gb->model == CUPID_GB_MODEL_CGB)
+        row = gb->pixel_timing.fetch_y;
+    else
+        row = p->window_active ? gb->window_line_counter
+                               : (uint8_t)(p->line + gb->io_registers[CUPID_GB_IO_SCY]);
     int base = lcdc & 0x10 ? p->tile * 16 : 0x1000 + (int8_t)p->tile * 16;
     row = (row & 7) ^ (p->attributes & 0x40 ? 7u : 0u);
     return (uint16_t)((unsigned)base + (p->attributes & 8 ? 0x2000u : 0u) + row * 2 + upper);
@@ -200,6 +204,8 @@ static void fetch_background(CupidGb *gb) {
             }
             unsigned y = p->window_active ? gb->window_line_counter
                                           : (uint8_t)(p->line + gb->io_registers[CUPID_GB_IO_SCY]);
+            if (gb->model == CUPID_GB_MODEL_CGB)
+                gb->pixel_timing.fetch_y = (uint8_t)y;
             unsigned column = p->column;
             if (!p->window_active) {
                 const int position = gb->pixel_timing.logical_x;
@@ -619,18 +625,19 @@ bool cupid_gb_pixels_timing_encode(const CupidGb *gb, uint8_t *data, size_t size
     data[0] = (uint8_t)position;
     data[1] = (uint8_t)(position >> 8);
     data[2] = gb->pixel_timing.flags;
-    data[3] = 0;
+    data[3] = gb->pixel_timing.fetch_y;
     return true;
 }
 
 bool cupid_gb_pixels_timing_decode(CupidGb *gb, const uint8_t *data, size_t size) {
-    if (!gb || !data || size != CUPID_GB_PIXEL_TIMING_STATE_SIZE || data[3])
+    if (!gb || !data || size != CUPID_GB_PIXEL_TIMING_STATE_SIZE)
         return false;
     const unsigned position = data[0] | (unsigned)data[1] << 8;
     const CupidGbPixelTiming previous = gb->pixel_timing;
     gb->pixel_timing.logical_x =
         (int16_t)(position < 0x8000u ? (int)position : (int)position - 0x10000);
     gb->pixel_timing.flags = data[2];
+    gb->pixel_timing.fetch_y = data[3];
     if (cupid_gb_pixels_timing_valid(gb))
         return true;
     gb->pixel_timing = previous;
@@ -643,6 +650,10 @@ void cupid_gb_pixels_import_legacy(CupidGb *gb) {
     CupidGbPixelTiming *timing = &gb->pixel_timing;
     const CupidGbPixels *p = &gb->pixels;
     *timing = (CupidGbPixelTiming){.logical_x = p->x};
+    /* The tile-map row is absent from these files. Reconstruct it from their
+     * saved window/scroll registers; an intervening old SCY write is unknowable. */
+    timing->fetch_y = p->window_active ? gb->window_line_counter
+                                       : (uint8_t)(p->line + gb->io_registers[CUPID_GB_IO_SCY]);
     if (!p->active)
         return;
     const unsigned scroll = gb->io_registers[CUPID_GB_IO_SCX] & 7u;

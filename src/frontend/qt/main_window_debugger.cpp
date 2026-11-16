@@ -307,6 +307,10 @@ void MainWindow::debuggerSlice() {
     if (stateOperation_ || menuDepth_ || menuInputSuspended_)
         return;
     QScopedValueRollback<bool> operation(stateOperation_, true);
+    // Paused debugger instructions can collect motor samples and publish frames.
+    // Every exit, including a breakpoint or failed step, discards that host
+    // feedback before another debugger slice or forward playback can use it.
+    const auto clearDebuggerRumble = qScopeGuard([this] { resetControllerRumble(); });
     QElapsedTimer slice;
     slice.start();
     for (unsigned count = 0; count < 128 && slice.elapsed() < 4; ++count) {

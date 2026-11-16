@@ -326,6 +326,10 @@ typedef void (*CupidGbRumbleCallback)(const struct CupidGb *gb, bool enabled, ui
                                       void *user_data);
 typedef void (*CupidGbRumbleStrengthCallback)(const struct CupidGb *gb, uint8_t strength,
                                               uint64_t base_cycles, void *user_data);
+typedef void (*CupidGbRumbleSampleCallback)(const struct CupidGb *gb, uint8_t strength,
+                                            void *user_data);
+typedef void (*CupidGbPresentationCallback)(const struct CupidGb *gb, uint8_t frame_type,
+                                            void *user_data);
 typedef void (*CupidGbInfraredCallback)(const struct CupidGb *gb, bool enabled,
                                         uint64_t base_cycles, void *user_data);
 
@@ -339,10 +343,12 @@ typedef enum CupidGbObjectFetchStage {
 } CupidGbObjectFetchStage;
 
 /* The fetcher's horizontal position includes the discarded pixels before LCD
- * output starts. Window byte reads retain their own half-fetch history. */
+ * output starts. Window byte reads retain their own half-fetch history.
+ * The supported CGB model retains the row selected at the tile-map address half. */
 typedef struct CupidGbPixelTiming {
     int16_t logical_x;
     uint8_t flags;
+    uint8_t fetch_y;
 } CupidGbPixelTiming;
 
 /* CPU reads and committed PPU fetch addresses survive LCD power transitions.
@@ -504,6 +510,10 @@ typedef struct CupidGb {
     void *rumble_user_data;
     CupidGbRumbleStrengthCallback rumble_strength_callback;
     void *rumble_strength_user_data;
+    CupidGbRumbleSampleCallback rumble_sample_callback;
+    void *rumble_sample_user_data;
+    CupidGbPresentationCallback presentation_callback;
+    void *presentation_user_data;
     CupidGbInfraredCallback infrared_callback;
     void *infrared_user_data;
     uint16_t oam_vram_row;      /* Retained source-bus row; UINT16_MAX releases the latch. */
@@ -576,6 +586,22 @@ bool cupid_gb_rumble_enabled(const CupidGb *gb);
 uint8_t cupid_gb_rumble_strength(const CupidGb *gb);
 void cupid_gb_set_rumble_strength_callback(CupidGb *gb, CupidGbRumbleStrengthCallback callback,
                                            void *user_data);
+/* Observe one effective motor level at the first nonfrozen oscillator portion
+ * of each CPU clock delivery, before its display events. Each
+ * delivery contributes one sample regardless of its duration; fully frozen
+ * oscillator spans contribute none. Host bulk ticks retain their M-cycle
+ * delivery cadence. The callback must only collect observations, without
+ * mutating or reentering the core. Registration survives reset and state loads,
+ * emits nothing during those operations, and is excluded from native states. */
+void cupid_gb_set_rumble_sample_callback(CupidGb *gb, CupidGbRumbleSampleCallback callback,
+                                         void *user_data);
+/* Observe every presentation after its handheld pixel buffers are finalized.
+ * Includes LCD-off, first-frame blank, repeat, and artificial presentations.
+ * CPU, interrupt, and SGB host-frame bookkeeping may still be in progress.
+ * Callback must not mutate or reenter the core or perform host device I/O.
+ * Registration survives init/reset/state loads and is never serialized. */
+void cupid_gb_set_presentation_callback(CupidGb *gb, CupidGbPresentationCallback callback,
+                                        void *user_data);
 void cupid_gb_set_model(CupidGb *gb, CupidGbModel model);
 /* Physical base-speed T-cycles per second, independent of CGB double speed.
  * SGB uses its NTSC host-derived clock; other current models use 4194304 Hz.

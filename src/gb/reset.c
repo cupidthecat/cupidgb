@@ -136,6 +136,10 @@ bool cupid_gb_reset(CupidGb *gb, CupidGbResetKind kind) {
     next->rumble_user_data = gb->rumble_user_data;
     next->rumble_strength_callback = gb->rumble_strength_callback;
     next->rumble_strength_user_data = gb->rumble_strength_user_data;
+    next->rumble_sample_callback = gb->rumble_sample_callback;
+    next->rumble_sample_user_data = gb->rumble_sample_user_data;
+    next->presentation_callback = gb->presentation_callback;
+    next->presentation_user_data = gb->presentation_user_data;
     next->infrared_callback = gb->infrared_callback;
     next->infrared_user_data = gb->infrared_user_data;
     next->mbc7.motion_x = gb->mbc7.motion_x;

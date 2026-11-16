@@ -270,7 +270,6 @@ ControllerConfiguration ControllerConfiguration::load(const QByteArray &bytes, b
 }
 
 ControllerManager::ControllerManager(QObject *parent) : QObject(parent) {
-    rumbleClock_.start();
     backend_.deviceAdded = [this](const DeviceInfo &info) {
         states_[info.instance].info = info;
         states_[info.instance].fallback = defaults(info);
@@ -730,13 +729,10 @@ void ControllerManager::setRumble(double amplitude, bool singlePlayer) {
         stopRumble();
         return;
     }
-    const auto value = uint16_t(std::clamp(amplitude, 0.0, 1.0) *
-                                std::clamp(configuration_.rumbleStrength, 0, 100) / 100.0 * 65535);
-    const qint64 now = rumbleClock_.elapsed();
-    // Turbo can complete many guest frames in one host refresh. Keep motor requests bounded.
-    if (value && now - lastRumbleRefresh_ < 16)
-        return;
-    lastRumbleRefresh_ = now;
+    const double intensity = std::clamp(amplitude, 0.0, 1.0);
+    const double strength = std::clamp(configuration_.rumbleStrength, 0, 100) / 100.0;
+    const auto value = uint16_t(
+        intensity > 0.0 && strength > 0.0 ? std::pow(intensity, strength) * strength * 65535 : 0);
     for (const auto &[id, state] : states_) {
         if (eligible(state) && (singlePlayer || profile(state.info).player == 0) && value)
             backend_.rumble(id, value, value, 250);
@@ -746,7 +742,6 @@ void ControllerManager::setRumble(double amplitude, bool singlePlayer) {
 }
 
 void ControllerManager::stopRumble() {
-    lastRumbleRefresh_ = -250;
     for (const auto &state : backend_.devices())
         backend_.stopRumble(state.info.instance);
 }

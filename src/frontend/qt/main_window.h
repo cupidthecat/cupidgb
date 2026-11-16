@@ -341,8 +341,8 @@ class MainWindow final : public QMainWindow {
     std::array<std::array<unsigned, 2>, 4> controllerRapidPhase_{};
     std::array<uint8_t, 4> debuggerPlayerButtons_{0xff, 0xff, 0xff, 0xff};
     unsigned controllerPlayerCount_ = 1;
-    uint64_t rumbleLastCycles_ = 0, rumbleWindowCycles_ = 0, rumbleWeightedCycles_ = 0;
-    uint8_t rumbleStrength_ = 0;
+    uint64_t rumbleLastCycles_ = 0, rumbleSampleSum_ = 0, rumbleSampleCount_ = 0;
+    std::vector<double> rumblePublishedAmplitudes_;
     unsigned menuDepth_ = 0;
     bool menuInputSuspended_ = false;
     bool controllerSmokeActive_ = false;

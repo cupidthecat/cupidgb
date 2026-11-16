@@ -632,8 +632,8 @@ static void test_malformed_tails(void) {
     static const struct {
         unsigned offset, size;
         uint32_t value;
-    } pixel_bad[] = {{0, 2, 0xffef}, {0, 2, 161},  {0, 2, 0x8000}, {0, 2, 0x7fff},
-                     {2, 1, 0x20},   {2, 1, 0x80}, {3, 1, 1},      {3, 1, 255}},
+    } pixel_bad[] = {{0, 2, 0xffef}, {0, 2, 161},  {0, 2, 0x8000},
+                     {0, 2, 0x7fff}, {2, 1, 0x20}, {2, 1, 0x80}},
       vram_bad[] = {{0, 2, 1},      {0, 2, 0x17ff}, {0, 2, 0x2000}, {0, 2, 0xffff}, {2, 2, 0x4000},
                     {2, 2, 0xffff}, {5, 1, 1},      {5, 1, 255},    {6, 2, 1},      {6, 2, 0x17ff},
                     {6, 2, 0x2000}, {6, 2, 0xffff}, {8, 2, 0x4000}, {8, 2, 0xffff}};
@@ -768,13 +768,17 @@ static void test_direct_codecs(void) {
     uint8_t pixel[CUPID_GB_PIXEL_TIMING_STATE_SIZE + 1] = {0};
     uint8_t vram[CUPID_GB_VRAM_BUS_STATE_SIZE + 1] = {0};
     for (int position = -16; position <= 160; ++position) {
-        rig->gb->pixel_timing = (CupidGbPixelTiming){.logical_x = (int16_t)position};
+        const uint8_t row = (uint8_t)(position + 16);
+        rig->gb->pixel_timing =
+            (CupidGbPixelTiming){.logical_x = (int16_t)position, .fetch_y = row};
         assert(cupid_gb_pixels_timing_encode(rig->gb, pixel, CUPID_GB_PIXEL_TIMING_STATE_SIZE));
         assert(pixel[0] == (uint8_t)position && pixel[1] == (uint8_t)((uint16_t)position >> 8));
-        assert(pixel[2] == 0 && pixel[3] == 0);
+        assert(pixel[2] == 0 && pixel[3] == row);
         rig->gb->pixel_timing.logical_x = 0;
+        rig->gb->pixel_timing.fetch_y = 0;
         assert(cupid_gb_pixels_timing_decode(rig->gb, pixel, CUPID_GB_PIXEL_TIMING_STATE_SIZE));
         assert(rig->gb->pixel_timing.logical_x == position);
+        assert(rig->gb->pixel_timing.fetch_y == row);
         ++codec_cases;
     }
     static const uint16_t maps[] = {0, 0x1800, 0x1fff};
@@ -816,7 +820,9 @@ static void test_direct_codecs(void) {
     assert(memcmp(before, rig->gb, sizeof(*before)) == 0);
     pixel[0] = 0;
     pixel[3] = 1;
-    assert(!cupid_gb_pixels_timing_decode(rig->gb, pixel, CUPID_GB_PIXEL_TIMING_STATE_SIZE));
+    assert(cupid_gb_pixels_timing_decode(rig->gb, pixel, CUPID_GB_PIXEL_TIMING_STATE_SIZE));
+    assert(rig->gb->pixel_timing.fetch_y == 1);
+    rig->gb->pixel_timing = before->pixel_timing;
     assert(memcmp(before, rig->gb, sizeof(*before)) == 0);
     vram[1] = 0x20;
     assert(!cupid_gb_vram_bus_state_decode(rig->gb, vram, CUPID_GB_VRAM_BUS_STATE_SIZE));

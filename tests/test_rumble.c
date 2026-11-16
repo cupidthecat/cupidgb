@@ -33,7 +33,7 @@
 enum { ROM_SIZE = 0x8000 };
 
 typedef struct Observer {
-    unsigned raw_calls, strength_calls;
+    unsigned raw_calls, strength_calls, sample_calls;
     bool enabled;
     uint8_t strength;
     uint64_t raw_cycle, strength_cycle;
@@ -57,9 +57,16 @@ static void motor_strength(const CupidGb *gb, uint8_t strength, uint64_t cycles,
     observer->strength_cycle = cycles;
 }
 
+static void motor_sample(const CupidGb *gb, uint8_t strength, void *context) {
+    Observer *observer = context;
+    assert(strength <= 3 && strength == cupid_gb_rumble_strength(gb));
+    ++observer->sample_calls;
+}
+
 static void observe(CupidGb *gb, Observer *observer) {
     cupid_gb_set_rumble_callback(gb, raw_motor, observer);
     cupid_gb_set_rumble_strength_callback(gb, motor_strength, observer);
+    cupid_gb_set_rumble_sample_callback(gb, motor_sample, observer);
 }
 
 static void make_rom(uint8_t *rom, CupidGbModel model, uint8_t type, uint8_t features) {
@@ -120,6 +127,7 @@ static void test_levels(CupidGb *gb, uint8_t *rom, CupidGbModel model) {
         cupid_gb_set_rumble_strength_callback(gb, NULL, &observer);
         assert(!gb->rumble_strength_callback && !gb->rumble_strength_user_data);
         cupid_gb_set_rumble_callback(gb, NULL, NULL);
+        cupid_gb_set_rumble_sample_callback(gb, NULL, NULL);
     }
 }
 
@@ -146,6 +154,7 @@ static void test_mbc5(CupidGb *gb, uint8_t *rom, CupidGbModel model) {
         }
         cupid_gb_set_rumble_callback(gb, NULL, NULL);
         cupid_gb_set_rumble_strength_callback(gb, NULL, NULL);
+        cupid_gb_set_rumble_sample_callback(gb, NULL, NULL);
     }
 }
 
@@ -153,6 +162,7 @@ static void retained_observers(const CupidGb *gb, const Observer *observer) {
     assert(gb->rumble_callback == raw_motor && gb->rumble_user_data == observer);
     assert(gb->rumble_strength_callback == motor_strength &&
            gb->rumble_strength_user_data == observer);
+    assert(gb->rumble_sample_callback == motor_sample && gb->rumble_sample_user_data == observer);
 }
 
 static void test_lifetimes(CupidGb *gb, uint8_t *rom, CupidGbModel model) {
@@ -170,6 +180,7 @@ static void test_lifetimes(CupidGb *gb, uint8_t *rom, CupidGbModel model) {
 
     cupid_gb_set_rumble_callback(gb, NULL, NULL);
     cupid_gb_set_rumble_strength_callback(gb, NULL, NULL);
+    cupid_gb_set_rumble_sample_callback(gb, NULL, NULL);
     assert(cupid_gb_state_size(gb) == length);
     assert(cupid_gb_save_state(gb, without_observers, length, NULL) == CUPID_GB_STATE_OK);
     assert(!memcmp(saved, without_observers, length));
@@ -211,7 +222,8 @@ static void test_lifetimes(CupidGb *gb, uint8_t *rom, CupidGbModel model) {
     assert(!cupid_gb_rumble_strength(gb) && !memcmp(&prior_init, &receiving, sizeof(receiving)));
     cupid_gb_cleanup(gb);
     assert(!gb->rumble_callback && !gb->rumble_user_data && !gb->rumble_strength_callback &&
-           !gb->rumble_strength_user_data && !cupid_gb_rumble_strength(gb));
+           !gb->rumble_strength_user_data && !gb->rumble_sample_callback &&
+           !gb->rumble_sample_user_data && !cupid_gb_rumble_strength(gb));
     free(before);
     free(without_observers);
     free(saved);
@@ -220,6 +232,7 @@ static void test_lifetimes(CupidGb *gb, uint8_t *rom, CupidGbModel model) {
 int main(void) {
     assert(!cupid_gb_rumble_strength(NULL));
     cupid_gb_set_rumble_strength_callback(NULL, motor_strength, NULL);
+    cupid_gb_set_rumble_sample_callback(NULL, motor_sample, NULL);
     CupidGb *gb = calloc(1, sizeof(*gb));
     uint8_t *rom = malloc(ROM_SIZE);
     assert(gb && rom);
