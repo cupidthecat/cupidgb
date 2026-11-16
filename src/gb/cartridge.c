@@ -46,6 +46,7 @@
 #include "cupid/gb/gb.h"
 #include "cupid/gb/huc3.h"
 #include "cupid/gb/mbc7.h"
+#include "display_clock.h"
 #include "rtc_internal.h"
 
 #ifdef _WIN32
@@ -911,6 +912,9 @@ bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size) {
     gb->rom_size = rom_size;
 
     gb->header = header;
+    /* Approximate post-boot startup has no earlier display-access history.
+     * Establish a canonical phase for this new cartridge session. */
+    cupid_gb_display_clock_import_legacy(gb);
 
     /* Cartridge requirements cannot turn monochrome hardware into a CGB.
      * Color-only software must still observe the explicitly selected model. */

@@ -24,5 +24,6 @@ CupidGB emulates Game Boy and Game Boy Color hardware with a C core and a Qt des
 | [Validation record](validation.md) | Recorded environments, test results, runtime measurements, and their limits |
 | [Cartridge-clock validation](validation-rtc.md) | Counter comparisons, clock policies, divider timing, native continuation, and remaining qualification |
 | [Audio and native-state validation](validation-audio.md) | Reconstruction, live restoration, SGB phase bounds, Camera processing, mapper comparisons, and native continuation |
+| [Display and infrared validation](validation-timing.md) | Display delivery, window/object edges, VRAM ownership, retained timing history and scoped comparison results |
 
 Start with the build guide if you have a source checkout. For an executable that already runs, use the user guide. A result in the validation record applies to the stated revision, inputs, settings, and duration; it does not qualify every later build.

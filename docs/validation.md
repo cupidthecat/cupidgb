@@ -4,7 +4,7 @@ This record starts with the desktop and timing checks on 2026-11-04 and includes
 
 Earlier sections retain the results and assumptions of their original builds. A result without a recorded model clock does not qualify the corrected SGB clock. Use the current model-clock reports when comparing physical speed across profiles.
 
-The [audio and native-state checkpoint](validation-audio.md) records the latest reconstruction, live-load, Camera and continuation results separately from these earlier builds.
+The [audio and native-state checkpoint](validation-audio.md) records reconstruction, live-load, Camera and continuation results separately from these earlier builds. The subsequent [display and infrared checkpoint](validation-timing.md) records display-delivery, pixel and VRAM comparisons and distinguishes development probes from final integration gates.
 
 ## Builds and automated checks
 

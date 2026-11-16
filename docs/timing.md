@@ -98,6 +98,8 @@ DIV reset clears the independent remainder. Its first new edge follows four unhe
 
 STOP samples the PPU's OAM, VRAM and palette access gates at entry. Those retained gates govern later fetches and output while the CPU is stopped; current mode bits cannot reconstruct them. Waking clears the gates. CGB palette RAM has its own ownership edges: it becomes inaccessible after readable mode 3 begins and remains inaccessible briefly after the final pixel. The retained final-pixel dot preserves that trailing phase through native snapshots.
 
+The VRAM sample follows retained display delivery. Quiet OAM work can still hold an open read gate when synchronized work at the same eager-renderer dot has claimed the port. STOP does not force that synchronization. Monochrome CPU reads retain the sampled ownership while stopped; physical CGB display work continues. An LCD power cycle releases the monochrome CPU read gate without replacing the complementary PPU STOP latch. The saved display reset phase distinguishes that power transition until execution resumes.
+
 Physical color hardware also reads background attributes for a monochrome cartridge. Tile-bank, flip and priority bits still affect fetching and mixing even though color-palette selection uses the monochrome compatibility path. Blocked VRAM reads return `FF` for the attribute byte too. Its bits still enter the FIFO; discarding them can put objects in front of a background that owns priority.
 
 Short freeze intervals require care when observing sound. Divider work can queue audio clocks even while LCD progress is frozen. The core retains pending digital clocks separately from rational sample credit and reconstruction phase. Register accesses and divider boundaries force the required work; a PCM drain only consumes samples already delivered. Paired checks must compare delivery steps as well as values and totals. The pinned reverse-switch odd-mode rules still lack separate physical-hardware qualification.
@@ -127,6 +129,22 @@ CGB startup uses a 452-dot first-line boundary in the local PPU coordinate syste
 Disabling and re-enabling the LCD preserves the coincidence and combined STAT latches until a startup refresh. Reading STAT immediately after enable does not force a new comparison. Automatic refresh occurs after the second processed LCD dot on non-CGB profiles and at the first advancing edge on CGB. During a double-speed interrupt tail, that CGB edge can be the first half-dot. An explicit STAT or LYC write still updates comparison immediately, even before the automatic refresh.
 
 `cupid_gb_sync_lcd_startup` exposes that CGB startup edge without advancing the pixel pipeline or counters. Clearing the fetch pipeline must retain `pixels.lyc_irq`; otherwise power cycling can fabricate a falling and rising comparison sequence. The HBlank delay and the frozen comparison latch have different reset rules.
+
+## Display delivery and VRAM read history
+
+[display_clock.c](../src/gb/display_clock.c) retains display delivery separately from the eager pixel pipeline. Its signed half-dot credit, row phase, pending batch, window state and frame age determine when quiet work becomes visible to another device. Every supported model retains this history, including cartridges without infrared hardware. Receiver availability remains a separate cartridge and hardware property.
+
+CPU execution supplies complete logical clock spans through `cupid_gb_deliver_cpu_cycles`. Display synchronization occurs at the guest accesses that require it; a passive debugger read cannot force it. VRAM, OAM, interrupt requests and the relevant display registers synchronize their pending work. DIV and infrared port accesses do not. On monochrome hardware, selecting an LCDC write conflict first samples the old value through the active bus path. Advancing the leading clocks before that sample changes later receiver observations.
+
+Frame age advances by the whole dots in each delivered span, after the scheduler's window split. At double speed, two separate one-half-dot deliveries therefore need not have the same frame-age increment as one two-half-dot delivery. This retained scheduler history does not replace `elapsed_cycles`, the divider remainder or the pixel pipeline's dot coordinate.
+
+[vram_bus.c](../src/gb/vram_bus.c) owns the committed map and tile-data addresses, the held read byte, and the pending addresses produced by eager fetching. Fine display work commits those pending addresses. A completed quiet row can leave the previous committed addresses in place. Keeping only the latest eager fetch would change a guest read at the first HBlank edge even when the completed image is correct.
+
+VRAM read and write ownership use separate predicates. On normal-speed CGB, the first scanline exposes STAT mode 3 before closing either port. On ordinary monochrome scanlines, the read port closes before the write port near the end of OAM search. CPU writes and CGB DMA's opposite-bank mirroring use the write predicate, so that early CGB interval cannot create an unintended second-bank write.
+
+At that edge, monochrome hardware can retain a low tile-address line. Normal-speed CGB can instead select the departing map or tile-data address, or return the preceding held byte while loading the newly requested byte. The physical CPU-selected VRAM bank remains independent of the bank recorded by the PPU fetch. Double-speed CGB bypasses this address alias. Successful CPU and OAM-DMA source reads update the held byte; blocked reads, writes, PPU fetches and passive peeks do not. An LCD power transition does not reset the VRAM latches, although the display synchronization before a power or VRAM write can commit pending addresses. A new hardware session clears the history.
+
+Native format 15 retains these display and VRAM records together with fractional pixel position, window-edge insertion and interrupted object-fetch state. Older formats can recover only history represented by their existing fields; their documented defaults cannot reproduce an unknown earlier bus read. Compare guest ports, completed pixels and intermediate surface writes separately. Some early surface publication positions still differ even where returned bytes and completed scanlines agree.
 
 ## Audio sample and filter units
 

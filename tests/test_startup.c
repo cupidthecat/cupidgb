@@ -21,6 +21,8 @@
  */
 
 #include "../src/gb/audio_state.h"
+#include "../src/gb/display_clock.h"
+#include "../src/gb/vram_bus.h"
 #include "cupid/common/sha256.h"
 #include "cupid/core/emulator.h"
 #include "cupid/gb/gb.h"
@@ -370,13 +372,15 @@ static uint8_t *encode_legacy_sgb_profile(const CupidGb *gb, size_t *length) {
     size_t written = 0;
     assert(bytes);
     assert(cupid_gb_save_state(gb, bytes, current, &written) == CUPID_GB_STATE_OK);
-    assert(written == current && bytes[8] == 14);
+    assert(written == current && bytes[8] == 15);
     const uint8_t empty[ACCESSORY_DESCRIPTOR_BYTES] = {0};
     const size_t descriptor = current - ACCESSORY_DESCRIPTOR_BYTES;
     assert(memcmp(bytes + descriptor, empty, sizeof(empty)) == 0);
-    /* Remove clock and reconstruction history before the descriptor. The archived V12
+    /* Remove later clock and reconstruction history before the descriptor. The archived V12
      * receiver history and empty accessory descriptor remain byte-for-byte. */
-    const size_t removed = RTC_HISTORY_BYTES + CUPID_GB_AUDIO_STATE_SIZE;
+    const size_t removed = RTC_HISTORY_BYTES + CUPID_GB_AUDIO_STATE_SIZE +
+                           CUPID_GB_DISPLAY_CLOCK_STATE_SIZE + CUPID_GB_PIXEL_TIMING_STATE_SIZE +
+                           CUPID_GB_VRAM_BUS_STATE_SIZE;
     memmove(bytes + descriptor - removed, bytes + descriptor, ACCESSORY_DESCRIPTOR_BYTES);
     *length = current - removed;
     bytes[8] = 12;
@@ -733,10 +737,12 @@ static void test_policy_and_state_lifetime(void) {
             STOP_PORT_BYTES = 4
         };
 
-        assert(bytes[8] == 14 && length > NATIVE_HEADER_BYTES);
-        const size_t stop_offset = length - ACCESSORY_DESCRIPTOR_BYTES - CUPID_GB_AUDIO_STATE_SIZE -
-                                   RTC_HISTORY_BYTES - INFRARED_HISTORY_BYTES - PULSE_DAC_BYTES -
-                                   STOP_PORT_BYTES;
+        assert(bytes[8] == 15 && length > NATIVE_HEADER_BYTES);
+        const size_t stop_offset = length - ACCESSORY_DESCRIPTOR_BYTES -
+                                   CUPID_GB_DISPLAY_CLOCK_STATE_SIZE -
+                                   CUPID_GB_PIXEL_TIMING_STATE_SIZE - CUPID_GB_VRAM_BUS_STATE_SIZE -
+                                   CUPID_GB_AUDIO_STATE_SIZE - RTC_HISTORY_BYTES -
+                                   INFRARED_HISTORY_BYTES - PULSE_DAC_BYTES - STOP_PORT_BYTES;
         assert(bytes[stop_offset] <= 1);
         bytes[stop_offset] = 2;
         cupid_sha256_parts(bytes, 96, bytes + 128, length - 128, bytes + 96);
@@ -802,8 +808,10 @@ static void test_printer_state_policy(void) {
                 const CupidGbPowerOn policy = b->power_on;
                 const size_t empty_size = cupid_gb_state_size(a);
                 const size_t stop_offset =
-                    empty_size - ACCESSORY_DESCRIPTOR_BYTES - CUPID_GB_AUDIO_STATE_SIZE -
-                    RTC_HISTORY_BYTES - INFRARED_HISTORY_BYTES - PULSE_DAC_BYTES - STOP_PORT_BYTES;
+                    empty_size - ACCESSORY_DESCRIPTOR_BYTES - CUPID_GB_DISPLAY_CLOCK_STATE_SIZE -
+                    CUPID_GB_PIXEL_TIMING_STATE_SIZE - CUPID_GB_VRAM_BUS_STATE_SIZE -
+                    CUPID_GB_AUDIO_STATE_SIZE - RTC_HISTORY_BYTES - INFRARED_HISTORY_BYTES -
+                    PULSE_DAC_BYTES - STOP_PORT_BYTES;
                 unsigned callbacks = 0;
                 register_observers(b, &callbacks);
                 CupidGbPrinter *source =
@@ -821,7 +829,7 @@ static void test_printer_state_policy(void) {
                 uint8_t *bytes = malloc(length), *roundtrip = malloc(length);
                 assert(bytes && roundtrip && length > empty_size);
                 assert(cupid_gb_save_state(a, bytes, length, &written) == CUPID_GB_STATE_OK);
-                assert(written == length && bytes[8] == 14);
+                assert(written == length && bytes[8] == 15);
                 assert(cupid_gb_save_state_with_context(a, roundtrip, length, &written,
                                                         &source_context) == CUPID_GB_STATE_OK);
                 assert(written == length && memcmp(bytes, roundtrip, length) == 0);

@@ -101,7 +101,7 @@ static uint8_t *save(const CupidGb *gb, size_t *size) {
     assert(bytes && cupid_gb_save_state(gb, bytes, *size, &written) == CUPID_GB_STATE_OK);
     assert(written == *size);
     /* The halted machine and its pending audio use the current native schema. */
-    assert(bytes[8] == 14 && bytes[9] == 0 && bytes[10] == 0 && bytes[11] == 0);
+    assert(bytes[8] == 15 && bytes[9] == 0 && bytes[10] == 0 && bytes[11] == 0);
     return bytes;
 }
 
@@ -244,6 +244,10 @@ static void test_fetches(CupidGb *gb) {
         cupid_gb_write_u8(gb, 0xff40, 0x91);
         for (unsigned tick = 0; tick < 400 && (cupid_gb_read_u8(gb, 0xff41) & 3u) != 3u; ++tick)
             cupid_gb_tick(gb, 1);
+        assert((cupid_gb_read_u8(gb, 0xff41) & 3u) == 3u);
+        /* First-row normal-speed CGB reads remain open briefly after STAT enters
+         * transfer. Move into established transfer before testing a blocked fetch. */
+        cupid_gb_tick(gb, 8);
         assert((cupid_gb_read_u8(gb, 0xff41) & 3u) == 3u);
         assert(cupid_gb_debug_peek(gb, 0x8000) == 0xd3 && cupid_gb_read_u8(gb, 0x8000) == 0xff);
         gb->cpu.pc = 0x8000;

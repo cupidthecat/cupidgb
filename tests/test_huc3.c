@@ -284,10 +284,15 @@ static void test_infrared_during_speed_switch(void) {
     gb->speed_switch_toggle_cycles = 8;
     const uint64_t before = gb->elapsed_cycles;
     CupidGbCpuBus bus = {0};
+    /* STAT's late commit consumes five normal-speed CPU T-cycles. The remaining
+     * three switch to fast mode when the toggle equals that complete delivery.
+     * The receiver gets 13 half dots while the whole-dot counter records seven. */
     cupid_gb_cpu_write(gb, 0xff41, 0x20, 1, &bus);
+    assert(gb->elapsed_cycles - before == 5 && gb->huc3.ir_warmup == 10);
+    assert(!gb->double_speed && gb->speed_switch_toggle_cycles == 3 && bus.credit == 1);
     cupid_gb_cpu_finish(gb, 1, &bus);
-    assert(gb->elapsed_cycles > before);
-    assert(gb->huc3.ir_warmup == (gb->elapsed_cycles - before) * 2);
+    assert(gb->elapsed_cycles - before == 7 && gb->huc3.ir_warmup == 13);
+    assert(gb->double_speed && !gb->speed_switch_toggle_cycles && !bus.credit);
     destroy(gb);
 }
 

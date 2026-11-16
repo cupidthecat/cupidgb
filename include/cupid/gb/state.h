@@ -68,6 +68,17 @@ CupidGbStateResult cupid_gb_load_state_with_context(CupidGb *gb, const uint8_t *
  * ROMs, boot ROMs, and save paths are session resources and are never included in state data.
  * Restoring an active boot overlay requires the same boot ROM to be available in the target.
  * The target's current boot-overlay enabled flag need not match the saved flag.
+ * Version 15 appends retained display-clock phase and pending batches, then logical
+ * pixel position and window timing latches, and VRAM address/read latches, after
+ * version 14 audio history and before the accessory descriptor. It also retains a
+ * pending monochrome object-fetch abort.
+ * Committed and pending VRAM fetch addresses remain separate across quiet display
+ * batches, later synchronization, and LCD power transitions on every hardware model.
+ * Capture and restoration do not force display synchronization or advance receiver charge.
+ * Versions 2 through 14 receive deterministic pixel, VRAM bus and synchronized display-clock
+ * projections from their fully decoded hardware state. Their missing timing/access
+ * history cannot reproduce exact pixel or infrared continuation. Live host input and
+ * callbacks remain attached.
  * Version 14 retains the older hardware and accessory layout and adds explicit
  * reconstruction rings, DAC delays, binary64 filter history, audio policy,
  * deterministic interference state and pending synthesis clocks before the accessory
@@ -90,15 +101,14 @@ CupidGbStateResult cupid_gb_load_state_with_context(CupidGb *gb, const uint8_t *
  * STOP access gates, the palette-port release edge, object fetch stage, pending
  * JOYP row release, and presentation events. Applicable SGB, MMM01, MBC7, Camera,
  * TPP1, and HuC3 sections are included.
- * Versions 2 through 13 remain readable. Missing reconstruction history receives
- * deterministic settled-channel defaults; queued PCM, output rate, rational credit
- * and the disabled-filter flag survive import. Retired integer mixer/filter history
- * is validated but cannot reproduce the new reconstruction waveform exactly.
- * Versions 2 through 12 use defaults for absent history. Their RTC phase
- * and divider subcycle start at zero; a saved TPP1 section supplies motor strength from its
- * status low bits. The older timer_counter field retains its literal saved value.
- * Missing TPP1 sections and other controllers start with zero motor strength. Older
- * monochrome pulse latches are derived from saved channel state; unknown duty
+ * Versions 2 through 14 remain readable. Versions 2 through 13 receive deterministic
+ * settled-channel defaults for missing reconstruction history; queued PCM, output rate, rational
+ * credit and the disabled-filter flag survive import. Retired integer mixer/filter history is
+ * validated but cannot reproduce the new reconstruction waveform exactly. Versions 2 through 12 use
+ * defaults for absent history. Their RTC phase and divider subcycle start at zero; a saved TPP1
+ * section supplies motor strength from its status low bits. The older timer_counter field retains
+ * its literal saved value. Missing TPP1 sections and other controllers start with zero motor
+ * strength. Older monochrome pulse latches are derived from saved channel state; unknown duty
  * sampling, trigger suppression and expired-clock history cannot be recovered.
  * Absent disconnected-DAC codes default to zero on every hardware model.
  * Versions 2 and 3 import additional pads released and the motor off because their

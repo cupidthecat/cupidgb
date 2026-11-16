@@ -86,7 +86,7 @@ static uint16_t update_charge(uint16_t charge, uint64_t clocks, bool active, uns
     return (uint16_t)(next < limit ? next : limit);
 }
 
-void cupid_gb_infrared_tick(CupidGb *gb, unsigned dots) {
+static void tick_receiver(CupidGb *gb, uint64_t clocks) {
     enum { WARMUP_START = 32000, DECAY_START = 23000, NOISE_RANGE = 2048 };
 
     if (!gb || !sensor_available(gb))
@@ -100,14 +100,17 @@ void cupid_gb_infrared_tick(CupidGb *gb, unsigned dots) {
         (gb->header.mbc_type == CUPID_GB_HUC3 && gb->huc3_mode == CUPID_GB_HUC3_INFRARED);
     if (!sensing && !sensor->ir_warmup && !sensor->ir_decay)
         return;
-    const uint64_t clocks = (uint64_t)dots * 2u;
     sensor->ir_warmup =
         update_charge(sensor->ir_warmup, clocks, sensing, CUPID_GB_INFRARED_WARMUP_LIMIT);
     bool detected = sensing && (gb->huc3_ir_input || sensor->ir_output || (port & 1u)) &&
                     sensor->ir_warmup >= WARMUP_START;
-    /* Near both thresholds, the photodiode's output fluctuates. Keep the
-     * transition repeatable by deriving its noise from emulated clock phase. */
-    const unsigned noise = (unsigned)((gb->elapsed_cycles * 105067u) >> 7) % NOISE_RANGE;
+    /* Threshold noise depends on the current divider and the last LCD wait,
+     * including quiet batches interrupted by a guest display access. Unsigned
+     * products preserve the low clock bits without signed overflow or shifts. */
+    const uint32_t divider =
+        (uint32_t)gb->io_registers[4] * 256u + (uint32_t)(gb->div_counter & 63u) * 4u;
+    const uint32_t display = (uint32_t)gb->display_clock.credit_half_dots;
+    const unsigned noise = (((divider + 9u) * 127u) ^ (display * 137u)) >> 3 & (NOISE_RANGE - 1u);
     if (sensor->ir_warmup < CUPID_GB_INFRARED_WARMUP_LIMIT && detected)
         detected = noise < (unsigned)sensor->ir_warmup - WARMUP_START;
     sensor->ir_decay =
@@ -116,4 +119,12 @@ void cupid_gb_infrared_tick(CupidGb *gb, unsigned dots) {
         detected = detected && sensor->ir_decay < DECAY_START + NOISE_RANGE &&
                    noise > (unsigned)sensor->ir_decay - DECAY_START;
     sensor->ir_detected = detected;
+}
+
+void cupid_gb_infrared_tick(CupidGb *gb, unsigned dots) {
+    tick_receiver(gb, (uint64_t)dots * 2u);
+}
+
+void cupid_gb_infrared_tick_half_dots(CupidGb *gb, unsigned half_dots) {
+    tick_receiver(gb, half_dots);
 }

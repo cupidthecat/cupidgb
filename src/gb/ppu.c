@@ -24,6 +24,8 @@
 
 #include "cupid/gb/cpu.h"
 #include "cupid/gbc/cgb.h"
+#include "display_clock.h"
+#include "vram_bus.h"
 
 #include <string.h>
 
@@ -31,18 +33,76 @@ bool cupid_gb_lcd_enabled(const CupidGb *gb) {
     return (gb->io_registers[CUPID_GB_IO_LCDC] & 0x80) != 0;
 }
 
+bool cupid_gb_ppu_vram_read_blocked(const CupidGb *gb) {
+    const CupidGbPixels *p = &gb->pixels;
+    const unsigned line = p->initialized ? p->line : gb->io_registers[CUPID_GB_IO_LY];
+    if (!cupid_gb_lcd_enabled(gb) || line >= 144u)
+        return false;
+    const bool color = gb->model == CUPID_GB_MODEL_CGB;
+    /* A monochrome STOP freezes the last CPU-port latch, including an OAM
+     * batch that had not yet reached its deferred read-claim event. */
+    if (gb->cpu.stopped && !color)
+        /* LCD power releases the CPU port without replacing the saved PPU
+         * ownership. A still-stopped scheduler cannot leave its reset phase. */
+        return gb->display_clock.phase != CUPID_GB_DISPLAY_CLOCK_RESET &&
+               !gb->stop_ppu_vram_blocked;
+    const unsigned mode = gb->io_registers[CUPID_GB_IO_STAT] & 3u;
+    if (p->initialized) {
+        /* The read port and STAT do not switch owners on the same dot. The
+         * monochrome scan claims VRAM after object37; color hardware keeps it
+         * available through the last OAM dot and its first-row startup reads. */
+        if (gb->ppu_lcd_startup && color && !gb->double_speed && p->dot < 84u)
+            return false;
+        if (!gb->ppu_lcd_startup && p->dot >= 77u && p->dot <= 80u)
+            return !color || (gb->double_speed && mode == CUPID_GB_PPU_MODE_TRANSFER);
+    }
+    return mode == CUPID_GB_PPU_MODE_TRANSFER ||
+           (!p->initialized && mode == CUPID_GB_PPU_MODE_OAM &&
+            gb->ppu_counter >= CUPID_GB_PPU_OAM_CYCLES);
+}
+
+bool cupid_gb_ppu_vram_write_blocked(const CupidGb *gb) {
+    const CupidGbPixels *p = &gb->pixels;
+    const unsigned line = p->initialized ? p->line : gb->io_registers[CUPID_GB_IO_LY];
+    if (!cupid_gb_lcd_enabled(gb) || line >= CUPID_GB_PPU_VISIBLE_SCANLINES)
+        return false;
+    /* Normal-speed color startup exposes STAT3 before claiming the write port.
+     * Ordinary monochrome OAM reads close earlier than writes, so their read
+     * predicate cannot determine CPU writes or color-DMA bank mirroring. */
+    if (p->initialized && gb->ppu_lcd_startup && gb->model == CUPID_GB_MODEL_CGB &&
+        !gb->double_speed && p->dot < 84u)
+        return false;
+    return (gb->io_registers[CUPID_GB_IO_STAT] & 3u) == CUPID_GB_PPU_MODE_TRANSFER;
+}
+
+static bool retained_vram_read_blocked(const CupidGb *gb) {
+    const CupidGbDisplayClock *clock = &gb->display_clock;
+    if (cupid_gb_lcd_enabled(gb) && clock->row < CUPID_GB_PPU_VISIBLE_SCANLINES) {
+        const bool color = gb->model == CUPID_GB_MODEL_CGB;
+        /* A fast half-dot can cross the claim before readable STAT changes. */
+        if (clock->phase == CUPID_GB_DISPLAY_CLOCK_STARTUP)
+            return clock->cursor >= 3u && (!color || gb->double_speed);
+        if (clock->phase == CUPID_GB_DISPLAY_CLOCK_TRANSFER_PREFIX)
+            return !(clock->flags & CUPID_GB_DISPLAY_CLOCK_FIRST_ROW) || !color || gb->double_speed;
+        /* STOP samples the retained port without forcing pending LCD work.
+         * Cursor38 is still waiting for object37; its read claim is installed
+         * only when the next object wait begins. */
+        if (clock->phase == CUPID_GB_DISPLAY_CLOCK_OAM_QUIET)
+            return false;
+        if (clock->phase == CUPID_GB_DISPLAY_CLOCK_OAM_FINE)
+            return !color && clock->cursor >= 39u;
+    }
+    return cupid_gb_ppu_vram_read_blocked(gb);
+}
+
 void cupid_gb_ppu_enter_stop(CupidGb *gb) {
     const bool visible = cupid_gb_lcd_enabled(gb) && gb->pixels.line < 144u;
     const unsigned mode = gb->io_registers[CUPID_GB_IO_STAT] & 3u;
-    bool vram_owned = visible && mode == CUPID_GB_PPU_MODE_TRANSFER;
-    if (gb->model == CUPID_GB_MODEL_CGB && !gb->double_speed && gb->ppu_lcd_startup &&
-        gb->pixels.dot < 84u)
-        vram_owned = false;
     const bool oam_owned =
         visible && (mode == CUPID_GB_PPU_MODE_OAM || mode == CUPID_GB_PPU_MODE_TRANSFER ||
                     (!gb->ppu_lcd_startup && gb->pixels.dot == 0) ||
                     (gb->ppu_transfer_end_dot && gb->pixels.dot == gb->ppu_transfer_end_dot));
-    gb->stop_ppu_vram_blocked = !vram_owned;
+    gb->stop_ppu_vram_blocked = !retained_vram_read_blocked(gb);
     gb->stop_ppu_oam_blocked = !oam_owned;
     gb->stop_ppu_palette_blocked = !cupid_cgb_palettes_cpu_blocked(gb);
 }
@@ -206,6 +266,20 @@ void cupid_gb_sync_stat_half(CupidGb *gb) {
         cupid_gb_set_ppu_mode(gb, CUPID_GB_PPU_MODE_OAM);
         update_stat_irq(gb, false, true, false, 2);
         update_stat_irq(gb, false, true, false, -1);
+    } else if (p->line < 144) {
+        const unsigned transfer = gb->ppu_lcd_startup ? 78u : 80u;
+        const unsigned mode = gb->io_registers[CUPID_GB_IO_STAT] & 3u;
+        if (p->dot == transfer && !p->active && mode != CUPID_GB_PPU_MODE_TRANSFER) {
+            /* Port ownership changes on the first half of this display dot.
+             * The fetch queue still advances on its ordinary whole-dot edge. */
+            cupid_gb_set_ppu_mode(gb, CUPID_GB_PPU_MODE_TRANSFER);
+            cupid_gb_update_stat_irq(gb);
+        } else if (!p->active && p->x == CUPID_GB_SCREEN_WIDTH && gb->ppu_transfer_end_dot &&
+                   p->dot == gb->ppu_transfer_end_dot && gb->stat_irq_delay) {
+            gb->stat_irq_delay = 0;
+            cupid_gb_set_ppu_mode(gb, CUPID_GB_PPU_MODE_HBLANK);
+            cupid_gb_update_stat_irq(gb);
+        }
     }
 }
 
@@ -234,6 +308,7 @@ void cupid_gb_reset_ppu(CupidGb *gb) {
      * combined STAT latches stay frozen until startup reaches its refresh edge. */
     const bool previous_lyc_irq = gb->pixels.lyc_irq;
     memset(&gb->pixels, 0, sizeof(gb->pixels));
+    gb->pixel_timing = (CupidGbPixelTiming){0};
     gb->pixels.lyc_irq = previous_lyc_irq;
     gb->pixels.initialized = true;
     cupid_gb_pixels_begin_line(gb);
@@ -310,7 +385,7 @@ void cupid_gb_tick_dma_tcycles(CupidGb *gb, unsigned cycles) {
             if (source >= 0xe000u && gb->model == CUPID_GB_MODEL_CGB)
                 value = 0xffu;
             else if (source >= 0x8000u && source < 0xa000u)
-                value = gb->video_ram[cupid_cgb_vram_offset(gb, source)];
+                value = cupid_gb_vram_bus_read(gb, gb, source, true);
             else
                 value = cupid_gb_read_bus_u8(gb, source);
             gb->object_attribute_memory[gb->dma_index] = value;
@@ -344,6 +419,7 @@ static void tick_ppu(CupidGb *gb, uint32_t dots) {
     if (!lcd_enabled) {
         const bool previous_lyc_irq = p->lyc_irq;
         memset(p, 0, sizeof(*p));
+        gb->pixel_timing = (CupidGbPixelTiming){0};
         gb->object_fetch_stage = CUPID_GB_OBJECT_IDLE;
         p->lyc_irq = previous_lyc_irq;
         gb->ppu_counter = 0;
@@ -420,8 +496,7 @@ static void tick_ppu(CupidGb *gb, uint32_t dots) {
                 if (p->active && cupid_gb_pixels_tick(gb)) {
                     p->active = false;
                     gb->ppu_transfer_end_dot = p->dot + 1u;
-                    if (p->window_used)
-                        ++gb->window_line_counter;
+                    cupid_gb_pixels_finish_line(gb);
                     if (!gb->double_speed)
                         cupid_gb_set_ppu_mode(gb, CUPID_GB_PPU_MODE_HBLANK);
                     /* At normal speed, mode bits precede the interrupt by one dot. */
@@ -485,6 +560,7 @@ static void tick_ppu(CupidGb *gb, uint32_t dots) {
                     if (gb->model != CUPID_GB_MODEL_CGB)
                         cupid_gb_set_ppu_mode(gb, CUPID_GB_PPU_MODE_HBLANK);
                     p->window_armed = false;
+                    p->window_active = false;
                     gb->window_line_counter = 0;
                 }
                 gb->io_registers[CUPID_GB_IO_LY] = p->line;

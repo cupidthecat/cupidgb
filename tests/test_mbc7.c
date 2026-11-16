@@ -21,9 +21,12 @@
  */
 
 #include "../src/gb/audio_state.h"
+#include "../src/gb/display_clock.h"
+#include "../src/gb/vram_bus.h"
 #include "cupid/common/sha256.h"
 #include "cupid/gb/battery.h"
 #include "cupid/gb/mbc7.h"
+#include "cupid/gb/ppu.h"
 #include "cupid/gb/state.h"
 
 #include <assert.h>
@@ -178,12 +181,14 @@ static void test_resume(CupidGb *first, CupidGb *second) {
     shift(first, 0x6e, 8);
     const size_t size = cupid_gb_state_size(first);
     /* Controller, receiver, clock and audio history precede the empty device descriptor. */
-    assert(size == V4_SIZE + 8 + 28 + 6 + RTC_HISTORY_BYTES + CUPID_GB_AUDIO_STATE_SIZE + 8);
+    assert(size == V4_SIZE + 8 + 28 + 6 + RTC_HISTORY_BYTES + CUPID_GB_AUDIO_STATE_SIZE +
+                       CUPID_GB_DISPLAY_CLOCK_STATE_SIZE + CUPID_GB_PIXEL_TIMING_STATE_SIZE +
+                       CUPID_GB_VRAM_BUS_STATE_SIZE + 8);
     uint8_t *saved = malloc(size), *restored = malloc(size);
     assert(saved && restored);
     size_t written = 0;
     assert(cupid_gb_save_state(first, saved, size, &written) == CUPID_GB_STATE_OK &&
-           written == size && saved[8] == 14);
+           written == size && saved[8] == 15);
     cupid_gb_mbc7_set_motion(second, -112, 112);
     assert(cupid_gb_load_state(second, saved, size) == CUPID_GB_STATE_OK);
     assert(cupid_gb_read_u8(first, PORT) == cupid_gb_read_u8(second, PORT));

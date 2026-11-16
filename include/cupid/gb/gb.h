@@ -332,8 +332,41 @@ typedef enum CupidGbObjectFetchStage {
     CUPID_GB_OBJECT_IDLE,
     CUPID_GB_OBJECT_WAIT_BACKGROUND,
     CUPID_GB_OBJECT_READ_WORD,
-    CUPID_GB_OBJECT_LEGACY
+    CUPID_GB_OBJECT_LEGACY,
+    CUPID_GB_OBJECT_ABORTED
 } CupidGbObjectFetchStage;
+
+/* The fetcher's horizontal position includes the discarded pixels before LCD
+ * output starts. Window byte reads retain their own half-fetch history. */
+typedef struct CupidGbPixelTiming {
+    int16_t logical_x;
+    uint8_t flags;
+} CupidGbPixelTiming;
+
+/* CPU reads and committed PPU fetch addresses survive LCD power transitions.
+ * Eager pixel work is pending until the display schedule performs fine work. */
+typedef struct CupidGbVramBus {
+    uint16_t map_address;
+    uint16_t data_address;
+    uint8_t read_value;
+    uint16_t fetch_map_address;
+    uint16_t fetch_data_address;
+} CupidGbVramBus;
+
+/* Display waits and interrupted batches affect VRAM read history and infrared
+ * thresholds even when no visible pixel changes. Every model retains this state. */
+typedef struct CupidGbDisplayClock {
+    int32_t credit_half_dots;
+    uint32_t frame_age_dots;
+    uint16_t row_half_dots;
+    uint16_t batch_half_dots;
+    uint8_t row;
+    uint8_t phase;
+    uint8_t cursor;
+    uint8_t window_alignment;
+    uint8_t flags;
+    uint8_t fine_wait_half_dots;
+} CupidGbDisplayClock;
 
 typedef struct CupidGb {
     CupidGbCpu cpu;
@@ -479,6 +512,9 @@ typedef struct CupidGb {
     CupidGbPowerOn power_on; /* Host startup policy; realized memory is serialized separately. */
     CupidGbRtcPolicy rtc_policy; /* Host clock policy and provider, never serialized. */
     uint32_t rtc_cycles;         /* Guest fractional phase in half-base-clock units. */
+    CupidGbDisplayClock display_clock;
+    CupidGbPixelTiming pixel_timing;
+    CupidGbVramBus vram_bus;
 } CupidGb;
 
 /* Optional host observation for one hardware step. This output is not stored

@@ -63,8 +63,7 @@ void cupid_cgb_run_pending_dma(CupidGb *gb) {
         const size_t destination = gb->hdma_destination & gb->hdma_vram_fetch & 0x1fffu;
         ++gb->hdma_destination;
         gb->video_ram[bank + destination] = bus_value;
-        if (cupid_gb_lcd_enabled(gb) && gb->pixels.line < 144 &&
-            (gb->io_registers[CUPID_GB_IO_STAT] & 3u) == CUPID_GB_PPU_MODE_TRANSFER)
+        if (cupid_gb_ppu_vram_write_blocked(gb))
             gb->video_ram[(bank ^ 0x2000u) + destination] = bus_value;
 
         if (!(gb->hdma_destination & 15u)) {

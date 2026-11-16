@@ -27,7 +27,11 @@
 
 #include "cupid/gb/gb.h"
 
+/* Bulk hardware time advances retain one delivery per machine cycle. */
 void cupid_gb_tick(CupidGb *gb, uint16_t cycles);
+/* Internal CPU delivery. Keep adjacent idle cycles together until the next
+ * actual bus event; receiver thresholds sample the complete delivered span. */
+void cupid_gb_deliver_cpu_cycles(CupidGb *gb, uint16_t cycles);
 /* Advance one complete color-DMA slot in CPU T-cycles. The caller captures its
  * duration at transfer entry and carries the returned CPU phase between slots. */
 unsigned cupid_gb_tick_color_dma_slot(CupidGb *gb, unsigned cycles, unsigned phase);

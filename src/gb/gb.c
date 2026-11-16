@@ -37,9 +37,11 @@
 #include "cupid/gb/gb.h"
 #include "cupid/gb/battery.h"
 #include "cupid/gb/infrared.h"
+#include "display_clock.h"
 #include "printer_internal.h"
 #include "rtc_internal.h"
 #include "startup_internal.h"
+#include "vram_bus.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -363,6 +365,9 @@ void cupid_gb_init(CupidGb *gb) {
     cupid_gb_startup_memory(gb);
     cupid_gb_apu_import_legacy(gb);
     cupid_gb_audio_import_legacy(gb);
+    cupid_gb_display_clock_import_legacy(gb);
+    cupid_gb_pixels_import_legacy(gb);
+    gb->vram_bus = (CupidGbVramBus){0};
     CupidGbPrinter *printer = cupid_gb_printer_attached(gb);
     if (printer)
         cupid_gb_printer_state_clear(&printer->state, gb->elapsed_cycles);
@@ -481,6 +486,8 @@ void cupid_gb_enter_boot_rom(CupidGb *gb) {
     gb->object_fetch_stage = CUPID_GB_OBJECT_IDLE;
     /* Boot entry aborts an in-flight object transaction, including legacy imports. */
     gb->pixels.object_delay = 0;
+    gb->pixel_timing = (CupidGbPixelTiming){0};
+    gb->vram_bus = (CupidGbVramBus){0};
     gb->cpu.ime = false;
     gb->cpu.ime_delay = 0u;
     gb->cpu.halted = false;
@@ -548,6 +555,7 @@ void cupid_gb_enter_boot_rom(CupidGb *gb) {
     gb->stat_irq_delay = 0u;
     gb->stat_irq_line = false;
     gb->window_line_counter = 0u;
+    cupid_gb_display_clock_reset(gb);
     CupidGbPrinter *printer = cupid_gb_printer_attached(gb);
     if (printer)
         cupid_gb_printer_state_clear(&printer->state, gb->elapsed_cycles);
@@ -782,7 +790,7 @@ uint8_t cupid_gb_sample_cartridge_bus(const CupidGb *gb) {
  * @brief Reads one byte from the data and I/O regions of the Game Boy address space.
  *
  * Implements the complete DMG/CGB memory map, including:
- *   - VRAM (with Mode 3 lock)
+ *   - VRAM (with PPU read ownership)
  *   - Cartridge RAM / RTC / MBC7 sensor / HuC registers
  *   - WRAM and echo RAM
  *   - OAM (with Mode 2/3 lock)
@@ -813,17 +821,14 @@ static uint8_t read_data_bus(const CupidGb *gb, uint16_t address, CupidGb *bus, 
     if (bus && ((address >= 0xff10u && address <= 0xff3fu) ||
                 (gb->model == CUPID_GB_MODEL_CGB && (address == 0xff76u || address == 0xff77u))))
         cupid_gb_apu_run(bus, true);
+    /* DMA's VRAM source path bypasses display synchronization. Guest accesses
+     * otherwise force the display wait even when its device rejects the read. */
+    if (bus && cupid_gb_display_clock_sync_address(address, false) &&
+        !((gb->dma_active || gb->dma_start_delay) && address >= 0x8000u && address < 0xa000u))
+        cupid_gb_display_clock_sync(bus);
 
     if (address >= 0x8000u && address <= 0x9fffu) {
-        uint8_t mode = (uint8_t)(gb->io_registers[CUPID_GB_IO_STAT] & 0x03u);
-
-        if (cupid_gb_lcd_enabled(gb) &&
-            gb->io_registers[CUPID_GB_IO_LY] < CUPID_GB_PPU_VISIBLE_SCANLINES &&
-            (mode == CUPID_GB_PPU_MODE_TRANSFER ||
-             (mode == CUPID_GB_PPU_MODE_OAM && gb->ppu_counter >= CUPID_GB_PPU_OAM_CYCLES))) {
-            return 0xffu;
-        }
-        return gb->video_ram[cupid_cgb_vram_offset(gb, address)];
+        return cupid_gb_vram_bus_read(gb, bus, address, false);
     }
 
     if (address >= 0xa000u && address <= 0xbfffu) {
@@ -1036,6 +1041,9 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
     if (gb->dma_active && !resolve_dma_access(gb, &address, true, value))
         return;
 
+    if (cupid_gb_display_clock_sync_address(address, true))
+        cupid_gb_display_clock_sync(gb);
+
     if ((gb->dma_active || gb->dma_start_delay) && address >= 0xfe00u && address <= 0xfeffu) {
         return;
     }
@@ -1190,11 +1198,7 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
     }
 
     if (address >= 0x8000u && address <= 0x9fffu) {
-        uint8_t mode = (uint8_t)(gb->io_registers[CUPID_GB_IO_STAT] & 0x03u);
-
-        if (cupid_gb_lcd_enabled(gb) &&
-            gb->io_registers[CUPID_GB_IO_LY] < CUPID_GB_PPU_VISIBLE_SCANLINES &&
-            mode == CUPID_GB_PPU_MODE_TRANSFER) {
+        if (cupid_gb_ppu_vram_write_blocked(gb)) {
             return;
         }
         gb->video_ram[cupid_cgb_vram_offset(gb, address)] = value;
@@ -1327,13 +1331,19 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
             cupid_gb_timer_apply_div_reset(gb);
         } else if (address == 0xff40u) {
             bool lcd_was_enabled = cupid_gb_lcd_enabled(gb);
+            const uint8_t old_lcdc = gb->io_registers[CUPID_GB_IO_LCDC];
             const uint8_t previous_mode = gb->io_registers[CUPID_GB_IO_STAT] & 3u;
             if (!lcd_was_enabled && (value & 0x80u))
                 cupid_gb_prepare_lcd_enable(gb);
             if (lcd_was_enabled != ((value & 0x80u) != 0))
                 gb->speed_switch_alignment = 0;
 
+            if ((old_lcdc & 2u) && !(value & 2u) && cupid_gb_pixels_abort_object(gb))
+                cupid_gb_display_clock_abort_object(gb);
             gb->io_registers[CUPID_GB_IO_LCDC] = value;
+            if (lcd_was_enabled != ((value & 0x80u) != 0))
+                cupid_gb_display_clock_power(gb, (value & 0x80u) != 0);
+            cupid_gb_display_clock_window_write(gb);
             if ((value & 0x80u) == 0u) {
                 if (lcd_was_enabled) {
                     cupid_cgb_hdma_lcd_off(gb, previous_mode);
@@ -1347,6 +1357,9 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
                 gb->ppu_line_boundary_hold = false;
                 gb->ppu_transfer_end_dot = 0;
                 gb->window_line_counter = 0u;
+                gb->pixel_timing = (CupidGbPixelTiming){0};
+                gb->object_fetch_stage = CUPID_GB_OBJECT_IDLE;
+                gb->pixels.object_delay = 0;
                 gb->io_registers[CUPID_GB_IO_LY] = 0u;
                 cupid_gb_set_ppu_mode(gb, CUPID_GB_PPU_MODE_HBLANK);
                 cupid_gb_update_stat_irq(gb);
@@ -1387,6 +1400,10 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
             }
         } else {
             gb->io_registers[address - 0xff00u] = value;
+            if (address == 0xff4au)
+                cupid_gb_display_clock_window_write(gb);
+            if (address == 0xff4bu)
+                cupid_gb_pixels_window_write(gb);
         }
         return;
     }
@@ -1438,13 +1455,13 @@ static bool cupid_gb_step_internal(CupidGb *gb, CupidGbStepTrace *trace) {
     }
 
     if (gb->cpu.stopped) {
-        cupid_gb_tick(gb, CUPID_GB_HALT_CYCLES);
+        cupid_gb_deliver_cpu_cycles(gb, CUPID_GB_HALT_CYCLES);
         if ((cupid_gb_read_u8(gb, 0xff00u) & 0x0fu) != 0x0fu) {
             cupid_gb_ppu_leave_stop(gb);
             gb->cpu.stopped = false;
             cupid_cgb_hdma_wake(gb);
             cupid_gb_tick_dma(gb);
-            cupid_gb_tick(gb, 2u);
+            cupid_gb_deliver_cpu_cycles(gb, 2u);
         }
         return true;
     }

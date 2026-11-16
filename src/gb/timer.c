@@ -27,6 +27,7 @@
 #include "cupid/gb/infrared.h"
 #include "cupid/gb/input.h"
 #include "cupid/gb/ppu.h"
+#include "display_clock.h"
 #include "rtc_internal.h"
 
 enum {
@@ -244,9 +245,15 @@ static void advance_base_time(CupidGb *gb, unsigned dots) {
     gb->elapsed_cycles += dots;
     if (gb->joyp_select_delay)
         cupid_gb_input_tick(gb, dots);
-    if (gb->cgb_mode || gb->header.mbc_type == CUPID_GB_HUC1 ||
-        gb->header.mbc_type == CUPID_GB_HUC3)
-        cupid_gb_infrared_tick(gb, dots);
+}
+
+static void finish_display_span(CupidGb *gb, unsigned half_dots) {
+    if (!half_dots || !cupid_gb_display_clock_capable(gb))
+        return;
+    /* Internal dot/M-cycle subdivision serves DMA arbitration. The receiver
+     * samples one completed CPU delivery, after its display and DMA work. */
+    cupid_gb_display_clock_advance(gb, half_dots);
+    cupid_gb_infrared_tick_half_dots(gb, half_dots);
 }
 
 /* The source bus is shared only while both engines can consume it. Callers
@@ -257,7 +264,7 @@ static bool shared_vram_dma(const CupidGb *gb) {
 }
 
 static void switch_clock_segment(CupidGb *gb, unsigned cycles, unsigned *half_dot,
-                                 uint32_t *rtc_half_cycles) {
+                                 uint32_t *rtc_half_cycles, uint32_t *display_half_cycles) {
     clock_cpu_span(gb, cycles);
     if (gb->speed_switch_halt_cycles) {
         if (gb->speed_switch_halt_cycles <= cycles) {
@@ -279,6 +286,7 @@ static void switch_clock_segment(CupidGb *gb, unsigned cycles, unsigned *half_do
         return;
     cupid_gb_apu_run(gb, false);
     *rtc_half_cycles += ticks;
+    *display_half_cycles += ticks;
     /* A partly frozen segment still releases its complete CPU-side DMA budget;
      * only the LCD oscillator loses the frozen prefix. A completely frozen
      * segment has no video or DMA edge. */
@@ -303,7 +311,8 @@ static void switch_clock_segment(CupidGb *gb, unsigned cycles, unsigned *half_do
     }
 }
 
-static void tick_switch_cycle(CupidGb *gb, uint32_t *rtc_half_cycles) {
+static void tick_switch_cycle(CupidGb *gb, uint32_t *rtc_half_cycles,
+                              uint32_t *display_half_cycles) {
     const bool old_speed = gb->double_speed;
     const unsigned toggle = gb->speed_switch_toggle_cycles;
     if (old_speed != (toggle != 0 && toggle <= 4))
@@ -313,22 +322,25 @@ static void tick_switch_cycle(CupidGb *gb, uint32_t *rtc_half_cycles) {
     if (toggle && toggle <= 4) {
         gb->speed_switch_toggle_cycles = 0;
         if (toggle < 4) {
-            switch_clock_segment(gb, toggle, &half_dot, rtc_half_cycles);
+            switch_clock_segment(gb, toggle, &half_dot, rtc_half_cycles, display_half_cycles);
+            finish_display_span(gb, *display_half_cycles);
+            *display_half_cycles = 0;
             cupid_gb_rtc_tick(gb, *rtc_half_cycles);
             *rtc_half_cycles = 0;
         }
         gb->double_speed = !old_speed;
-        switch_clock_segment(gb, toggle < 4 ? 4u - toggle : 4u, &half_dot, rtc_half_cycles);
+        switch_clock_segment(gb, toggle < 4 ? 4u - toggle : 4u, &half_dot, rtc_half_cycles,
+                             display_half_cycles);
         gb->io_registers[0x4d] =
             (uint8_t)((gb->io_registers[0x4d] & 1u) | (gb->double_speed ? 0x80u : 0));
     } else {
         if (toggle)
             gb->speed_switch_toggle_cycles = (uint8_t)(toggle - 4);
-        switch_clock_segment(gb, 4, &half_dot, rtc_half_cycles);
+        switch_clock_segment(gb, 4, &half_dot, rtc_half_cycles, display_half_cycles);
     }
 }
 
-static void tick_mcycles(CupidGb *gb, uint16_t cycles) {
+static void tick_mcycles(CupidGb *gb, uint16_t cycles, bool cpu_delivery) {
     if (!gb || !cycles) {
         return;
     }
@@ -340,21 +352,29 @@ static void tick_mcycles(CupidGb *gb, uint16_t cycles) {
          * boundary must not turn an old-speed prefix into the equality case. */
         gb->speed_switch_toggle_cycles = 0;
         if (toggle < duration)
-            tick_mcycles(gb, (uint16_t)(toggle / 4u));
+            tick_mcycles(gb, (uint16_t)(toggle / 4u), cpu_delivery);
         gb->double_speed = !gb->double_speed;
         gb->io_registers[0x4d] =
             (uint8_t)((gb->io_registers[0x4d] & 1u) | (gb->double_speed ? 0x80u : 0));
         if (toggle < duration) {
-            tick_mcycles(gb, (uint16_t)((duration - toggle) / 4u));
+            tick_mcycles(gb, (uint16_t)((duration - toggle) / 4u), cpu_delivery);
             return;
         }
     }
 
+    /* The caller owns delivery boundaries. A host bulk wait retains its
+     * M-cycle cadence independently of whether it is short or long. */
+    const bool bulk = !cpu_delivery;
     uint32_t half_cycles = 0;
+    uint32_t display_half_cycles = 0;
     while (cycles-- != 0u) {
         if (gb->speed_switch_halt_cycles || gb->speed_switch_toggle_cycles ||
             gb->speed_switch_freeze_cycles || gb->stop_divider_hold_cycles) {
-            tick_switch_cycle(gb, &half_cycles);
+            tick_switch_cycle(gb, &half_cycles, &display_half_cycles);
+            if (bulk) {
+                finish_display_span(gb, display_half_cycles);
+                display_half_cycles = 0;
+            }
             continue;
         }
         clock_cpu_span(gb, 4u);
@@ -369,6 +389,7 @@ static void tick_mcycles(CupidGb *gb, uint16_t cycles) {
         }
         const uint16_t dots = gb->double_speed ? 2u : 4u;
         half_cycles += (uint32_t)dots * 2u;
+        display_half_cycles += (uint32_t)dots * 2u;
         const bool shared = (gb->dma_active || gb->dma_start_delay) &&
                             (gb->dma_source_base & 0xe000u) == 0x8000u &&
                             cupid_gb_lcd_enabled(gb) && !gb->cpu.halted && !gb->cpu.stopped;
@@ -384,12 +405,21 @@ static void tick_mcycles(CupidGb *gb, uint16_t cycles) {
         }
         if (!shared)
             cupid_gb_tick_dma(gb);
+        if (bulk) {
+            finish_display_span(gb, display_half_cycles);
+            display_half_cycles = 0;
+        }
     }
+    finish_display_span(gb, display_half_cycles);
     cupid_gb_rtc_tick(gb, half_cycles);
 }
 
 void cupid_gb_tick(CupidGb *gb, uint16_t cycles) {
-    tick_mcycles(gb, cycles);
+    tick_mcycles(gb, cycles, false);
+}
+
+void cupid_gb_deliver_cpu_cycles(CupidGb *gb, uint16_t cycles) {
+    tick_mcycles(gb, cycles, true);
 }
 
 uint8_t cupid_gb_tick_halt(CupidGb *gb) {
@@ -401,7 +431,7 @@ uint8_t cupid_gb_tick_halt(CupidGb *gb) {
     gb->cpu.just_halted = false;
     if (gb->model == CUPID_GB_MODEL_CGB || first_cycle) {
         /* Color hardware and the first cycle after HALT poll before the cycle. */
-        cupid_gb_tick(gb, 1u);
+        cupid_gb_deliver_cpu_cycles(gb, 1u);
         return before;
     }
 
@@ -414,6 +444,7 @@ uint8_t cupid_gb_tick_halt(CupidGb *gb) {
         advance_base_time(gb, 2u);
         cupid_gb_tick_ppu_dots(gb, 2u);
         cupid_gb_tick_dma_tcycles(gb, 2u);
+        finish_display_span(gb, 4u);
         cupid_gb_rtc_tick(gb, 4u);
         if (!half)
             middle = (uint8_t)(gb->interrupt_enable & gb->interrupt_flags & 0x1fu);
@@ -445,6 +476,7 @@ void cupid_gb_acknowledge_interrupt(CupidGb *gb, uint8_t mask) {
     }
     if (!shared)
         cupid_gb_tick_dma_tcycles(gb, 2u);
+    finish_display_span(gb, half * 2u);
     cupid_gb_rtc_tick(gb, (uint32_t)half * 2u);
     gb->interrupt_flags &= (uint8_t)~mask;
     clock_cpu_span(gb, 2u);
@@ -458,6 +490,7 @@ void cupid_gb_acknowledge_interrupt(CupidGb *gb, uint8_t mask) {
     }
     if (!shared)
         cupid_gb_tick_dma_tcycles(gb, 2u);
+    finish_display_span(gb, half * 2u);
     cupid_gb_rtc_tick(gb, (uint32_t)half * 2u);
 }
 
@@ -514,6 +547,7 @@ static unsigned bus_clock_span(CupidGb *gb, unsigned phase, unsigned cycles) {
         cupid_gb_tick_apu_divider(gb, gb->double_speed ? 2u : 4u);
     for (unsigned tick = 0; tick < cycles; ++tick) {
         if (old_cycles && tick == old_cycles) {
+            finish_display_span(gb, half_cycles);
             cupid_gb_rtc_tick(gb, half_cycles);
             half_cycles = 0;
             gb->double_speed = !gb->double_speed;
@@ -565,6 +599,7 @@ static unsigned bus_clock_span(CupidGb *gb, unsigned phase, unsigned cycles) {
     if (switching)
         gb->io_registers[0x4d] =
             (uint8_t)((gb->io_registers[0x4d] & 1u) | (gb->double_speed ? 0x80u : 0));
+    finish_display_span(gb, half_cycles);
     cupid_gb_rtc_tick(gb, half_cycles);
     return phase;
 }
@@ -577,7 +612,7 @@ unsigned cupid_gb_tick_color_dma_slot(CupidGb *gb, unsigned cycles, unsigned pha
 
 void cupid_gb_cpu_finish(CupidGb *gb, uint16_t mcycles, CupidGbCpuBus *bus) {
     if (!bus->credit) {
-        tick_mcycles(gb, mcycles);
+        tick_mcycles(gb, mcycles, true);
         return;
     }
     const unsigned phase = (unsigned)((bus->credit + 4) & 3);
@@ -603,8 +638,8 @@ typedef struct CpuWrite {
     bool double_speed;
 } CpuWrite;
 
-static CpuWrite cpu_write_plan(const CupidGb *gb, uint16_t address, uint8_t value,
-                               unsigned boundary, bool first) {
+static CpuWrite cpu_write_plan(CupidGb *gb, uint16_t address, uint8_t value, unsigned boundary,
+                               bool first) {
     CpuWrite write = {address,         value, 0, 0, boundary, boundary, CPU_WRITE_ORDINARY,
                       gb->double_speed};
     if (address == 0xff41u) {
@@ -613,7 +648,11 @@ static CpuWrite cpu_write_plan(const CupidGb *gb, uint16_t address, uint8_t valu
         write.early = boundary;
         write.commit = write.sample = boundary + 1;
     } else if (address == 0xff40u) {
-        write.previous = gb->io_registers[CUPID_GB_IO_LCDC];
+        /* Monochrome LCDC pulses sample the old value before their leading clocks.
+         * The bus read also resolves retained display work; a raw register read
+         * would shift the receiver's first threshold crossing during this write. */
+        write.previous = gb->model == CUPID_GB_MODEL_CGB ? gb->io_registers[CUPID_GB_IO_LCDC]
+                                                         : cupid_gb_read_bus_u8(gb, address);
         if (gb->model != CUPID_GB_MODEL_CGB) {
             write.kind = CPU_WRITE_LCDC;
             write.early = boundary - 2;
@@ -696,7 +735,7 @@ static uint8_t run_cpu_write_plan(CupidGb *gb, const CpuWrite *write, unsigned b
         const unsigned duration = event - elapsed;
         if (duration) {
             if (!interrupt && !phase && !(duration & 3u))
-                cupid_gb_tick(gb, (uint16_t)(duration / 4u));
+                cupid_gb_deliver_cpu_cycles(gb, (uint16_t)(duration / 4u));
             else
                 phase = bus_clock_span(gb, phase, duration);
         }

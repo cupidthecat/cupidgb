@@ -30,6 +30,7 @@
 #include "cupid/gb/battery.h"
 #include "cupid/gb/cartridge.h"
 #include "cupid/gb/state.h"
+#include "cupid/gb/timer.h"
 
 static void prepare(CupidGb *gb) {
     uint8_t rom[32768] = {0};
@@ -60,19 +61,19 @@ static void calls(CupidGb *gb) {
 
 static void halt_at_vram_boundary(CupidGb *gb) {
     prepare(gb);
+    gb->video_ram[0] = 0;
+    gb->rom[0x38] = 0xc9;
+    cupid_gb_write_u8(gb, 0xff40, 0x91);
+    /* Reach an ordinary OAM scan through the scheduler. Monochrome VRAM reads
+     * close before STAT3; the following HALT poll must cross that read edge. */
+    for (unsigned cycle = 0; cycle < 160 && (gb->pixels.line != 1 || gb->pixels.dot < 73); ++cycle)
+        cupid_gb_tick(gb, 1);
+    assert(!gb->ppu_lcd_startup && gb->pixels.line == 1 && gb->pixels.dot >= 73 &&
+           gb->pixels.dot < 77 && (gb->io_registers[0x41] & 3u) == 2);
     gb->cpu.pc = 0x8000;
     gb->cpu.halted = true;
     gb->cpu.just_halted = false;
     gb->interrupt_enable = gb->interrupt_flags = 1;
-    gb->io_registers[0x40] = 0x91;
-    gb->io_registers[0x41] = 2;
-    gb->io_registers[0x44] = 0;
-    gb->pixels.initialized = true;
-    gb->pixels.dot = 78;
-    gb->pixels.line = 0;
-    gb->ppu_counter = 19;
-    gb->video_ram[0] = 0;
-    gb->rom[0x38] = 0xc9;
 }
 
 static void assert_same_hardware(const CupidGb *first, const CupidGb *second) {
@@ -146,6 +147,7 @@ static void test_execution(CupidGb *gb) {
     cupid_gb_debugger_begin(&debug, gb, CUPID_GB_DEBUG_NEXT);
     assert(cupid_gb_debugger_step(&debug, gb) == CUPID_GB_DEBUG_STOP_NONE);
     assert(!gb->cpu.halted && gb->cpu.pc == 0x8000 && debug.steps == 1);
+    assert(cupid_gb_read_u8(gb, 0x8000) == 0xff && cupid_gb_debug_peek(gb, 0x8000) == 0);
     assert(cupid_gb_debugger_run(&debug, gb, 8) == CUPID_GB_DEBUG_STOP_TARGET);
     assert(gb->cpu.pc == 0x8001 && gb->cpu.sp == 0xdff0 && debug.steps == 3);
 
@@ -515,6 +517,7 @@ static void test_step_observation(CupidGb *gb) {
             /* Wake changes bus visibility before the following opcode fetch.
              * The idle trace must not describe the earlier readable NOP. */
             assert(!gb->cpu.halted && gb->cpu.pc == address);
+            assert(cupid_gb_read_u8(gb, address) == 0xff && cupid_gb_debug_peek(gb, address) == 0);
             assert(cupid_gb_step(gb) && cupid_gb_step_observed(observed, &trace));
             assert(trace.event == CUPID_GB_STEP_INSTRUCTION && trace.address == address &&
                    trace.opcode == 0xff);

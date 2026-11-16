@@ -53,7 +53,7 @@ static void print_fixture(const char *path) {
     size_t length;
     uint8_t *bytes = encode(gb, &length);
     const size_t v11_length = v11_hardware_size(gb, length);
-    assert(v11_length == 300600 && bytes[8] == 14 && !bytes[v11_length - 28] &&
+    assert(v11_length == 300600 && bytes[8] == 15 && !bytes[v11_length - 28] &&
            !bytes[v11_length - 27]);
     /* These bytes came from the checked original v4 fixture. Sound synthesis
      * can evolve without rewriting the historical portability contract. */

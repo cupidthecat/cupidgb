@@ -53,6 +53,8 @@ enum {
 };
 
 bool cupid_gb_lcd_enabled(const CupidGb *gb);
+bool cupid_gb_ppu_vram_read_blocked(const CupidGb *gb);
+bool cupid_gb_ppu_vram_write_blocked(const CupidGb *gb);
 /* STOP samples CPU port ownership once, then freezes the complementary PPU gates. */
 void cupid_gb_ppu_enter_stop(CupidGb *gb);
 void cupid_gb_ppu_leave_stop(CupidGb *gb);
@@ -88,5 +90,25 @@ void cupid_gb_pixels_begin_line(CupidGb *gb);
 void cupid_gb_pixels_scan_object(CupidGb *gb, unsigned index);
 void cupid_gb_pixels_begin_transfer(CupidGb *gb);
 bool cupid_gb_pixels_tick(CupidGb *gb);
+void cupid_gb_pixels_finish_line(CupidGb *gb);
+bool cupid_gb_pixels_abort_object(CupidGb *gb);
+void cupid_gb_pixels_window_write(CupidGb *gb);
+
+enum {
+    CUPID_GB_PIXEL_FRACTIONAL = 1,
+    CUPID_GB_PIXEL_WINDOW_FIRST = 2,
+    CUPID_GB_PIXEL_WX_GLITCH = 4,
+    CUPID_GB_PIXEL_WINDOW_HOLD = 8,
+    CUPID_GB_PIXEL_BG_INSERT = 16,
+    CUPID_GB_PIXEL_TIMING_FLAGS = 31,
+    CUPID_GB_PIXEL_TIMING_STATE_SIZE = 4
+};
+
+/* This fixed record preserves pipeline history omitted by older native files.
+ * Legacy import projects only the loaded prefix and never samples live input. */
+bool cupid_gb_pixels_timing_valid(const CupidGb *gb);
+bool cupid_gb_pixels_timing_encode(const CupidGb *gb, uint8_t *data, size_t size);
+bool cupid_gb_pixels_timing_decode(CupidGb *gb, const uint8_t *data, size_t size);
+void cupid_gb_pixels_import_legacy(CupidGb *gb);
 
 #endif

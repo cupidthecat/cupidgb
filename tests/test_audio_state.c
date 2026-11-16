@@ -21,8 +21,11 @@
  */
 
 #include "../src/gb/audio_state.h"
+#include "../src/gb/display_clock.h"
+#include "../src/gb/vram_bus.h"
 #include "cupid/common/sha256.h"
 #include "cupid/gb/apu.h"
+#include "cupid/gb/ppu.h"
 #include "cupid/gb/state.h"
 #include "cupid/gb/timer.h"
 
@@ -131,7 +134,7 @@ static Blob encode(const CupidGb *gb) {
     assert(blob.bytes);
     size_t written = 0;
     assert(cupid_gb_save_state(gb, blob.bytes, blob.length, &written) == CUPID_GB_STATE_OK);
-    assert(written == blob.length && blob.bytes[8] == 14);
+    assert(written == blob.length && blob.bytes[8] == 15);
     return blob;
 }
 
@@ -341,11 +344,13 @@ static void test_live_rate_changes(void) {
 }
 
 static Blob legacy_v13(const Blob *current) {
-    Blob old = {malloc(current->length), current->length - CUPID_GB_AUDIO_STATE_SIZE};
+    const size_t removed = CUPID_GB_AUDIO_STATE_SIZE + CUPID_GB_DISPLAY_CLOCK_STATE_SIZE +
+                           CUPID_GB_PIXEL_TIMING_STATE_SIZE + CUPID_GB_VRAM_BUS_STATE_SIZE;
+    Blob old = {malloc(current->length), current->length - removed};
     assert(old.bytes);
-    const size_t audio = current->length - ACCESSORY_BYTES - CUPID_GB_AUDIO_STATE_SIZE;
+    const size_t audio = current->length - ACCESSORY_BYTES - removed;
     memcpy(old.bytes, current->bytes, audio);
-    memcpy(old.bytes + audio, current->bytes + audio + CUPID_GB_AUDIO_STATE_SIZE, ACCESSORY_BYTES);
+    memcpy(old.bytes + audio, current->bytes + audio + removed, ACCESSORY_BYTES);
     put_word(old.bytes + 8, 13, 4);
     resign(&old);
     return old;
@@ -377,6 +382,9 @@ static void test_v13_import(void) {
                    target->apu.output.filter.capacitor[1] == 0);
             cupid_gb_apu_import_monochrome_noise(source);
             cupid_gb_audio_import_legacy(source);
+            cupid_gb_pixels_import_legacy(source);
+            cupid_gb_display_clock_import_legacy(source);
+            cupid_gb_vram_bus_import_legacy(source);
             assert_same(source, target);
             compare_pcm(source, target);
             for (unsigned step = 0; step < 128; ++step) {
@@ -447,7 +455,9 @@ static void test_malformed_history(void) {
     cupid_gb_tick(target, 133);
     Blob valid = encode(source), bad = {malloc(valid.length), valid.length};
     assert(bad.bytes);
-    const size_t audio = valid.length - ACCESSORY_BYTES - CUPID_GB_AUDIO_STATE_SIZE;
+    const size_t audio = valid.length - ACCESSORY_BYTES - CUPID_GB_DISPLAY_CLOCK_STATE_SIZE -
+                         CUPID_GB_PIXEL_TIMING_STATE_SIZE - CUPID_GB_VRAM_BUS_STATE_SIZE -
+                         CUPID_GB_AUDIO_STATE_SIZE;
 
     const struct Mutation {
         size_t offset;

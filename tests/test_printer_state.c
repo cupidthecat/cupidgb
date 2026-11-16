@@ -21,7 +21,10 @@
  */
 
 #include "../src/gb/audio_state.h"
+#include "../src/gb/display_clock.h"
+#include "../src/gb/vram_bus.h"
 #include "cupid/common/sha256.h"
+#include "cupid/gb/ppu.h"
 #include "cupid/gb/printer.h"
 #include "cupid/gb/state.h"
 #include "cupid/gb/timer.h"
@@ -38,7 +41,9 @@ enum {
     RTC_HISTORY_BYTES = 6,
     MOTOR_HISTORY_OFFSET = 4,
     BARE_STATE_BYTES = 300600 + INFRARED_HISTORY_BYTES + RTC_HISTORY_BYTES +
-                       CUPID_GB_AUDIO_STATE_SIZE + DEVICE_DESCRIPTOR_BYTES,
+                       CUPID_GB_AUDIO_STATE_SIZE + CUPID_GB_DISPLAY_CLOCK_STATE_SIZE +
+                       CUPID_GB_PIXEL_TIMING_STATE_SIZE + CUPID_GB_VRAM_BUS_STATE_SIZE +
+                       DEVICE_DESCRIPTOR_BYTES,
     PRINTER_WIRE_BYTES = 32687,
     WIRE_PHASE = 0,
     WIRE_HEADER = 1,
@@ -239,7 +244,7 @@ static Blob save_rig(const Rig *rig, bool trusted) {
                                                    &rig->context)
                 : cupid_gb_save_state(rig->gb, blob.bytes, blob.length, &written);
     assert(result == CUPID_GB_STATE_OK && written == blob.length);
-    assert(read_le(blob.bytes + 8, 4) == 14);
+    assert(read_le(blob.bytes + 8, 4) == 15);
     return blob;
 }
 
@@ -829,11 +834,15 @@ static void test_malformed_devices(void) {
                 case 8:
                     /* Valid accessory data must not commit before a later
                      * hardware validation failure has been resolved. */
-                    bad.bytes[descriptor - CUPID_GB_AUDIO_STATE_SIZE - RTC_HISTORY_BYTES - 1] = 16;
+                    bad.bytes[descriptor - CUPID_GB_DISPLAY_CLOCK_STATE_SIZE -
+                              CUPID_GB_PIXEL_TIMING_STATE_SIZE - CUPID_GB_VRAM_BUS_STATE_SIZE -
+                              CUPID_GB_AUDIO_STATE_SIZE - RTC_HISTORY_BYTES - 1] = 16;
                     break;
                 case 9:
                     /* A non-TPP1 core must reject even an otherwise valid motor value. */
-                    bad.bytes[descriptor - CUPID_GB_AUDIO_STATE_SIZE - RTC_HISTORY_BYTES +
+                    bad.bytes[descriptor - CUPID_GB_DISPLAY_CLOCK_STATE_SIZE -
+                              CUPID_GB_PIXEL_TIMING_STATE_SIZE - CUPID_GB_VRAM_BUS_STATE_SIZE -
+                              CUPID_GB_AUDIO_STATE_SIZE - RTC_HISTORY_BYTES +
                               MOTOR_HISTORY_OFFSET] = 1;
                     break;
                 default:
@@ -1064,9 +1073,10 @@ static void test_legacy_fresh_device(void) {
     source->gb->elapsed_cycles = 0x1234567;
     memset(source->gb->apu.pulse_timing, 0, sizeof(source->gb->apu.pulse_timing));
     Blob current = save_rig(source, false);
-    const size_t hardware_size = current.length - DEVICE_DESCRIPTOR_BYTES -
-                                 CUPID_GB_AUDIO_STATE_SIZE - RTC_HISTORY_BYTES -
-                                 INFRARED_HISTORY_BYTES;
+    const size_t hardware_size =
+        current.length - DEVICE_DESCRIPTOR_BYTES - CUPID_GB_DISPLAY_CLOCK_STATE_SIZE -
+        CUPID_GB_PIXEL_TIMING_STATE_SIZE - CUPID_GB_VRAM_BUS_STATE_SIZE -
+        CUPID_GB_AUDIO_STATE_SIZE - RTC_HISTORY_BYTES - INFRARED_HISTORY_BYTES;
     const size_t lengths[] = {300518,
                               300568,
                               300572,

@@ -45,6 +45,8 @@ bool cupid_gb_infrared_detected(const CupidGb *gb);
 void cupid_gb_infrared_write_cartridge(CupidGb *gb, uint8_t value);
 void cupid_gb_infrared_write_port(CupidGb *gb, uint8_t value);
 void cupid_gb_infrared_tick(CupidGb *gb, unsigned dots);
+/* CPU deliveries can end between LCD dots in color double-speed mode. */
+void cupid_gb_infrared_tick_half_dots(CupidGb *gb, unsigned half_dots);
 
 #ifdef __cplusplus
 }

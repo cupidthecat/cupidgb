@@ -10,7 +10,7 @@ Load a native state file through File > Load State File or drop a `.s0` through 
 
 Writes use an atomic file replacement. Loading checks the complete cartridge identity and hardware model. A state captured with an active boot overlay requires the matching local boot binary. Failed validation preserves the running session and its host audio queue. A successful load replaces the emulated state, reapplies current physical input, clears queued host audio, and realigns pacing.
 
-New files use CupidGB native version 14. Versions 2 through 13 remain loadable. Desktop loads retain the current audio filter, interference level, channel choices, sample rate and receiving output history. Interoperable BESS state imports remain pending.
+New files use CupidGB native version 15. Versions 2 through 14 remain loadable. Desktop loads retain the current audio filter, interference level, channel choices, sample rate and receiving output history. Interoperable BESS state imports remain pending.
 
 The version identifies the wire encoding. Subsequent execution follows the current engine. Version 3 records pending CGB DMA work, CPU speed-switch sequencing, and audio clock, held-output, envelope, sweep, and noise latches. Version 2 has no values for these latches. Its loader initializes them deterministically after validating the old payload; it never takes missing hardware history from the target's running session. Pending DMA and speed-switch delays start cleared, while an old armed HBlank transfer retains its saved block count. On color hardware, pulse clock startup follows the saved channel enable, and held pulse output follows the saved duty position. Monochrome pulse history uses the import rules described under version 11 below. Noise gates and held output derive from the saved channel/DAC and LFSR state, with a canonical prescaler phase. The old LFSR, timer and queued PCM remain intact. Version 14 initializes missing reconstruction and filter history as described below. Keep the original state if you need to revisit its earlier build.
 
@@ -155,6 +155,53 @@ The ordinary load APIs restore the entire recorded audio output for exact contin
 Early version 14 writers used a nearest-rounded rate cache. The decoder recognizes its exact expected value and matching span, then replaces that derived cache with the bounded increment while preserving captured history. This prevents an imported SGB stream from resuming positive phase drift. Other cache mismatches remain invalid.
 
 Versions 2 through 13 preserve queued PCM, rational sample credit, the saved rate and the disabled-filter flag. Import validates the former integer mixer/filter history, then initializes missing reconstruction and DAC history from settled saved channels. It cannot reconstruct past edges or analog history those files did not store. Exact old-build waveform continuation therefore requires the original build and state.
+
+### Display, pixel and VRAM history in version 15
+
+Version 15 adds a 20-byte display record, a four-byte pixel record and a ten-byte VRAM record after the version 14 audio section and before the accessory descriptor. Every new file carries all three records. The display record preserves LCD waits, work deferred across CPU deliveries and work forced by a guest bus access. That history affects VRAM reads on every model and infrared sensing where the receiver is available. DIV alone cannot recover it: resetting DIV or reading VRAM can change a later receiver transition without changing the elapsed guest time.
+
+| Relative offset | Bytes | Added state |
+| --- | --- | --- |
+| 0 | 4 | Signed little-endian display credit in half-dots |
+| 4 | 4 | Little-endian frame age in dots |
+| 8 | 2 | Little-endian row position in half-dots |
+| 10 | 2 | Little-endian deferred batch budget in half-dots |
+| 12 | 1 | Internal scanline, zero through 153 |
+| 13 | 1 | Display wait phase |
+| 14 | 1 | Position within that phase |
+| 15 | 1 | Window-check alignment, zero through seven |
+| 16 | 1 | Startup, window and forced-processing flags |
+| 17 | 1 | Remaining fine-fetch wait in half-dots |
+| 18 | 2 | Reserved, both zero |
+
+The following four bytes preserve pixel-fetch timing on every model, including models without infrared:
+
+| Relative offset within pixel record | Bytes | Added state |
+| --- | --- | --- |
+| 0 | 2 | Signed little-endian logical horizontal position, minus sixteen through 160 |
+| 2 | 1 | Fractional-scroll, first-window-fetch, CGB WX-read, monochrome window-hold and pending background-insertion flags |
+| 3 | 1 | Reserved, zero |
+
+The logical position includes discarded pixels before the visible row. The CGB WX-read flag is invalid on other hardware. A monochrome window hold requires a matching active window, empty fetch queue and idle object engine. Pending background insertion retains a zero-valued window-edge pixel across an intervening object fetch while leaving the fetched background tile queued. Version 15 also permits a pending monochrome object-fetch abort in the existing object-stage byte. This stage retains the selected object until the next pixel step consumes the abort; earlier versions reject that stage value. These fields preserve fetch work that the visible horizontal coordinate cannot describe.
+
+The final ten bytes preserve the VRAM read circuit and pending fetch addresses:
+
+| Relative offset within VRAM record | Bytes | Added state |
+| --- | --- | --- |
+| 0 | 2 | Little-endian last tile-map address, zero or `1800` through `1FFF` |
+| 2 | 2 | Little-endian last tile-data address, including the PPU bank bit, below `4000` |
+| 4 | 1 | Last byte driven by a successful CPU or OAM DMA VRAM read |
+| 5 | 1 | Reserved, zero |
+| 6 | 2 | Little-endian pending tile-map address, with the same bounds as the committed map address |
+| 8 | 2 | Little-endian pending tile-data address, with the same bounds as the committed data address |
+
+The first HBlank read can use a committed fetch address or expose the held byte. Fine display processing commits pending addresses as it consumes fetch work. A completed quiet batch retains the earlier committed addresses, so the pending pair must remain independent through save/load. CPU VRAM bank selection remains independent of the PPU bank recorded in the tile address. An LCD power transition does not reset the VRAM latches, and a VRAM write does not replace the held byte. The display synchronization preceding either guest write can commit pending addresses. Blocked CPU reads and passive inspection do not replace the held byte.
+
+An ordinary version 15 state without model or cartridge extensions occupies 305,088 bytes without a printer and 337,775 bytes with one. Earlier payload offsets and the accessory descriptor retain their encodings. Query the complete size for each capture.
+
+Every supported hardware model maintains the display record, including cartridges without an infrared receiver. Validation checks credit and age bounds, phase-specific cursor limits, batch/phase combinations, flag bits, address ranges and reserved bytes. Pending and committed VRAM addresses may legitimately differ after a quiet row or LCD power-off. An invalid record rejects the whole console and printer transaction. Capture leaves the live display and receiver untouched; it does not consume a pending batch to simplify the saved state.
+
+Versions 2 through 14 have no exact record of this scheduling history. After all other migrations finish, the loader derives a deterministic starting phase and logical pixel position from the saved LCD power, scanline, pixel pipeline, scroll and frame age. Missing batches and window notifications start cleared. The saved working fetch address supplies the known tile-map or tile-data address; the overwritten address and held read byte start at zero. Pending addresses begin equal to those projected committed addresses. The result depends on the loaded file and cartridge, never the receiving session's previous timing history. This permits continued execution but cannot reproduce a prior forced bus access or fetch latch that the older format did not record. All four exact/live and ordinary/trusted loading paths retain the current infrared input and host callbacks.
 
 ## Validation scope
 

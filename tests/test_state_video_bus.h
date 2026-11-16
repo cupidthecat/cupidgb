@@ -122,6 +122,10 @@ static void test_video_bus_history(void) {
     for (unsigned unused = 0; unused < 5; ++unused) {
         a->model = unused == 0 ? CUPID_GB_MODEL_DMG_ABC : CUPID_GB_MODEL_CGB;
         a->cgb_mode = a->model == CUPID_GB_MODEL_CGB;
+        /* This synthetic model change needs a canonical display-clock origin. */
+        cupid_gb_pixels_import_legacy(a);
+        cupid_gb_display_clock_import_legacy(a);
+        cupid_gb_vram_bus_import_legacy(a);
         a->dma_active = unused != 1 && unused != 4;
         a->dma_source_base = unused == 2 ? 0xc000 : 0x8000;
         a->dma_index = unused >= 3 ? 0 : 1;
@@ -403,7 +407,7 @@ static void test_stop_port_history(void) {
             assert(!b->stop_ppu_oam_blocked && !b->stop_ppu_palette_blocked &&
                    !b->ppu_transfer_end_dot &&
                    b->stop_ppu_vram_blocked == a->stop_ppu_vram_blocked);
-            put_u32(state + 8, 12);
+            put_u32(state + 8, 15);
             put_u32(state + 12, (uint32_t)length);
             const size_t offsets[] = {v11_length - 6, v11_length - 5, v11_length - 4,
                                       v11_length - 3};
@@ -479,7 +483,7 @@ static void test_object_fetch_stage_history(void) {
             }
             free(damaged);
         }
-        state[stage_offset] = 4;
+        state[stage_offset] = CUPID_GB_OBJECT_ABORTED + 1;
         update_integrity(state, length);
         *before = *b;
         rejected_unchanged(b, state, length, CUPID_GB_STATE_INVALID);
