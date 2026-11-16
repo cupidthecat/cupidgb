@@ -102,6 +102,8 @@ bool MainWindow::motionSmokeTest(const QString &directory) {
     timer_.stop();
     motionFocusActive_ = true;
     refreshControllerGate();
+    if (!motionInputAllowed(true))
+        return smokeFailure(__FILE__, __LINE__);
     const auto move = [&](int x, int y) {
         const QSize source = display_->image.size();
         const QRectF viewport = displayViewport(source, display_->size(), display_->scaling,

@@ -960,6 +960,11 @@ bool MainWindow::controllerSmokeTest(const QString &directory) {
     if (!runFrame() || !motorNear(43690))
         return smokeFailure(__FILE__, __LINE__);
 
+    // Debugger stops expose their tool window. Close it before the following
+    // pointer workflow checks input through the gameplay window's focus gate.
+    if (!debuggerWindow_ || !debuggerWindow_->close() || debuggerWindow_->isVisible())
+        return smokeFailure(__FILE__, __LINE__);
+
     if (!openMotorCartridge(8))
         return smokeFailure(__FILE__, __LINE__);
     cupid_gb_write_u8(&emulator_->gb, 3, 0x23);
