@@ -1,3 +1,25 @@
+/**
+ * @file    camera.c
+ * @brief   Camera cartridge banking, exposure timing, and sensor-to-tile conversion.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://gnu.org>.
+ */
+
 #include "cupid/gb/camera.h"
 
 enum {
@@ -76,9 +98,13 @@ static int sensor_pixel(const CupidGbCamera *camera, int x, int y) {
     unsigned pattern = coordinates + camera->capture_number * 29u;
     unsigned gray = (pattern ^ (unsigned)(x * y / 4)) & 255u;
     unsigned index = camera->registers[CAMERA_GAIN] & 31u;
-    /* Approximate the analog gain in fixed point, with unity at index 4. */
-    unsigned gain = index < 4 ? 224u + 8u * index : 256u + (171u * (index - 4u) + 13u) / 27u;
-    gray = gray * gain / 256u;
+    /* These Q15 coefficients preserve all 256 quantized sensor levels at each
+     * gain setting. Truncate the gain stage before applying exposure. */
+    static const uint16_t gain_q15[] = {28865, 29981, 30990, 31915, 32768, 33558, 34297, 34988,
+                                        35638, 36832, 37909, 38888, 39785, 40619, 41758, 43112,
+                                        44320, 45406, 46393, 47298, 48134, 48912, 49637, 50320,
+                                        50958, 51562, 52133, 52681, 53200, 53695, 54169, 54635};
+    gray = (gray * gain_q15[index]) >> 15u;
     return (int)(gray * exposure(camera) / 4096u);
 }
 
@@ -87,9 +113,16 @@ static unsigned sensor_level(const CupidGbCamera *camera, int x, int y) {
     if ((camera->registers[CAMERA_GAIN] & 0xe0u) == 0xe0u) {
         static const uint8_t edge_gain_quarters[] = {2, 3, 4, 5, 8, 12, 16, 20};
         unsigned index = (camera->registers[CAMERA_EDGE] >> 4u) & 7u;
-        int neighbors = sensor_pixel(camera, x - 1, y) + sensor_pixel(camera, x + 1, y) +
-                        sensor_pixel(camera, x, y - 1) + sensor_pixel(camera, x, y + 1);
-        gray += (4 * gray - neighbors) * edge_gain_quarters[index] / 4;
+        const int strength = edge_gain_quarters[index];
+        static const int8_t dx[] = {-1, 1, 0, 0};
+        static const int8_t dy[] = {0, 0, -1, 1};
+        gray *= 1 + strength;
+        /* Each neighbor is a separate signed, quantized stage. Combining the
+         * terms changes the shade near a threshold, especially below zero. */
+        for (unsigned neighbor = 0; neighbor < 4; ++neighbor) {
+            const int adjacent = sensor_pixel(camera, x + dx[neighbor], y + dy[neighbor]);
+            gray = (4 * gray - adjacent * strength) / 4;
+        }
     }
     unsigned cell = (unsigned)((y & 3) * 4 + (x & 3));
     const uint8_t *limits = &camera->registers[CAMERA_THRESHOLDS + cell * 3u];

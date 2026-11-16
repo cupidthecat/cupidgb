@@ -110,4 +110,6 @@ Inspector raw grayscale mode bypasses color correction. Palette-selected color p
 
 ## Remaining debugger scope
 
-Bare `reset` and `reset quick` console commands remain pending; use the implemented `reset reload` command or the ordinary Reset action for the documented current workflows. Read/write watchpoints, a full expression language, saved debugger sessions, continuous-playback instruction replay, arbitrary physical-bank memory editing, ROM patching, interactive palette editing, and presentation layer/channel toggles also remain pending. Inspector rendering and the bounded instruction history are useful diagnostic tools, not complete debugger or hardware parity.
+Use Audio > Audio Channels or Alt+1 through Alt+4 to listen to individual channel combinations. Muting changes output mixing while the emulated channel continues running. These choices persist through state loading, rewind and Backstep for the current session.
+
+Bare `reset` and `reset quick` console commands remain pending; use the implemented `reset reload` command or the ordinary Reset action for the documented current workflows. Read/write watchpoints, a full expression language, saved debugger sessions, continuous-playback instruction replay, arbitrary physical-bank memory editing, ROM patching, interactive palette editing, and graphics layer toggles also remain pending. Inspector rendering and the bounded instruction history are useful diagnostic tools, not complete debugger or hardware parity.

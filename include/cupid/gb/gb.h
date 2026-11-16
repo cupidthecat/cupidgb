@@ -1,3 +1,25 @@
+/**
+ * @file    gb.h
+ * @brief   Game Boy hardware state, model definitions, memory access, and lifecycle API.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://gnu.org>.
+ */
+
 #ifndef CUPID_GB_GB_H
 #define CUPID_GB_GB_H
 
@@ -5,6 +27,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "cupid/gb/audio_output.h"
 #include "cupid/gb/rtc.h"
 #include "cupid/gb/sgb.h"
 #include "cupid/gb/startup.h"
@@ -15,17 +38,13 @@
 #define CUPID_GB_SCREEN_WIDTH 160u
 #define CUPID_GB_SCREEN_HEIGHT 144u
 
-/* APU sample buffer: ~2.8 frames at 44100 Hz / 60 fps */
-#define CUPID_GB_APU_SAMPLE_RATE 44100u
-#define CUPID_GB_APU_BUF_FRAMES 2048u
-
 /*
  * All 4 Game Boy audio channels + frame sequencer state.
  * ch*_len  = internal length counter (counts DOWN; channel stops at 0).
  * ch*_freq = current 11-bit channel frequency.
- * ch*_timer = T-cycle countdown until next event (duty step / wave pos / LFSR).
- * buf[]    = int16_t stereo samples, L then R, generated each tick.
- * buf_write = number of stereo frames currently waiting in buf[].
+ * ch1..3_timer = T-cycle countdown until the next duty step or wave fetch.
+ * ch4_timer retains a legacy nominal period; noise_timing owns the running divider.
+ * output holds the host-rate reconstruction, filter, and queued stereo frames.
  */
 typedef struct CupidGbPulseTiming {
     uint8_t start_delay; /* Remaining trigger settling time, 0..12 base T-cycles. */
@@ -60,6 +79,8 @@ typedef struct CupidGbNoiseTiming {
     bool output_high;
     bool last_shift_narrow;
     bool pre_shift_bit7;
+    bool feedback_latch; /* Delayed exclusive-or feedback for monochrome noise shifts. */
+    uint8_t start_delay; /* Monochrome trigger settling time, 0..12 base T-cycles. */
 } CupidGbNoiseTiming;
 
 typedef struct CupidGbApu {
@@ -141,18 +162,13 @@ typedef struct CupidGbApu {
     CupidGbPulseTiming pulse_timing[2];
     CupidGbSweepTiming sweep_timing;
     CupidGbNoiseTiming noise_timing;
-    /* DAC disconnect freezes its code until a later channel-output event. */
+    /* Disconnected pulse DACs retain their hardware codes independently of synthesis events. */
     uint8_t pulse_dac_hold[2];
+    /* DAC disconnect freezes its code until a later channel-output event. */
+    uint8_t dac_sample[CUPID_GB_AUDIO_CHANNELS];
+    uint16_t pending_cycles; /* Delivered base T-cycles awaiting a digital APU run. */
 
-    /* Output */
-    uint32_t sample_acc;
-    int16_t buf[CUPID_GB_APU_BUF_FRAMES * 2u]; /* L/R interleaved */
-    uint32_t buf_write;                        /* number of stereo frames written */
-    uint32_t sample_rate; /* Zero selects the default rate for zero-initialized callers. */
-    int64_t mix_left, mix_right;
-    int64_t highpass_left, highpass_right;
-    uint32_t highpass_rate;
-    bool highpass_disabled;
+    CupidGbAudioOutput output;
 } CupidGbApu;
 
 typedef enum CupidGbMbcType {

@@ -16,12 +16,13 @@ CupidGB emulates Game Boy and Game Boy Color hardware with a C core and a Qt des
 | [Troubleshooting](troubleshooting.md) | Loading, input, display, sound, saving, and build problems |
 | [Architecture](architecture.md) | Subsystem ownership, clock domains, and host integration |
 | [Timing and clock domains](timing.md) | CPU bus phases, interrupt acknowledgment, STAT latches, audio units, host deadlines, and timing validation |
-| [Audio subsystem](audio.md) | Channel and divider clocks, register behavior, sample integration, host playback, snapshots, and audio limits |
+| [Audio subsystem](audio.md) | Channel and divider clocks, register behavior, sample reconstruction, filters, host playback, snapshots, and audio limits |
 | [Core API](core-api.md) | Lifecycle, model clocks, stepping, serial observation, snapshots, and embedding contracts |
 | [Testing and measurements](testing.md) | Regression checks, external ROM suites, comparable runtime evidence, and reports |
 | [Contributing](contributing.md) | Source changes, formatting, documentation, private inputs, and review requirements |
 | [Parity checklist](parity.md) | Implemented behavior and remaining hardware and desktop requirements |
 | [Validation record](validation.md) | Recorded environments, test results, runtime measurements, and their limits |
 | [Cartridge-clock validation](validation-rtc.md) | Counter comparisons, clock policies, divider timing, native continuation, and remaining qualification |
+| [Audio and native-state validation](validation-audio.md) | Reconstruction, live restoration, SGB phase bounds, Camera processing, mapper comparisons, and native continuation |
 
 Start with the build guide if you have a source checkout. For an executable that already runs, use the user guide. A result in the validation record applies to the stated revision, inputs, settings, and duration; it does not qualify every later build.

@@ -1,3 +1,25 @@
+/**
+ * @file    test_video_bus.c
+ * @brief   Regression tests for video-port ownership and CPU/DMA contention.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://gnu.org>.
+ */
+
 #include "cupid/common/sha256.h"
 #include "cupid/gb/gb.h"
 #include "cupid/gb/input.h"
@@ -255,8 +277,8 @@ static void test_cpu_video_edges(void) {
                 cupid_gb_write_u8(gb, 0xff80, 0x10);
                 break;
         }
-        gb->apu.sample_acc = 0;
-        gb->apu.buf_write = 0;
+        gb->apu.output.sample_acc = 0;
+        gb->apu.output.buf_write = 0;
         /* Seed a public instruction boundary inside an existing transfer. The
          * instruction owns subsequent clocks, including wake-only DMA credit. */
         gb->dma_source_base = 0x8000;
@@ -279,8 +301,8 @@ static void test_cpu_video_edges(void) {
         assert(gb->dma_index == cases[i].next_cursor && gb->dma_active == cases[i].dma_active);
         if (gb->dma_active)
             assert(gb->dma_phase == cases[i].next_phase);
-        assert(gb->apu.buf_write == 0);
-        assert(gb->apu.sample_acc == (uint64_t)cases[i].duration * 44100u);
+        assert(gb->apu.output.buf_write == 0);
+        assert(gb->apu.output.sample_acc == (uint64_t)cases[i].duration * 44100u);
         assert(fingerprint(gb->object_attribute_memory, 160) == cases[i].oam);
         assert(fingerprint(gb->video_ram, cases[i].color ? 0x4000 : 0x2000) == cases[i].vram);
         release(gb);
@@ -408,8 +430,8 @@ static void test_cpu_video_continuation(void) {
             assert(cases[i].program == STOP_PROGRAM);
             cupid_gb_write_u8(gb, 0xff80, 0x10);
         }
-        gb->apu.sample_acc = 0;
-        gb->apu.buf_write = 0;
+        gb->apu.output.sample_acc = 0;
+        gb->apu.output.buf_write = 0;
         gb->dma_source_base = 0x8000;
         gb->dma_index = cases[i].cursor;
         gb->dma_phase = cases[i].phase;
@@ -437,7 +459,7 @@ static void test_cpu_video_continuation(void) {
             assert(gb->dma_index == expected->cursor && gb->dma_active == expected->active);
             if (gb->dma_active)
                 assert(gb->dma_phase == expected->phase);
-            assert(gb->apu.buf_write == 0 && gb->apu.sample_acc == expected->audio);
+            assert(gb->apu.output.buf_write == 0 && gb->apu.output.sample_acc == expected->audio);
             assert(fingerprint(gb->object_attribute_memory, 160) == expected->oam);
             assert(fingerprint(gb->video_ram, 0x4000) == UINT32_C(0x441a1dc5));
         }
@@ -467,8 +489,8 @@ static void test_acknowledge_video_edge(void) {
             gb->io_registers[5] = 0;
             gb->tima_overflow_delay = 1;
         }
-        gb->apu.sample_acc = 0;
-        gb->apu.buf_write = 0;
+        gb->apu.output.sample_acc = 0;
+        gb->apu.output.buf_write = 0;
         /* This fixture starts inside the final DMA byte, before any shared
          * fetch has retained a row. It intentionally bypasses the start delay. */
         gb->dma_source_base = 0x8000;
@@ -490,7 +512,7 @@ static void test_acknowledge_video_edge(void) {
         assert((cupid_gb_read_u8(gb, 0xff0f) & 31) == (reload ? 4 : 0));
         assert(cupid_gb_read_u8(gb, 0xff05) == (reload ? 0x42 : 0xfc));
         assert(gb->dma_index == 160 && gb->dma_active && gb->dma_phase == 3);
-        assert(gb->apu.buf_write == 0 && gb->apu.sample_acc == 176400);
+        assert(gb->apu.output.buf_write == 0 && gb->apu.output.sample_acc == 176400);
         assert(fingerprint(gb->object_attribute_memory, 160) == UINT32_C(0x9d10a1e9));
         assert(fingerprint(gb->video_ram, 0x2000) == UINT32_C(0x20779dc5));
         release(gb);

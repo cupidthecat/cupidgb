@@ -1,3 +1,25 @@
+/**
+ * @file    main_window_internal.h
+ * @brief   Shared Qt window helpers, validated preferences, and display widget.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <https://gnu.org>.
+ */
+
 #pragma once
 
 #include "main_window.h"
@@ -86,6 +108,10 @@ constexpr std::array<const char *, 5> specialNames = {"Turbo", "Rewind", "Slow m
                                                       "Rapid B"};
 constexpr std::array<int, 5> defaultSpecialKeys = {Qt::Key_Space, Qt::Key_Tab, Qt::Key_Shift, 0, 0};
 constexpr std::array<const char *, 3> frameBlendingNames = {"Disabled", "Simple", "Accurate"};
+constexpr std::array<const char *, 3> audioFilterNames = {"None (Keep DC Offset)", "Accurate",
+                                                          "Preserve Waveform"};
+constexpr std::array<const char *, 4> audioChannelNames = {"Square Channel 1", "Square Channel 2",
+                                                           "Wave Channel", "Noise Channel"};
 constexpr std::array<unsigned, 12> turboCapChoices = {0, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
 
 unsigned configuredTurboCapQuarters(const QSettings &settings) {
@@ -108,6 +134,36 @@ CupidGbRtcMode configuredRtcMode(const QSettings &settings) {
         default:
             return CUPID_GB_RTC_SYNC_TO_HOST;
     }
+}
+
+int audioPreferenceInteger(const QVariant &value, int maximum, int fallback) {
+    switch (value.metaType().id()) {
+        case QMetaType::Int:
+        case QMetaType::UInt:
+        case QMetaType::LongLong:
+        case QMetaType::ULongLong:
+        case QMetaType::QString: {
+            // INI values can be strings; signs, whitespace and rounded floats
+            // must not turn a malformed preference into a different audio policy.
+            const QString text = value.toString();
+            bool valid = false;
+            const int number = text.toInt(&valid);
+            if (valid && number >= 0 && number <= maximum && text == QString::number(number))
+                return number;
+            return fallback;
+        }
+        default:
+            return fallback;
+    }
+}
+
+CupidGbAudioFilter configuredAudioFilter(const QSettings &settings) {
+    return CupidGbAudioFilter(audioPreferenceInteger(settings.value("audio/highpassMode"), 2,
+                                                     CUPID_GB_AUDIO_FILTER_ACCURATE));
+}
+
+int configuredAudioInterference(const QSettings &settings) {
+    return audioPreferenceInteger(settings.value("audio/interferenceVolume"), 100, 0);
 }
 
 FrameBlending configuredFrameBlending(const QSettings &settings) {

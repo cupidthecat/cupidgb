@@ -1,3 +1,25 @@
+/**
+ * @file    main_window_session.cpp
+ * @brief   Qt pacing, state files, and bounded rewind session management.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <https://gnu.org>.
+ */
+
 #include "main_window_internal.h"
 
 #include <QScopeGuard>
@@ -243,12 +265,12 @@ bool MainWindow::restoreState(const QByteArray &bytes, bool reportFailure, bool 
     }
     const auto result =
         rewindSnapshot
-            ? cupid_gb_load_state_with_context(&emulator_->gb,
-                                               reinterpret_cast<const uint8_t *>(bytes.constData()),
-                                               size_t(bytes.size()), rewindContext_.get())
-            : cupid_gb_load_state(&emulator_->gb,
-                                  reinterpret_cast<const uint8_t *>(bytes.constData()),
-                                  size_t(bytes.size()));
+            ? cupid_gb_load_state_live_with_context(
+                  &emulator_->gb, reinterpret_cast<const uint8_t *>(bytes.constData()),
+                  size_t(bytes.size()), rewindContext_.get())
+            : cupid_gb_load_state_live(&emulator_->gb,
+                                       reinterpret_cast<const uint8_t *>(bytes.constData()),
+                                       size_t(bytes.size()));
     if (result != CUPID_GB_STATE_OK) {
         if (reportFailure)
             reportError("Cannot load emulator state: " +
@@ -338,7 +360,8 @@ bool MainWindow::loadStateFile(const QString &path) {
     if (recorder_ && recorder_->active() &&
         recorder_->sampleRate() != cupid_gb_apu_get_sample_rate(&emulator_->gb))
         stopRecording();
-    // Pending samples belong to the saved timeline, before the next forward instruction.
+    // The receiving output history survives a load. Discard its queued frames
+    // before resuming guest execution at the restored instruction boundary.
     int16_t discarded[CUPID_GB_APU_BUF_FRAMES * 2];
     cupid_gb_apu_drain(&emulator_->gb, discarded, CUPID_GB_APU_BUF_FRAMES);
     // Host input remains current even when the saved guest frame held another button.
@@ -510,8 +533,8 @@ bool MainWindow::rewindFrame(PlaybackResult *result) {
             statusBar()->showMessage("Rewind disabled: stored state could not be restored");
             return false;
         }
-        // Native snapshots retain pending PCM. It belongs to the restored past;
-        // only newly generated replay samples enter the live host stream.
+        // Live restores retain the receiving output history. Discard pending
+        // frames so only newly generated replay samples enter the host stream.
         int16_t discarded[CUPID_GB_APU_BUF_FRAMES * 2];
         cupid_gb_apu_drain(&emulator_->gb, discarded, CUPID_GB_APU_BUF_FRAMES);
         resetDebuggerTimeline();

@@ -1,3 +1,25 @@
+/**
+ * @file    state.h
+ * @brief   Versioned native snapshot capture, exact replay and live restoration.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <https://gnu.org>.
+ */
+
 #ifndef CUPID_GB_STATE_H
 #define CUPID_GB_STATE_H
 
@@ -46,6 +68,13 @@ CupidGbStateResult cupid_gb_load_state_with_context(CupidGb *gb, const uint8_t *
  * ROMs, boot ROMs, and save paths are session resources and are never included in state data.
  * Restoring an active boot overlay requires the same boot ROM to be available in the target.
  * The target's current boot-overlay enabled flag need not match the saved flag.
+ * Version 14 retains the older hardware and accessory layout and adds explicit
+ * reconstruction rings, DAC delays, binary64 filter history, audio policy,
+ * deterministic interference state and pending synthesis clocks before the accessory
+ * descriptor. Exact loads restore both the guest hardware and this output history.
+ * Live loads first finish the saved APU's deferred clocks on the candidate, then retain
+ * the receiving output history and policy. They rebase its sample fraction without
+ * changing the receiving sample rate or emitting the discarded timeline's queued audio.
  * Version 13 retains the version 11 hardware payload and version 12 receiver history, then adds
  * uint32 fractional RTC phase, one TPP1 motor byte and one divider subcycle byte before the
  * built-in accessory descriptor. Divider subcycles retain zero through three unheld CPU T-cycles.
@@ -61,7 +90,11 @@ CupidGbStateResult cupid_gb_load_state_with_context(CupidGb *gb, const uint8_t *
  * STOP access gates, the palette-port release edge, object fetch stage, pending
  * JOYP row release, and presentation events. Applicable SGB, MMM01, MBC7, Camera,
  * TPP1, and HuC3 sections are included.
- * Versions 2 through 12 remain readable with defaults for absent history. Their RTC phase
+ * Versions 2 through 13 remain readable. Missing reconstruction history receives
+ * deterministic settled-channel defaults; queued PCM, output rate, rational credit
+ * and the disabled-filter flag survive import. Retired integer mixer/filter history
+ * is validated but cannot reproduce the new reconstruction waveform exactly.
+ * Versions 2 through 12 use defaults for absent history. Their RTC phase
  * and divider subcycle start at zero; a saved TPP1 section supplies motor strength from its
  * status low bits. The older timer_counter field retains its literal saved value.
  * Missing TPP1 sections and other controllers start with zero motor strength. Older
@@ -84,6 +117,14 @@ CupidGbStateResult cupid_gb_save_state(const CupidGb *gb, uint8_t *data, size_t 
  * their host pacing baseline before resuming. These buffers use the CupidGB native format.
  */
 CupidGbStateResult cupid_gb_load_state(CupidGb *gb, const uint8_t *data, size_t length);
+/* Live desktop timeline changes restore guest state while retaining the receiving
+ * output queue, reconstruction/DAC/filter history, sample rate and listening policy.
+ * Only the reconstruction fraction is rebased. Clear queued host/core playback
+ * before resuming. Rejected loads leave the entire receiving instance unchanged. */
+CupidGbStateResult cupid_gb_load_state_live(CupidGb *gb, const uint8_t *data, size_t length);
+CupidGbStateResult cupid_gb_load_state_live_with_context(CupidGb *gb, const uint8_t *data,
+                                                         size_t length,
+                                                         const CupidGbStateContext *context);
 const char *cupid_gb_state_result_name(CupidGbStateResult result);
 
 #ifdef __cplusplus

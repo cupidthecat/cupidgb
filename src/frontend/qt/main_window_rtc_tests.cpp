@@ -1,4 +1,27 @@
+/**
+ * @file    main_window_rtc_tests.cpp
+ * @brief   Qt cartridge-clock policy and battery-save lifecycle regressions.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://gnu.org>.
+ */
+
 #include "main_window_internal.h"
+#include "main_window_state_test_helpers.h"
 
 #include <QDateTime>
 #include <QScopeGuard>
@@ -277,26 +300,28 @@ bool MainWindow::rtcSmokeTest(const QString &directory) {
         gb.rtc_cycles = 54321;
         gb.rtc.base_time = clock.now - 9;
         const QByteArray saved = session.captureState();
+        const QByteArray savedHardware = hardwareSnapshotForTest(gb);
         const auto savedRegisters = rtcRegisters(gb);
         if (saved.isEmpty() || !cupid_gb_set_rtc_mode(&gb, CUPID_GB_RTC_SYNC_TO_HOST))
             return smokeFailure(__FILE__, __LINE__);
         gb.rtc.s = 47;
         gb.rtc_cycles = 9988;
         const unsigned loadCalls = clock.calls;
-        if (!session.restoreState(saved, false) || session.captureState() != saved ||
+        if (!session.restoreState(saved, false) || !matchesHardwareForTest(gb, savedHardware) ||
             !policyMatches(CUPID_GB_RTC_SYNC_TO_HOST) || rtcRegisters(gb) != savedRegisters ||
             gb.rtc_cycles != 54321 || gb.rtc.base_time != clock.now - 9 || clock.calls != loadCalls)
             return smokeFailure(__FILE__, __LINE__);
+        const QByteArray receivingState = session.captureState();
         QByteArray damaged = saved;
         damaged.back() = char(uint8_t(damaged.back()) ^ 1u);
-        if (session.restoreState(damaged, false) || session.captureState() != saved ||
+        if (session.restoreState(damaged, false) || session.captureState() != receivingState ||
             !policyMatches(CUPID_GB_RTC_SYNC_TO_HOST) || clock.calls != loadCalls)
             return smokeFailure(__FILE__, __LINE__);
 
         const auto *beforeCore = session.emulator_.get();
         session.bootDirectoryOverride_ = fixtures.filePath("missing-firmware");
         if (session.openRom(cartridge) || session.emulator_.get() != beforeCore ||
-            session.captureState() != saved || !policyMatches(CUPID_GB_RTC_SYNC_TO_HOST) ||
+            session.captureState() != receivingState || !policyMatches(CUPID_GB_RTC_SYNC_TO_HOST) ||
             clock.calls != loadCalls)
             return smokeFailure(__FILE__, __LINE__);
         session.failed_ = false;

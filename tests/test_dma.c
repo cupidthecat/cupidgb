@@ -1,3 +1,25 @@
+/**
+ * @file    test_dma.c
+ * @brief   Regression tests for OAM DMA, color DMA, and transfer scheduling.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://gnu.org>.
+ */
+
 #include "cupid/gb/debugger.h"
 #include "cupid/gb/gb.h"
 #include "cupid/gb/input.h"
@@ -103,8 +125,8 @@ static void test_general_transfer_clocks_and_blocks(void) {
         assert(gb->elapsed_cycles == duration);
         assert(gb->io_registers[4] * 64u + gb->div_counter ==
                ((divider + duration / (fast ? 2u : 4u)) & 0x3fffu));
-        assert(gb->apu.sample_acc == duration * UINT32_C(44100) % 4194304u);
-        assert(gb->apu.buf_write == duration * UINT32_C(44100) / 4194304u);
+        assert(gb->apu.output.sample_acc == duration * UINT32_C(44100) % 4194304u);
+        assert(gb->apu.output.buf_write == duration * UINT32_C(44100) / 4194304u);
         assert(cupid_gb_read_u8(gb, 0xff55) == 0xff);
         release(gb);
     }

@@ -1,5 +1,28 @@
+/**
+ * @file    main_window_workflow_tests.cpp
+ * @brief   Runtime checks for Qt session, playback, and persistence workflows.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <https://gnu.org>.
+ */
+
 #include "inspector_renderer.h"
 #include "main_window_internal.h"
+#include "main_window_state_test_helpers.h"
 
 #include <QScopeGuard>
 
@@ -8,7 +31,7 @@ bool MainWindow::smokeTest() {
     if (!directory.isValid())
         return smokeFailure(__FILE__, __LINE__);
     if (!playbackSmokeTest(directory.path()) || !startupSmokeTest(directory.path()) ||
-        !rtcSmokeTest(directory.path()))
+        !rtcSmokeTest(directory.path()) || !audioPolicySmokeTest(directory.path()))
         return smokeFailure(__FILE__, __LINE__);
     QByteArray rom(32768, char(0));
     rom[0x100] = char(0x18);
@@ -167,6 +190,7 @@ bool MainWindow::smokeTest() {
         return smokeFailure(__FILE__, __LINE__);
     setPaused(true);
     const QByteArray checkpoint = captureState();
+    const QByteArray checkpointHardware = hardwareSnapshotForTest(emulator_->gb);
     // Version 2 retains the frozen payload prefix but has no new timing latches.
     // Loading its file must preserve that file and let the core initialize missing history.
     QByteArray version2 = checkpoint.first(300518);
@@ -239,16 +263,17 @@ bool MainWindow::smokeTest() {
     if (openRom(nativeStatePath) || captureState() != checkpoint)
         return smokeFailure(__FILE__, __LINE__);
     failed_ = false; // State files must never be interpreted as new cartridges.
-    if (!runFrame() || !dropFile(nativeStatePath) || !paused_ || captureState() != checkpoint)
+    if (!runFrame() || !dropFile(nativeStatePath) || !paused_ ||
+        !matchesHardwareForTest(emulator_->gb, checkpointHardware))
         return smokeFailure(__FILE__, __LINE__);
     if (!runFrame() || !runFrame())
         return smokeFailure(__FILE__, __LINE__);
-    const QByteArray expectedReplay = captureState();
-    if (!loadSlot(1) || !paused_ || captureState() != checkpoint || !runFrame() || !runFrame() ||
-        captureState() != expectedReplay)
+    const QByteArray expectedReplay = hardwareSnapshotForTest(emulator_->gb);
+    if (!loadSlot(1) || !paused_ || !matchesHardwareForTest(emulator_->gb, checkpointHardware) ||
+        !runFrame() || !runFrame() || !matchesHardwareForTest(emulator_->gb, expectedReplay))
         return smokeFailure(__FILE__, __LINE__);
     if (!saveSlot(2) || !QFile::rename(slotPath(2), slotPath(2, true)) || !runFrame() ||
-        !loadSlot(2) || captureState() != expectedReplay)
+        !loadSlot(2) || !matchesHardwareForTest(emulator_->gb, expectedReplay))
         return smokeFailure(__FILE__, __LINE__);
     QFile corrupt(slotPath(2));
     if (!corrupt.open(QIODevice::WriteOnly) || corrupt.write("invalid") != 7)
@@ -310,7 +335,7 @@ bool MainWindow::smokeTest() {
     for (int i = 0; i < 6; ++i)
         if (!runFrame())
             return smokeFailure(__FILE__, __LINE__);
-    const QByteArray forwardState = captureState();
+    const QByteArray forwardState = hardwareSnapshotForTest(emulator_->gb);
     // The first replay repeats the current frame before history begins moving back.
     for (int i = 0; i < 4; ++i)
         if (!rewindFrame())
@@ -318,7 +343,7 @@ bool MainWindow::smokeTest() {
     for (int i = 0; i < 3; ++i)
         if (!runFrame())
             return smokeFailure(__FILE__, __LINE__);
-    if (captureState() != forwardState) {
+    if (!matchesHardwareForTest(emulator_->gb, forwardState)) {
         qCritical("Rewind workflow failed to reproduce the forward state");
         return smokeFailure(__FILE__, __LINE__);
     }
@@ -785,8 +810,14 @@ bool MainWindow::smokeTest() {
         recorder_->active() || QFileInfo(rateChangePath).size() <= 44)
         return smokeFailure(__FILE__, __LINE__);
     const QString loadRatePath = directory.filePath("load-rate-change.wav");
-    if (!startRecording(loadRatePath) || !loadSlot(8) || recorder_->active() ||
-        QFileInfo(loadRatePath).size() != 44)
+    const uint32_t receivingRate = cupid_gb_apu_get_sample_rate(&emulator_->gb);
+    // A disk load restores guest hardware, while its receiving stream and active
+    // recording keep their rate. An explicit rate change above still closes a file.
+    if (!startRecording(loadRatePath) || !loadSlot(8) || !recorder_->active() ||
+        recorder_->sampleRate() != receivingRate ||
+        cupid_gb_apu_get_sample_rate(&emulator_->gb) != receivingRate ||
+        recorder_->framesWritten() || !runFrame() || !recorder_->framesWritten() ||
+        !stopRecording() || QFileInfo(loadRatePath).size() <= 44)
         return smokeFailure(__FILE__, __LINE__);
     const QString resetRecordingPath = directory.filePath("reset-audio.wav");
     if (!startRecording(resetRecordingPath) || !runFrame() || !restart() || recorder_->active() ||
@@ -1178,7 +1209,7 @@ bool MainWindow::audioLifecycleSmokeTest(const QString &path) {
     }
     if (!session.saveSlot(6))
         return smokeFailure(__FILE__, __LINE__);
-    const QByteArray restored = session.captureState();
+    const QByteArray restored = hardwareSnapshotForTest(session.emulator_->gb);
     for (const bool beforeReplay : {false, true}) {
         session.keyboardSpecialHeld_[1] = true;
         session.reconcileControllerInput();
@@ -1206,7 +1237,8 @@ bool MainWindow::audioLifecycleSmokeTest(const QString &path) {
         session.audioPriming_ = false;
         session.nextFrame_ = 0;
         session.tick();
-        if (!callback.triggered || !callback.closed || session.captureState() != restored ||
+        if (!callback.triggered || !callback.closed ||
+            !matchesHardwareForTest(session.emulator_->gb, restored) ||
             session.display_->image != loadedImage || session.nextFrame_ != loadedDeadline ||
             session.rewindStates_.size() != 1 || session.audioBuffer_->bytesAvailable())
             return smokeFailure(__FILE__, __LINE__);

@@ -1,3 +1,26 @@
+/**
+ * @file    test_state.c
+ * @brief   Portable snapshot roundtrips, compatibility, and transactional validation.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <https://gnu.org>.
+ */
+
+#include "../src/gb/audio_state.h"
 #include "cupid/common/sha256.h"
 #include "cupid/gb/apu.h"
 #include "cupid/gb/gb.h"
@@ -117,7 +140,7 @@ static size_t v11_hardware_size(const CupidGb *gb, size_t length) {
     enum { ACCESSORY_DESCRIPTOR_BYTES = 8, INFRARED_HISTORY_BYTES = 6, RTC_HISTORY_BYTES = 6 };
 
     /* These fixtures have no attached device. HuC3 keeps its existing IR section. */
-    const size_t tail = ACCESSORY_DESCRIPTOR_BYTES + RTC_HISTORY_BYTES +
+    const size_t tail = ACCESSORY_DESCRIPTOR_BYTES + RTC_HISTORY_BYTES + CUPID_GB_AUDIO_STATE_SIZE +
                         (gb->header.mbc_type == CUPID_GB_HUC3 ? 0 : INFRARED_HISTORY_BYTES);
     assert(length >= tail);
     return length - tail;
@@ -191,7 +214,7 @@ static void assert_hardware_equal(const CupidGb *a, const CupidGb *b) {
     SAME_ARRAY(sgb.transfer.tiles);
     SAME_ARRAY(sgb.transfer.map);
     SAME_ARRAY(sgb.transfer.palettes);
-    SAME_ARRAY(apu.buf);
+    SAME_ARRAY(apu.output.buf);
 #undef SAME_ARRAY
 }
 
@@ -259,7 +282,7 @@ static void test_resume(void) {
                 size_t length;
                 uint8_t *state = encode(a, &length);
                 assert(length == cupid_gb_state_size(b) && length > 300518);
-                assert(state[8] == 13);
+                assert(state[8] == 14);
                 uint8_t *rom_pointer = b->rom;
                 strcpy(b->save_path, "host-session-save.sav");
                 assert(cupid_gb_load_state(b, state, length) == CUPID_GB_STATE_OK);
@@ -363,7 +386,7 @@ static void test_pulse_continuation(void) {
             size_t length;
             uint8_t *bytes = encode(a, &length);
             const size_t v11_length = v11_hardware_size(a, length);
-            assert(bytes[8] == 13);
+            assert(bytes[8] == 14);
             assert(bytes[v11_length - 2] == a->apu.pulse_dac_hold[0] &&
                    bytes[v11_length - 1] == a->apu.pulse_dac_hold[1]);
             if (stage == 2 || stage == 4)
@@ -627,6 +650,8 @@ static void test_v2_import(void) {
             cupid_gb_apu_import_legacy(expected);
             cupid_gb_apu_import_monochrome_pulses(expected);
             memset(expected->apu.pulse_dac_hold, 0, sizeof(expected->apu.pulse_dac_hold));
+            cupid_gb_apu_import_monochrome_noise(expected);
+            cupid_gb_audio_import_legacy(expected);
             if (expected->model == CUPID_GB_MODEL_SGB) {
                 expected->sgb.transfer.frame_dots = 0;
                 memcpy(expected->sgb.transfer.tiles, expected->sgb.border_tiles,
@@ -675,14 +700,33 @@ static void test_v2_import(void) {
                 assert(target->apu.noise_timing.foreground ==
                        (source->apu.ch4_on && source->apu.ch4_dac));
                 assert(!target->apu.noise_timing.started_dac_off &&
-                       target->apu.noise_timing.divider_counter == 0);
+                       !target->apu.noise_timing.start_delay);
+                if (target->model == CUPID_GB_MODEL_CGB)
+                    assert(target->apu.noise_timing.divider_counter == 0);
+                else {
+                    /* The monochrome import reconstructs the next noise edge from
+                     * the old timer, rather than restarting its selector counter. */
+                    const unsigned period =
+                        source->apu.ch4_div_code ? source->apu.ch4_div_code * 8u : 4u;
+                    const unsigned selector_period = 2u << source->apu.ch4_shift;
+                    unsigned edges =
+                        ((selector_period / 2u) - target->apu.noise_timing.divider_counter) &
+                        (selector_period - 1u);
+                    if (!edges)
+                        edges = selector_period;
+                    const unsigned until_edge =
+                        target->apu.noise_timing.remaining * 2u + (edges - 1u) * period;
+                    const unsigned legacy_timer =
+                        source->apu.ch4_timer ? source->apu.ch4_timer : period;
+                    assert(until_edge == ((legacy_timer + 1u) & ~1u));
+                }
                 assert_hardware_equal(expected, target);
                 assert_encoded_equal(expected, target);
-                /* Queued PCM, integration and capacitor history belong to v2,
-                 * and importing missing latches must preserve all three. */
-                assert(target->apu.sample_acc == source->apu.sample_acc);
-                assert(target->apu.mix_left == source->apu.mix_left);
-                assert(target->apu.highpass_left == source->apu.highpass_left);
+                /* Legacy PCM and delivery credit remain available. Unsupported
+                 * mixer history is replaced by deterministic reconstruction. */
+                assert(target->apu.output.sample_acc == source->apu.output.sample_acc);
+                assert(target->apu.output.buf_write == source->apu.output.buf_write);
+                assert(target->apu.output.filter.capacitor[0] == 0);
             }
             free(bytes);
         }
@@ -1164,7 +1208,7 @@ static void test_sgb_transfer_resume(void) {
     size_t length;
     uint8_t *bytes = encode(source, &length);
     const size_t v11_length = v11_hardware_size(source, length);
-    assert(v11_length == 310719 && bytes[8] == 13);
+    assert(v11_length == 310719 && bytes[8] == 14);
     assert(bytes[v4_length + 7 + 4096] == 0xa5);
     assert(bytes[v4_length + 7 + 8192] == 0x80 && bytes[v4_length + 7 + 8193] == 0x0c);
     assert(bytes[v11_length - 30] == 0x34 && bytes[v11_length - 29] == 0x12);
@@ -1345,7 +1389,7 @@ static void test_v5_sgb_mapper_sections(void) {
         size_t length;
         uint8_t *bytes = encode(source, &length);
         const size_t v11_length = v11_hardware_size(source, length);
-        assert(v11_length == mapper_offset + mapper_length + 28 && bytes[8] == 13 &&
+        assert(v11_length == mapper_offset + mapper_length + 28 && bytes[8] == 14 &&
                bytes[mapper_offset - 2] == 0x34 && bytes[mapper_offset - 1] == 0x12);
         assert(memcmp(bytes + mapper_offset, wire, mapper_length) == 0);
         assert(cupid_gb_load_state(target, bytes, length) == CUPID_GB_STATE_OK);
@@ -1357,6 +1401,8 @@ static void test_v5_sgb_mapper_sections(void) {
         assert(cupid_gb_load_state(target, bytes, v5_length) == CUPID_GB_STATE_OK);
         /* V5 restores monochrome pulse gates from the saved active/timer state. */
         cupid_gb_apu_import_monochrome_pulses(source);
+        cupid_gb_apu_import_monochrome_noise(source);
+        cupid_gb_audio_import_legacy(source);
         assert_encoded_equal(source, target);
         free(bytes);
         cupid_gb_cleanup(source);
@@ -1372,50 +1418,52 @@ static void test_sgb_sample_phase_and_legacy_filter(void) {
     prepare(source, CUPID_GB_MODEL_SGB, false);
     prepare(target, CUPID_GB_MODEL_SGB, false);
     const uint32_t clock_hz = cupid_gb_base_clock_hz(source);
-    source->apu.sample_acc = clock_hz - 1;
+    source->apu.output.sample_acc = clock_hz - 1;
     size_t length;
     uint8_t *state = encode(source, &length);
     assert(cupid_gb_load_state(target, state, length) == CUPID_GB_STATE_OK);
-    assert(target->apu.sample_acc == clock_hz - 1);
+    assert(target->apu.output.sample_acc == clock_hz - 1);
     assert_encoded_equal(source, target);
 
-    /* A correctly hashed phase at the model's clock boundary must fail validation. */
-    size_t phase_offset = 0, matches = 0;
-    for (size_t offset = 128; offset + 4 <= length; ++offset) {
-        uint32_t value = (uint32_t)state[offset] | ((uint32_t)state[offset + 1] << 8) |
-                         ((uint32_t)state[offset + 2] << 16) | ((uint32_t)state[offset + 3] << 24);
-        if (value == clock_hz - 1) {
-            phase_offset = offset;
-            ++matches;
-        }
-    }
-    assert(matches == 1);
-    for (unsigned byte = 0; byte < 4; ++byte) {
-        state[phase_offset + byte] = (uint8_t)(clock_hz >> (byte * 8));
-    }
+    /* Native delivery credit includes deferred hardware clocks, but its bounded
+     * representation must still reject a correctly hashed overflow. */
+    put_u32(state + 292148, UINT32_MAX);
     update_integrity(state, length);
     rejected_unchanged(target, state, length, CUPID_GB_STATE_INVALID);
     free(state);
 
-    CupidGb handheld = {0}, corrected = {0};
-    corrected.model = CUPID_GB_MODEL_SGB;
-    assert(cupid_gb_apu_set_sample_rate(&handheld, CUPID_GB_APU_SAMPLE_RATE));
-    assert(cupid_gb_apu_set_sample_rate(&corrected, CUPID_GB_APU_SAMPLE_RATE));
-    source->apu.sample_rate = 0; /* Legacy default-rate sentinel must survive migration. */
-    source->apu.sample_acc = 4194303;
-    source->apu.mix_left = 123456;
-    source->apu.mix_right = -456789;
-    source->apu.highpass_rate = handheld.apu.highpass_rate;
-    source->apu.highpass_left = 123;
-    source->apu.highpass_right = -456;
-    source->apu.buf_write = 2;
-    source->apu.buf[0] = 1234;
-    source->apu.buf[1] = -2345;
+    source->apu.output.sample_rate = 0; /* Keep the legacy default-rate sentinel. */
+    source->apu.output.sample_acc = 4194303;
+    source->apu.output.buf_write = 2;
+    source->apu.output.buf[0] = 1234;
+    source->apu.output.buf[1] = -2345;
     state = encode(source, &length);
+    const size_t audio_offset = length - 8 - CUPID_GB_AUDIO_STATE_SIZE;
+    memmove(state + audio_offset, state + audio_offset + CUPID_GB_AUDIO_STATE_SIZE, 8);
+    length -= CUPID_GB_AUDIO_STATE_SIZE;
+    put_u32(state + 8, 13);
+    put_u32(state + 12, (uint32_t)length);
+    /* An older writer used handheld filter coefficients for this adapter.
+     * Its integer histories are accepted and validated, then rebuilt at the
+     * receiving synthesis representation and the saved model's oscillator. */
+    const int64_t history[] = {123456, -456789, 123, -456};
+    for (unsigned field = 0; field < 4; ++field)
+        for (unsigned byte = 0; byte < 8; ++byte)
+            state[300353 + field * 8 + byte] = (uint8_t)((uint64_t)history[field] >> (8 * byte));
+    put_u32(state + 300385, UINT32_C(1069461147));
+    /* Older states contain a sub-frame accumulator without deferred clocks. */
+    put_u32(state + 292148, clock_hz);
+    update_integrity(state, length);
+    rejected_unchanged(target, state, length, CUPID_GB_STATE_INVALID);
+    put_u32(state + 292148, source->apu.output.sample_acc);
+    update_integrity(state, length);
     assert(cupid_gb_load_state(target, state, length) == CUPID_GB_STATE_OK);
-    assert(target->apu.highpass_rate == corrected.apu.highpass_rate);
-    assert(target->apu.highpass_rate != source->apu.highpass_rate);
-    source->apu.highpass_rate = corrected.apu.highpass_rate;
+    cupid_gb_apu_import_monochrome_noise(source);
+    cupid_gb_audio_import_legacy(source);
+    assert(target->apu.output.sample_rate == 0);
+    assert(target->apu.output.filter.retention == source->apu.output.filter.retention);
+    assert(target->apu.output.filter.capacitor[0] == 0 &&
+           target->apu.output.filter.capacitor[1] == 0);
     assert_encoded_equal(source, target);
     assert_hardware_equal(source, target);
     free(state);
@@ -1425,66 +1473,7 @@ static void test_sgb_sample_phase_and_legacy_filter(void) {
     free(target);
 }
 
-static void print_fixture(const char *path) {
-    CupidGb *gb = calloc(1, sizeof(*gb));
-    assert(gb);
-    prepare(gb, CUPID_GB_MODEL_CGB, true);
-    /* The frozen wire fixture supplies its historical bytes explicitly.
-     * Startup variation is covered separately from the codec contract. */
-    memset(gb->high_ram, 0, sizeof(gb->high_ram));
-    memset(gb->cgb_obj_palette_ram, 0, sizeof(gb->cgb_obj_palette_ram));
-    for (size_t index = 0; index < sizeof(gb->cgb_bg_palette_ram); index += 2) {
-        gb->cgb_bg_palette_ram[index] = 0xff;
-        gb->cgb_bg_palette_ram[index + 1] = 0x7f;
-    }
-    /* Preserve the original divider phase of this compatibility fixture. */
-    gb->div_counter = 0;
-    gb->double_speed = true;
-    cupid_gb_write_u8(gb, 0xff40, 0);
-    prepare_phase(gb, 2);
-    /* Keep the historical in-flight OAM prefix of this compatibility fixture.
-     * The current scheduler completes its last source read one M-cycle earlier. */
-    gb->object_attribute_memory[21] = 0;
-    gb->dma_source_base = 0xc000;
-    gb->dma_index = 21;
-    gb->dma_start_delay = 0;
-    gb->dma_restart_delay = 2;
-    gb->dma_active = true;
-    size_t length;
-    uint8_t *bytes = encode(gb, &length);
-    const size_t v11_length = v11_hardware_size(gb, length);
-    assert(v11_length == 300600 && bytes[8] == 13 && !bytes[v11_length - 28] &&
-           !bytes[v11_length - 27]);
-    length = v11_length - 28;
-    put_u32(bytes + 8, 4);
-    put_u32(bytes + 12, (uint32_t)length);
-    update_integrity(bytes, length);
-    char sha256[65];
-    digest_hex(bytes, length, sha256);
-    printf("CUPIDGB_STATE_FIXTURE size=%zu sha256=%s\n", length, sha256);
-    fflush(stdout);
-    assert(length == 300572);
-    assert(strcmp(sha256, "652af4f40504c86dd59eff09f0997f5b60b654816a0908d7802704f981b43be5") == 0);
-    /* The older wire payloads remain byte-for-byte compatible when wrapped
-     * in their original headers. Added fields cannot shift either prefix. */
-    put_u32(bytes + 8, 3);
-    put_u32(bytes + 12, 300568);
-    update_integrity(bytes, 300568);
-    char legacy_sha256[65];
-    digest_hex(bytes, 300568, legacy_sha256);
-    assert(strcmp(legacy_sha256,
-                  "e4fdd3d7ebfdd04aec94ce7b85f0f2d7d83de1416242fa89f26ccf5dfaf71eb2") == 0);
-    put_u32(bytes + 8, 4);
-    put_u32(bytes + 12, (uint32_t)length);
-    update_integrity(bytes, length);
-    if (path) {
-        FILE *file = fopen(path, "wb");
-        assert(file && fwrite(bytes, 1, length, file) == length && fclose(file) == 0);
-    }
-    free(bytes);
-    cupid_gb_cleanup(gb);
-    free(gb);
-}
+#include "test_state_fixture.h"
 
 static void reject_stale_context(CupidGb *gb, const uint8_t *state, size_t length,
                                  const CupidGbStateContext *context, CupidGbStateResult expected) {

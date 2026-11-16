@@ -1,4 +1,25 @@
 /**
+ * @file    gb.c
+ * @brief   Game Boy machine initialization, cartridge memory, and mapped bus access.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <https://gnu.org>.
+ */
+/**
  * @file gb.c
  * @brief Game Boy system glue — initialization, step loop, and memory map.
  *
@@ -341,6 +362,7 @@ void cupid_gb_init(CupidGb *gb) {
     cupid_gb_sgb_init(gb);
     cupid_gb_startup_memory(gb);
     cupid_gb_apu_import_legacy(gb);
+    cupid_gb_audio_import_legacy(gb);
     CupidGbPrinter *printer = cupid_gb_printer_attached(gb);
     if (printer)
         cupid_gb_printer_state_clear(&printer->state, gb->elapsed_cycles);
@@ -785,6 +807,12 @@ static uint8_t read_data_bus(const CupidGb *gb, uint16_t address, CupidGb *bus, 
     if (gb == 0) {
         return 0xffu;
     }
+
+    /* Guest audio reads force pending clocks. Passive debugger reads leave
+     * execution and output delivery untouched. */
+    if (bus && ((address >= 0xff10u && address <= 0xff3fu) ||
+                (gb->model == CUPID_GB_MODEL_CGB && (address == 0xff76u || address == 0xff77u))))
+        cupid_gb_apu_run(bus, true);
 
     if (address >= 0x8000u && address <= 0x9fffu) {
         uint8_t mode = (uint8_t)(gb->io_registers[CUPID_GB_IO_STAT] & 0x03u);

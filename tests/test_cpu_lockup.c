@@ -1,3 +1,25 @@
+/**
+ * @file    test_cpu_lockup.c
+ * @brief   Regression tests for illegal-opcode fetches and halted peripheral operation.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://gnu.org>.
+ */
+
 #include "cupid/gb/apu.h"
 #include "cupid/gb/cpu.h"
 #include "cupid/gb/debugger.h"
@@ -78,8 +100,8 @@ static uint8_t *save(const CupidGb *gb, size_t *size) {
     size_t written = 0;
     assert(bytes && cupid_gb_save_state(gb, bytes, *size, &written) == CUPID_GB_STATE_OK);
     assert(written == *size);
-    /* The corrected hardware state fits the existing native schema. */
-    assert(bytes[8] == 13 && bytes[9] == 0 && bytes[10] == 0 && bytes[11] == 0);
+    /* The halted machine and its pending audio use the current native schema. */
+    assert(bytes[8] == 14 && bytes[9] == 0 && bytes[10] == 0 && bytes[11] == 0);
     return bytes;
 }
 
@@ -272,7 +294,7 @@ static void test_peripheral_clocks(CupidGb *gb) {
         SerialCapture capture = {0};
         arm_peripherals(gb, &capture);
         const uint64_t before = gb->elapsed_cycles;
-        const uint64_t sample_acc = gb->apu.sample_acc;
+        const uint64_t sample_acc = gb->apu.output.sample_acc;
         const uint32_t rate = cupid_gb_apu_get_sample_rate(gb);
         CupidGbStepTrace trace;
         assert(cupid_gb_step_observed(gb, &trace) && trace.event == CUPID_GB_STEP_ILLEGAL_OPCODE);

@@ -1,4 +1,27 @@
+/**
+ * @file    main_window_debugger_tests.cpp
+ * @brief   Runtime debugger command, timeline, and inspector workflow regression tests.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <https://gnu.org>.
+ */
+
 #include "main_window_internal.h"
+#include "main_window_state_test_helpers.h"
 
 #include <QScopeGuard>
 
@@ -77,10 +100,10 @@ bool MainWindow::debuggerSmokeTest(const QString &directory) {
     if (emulator_->gb.cpu.pc != 0x153)
         return smokeFailure(__FILE__, __LINE__);
     debuggerWindow_->submitCommand("set pc $0150");
-    const QByteArray beforeStep = captureState();
+    const QByteArray beforeStep = hardwareSnapshotForTest(emulator_->gb);
     debuggerWindow_->submitCommand("step");
     if (!complete() || emulator_->gb.cpu.pc != 0x153 || debuggerHistory_.size() != 1 ||
-        !debuggerBackstep() || captureState() != beforeStep)
+        !debuggerBackstep() || !matchesHardwareForTest(emulator_->gb, beforeStep))
         return smokeFailure(__FILE__, __LINE__);
     debuggerWindow_->submitCommand("set pc $0153");
     debuggerWindow_->submitCommand("step");
@@ -229,7 +252,7 @@ bool MainWindow::debuggerSmokeTest(const QString &directory) {
     debuggerWindow_->submitCommand("break $0160 if Inner != 0");
     if (!loadDebuggerSymbols(withoutInnerPath) || debugger_->symbol_count != 1)
         return smokeFailure(__FILE__, __LINE__);
-    const QByteArray beforeNextConditionError = captureState();
+    const QByteArray beforeNextConditionError = hardwareSnapshotForTest(emulator_->gb);
     const uint64_t beforeNextConditionCycles = emulator_->gb.elapsed_cycles;
     debuggerWindow_->submitCommand("next");
     if (!complete() || !paused_ || emulator_->gb.cpu.pc != 0x160 ||
@@ -237,7 +260,8 @@ bool MainWindow::debuggerSmokeTest(const QString &directory) {
         debugger_->last_stop != CUPID_GB_DEBUG_STOP_ERROR || debuggerHistory_.size() != 1 ||
         !debuggerWindow_->outputText().contains("Breakpoint condition evaluation failed.") ||
         !debuggerBackstep() || emulator_->gb.cpu.pc != 0x155 ||
-        captureState() != beforeNextConditionError || !loadDebuggerSymbols(symbolsPath))
+        !matchesHardwareForTest(emulator_->gb, beforeNextConditionError) ||
+        !loadDebuggerSymbols(symbolsPath))
         return smokeFailure(__FILE__, __LINE__);
     debuggerWindow_->submitCommand("delete all");
     debuggerWindow_->submitCommand("break Inner");
@@ -289,7 +313,7 @@ bool MainWindow::debuggerSmokeTest(const QString &directory) {
     fillNoise(noisy.work_ram, sizeof(noisy.work_ram));
     fillNoise(noisy.high_ram, sizeof(noisy.high_ram));
     fillNoise(noisy.object_attribute_memory, sizeof(noisy.object_attribute_memory));
-    fillNoise(noisy.apu.buf, sizeof(noisy.apu.buf));
+    fillNoise(noisy.apu.output.buf, sizeof(noisy.apu.output.buf));
     fillNoise(noisy.sgb.border_tiles, sizeof(noisy.sgb.border_tiles));
     fillNoise(noisy.sgb.attribute_files, sizeof(noisy.sgb.attribute_files));
     fillNoise(noisy.sgb.ram_palettes, sizeof(noisy.sgb.ram_palettes));
@@ -388,7 +412,7 @@ bool MainWindow::debuggerSmokeTest(const QString &directory) {
     openDebugger();
     debuggerWindow_->submitCommand("set pc $0150");
     debuggerWindow_->submitCommand("write $ffff $1f");
-    const QByteArray beforeIllegal = captureState();
+    const QByteArray beforeIllegal = hardwareSnapshotForTest(emulator_->gb);
     const uint64_t beforeIllegalCycles = emulator_->gb.elapsed_cycles;
     const auto beforeIllegalOutput = debuggerWindow_->outputText().size();
     const bool beforeIllegalFailure = failed_;
@@ -400,12 +424,13 @@ bool MainWindow::debuggerSmokeTest(const QString &directory) {
         !debuggerWindow_->outputText()
              .mid(beforeIllegalOutput)
              .contains("Illegal opcode: CPU halted") ||
-        failed_ != beforeIllegalFailure || !debuggerBackstep() || captureState() != beforeIllegal)
+        failed_ != beforeIllegalFailure || !debuggerBackstep() ||
+        !matchesHardwareForTest(emulator_->gb, beforeIllegal))
         return smokeFailure(__FILE__, __LINE__);
     debuggerWindow_->submitCommand("step");
     if (!complete() || !saveSlot(9))
         return smokeFailure(__FILE__, __LINE__);
-    const QByteArray lockedState = captureState();
+    const QByteArray lockedState = hardwareSnapshotForTest(emulator_->gb);
     const uint64_t lockedCycles = emulator_->gb.elapsed_cycles;
     debuggerWindow_->submitCommand("write $ff0f $1f");
     debuggerWindow_->submitCommand("step");
@@ -428,7 +453,7 @@ bool MainWindow::debuggerSmokeTest(const QString &directory) {
     debuggerWindow_->submitCommand("step");
     if (!complete() || emulator_->gb.cpu.pc != 0x152 ||
         emulator_->gb.cpu.a != uint8_t(beforeReleasedA + 1) || !loadSlot(9) ||
-        captureState() != lockedState || !emulator_->gb.cpu.halted ||
+        !matchesHardwareForTest(emulator_->gb, lockedState) || !emulator_->gb.cpu.halted ||
         emulator_->gb.interrupt_enable)
         return smokeFailure(__FILE__, __LINE__);
     debuggerWindow_->submitCommand("reset reload");
@@ -450,13 +475,13 @@ bool MainWindow::debuggerSmokeTest(const QString &directory) {
                 session.generatedAudioFrames_ <= beforeAudio)
                 return smokeFailure(__FILE__, __LINE__);
         }
-        const QByteArray savedLock = session.captureState();
+        const QByteArray savedLock = hardwareSnapshotForTest(session.emulator_->gb);
         if (!session.saveSlot(8) || !session.runFrame() || !session.loadSlot(8) ||
-            session.captureState() != savedLock || !session.runFrame() || session.failed_ ||
-            session.paused_ || !session.emulator_->gb.cpu.halted || !session.restart() ||
-            session.emulator_->gb.cpu.halted || session.emulator_->gb.cpu.pc != 0x100 ||
-            !session.runFrame() || session.failed_ || session.paused_ ||
-            !session.emulator_->gb.cpu.halted || !session.closeRom())
+            !matchesHardwareForTest(session.emulator_->gb, savedLock) || !session.runFrame() ||
+            session.failed_ || session.paused_ || !session.emulator_->gb.cpu.halted ||
+            !session.restart() || session.emulator_->gb.cpu.halted ||
+            session.emulator_->gb.cpu.pc != 0x100 || !session.runFrame() || session.failed_ ||
+            session.paused_ || !session.emulator_->gb.cpu.halted || !session.closeRom())
             return smokeFailure(__FILE__, __LINE__);
     }
     // Both MMM01 dump layouts share logical labels and qualified expressions.

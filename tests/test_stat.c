@@ -1,3 +1,25 @@
+/**
+ * @file    test_stat.c
+ * @brief   Regression tests for LCD status timing and interrupt conditions.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://gnu.org>.
+ */
+
 #include "cupid/gb/apu.h"
 #include "cupid/gb/gb.h"
 #include "cupid/gb/ppu.h"
@@ -198,11 +220,11 @@ static void test_stat_during_delayed_speed_switch(void) {
     assert(gb->speed_switch_toggle_cycles == 6 && gb->speed_switch_freeze_cycles == 1);
     check_snapshot_continuation(gb);
     uint64_t start = gb->elapsed_cycles;
-    uint32_t sample_phase = gb->apu.sample_acc;
+    uint32_t sample_phase = gb->apu.output.sample_acc;
     assert(cupid_gb_step(gb));
     assert(gb->cpu.pc == 0x102 && gb->double_speed);
     /* DIV clocks only two audio dots across this six-dot LCD interval. */
-    assert(gb->apu.sample_acc - sample_phase == 2u * cupid_gb_apu_get_sample_rate(gb));
+    assert(gb->apu.output.sample_acc - sample_phase == 2u * cupid_gb_apu_get_sample_rate(gb));
     assert(gb->speed_switch_toggle_cycles == 0 && gb->speed_switch_freeze_cycles == 0);
     assert(gb->elapsed_cycles - start == 6);
     assert(gb->div_counter == 1 && (cupid_gb_read_u8(gb, 0xff4d) & 0x80));

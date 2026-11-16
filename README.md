@@ -23,6 +23,7 @@ Use `--model dmg`, `--model cgb`, or another supported profile to fix hardware f
 | Open / reset / pause | Ctrl+O / Ctrl+R / Ctrl+P |
 | Save / load numbered slot | Ctrl+digit / Ctrl+Shift+digit |
 | Fullscreen / mute / screenshot | Ctrl+F / Ctrl+M / F12 |
+| Audio channels 1 through 4 | Alt+1 through Alt+4 |
 | Settings / debugger | Ctrl+, / Ctrl+C |
 
 Emulation > Settings controls hardware, the optional boot-ROM directory, input, display, volume, and rewind limits. Model and boot choices apply on the next reset or open. Without a boot binary, startup uses an approximate post-boot profile. Boot binaries and game inputs are not distributed.
@@ -31,7 +32,11 @@ Power-on RAM varies by hardware profile. For a reproducible session, add `--powe
 
 Emulation > Controllers selects devices and configures buttons, axes, hats, player assignments, dead zones, hold controls, shortcuts and cartridge rumble. Recognized controllers have a default layout; generic joysticks need layout verification. See [the controller guide](docs/controllers.md) for capture, focus, menus, reconnects and SGB input. Physical devices and motion input remain unqualified.
 
-Battery data uses `.sav` beside the cartridge. State slots use `.s0` through `.s9`, with the zero key selecting slot 10. Archive storage names include the archive extension, such as `game.zip.sav`. Settings offers system-time or Accurate emulated-time policies for supported cartridge clocks. New states use CupidGB native version 13, retaining fractional clock and divider progress, TPP1 motor strength, infrared history and pending printer work. Versions 2 through 12 remain loadable with defaults for history those builds did not record. File > Recover Battery from Older State can export supported battery data from version 1. Keep backups of saves you need to preserve. See [cartridge clocks](docs/rtc.md) for policy and persistence behavior.
+Battery data uses `.sav` beside the cartridge. State slots use `.s0` through `.s9`, with the zero key selecting slot 10. Archive storage names include the archive extension, such as `game.zip.sav`. Settings offers system-time or Accurate emulated-time policies for supported [cartridge clocks](docs/rtc.md).
+
+New states use CupidGB native version 14 and retain hardware, peripheral and audio reconstruction history. Versions 2 through 13 remain loadable with explicit defaults for missing history. Desktop loads keep current listening settings. File > Recover Battery from Older State can export supported battery data from version 1. See [save states and rewind](docs/save-states.md) for compatibility and backup guidance.
+
+Audio settings include Accurate, waveform-preserving and disabled high-pass filtering, optional interference and individual channel toggles. [The audio guide](docs/audio.md) explains how these controls affect playback and recording.
 
 Physical controller/motion qualification, advanced debugger commands/watchpoints, paired cable sessions and other accessories, custom cheat expressions, state interchange, individual hardware revisions, uncommon cartridge behavior, and advanced display/audio features remain incomplete. [The parity checklist](docs/parity.md) records the full scope.
 

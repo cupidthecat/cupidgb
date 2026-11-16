@@ -1,3 +1,25 @@
+/**
+ * @file    main_window_session_tests.cpp
+ * @brief   Qt model selection, idle scheduling, pacing, and display-cadence regressions.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://gnu.org>.
+ */
+
 #include "main_window_internal.h"
 
 #include <QDebug>
@@ -561,14 +583,16 @@ bool MainWindow::turboCapSmokeTest(const QString &path) {
         return smokeFailure(__FILE__, __LINE__);
 
     // Selecting a cap must not change normal-speed hardware, PCM production or
-    // its model-clock deadline. Re-run the same snapshot under two preferences.
+    // its model-clock deadline. Exact native restores control both guest and
+    // output history here; live timeline restoration has separate workflow checks.
     session.turbo_ = session.slowHeld_ = false;
     session.speedSteps_ = 16;
     const auto normalStart = session.captureState();
     QByteArray normalResult;
     uint64_t normalAudio = 0;
     for (const unsigned cap : {6u, 16u}) {
-        if (!session.restoreState(normalStart, false))
+        if (cupid_gb_load_state(&gb, reinterpret_cast<const uint8_t *>(normalStart.constData()),
+                                size_t(normalStart.size())) != CUPID_GB_STATE_OK)
             return smokeFailure(__FILE__, __LINE__);
         session.setTurboCap(cap);
         session.resetPacing();

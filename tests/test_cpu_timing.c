@@ -1,9 +1,33 @@
+/**
+ * @file    test_cpu_timing.c
+ * @brief   Regression tests for CPU instruction timing, bus phases, and interrupts.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://gnu.org>.
+ */
+
+#include "cupid/gb/apu.h"
 #include "cupid/gb/gb.h"
 #include "cupid/gb/ppu.h"
 #include "cupid/gb/timer.h"
 
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static void prepare(CupidGb *gb, uint8_t opcode, uint8_t flags) {
@@ -368,6 +392,9 @@ static void test_double_speed_clock_domains(void) {
     cupid_gb_write_u8(&gb, 0xff25, 0x22);
     CupidGb doubled = gb;
     doubled.double_speed = true;
+    CupidGb *normal_output = malloc(sizeof(*normal_output));
+    CupidGb *double_output = malloc(sizeof(*double_output));
+    assert(normal_output && double_output);
     for (unsigned cycle = 1; cycle <= 2200; ++cycle) {
         cupid_gb_tick(&doubled, 1);
         if (cycle == 2049u)
@@ -377,19 +404,29 @@ static void test_double_speed_clock_domains(void) {
         cupid_gb_tick(&gb, 1);
         assert(gb.elapsed_cycles == cycle * 4u);
         assert(doubled.elapsed_cycles == gb.elapsed_cycles);
+        /* Two-clock delivery may render before the corresponding four-clock
+         * boundary. Flush copies to compare the same delivered hardware time
+         * without changing either scheduler's pending work. Only the distance
+         * since that last render may differ; credit, phase, PCM, filters and
+         * every digital channel latch still have to match. */
+        *normal_output = gb;
+        *double_output = doubled;
+        cupid_gb_apu_run(normal_output, true);
+        cupid_gb_apu_run(double_output, true);
+        CupidGbApu current = double_output->apu;
+        current.output.render_cycles = normal_output->apu.output.render_cycles;
         if (cycle == 2048u) {
             /* The first DIV fall leaves a double-speed envelope latch until
              * the next timer period. This tone has no envelope clock pending;
              * all other state matches and the following iteration rejoins. */
             assert(gb.apu.envelope_delay == 0 && doubled.apu.envelope_delay == 2);
-            CupidGbApu current = doubled.apu;
             current.envelope_delay = 0;
-            assert(memcmp(&gb.apu, &current, sizeof(gb.apu)) == 0);
-        } else {
-            assert(memcmp(&gb.apu, &doubled.apu, sizeof(gb.apu)) == 0);
         }
+        assert(memcmp(&normal_output->apu, &current, sizeof(current)) == 0);
     }
-    assert(gb.apu.buf_write > 0 && gb.apu.fs_step != 0);
+    free(double_output);
+    free(normal_output);
+    assert(gb.apu.output.buf_write > 0 && gb.apu.fs_step != 0);
     assert(gb.div_counter == 2200u % 64u);
     assert(doubled.div_counter == 4400u % 64u);
     for (unsigned phase = 0; phase < 2; ++phase) {

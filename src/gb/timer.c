@@ -1,3 +1,24 @@
+/**
+ * @file    timer.c
+ * @brief   Game Boy timer, serial, divider, and shared peripheral clock delivery.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <https://gnu.org>.
+ */
 #include "cupid/gb/timer.h"
 
 #include "cupid/gb/apu.h"
@@ -256,6 +277,7 @@ static void switch_clock_segment(CupidGb *gb, unsigned cycles, unsigned *half_do
     *half_dot = (*half_dot + ticks) & 1u;
     if (frozen == cycles)
         return;
+    cupid_gb_apu_run(gb, false);
     *rtc_half_cycles += ticks;
     /* A partly frozen segment still releases its complete CPU-side DMA budget;
      * only the LCD oscillator loses the frozen prefix. A completely frozen
@@ -336,6 +358,7 @@ static void tick_mcycles(CupidGb *gb, uint16_t cycles) {
             continue;
         }
         clock_cpu_span(gb, 4u);
+        cupid_gb_apu_run(gb, false);
 
         /* Each CPU machine cycle occupies two LCD dots in double speed.
          * Batching pairs of cycles would move reads and interrupts by two dots. */
@@ -387,6 +410,7 @@ uint8_t cupid_gb_tick_halt(CupidGb *gb) {
         /* Monochrome HALT polls between two complete two-T-cycle deliveries.
          * A carried divider period can finish in either half. */
         clock_cpu_span(gb, 2u);
+        cupid_gb_apu_run(gb, false);
         advance_base_time(gb, 2u);
         cupid_gb_tick_ppu_dots(gb, 2u);
         cupid_gb_tick_dma_tcycles(gb, 2u);
@@ -413,6 +437,7 @@ void cupid_gb_acknowledge_interrupt(CupidGb *gb, uint8_t mask) {
         gb->speed_switch_alignment ^= 4u;
     const bool shared = shared_vram_dma(gb);
     clock_cpu_span(gb, 2u);
+    cupid_gb_apu_run(gb, false);
     for (unsigned dot = 0; dot < half; ++dot) {
         clock_lcd_dot(gb);
         if (shared)
@@ -423,6 +448,7 @@ void cupid_gb_acknowledge_interrupt(CupidGb *gb, uint8_t mask) {
     cupid_gb_rtc_tick(gb, (uint32_t)half * 2u);
     gb->interrupt_flags &= (uint8_t)~mask;
     clock_cpu_span(gb, 2u);
+    cupid_gb_apu_run(gb, false);
     if (gb->double_speed)
         gb->speed_phase = !gb->speed_phase;
     for (unsigned dot = 0; dot < half; ++dot) {
@@ -530,8 +556,11 @@ static unsigned bus_clock_span(CupidGb *gb, unsigned phase, unsigned cycles) {
             if (phase_speed)
                 gb->speed_phase = !gb->speed_phase;
         }
-        if (divider_edge)
+        if (divider_edge) {
             clock_cpu_domain(gb);
+            if (!switching || !gb->speed_switch_freeze_cycles)
+                cupid_gb_apu_run(gb, false);
+        }
     }
     if (switching)
         gb->io_registers[0x4d] =

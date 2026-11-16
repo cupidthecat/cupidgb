@@ -1,3 +1,25 @@
+/**
+ * @file    main_window_display.cpp
+ * @brief   Qt display presentation and persistent settings workflows.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <https://gnu.org>.
+ */
+
 #include "main_window_internal.h"
 
 #include <QWidgetAction>
@@ -425,6 +447,31 @@ void MainWindow::configure() {
     volume->setRange(0, 100);
     volume->setValue(settings_.value("audio/volume", 100).toInt());
     form->addRow("Volume", volume);
+    auto *audioFilter = new QComboBox;
+    audioFilter->setObjectName("audioFilterMode");
+    for (size_t mode = 0; mode < audioFilterNames.size(); ++mode)
+        audioFilter->addItem(audioFilterNames[mode], int(mode));
+    audioFilter->setCurrentIndex(audioFilter->findData(int(configuredAudioFilter(settings_))));
+    form->addRow("Highpass Filter:", audioFilter);
+    auto *interferenceRow = new QWidget;
+    interferenceRow->setObjectName("audioInterferenceRow");
+    auto *interferenceLayout = new QHBoxLayout(interferenceRow);
+    interferenceLayout->setContentsMargins(0, 0, 0, 0);
+    auto *interference = new QSlider(Qt::Horizontal);
+    interference->setObjectName("audioInterferenceVolume");
+    interference->setRange(0, 100);
+    interference->setSingleStep(5);
+    interference->setPageStep(5);
+    interference->setValue(configuredAudioInterference(settings_));
+    auto *interferenceValue = new QLabel(QString("%1%").arg(interference->value()));
+    interferenceValue->setObjectName("audioInterferenceVolumeValue");
+    interferenceValue->setMinimumWidth(interferenceValue->fontMetrics().horizontalAdvance("100%"));
+    connect(
+        interference, &QSlider::valueChanged, interferenceValue,
+        [interferenceValue](int value) { interferenceValue->setText(QString("%1%").arg(value)); });
+    interferenceLayout->addWidget(interference);
+    interferenceLayout->addWidget(interferenceValue);
+    form->addRow("Interference Volume:", interferenceRow);
     auto *rewindLength = new QComboBox;
     for (const int seconds : {0, 10, 30, 60, 120, 300, 600})
         rewindLength->addItem(seconds ? QString("Up to %1 seconds").arg(seconds) : "Disabled",
@@ -586,6 +633,10 @@ void MainWindow::configure() {
         const bool outputChanged = requestedOutput != outputDevice->currentData().toByteArray();
         settings_.setValue("audio/outputDevice", outputDevice->currentData().toByteArray());
         settings_.setValue("audio/volume", volume->value());
+        settings_.setValue("audio/highpassMode", audioFilter->currentData());
+        settings_.setValue("audio/interferenceVolume", interference->value());
+        if (emulator_)
+            applyAudioPolicy(&emulator_->gb);
         if (settings_.value("emulation/rewindSeconds", 120) != rewindLength->currentData() ||
             settings_.value("emulation/rewindMiB", 256) != rewindBudget->currentData()) {
             settings_.setValue("emulation/rewindSeconds", rewindLength->currentData());

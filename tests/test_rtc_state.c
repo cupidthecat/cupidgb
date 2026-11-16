@@ -1,4 +1,28 @@
+/**
+ * @file    test_rtc_state.c
+ * @brief   Clock, divider, and motor history in portable emulator snapshots.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <https://gnu.org>.
+ */
+
+#include "../src/gb/audio_state.h"
 #include "cupid/common/sha256.h"
+#include "cupid/gb/apu.h"
 #include "cupid/gb/infrared.h"
 #include "cupid/gb/printer.h"
 #include "cupid/gb/rtc.h"
@@ -198,7 +222,7 @@ static Blob save_rig(const Rig *rig, bool trusted) {
                                                    &rig->context)
                 : cupid_gb_save_state(rig->gb, blob.bytes, blob.length, &written);
     assert(result == CUPID_GB_STATE_OK && written == blob.length);
-    assert(read_u32(blob.bytes + 8) == 13);
+    assert(read_u32(blob.bytes + 8) == 14);
     assert(memcmp(&before, &rig->host, sizeof(before)) == 0);
     return blob;
 }
@@ -257,7 +281,7 @@ static size_t expected_size(const Rig *rig) {
     const size_t infrared = (size_t)(gb->header.mbc_type == CUPID_GB_HUC3 ? 0 : INFRARED_BYTES);
     const size_t accessory = (size_t)(rig->printer ? PRINTER_BYTES : 0);
     return V4_BYTES + border + mapper + V11_TAIL_BYTES + infrared + RTC_HISTORY_BYTES +
-           DESCRIPTOR_BYTES + accessory;
+           CUPID_GB_AUDIO_STATE_SIZE + DESCRIPTOR_BYTES + accessory;
 }
 
 static Blob copy_blob(const Blob *source, size_t length) {
@@ -268,17 +292,18 @@ static Blob copy_blob(const Blob *source, size_t length) {
 }
 
 static Blob legacy_blob(const Rig *rig, const Blob *current, unsigned version) {
-    assert(version >= 2 && version <= 12);
+    assert(version >= 2 && version <= 13);
     const size_t descriptor = descriptor_offset(rig, current);
     Blob legacy;
-    if (version == 12) {
+    if (version >= 12) {
         legacy = copy_blob(current, current->length);
+        const size_t removed = CUPID_GB_AUDIO_STATE_SIZE + (version == 12 ? RTC_HISTORY_BYTES : 0);
         /* The entire accessory tail moves, including a nonempty printer payload. */
-        memmove(legacy.bytes + descriptor - RTC_HISTORY_BYTES, legacy.bytes + descriptor,
+        memmove(legacy.bytes + descriptor - removed, legacy.bytes + descriptor,
                 current->length - descriptor);
-        legacy.length -= RTC_HISTORY_BYTES;
+        legacy.length -= removed;
     } else {
-        const size_t v11 = descriptor - RTC_HISTORY_BYTES -
+        const size_t v11 = descriptor - CUPID_GB_AUDIO_STATE_SIZE - RTC_HISTORY_BYTES -
                            (rig->gb->header.mbc_type == CUPID_GB_HUC3 ? 0 : INFRARED_BYTES);
         static const size_t tails[] = {0, 4, 5, 16, 22, 26, 28};
         const size_t length = version == 2   ? V2_BYTES
@@ -357,7 +382,8 @@ static void test_history_roundtrip(void) {
                     target->gb->mbc7.motion_y = 123;
                     Blob saved = save_rig(source, api != 0);
                     assert(saved.length == expected_size(source));
-                    const size_t rtc = descriptor_offset(source, &saved) - RTC_HISTORY_BYTES;
+                    const size_t rtc = descriptor_offset(source, &saved) -
+                                       CUPID_GB_AUDIO_STATE_SIZE - RTC_HISTORY_BYTES;
                     assert(read_u32(saved.bytes + rtc) == phase);
                     const uint8_t motor = types[type] == 0xbc ? source->gb->tpp1.motor_strength : 0;
                     assert(saved.bytes[rtc + MOTOR_HISTORY_OFFSET] == motor);
@@ -432,7 +458,8 @@ static void test_legacy_defaults(void) {
                        target->gb->huc3.ir_output == infrared &&
                        target->gb->huc3.ir_detected == infrared);
                 Blob resaved = save_rig(target, true);
-                const size_t history = descriptor_offset(target, &resaved) - RTC_HISTORY_BYTES;
+                const size_t history = descriptor_offset(target, &resaved) -
+                                       CUPID_GB_AUDIO_STATE_SIZE - RTC_HISTORY_BYTES;
                 assert(resaved.bytes[history + MOTOR_HISTORY_OFFSET] ==
                        target->gb->tpp1.motor_strength);
                 assert(resaved.bytes[history + DIVIDER_HISTORY_OFFSET] == 0);
@@ -525,18 +552,20 @@ static void test_transactional_rejection(void) {
             for (unsigned scenario = 0; scenario < 8; ++scenario) {
                 Blob bad = copy_blob(&valid, valid.length + (scenario == 4) - (scenario == 5));
                 if (scenario < 2)
-                    bad.bytes[descriptor - RTC_HISTORY_BYTES + MOTOR_HISTORY_OFFSET] =
+                    bad.bytes[descriptor - CUPID_GB_AUDIO_STATE_SIZE - RTC_HISTORY_BYTES +
+                              MOTOR_HISTORY_OFFSET] =
                         scenario ? 255 : (types[type] == 0xbc ? 4 : 1);
                 else if (scenario == 2) {
-                    const size_t ir_boolean = types[type] == 0xfe
-                                                  ? V4_BYTES + HUC3_SECTION_BYTES - 1
-                                                  : descriptor - RTC_HISTORY_BYTES - 1;
+                    const size_t ir_boolean =
+                        types[type] == 0xfe
+                            ? V4_BYTES + HUC3_SECTION_BYTES - 1
+                            : descriptor - CUPID_GB_AUDIO_STATE_SIZE - RTC_HISTORY_BYTES - 1;
                     bad.bytes[ir_boolean] = 2;
                 } else if (scenario == 3)
                     bad.bytes[descriptor + 2] = 1;
                 else if (scenario >= 6)
-                    bad.bytes[descriptor - RTC_HISTORY_BYTES + DIVIDER_HISTORY_OFFSET] =
-                        scenario == 6 ? 4 : 255;
+                    bad.bytes[descriptor - CUPID_GB_AUDIO_STATE_SIZE - RTC_HISTORY_BYTES +
+                              DIVIDER_HISTORY_OFFSET] = scenario == 6 ? 4 : 255;
                 resign(&bad);
                 reject_unchanged(target, &bad, api != 0);
                 free(bad.bytes);
@@ -632,14 +661,16 @@ static void test_v12_printer_tail(void) {
          * therefore leave four bits captured by the printer's launch callback. */
         assert(current.bytes[descriptor + DESCRIPTOR_BYTES + PRINTER_INCOMING_BITS] == 4);
         Blob legacy = legacy_blob(source, &current, 12);
-        assert(memcmp(legacy.bytes + descriptor - RTC_HISTORY_BYTES, current.bytes + descriptor,
-                      DESCRIPTOR_BYTES + PRINTER_BYTES) == 0);
+        assert(memcmp(legacy.bytes + descriptor - CUPID_GB_AUDIO_STATE_SIZE - RTC_HISTORY_BYTES,
+                      current.bytes + descriptor, DESCRIPTOR_BYTES + PRINTER_BYTES) == 0);
         assert(load_rig(target, &legacy, api != 0) == CUPID_GB_STATE_OK);
         assert(target->gb->rtc_cycles == 0 && target->gb->tpp1.status == 0x0a &&
                target->gb->tpp1.motor_strength == 2 && target->gb->divider_subcycle == 0);
         source->gb->rtc_cycles = 0;
         source->gb->divider_subcycle = 0;
         source->gb->tpp1.motor_strength = 2;
+        cupid_gb_apu_import_monochrome_noise(source->gb);
+        cupid_gb_audio_import_legacy(source->gb);
         assert_equal(source, target);
         free(current.bytes);
         free(legacy.bytes);

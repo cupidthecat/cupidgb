@@ -1,3 +1,24 @@
+/**
+ * @file    test_apu.c
+ * @brief   Regression coverage for sound hardware, clock delivery, and audio output.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <https://gnu.org>.
+ */
 #include "cupid/gb/apu.h"
 #include "cupid/gb/timer.h"
 
@@ -88,26 +109,28 @@ static void test_power_cycle_resets_sound_but_preserves_stream(bool color) {
     cupid_gb_write_u8(&gb, 0xff19, 0x87);
     cupid_gb_tick_apu(&gb, 95); /* Sample before the duty wrap, including trigger delay. */
     assert(gb.apu.ch2_duty_pos != 0);
-    uint32_t count = gb.apu.buf_write;
-    uint32_t fraction = gb.apu.sample_acc;
-    int16_t left = gb.apu.buf[0];
-    int64_t partial = gb.apu.mix_left;
-    int64_t capacitor = gb.apu.highpass_left;
+    uint32_t count = gb.apu.output.buf_write;
+    uint32_t fraction = gb.apu.output.sample_acc;
+    int16_t left = gb.apu.output.buf[0];
+    uint32_t partial = gb.apu.output.sample_fraction;
+    double capacitor = gb.apu.output.filter.capacitor[0];
     cupid_gb_write_u8(&gb, 0xff26, 0);
     assert(gb.apu.ch2_duty_pos == 0);
     assert(gb.apu.ch2_freq == 0);
     assert(!gb.apu.ch2_on && !gb.apu.ch2_dac);
     assert(gb.io_registers[0x16] == 0);
     assert(gb.io_registers[0x30] == 0xa5);
-    assert(gb.apu.buf_write == count && gb.apu.buf[0] == left);
-    assert(gb.apu.sample_acc == fraction);
-    assert(gb.apu.mix_left == partial && gb.apu.highpass_left == capacitor);
+    assert(gb.apu.output.buf_write == count && gb.apu.output.buf[0] == left);
+    assert(gb.apu.output.sample_acc == fraction);
+    assert(gb.apu.output.sample_fraction == partial &&
+           gb.apu.output.filter.capacitor[0] == capacitor);
     cupid_gb_write_u8(&gb, 0xff26, 0x80);
     assert(gb.apu.ch2_duty_pos == 0);
     assert(!gb.apu.ch2_on && !gb.apu.ch2_dac);
     assert(gb.io_registers[0x30] == 0xa5);
-    assert(gb.apu.buf_write == count && gb.apu.sample_acc == fraction);
-    assert(gb.apu.mix_left == partial && gb.apu.highpass_left == capacitor);
+    assert(gb.apu.output.buf_write == count && gb.apu.output.sample_acc == fraction);
+    assert(gb.apu.output.sample_fraction == partial &&
+           gb.apu.output.filter.capacitor[0] == capacitor);
 }
 
 static void test_cgb_compatibility_uses_color_hardware(void) {
@@ -242,7 +265,7 @@ static void test_pulse_trigger_length_enable(void) {
                     unsigned count = cupid_gb_apu_drain(subject, actual, 128);
                     assert(count > 0 && count == cupid_gb_apu_drain(control, expected, 128));
                     assert(!memcmp(actual, expected, count * 2u * sizeof(*actual)));
-                    assert(actual[(count - 1) * 2u] == -4080);
+                    assert(subject->apu.output.channels[channel].input[0] == -120);
 
                     const uint16_t remaining =
                         channel ? subject->apu.ch2_timer : subject->apu.ch1_timer;
@@ -328,13 +351,13 @@ static void test_monochrome_pulse_duty_hold(void) {
         cupid_gb_write_u8(&gb, base, 0);
         tick_audio(&gb, 192);
         assert(timing->output_high);
-        assert(gb.apu.buf[2u * (gb.apu.buf_write - 1)] == -4080);
+        assert(gb.apu.output.channels[channel].input[0] == -120);
         /* Retriggering changes volume immediately without resampling the new duty. */
         cupid_gb_write_u8(&gb, base + 1, 0xe0);
         cupid_gb_write_u8(&gb, base + 3, 0x80);
         tick_audio(&gb, 192);
         assert(timing->output_high);
-        assert(gb.apu.buf[2u * (gb.apu.buf_write - 1)] == -3536);
+        assert(gb.apu.output.channels[channel].input[0] == -104);
         const uint16_t remaining = channel ? gb.apu.ch2_timer : gb.apu.ch1_timer;
         tick_audio(&gb, remaining - 1u);
         assert(timing->output_high);
@@ -358,17 +381,18 @@ static void test_pulse_dac_hold(void) {
                 cupid_gb_write_u8(&gb, base + 1, 0xf0);
                 cupid_gb_write_u8(&gb, base + 3, 0x80);
                 tick_audio(&gb, 8400);
-                assert(gb.apu.buf[2u * (gb.apu.buf_write - 1)] == -4080);
+                assert(gb.apu.output.channels[channel].input[0] == -120);
                 for (unsigned toggle = 0; toggle < 2; ++toggle) {
                     cupid_gb_write_u8(&gb, base + 1, 0);
                     tick_audio(&gb, 192);
-                    assert(gb.apu.buf[2u * (gb.apu.buf_write - 1)] == 0);
+                    assert(!(channel ? gb.apu.ch2_dac : gb.apu.ch1_dac));
+                    assert(gb.apu.output.channels[channel].input[0] == -120);
                     /* A DAC-only enable retains its prior code even though the
                      * output gate and the readable PCM tap remain inactive. */
                     cupid_gb_write_u8(&gb, base + 1, 0x80);
                     tick_audio(&gb, 192);
                     assert(!(cupid_gb_read_u8(&gb, 0xff26) & (1u << channel)));
-                    assert(gb.apu.buf[2u * (gb.apu.buf_write - 1)] == -4080);
+                    assert(gb.apu.output.channels[channel].input[0] == -120);
                     if (color)
                         assert(cupid_gb_apu_read_pcm12(&gb) == 0);
                 }
@@ -381,12 +405,12 @@ static void test_pulse_dac_hold(void) {
                     cupid_gb_write_u8(&gb, base + 3, 0x80);
                 }
                 tick_audio(&gb, 192);
-                assert(gb.apu.buf[2u * (gb.apu.buf_write - 1)] == 4080);
+                assert(gb.apu.output.channels[channel].input[0] == 120);
                 /* Expiry and a new trigger both replace the held DAC code. */
                 cupid_gb_write_u8(&gb, base + 1, 0);
                 cupid_gb_write_u8(&gb, base + 1, 0xf0);
                 tick_audio(&gb, 192);
-                assert(gb.apu.buf[2u * (gb.apu.buf_write - 1)] == 4080);
+                assert(gb.apu.output.channels[channel].input[0] == 120);
             }
         }
     }
@@ -402,7 +426,12 @@ static void test_noise_clock(void) {
             cupid_gb_write_u8(&gb, 0xff21, 0xf0);
             cupid_gb_write_u8(&gb, 0xff22, (uint8_t)((shift << 4) | divisor));
             cupid_gb_write_u8(&gb, 0xff23, 0x80);
-            tick_audio(&gb, gb.apu.ch4_timer);
+            const unsigned startup = divisor == 0 ? 12 : divisor == 1 ? 20 : divisor * 8 + 4;
+            const unsigned first_rise = startup + ((1u << shift) - 1u) * divisors[divisor] / 2;
+            tick_audio(&gb, first_rise);
+            /* Reset clears the physical feedback latch. Its first rising edge
+             * shifts that zero, before a falling edge has captured feedback. */
+            assert(gb.apu.ch4_lfsr == 0x7fff);
             uint16_t previous = gb.apu.ch4_lfsr;
             for (unsigned edge = 0; edge < 24; ++edge) {
                 tick_audio(&gb, period - 1);
@@ -425,20 +454,63 @@ static void test_noise_clock(void) {
     }
 }
 
+static void test_monochrome_noise_latches(void) {
+    CupidGb gb = {0};
+    cupid_gb_write_u8(&gb, 0xff26, 0x80);
+    cupid_gb_write_u8(&gb, 0xff21, 0xf0);
+    cupid_gb_write_u8(&gb, 0xff22, 0x10);
+    tick_audio(&gb, 4);
+    cupid_gb_write_u8(&gb, 0xff23, 0x80);
+    assert(!gb.apu.ch4_on && gb.apu.noise_timing.start_delay == 12);
+    tick_audio(&gb, 11);
+    assert(!gb.apu.ch4_on && gb.apu.noise_timing.start_delay == 1);
+    tick_audio(&gb, 1);
+    assert(gb.apu.ch4_on && !gb.apu.noise_timing.start_delay);
+    assert(!gb.apu.noise_timing.feedback_latch);
+    tick_audio(&gb, 16);
+    assert(gb.apu.noise_timing.divider_counter == 2);
+    assert(gb.apu.ch4_lfsr == 0x7fff && !gb.apu.noise_timing.feedback_latch);
+    tick_audio(&gb, 8);
+    assert(gb.apu.noise_timing.divider_counter == 4);
+    assert(gb.apu.ch4_lfsr == 0x7fff && gb.apu.noise_timing.feedback_latch);
+    tick_audio(&gb, 8);
+    assert(gb.apu.noise_timing.divider_counter == 6 && gb.apu.ch4_lfsr == 0x3fff);
+
+    /* At a reload edge the selector sees counter 6 together with counter 5.
+     * The intermediate write captures feedback; the final selector adds a
+     * narrow shift even though the requested width is wide. */
+    cupid_gb_write_u8(&gb, 0xff22, 0);
+    assert(gb.apu.ch4_lfsr == 0x1fbf);
+    tick_audio(&gb, 4);
+    assert(gb.apu.ch4_lfsr == 0x0fdf);
+
+    gb.apu.ch4_on = false;
+    uint16_t counter = gb.apu.noise_timing.divider_counter;
+    tick_audio(&gb, 16);
+    assert(gb.apu.noise_timing.divider_counter != counter);
+    cupid_gb_write_u8(&gb, 0xff21, 0);
+    counter = gb.apu.noise_timing.divider_counter;
+    tick_audio(&gb, 16);
+    assert(gb.apu.noise_timing.divider_counter == counter);
+    cupid_gb_write_u8(&gb, 0xff21, 0xf0);
+    tick_audio(&gb, 16);
+    assert(gb.apu.noise_timing.divider_counter == counter);
+}
+
 static void test_partial_drain(void) {
     CupidGb gb = {0};
     int16_t output[12];
     const int16_t frames[] = {1, -1, 2, -2, 3, -3, 4, -4};
-    memcpy(gb.apu.buf, frames, sizeof(frames));
-    gb.apu.buf_write = 4;
+    memcpy(gb.apu.output.buf, frames, sizeof(frames));
+    gb.apu.output.buf_write = 4;
     assert(cupid_gb_apu_drain(&gb, output, 0) == 0);
-    assert(gb.apu.buf_write == 4);
+    assert(gb.apu.output.buf_write == 4);
     assert(cupid_gb_apu_drain(&gb, output, 1) == 1);
     assert(memcmp(output, frames, 2 * sizeof(int16_t)) == 0);
-    assert(gb.apu.buf_write == 3);
+    assert(gb.apu.output.buf_write == 3);
     assert(cupid_gb_apu_drain(&gb, output, 6) == 3);
     assert(memcmp(output, frames + 2, 6 * sizeof(int16_t)) == 0);
-    assert(gb.apu.buf_write == 0);
+    assert(gb.apu.output.buf_write == 0);
     assert(cupid_gb_apu_drain(&gb, output, 6) == 0);
 }
 
@@ -451,7 +523,7 @@ static void test_stop_oscillator(bool color) {
     uint8_t duty_position = gb.apu.ch2_duty_pos;
     tick_audio(&gb, 100);
     assert(gb.apu.ch2_duty_pos == ((duty_position + (color ? 25 : 0)) & 7));
-    assert(gb.apu.buf_write == 1); /* STOP does not stop the host's audio stream. */
+    assert(gb.apu.output.buf_write == 1); /* STOP does not stop the host's audio stream. */
 }
 
 static void prepare_dc(CupidGb *gb) {
@@ -462,32 +534,37 @@ static void prepare_dc(CupidGb *gb) {
     cupid_gb_write_u8(gb, 0xff25, 0x10);
 }
 
+static CupidGbAudioFrame settled_output(CupidGb *gb) {
+    int16_t frames[CUPID_GB_APU_BUF_FRAMES * 2];
+    (void)cupid_gb_apu_drain(gb, frames, CUPID_GB_APU_BUF_FRAMES);
+    tick_audio(gb, 8192);
+    const uint32_t count = cupid_gb_apu_drain(gb, frames, CUPID_GB_APU_BUF_FRAMES);
+    assert(count > CUPID_GB_AUDIO_TAPS);
+    return (CupidGbAudioFrame){frames[(count - 1) * 2], frames[(count - 1) * 2 + 1]};
+}
+
 static void test_dac_transfer_and_pan(void) {
     CupidGb gb;
-    int16_t output[8];
     prepare_dc(&gb);
     cupid_gb_apu_set_highpass(&gb, false);
-    tick_audio(&gb, 96);
-    assert(cupid_gb_apu_drain(&gb, output, 4) == 1);
-    assert(output[0] == 4080 && output[1] == 0);
-    /* Sample 15 has the opposite polarity to code zero. */
+    gb.cpu.stopped = true; /* Hold synthetic digital levels while output settles. */
+    CupidGbAudioFrame frame = settled_output(&gb);
+    assert(frame.left == 4080 && frame.right == 0);
     gb.apu.ch1_on = true;
     gb.apu.ch1_duty = 0;
     gb.apu.ch1_duty_pos = 7;
     gb.apu.ch1_vol = 15;
     gb.apu.ch1_timer = 8192;
-    cupid_gb_apu_import_legacy(&gb); /* Seed the synthetic fixture's held output. */
-    tick_audio(&gb, 192);
-    assert(cupid_gb_apu_drain(&gb, output, 4) == 2);
-    assert(output[2] == -4080 && output[3] == 0);
+    cupid_gb_apu_import_legacy(&gb);
+    cupid_gb_audio_import_legacy(&gb);
+    frame = settled_output(&gb);
+    assert(frame.left == -4080 && frame.right == 0);
     cupid_gb_write_u8(&gb, 0xff25, 1);
-    tick_audio(&gb, 192);
-    assert(cupid_gb_apu_drain(&gb, output, 4) == 2);
-    assert(output[2] == 0 && output[3] == -510); /* NR50 zero still means gain one. */
+    frame = settled_output(&gb);
+    assert(frame.left == 0 && frame.right == -510);
     cupid_gb_write_u8(&gb, 0xff12, 0);
-    tick_audio(&gb, 192);
-    assert(cupid_gb_apu_drain(&gb, output, 4) == 2);
-    assert(output[2] == 0 && output[3] == 0);
+    frame = settled_output(&gb);
+    assert(frame.left == 0 && frame.right == 0);
 }
 
 static void test_highpass_dc_and_disconnect(void) {
@@ -497,25 +574,29 @@ static void test_highpass_dc_and_disconnect(void) {
     tick_audio(&gb, 96000);
     uint32_t count = cupid_gb_apu_drain(&gb, output, CUPID_GB_APU_BUF_FRAMES);
     assert(count > 1000);
-    assert(output[0] == 4080 && output[1] == 0);
-    for (uint32_t i = 1; i < count; ++i) {
-        assert(output[i * 2] <= output[(i - 1) * 2]);
+    assert(output[0] == 0 && output[1] == 0);
+    assert(output[96 * 2] > 1000);
+    for (uint32_t i = 96; i < count; ++i) {
         assert(output[i * 2] >= 0);
         assert(output[i * 2 + 1] == 0);
     }
     assert(output[(count - 1) * 2] < 100);
-    int64_t capacitor = gb.apu.highpass_left;
     cupid_gb_write_u8(&gb, 0xff12, 0);
+    tick_audio(&gb, 4096); /* Retire the monochrome DAC connection delay. */
+    (void)cupid_gb_apu_drain(&gb, output, CUPID_GB_APU_BUF_FRAMES);
+    double capacitor = gb.apu.output.filter.capacitor[0];
     tick_audio(&gb, 960);
     count = cupid_gb_apu_drain(&gb, output, CUPID_GB_APU_BUF_FRAMES);
     assert(count >= 10);
-    assert(gb.apu.highpass_left == capacitor); /* Disconnected DMG capacitor holds charge. */
+    assert(gb.apu.output.filter.capacitor[0] ==
+           capacitor); /* Disconnected DMG capacitor holds charge. */
     for (uint32_t i = 0; i < count * 2; ++i) {
         assert(output[i] == 0);
     }
     gb.model = CUPID_GB_MODEL_CGB;
     tick_audio(&gb, 960);
-    assert(gb.apu.highpass_left < capacitor); /* Color hardware keeps the output connected. */
+    assert(gb.apu.output.filter.capacitor[0] <
+           capacitor); /* Color hardware keeps the output connected. */
 }
 
 static void test_duty_phase(void) {
@@ -539,6 +620,7 @@ static void test_duty_phase(void) {
             gb.apu.ch1_timer = 8192;
             gb.apu.ch2_timer = 8192;
             cupid_gb_apu_import_legacy(&gb); /* Materialize this synthetic duty/phase. */
+            cupid_gb_audio_import_legacy(&gb);
             tick_audio(&gb, 192);
             uint32_t count = cupid_gb_apu_drain(&gb, output, 4);
             assert(count >= 2);
@@ -564,8 +646,8 @@ static void test_sample_rates_and_batching(void) {
             cycles -= batch;
         }
         assert(count == rates[r]);
-        assert(gb.apu.sample_acc == 0);
-        assert(gb.apu.mix_left == 0 && gb.apu.mix_right == 0);
+        assert(gb.apu.output.sample_acc == 0);
+        assert(gb.apu.output.sample_fraction < (1u << 28));
         assert(!cupid_gb_apu_set_sample_rate(&gb, 7999));
         assert(!cupid_gb_apu_set_sample_rate(&gb, 192001));
         assert(cupid_gb_apu_get_sample_rate(&gb) == rates[r]);
@@ -582,17 +664,18 @@ static void test_sample_rates_and_batching(void) {
         cupid_gb_tick_apu(&one, 1);
     }
     tick_audio(&batch, 12000);
-    assert(one.apu.buf_write == batch.apu.buf_write);
-    assert(memcmp(one.apu.buf, batch.apu.buf, one.apu.buf_write * 2 * sizeof(int16_t)) == 0);
-    assert(one.apu.mix_left == batch.apu.mix_left);
-    assert(one.apu.sample_acc == batch.apu.sample_acc);
-    assert(one.apu.highpass_left == batch.apu.highpass_left);
+    assert(one.apu.output.buf_write == batch.apu.output.buf_write);
+    assert(memcmp(one.apu.output.buf, batch.apu.output.buf,
+                  one.apu.output.buf_write * 2 * sizeof(int16_t)) == 0);
+    assert(one.apu.output.sample_fraction == batch.apu.output.sample_fraction);
+    assert(one.apu.output.sample_acc == batch.apu.output.sample_acc);
+    assert(one.apu.output.filter.capacitor[0] == batch.apu.output.filter.capacitor[0]);
     assert(one.apu.ch1_duty_pos == batch.apu.ch1_duty_pos);
 }
 
 static void test_physical_model_clocks(void) {
     assert(cupid_gb_base_clock_hz(NULL) == 4194304u);
-    uint32_t handheld_filter = 0;
+    double handheld_filter = 0;
     for (unsigned model = CUPID_GB_MODEL_DMG_ABC; model <= CUPID_GB_MODEL_SGB2; ++model) {
         CupidGb gb = {0};
         gb.model = (CupidGbModel)model;
@@ -602,10 +685,10 @@ static void test_physical_model_clocks(void) {
         assert(cupid_gb_base_clock_hz(&gb) == clock_hz);
         assert(cupid_gb_apu_set_sample_rate(&gb, 48000));
         if (model == CUPID_GB_MODEL_DMG_ABC) {
-            handheld_filter = gb.apu.highpass_rate;
+            handheld_filter = gb.apu.output.filter.retention;
         }
-        assert(model == CUPID_GB_MODEL_SGB ? gb.apu.highpass_rate < handheld_filter
-                                           : gb.apu.highpass_rate == handheld_filter);
+        assert(model == CUPID_GB_MODEL_SGB ? gb.apu.output.filter.retention < handheld_filter
+                                           : gb.apu.output.filter.retention == handheld_filter);
         uint32_t count = 0, cycles = clock_hz;
         int16_t output[CUPID_GB_APU_BUF_FRAMES * 2];
         while (cycles) {
@@ -614,25 +697,28 @@ static void test_physical_model_clocks(void) {
             count += cupid_gb_apu_drain(&gb, output, CUPID_GB_APU_BUF_FRAMES);
             cycles -= chunk;
         }
-        assert(count == 48000 && gb.apu.sample_acc == 0);
+        assert(count == 48000 && gb.apu.output.sample_acc == 0);
     }
 
     CupidGb one, batch;
     prepare_dc(&one);
     one.model = CUPID_GB_MODEL_SGB;
     cupid_gb_apu_set_highpass(&one, false);
+    cupid_gb_audio_import_legacy(&one);
     batch = one;
     for (unsigned dot = 0; dot < 12000; ++dot) {
         cupid_gb_tick_apu(&one, 1);
     }
     tick_audio(&batch, 12000);
-    assert(one.apu.buf_write && one.apu.buf_write == batch.apu.buf_write);
-    assert(memcmp(one.apu.buf, batch.apu.buf, one.apu.buf_write * 2 * sizeof(int16_t)) == 0);
-    assert(one.apu.sample_acc == batch.apu.sample_acc);
-    assert(one.apu.mix_left == batch.apu.mix_left && one.apu.mix_right == batch.apu.mix_right);
-    for (unsigned frame = 0; frame < one.apu.buf_write; ++frame) {
+    assert(one.apu.output.buf_write && one.apu.output.buf_write == batch.apu.output.buf_write);
+    assert(memcmp(one.apu.output.buf, batch.apu.output.buf,
+                  one.apu.output.buf_write * 2 * sizeof(int16_t)) == 0);
+    assert(one.apu.output.sample_acc == batch.apu.output.sample_acc);
+    assert(one.apu.output.sample_fraction == batch.apu.output.sample_fraction &&
+           one.apu.output.render_cycles == batch.apu.output.render_cycles);
+    for (unsigned frame = 0; frame < one.apu.output.buf_write; ++frame) {
         /* Clock changes affect pitch and sample boundaries, not the DAC's DC gain. */
-        assert(one.apu.buf[frame * 2] == 4080 && one.apu.buf[frame * 2 + 1] == 0);
+        assert(one.apu.output.buf[frame * 2] == 4080 && one.apu.output.buf[frame * 2 + 1] == 0);
     }
 }
 
@@ -647,10 +733,9 @@ static void test_fast_pulse_integration(void) {
     tick_audio(&gb, 32768);
     uint32_t count = cupid_gb_apu_drain(&gb, output, CUPID_GB_APU_BUF_FRAMES);
     assert(count > 300);
-    /* Each output window contains nearly three complete pulse periods.
-     * Point sampling would produce full-amplitude 4080-valued aliases instead.
-     */
-    for (uint32_t i = 1; i < count; ++i) {
+    /* After the reconstruction tail, an ultrasonic pulse must not produce
+     * full-amplitude aliases in the audible output. */
+    for (uint32_t i = CUPID_GB_AUDIO_TAPS; i < count; ++i) {
         assert(output[i * 2] > -1400 && output[i * 2] < 1400);
         assert(output[i * 2 + 1] == 0);
     }
@@ -805,15 +890,15 @@ static void test_power_preserves_output_pipeline(bool color) {
         cupid_gb_write_u8(&gb, (uint16_t)(0xff30 + byte), (uint8_t)(byte * 13));
     }
     CupidGbApu pipeline = gb.apu;
-    assert(pipeline.buf_write != 0 && pipeline.sample_acc != 0);
+    assert(pipeline.output.buf_write != 0 && pipeline.output.sample_acc != 0);
     cupid_gb_write_u8(&gb, 0xff26, 0);
-    assert(gb.apu.sample_rate == pipeline.sample_rate);
-    assert(gb.apu.sample_acc == pipeline.sample_acc);
-    assert(gb.apu.mix_left == pipeline.mix_left);
-    assert(gb.apu.highpass_left == pipeline.highpass_left);
-    assert(gb.apu.highpass_rate == pipeline.highpass_rate);
-    assert(gb.apu.buf_write == pipeline.buf_write);
-    assert(memcmp(gb.apu.buf, pipeline.buf, sizeof(pipeline.buf)) == 0);
+    assert(gb.apu.output.sample_rate == pipeline.output.sample_rate);
+    assert(gb.apu.output.sample_acc == pipeline.output.sample_acc);
+    assert(gb.apu.output.sample_fraction == pipeline.output.sample_fraction);
+    assert(gb.apu.output.filter.capacitor[0] == pipeline.output.filter.capacitor[0]);
+    assert(gb.apu.output.filter.retention == pipeline.output.filter.retention);
+    assert(gb.apu.output.buf_write == pipeline.output.buf_write);
+    assert(memcmp(gb.apu.output.buf, pipeline.output.buf, sizeof(pipeline.output.buf)) == 0);
     assert(gb.apu.ch1_freq == 0 && gb.apu.ch1_timer == 0 && gb.apu.ch1_duty_pos == 0);
     assert(gb.apu.ch1_vol == 0 && !gb.apu.ch1_dac && !gb.apu.ch1_on);
     for (unsigned reg = 0x10; reg < 0x26; ++reg) {
@@ -830,10 +915,10 @@ static void test_power_preserves_output_pipeline(bool color) {
     for (unsigned channel = 0; channel < 4; ++channel) {
         assert(get_length_count(&gb, channel) == (color ? 0 : channel + 1));
     }
-    assert(gb.apu.sample_acc == pipeline.sample_acc);
-    assert(gb.apu.mix_left == pipeline.mix_left);
-    assert(gb.apu.highpass_left == pipeline.highpass_left);
-    assert(gb.apu.buf_write == pipeline.buf_write);
+    assert(gb.apu.output.sample_acc == pipeline.output.sample_acc);
+    assert(gb.apu.output.sample_fraction == pipeline.output.sample_fraction);
+    assert(gb.apu.output.filter.capacitor[0] == pipeline.output.filter.capacitor[0]);
+    assert(gb.apu.output.buf_write == pipeline.output.buf_write);
 }
 
 static void test_color_pulse_clock_and_held_duty(void) {
@@ -984,7 +1069,8 @@ static void test_color_sweep_overflow_mixer_edge(void) {
         cupid_gb_write_u8(&batch, 0xff25, 0xff);
         cupid_gb_tick_apu(&batch, 36);
         if (sample_boundary) {
-            batch.apu.sample_acc = cupid_gb_base_clock_hz(&batch) - 2 * CUPID_GB_APU_SAMPLE_RATE;
+            batch.apu.output.sample_acc =
+                cupid_gb_base_clock_hz(&batch) - 2 * CUPID_GB_APU_SAMPLE_RATE;
         }
         CupidGb split = batch;
         cupid_gb_tick_apu(&batch, 4);
@@ -1222,7 +1308,7 @@ static void test_audio_chunk_splitting(void) {
                 if (scenario == 0) {
                     cupid_gb_write_u8(&batch, 0xff26, 0);
                 } else if (scenario == 3) {
-                    batch.apu.buf_write = CUPID_GB_APU_BUF_FRAMES;
+                    batch.apu.output.buf_write = CUPID_GB_APU_BUF_FRAMES;
                 } else if (scenario == 4) {
                     batch.cpu.stopped = true;
                     batch.apu.ch3_wave_access_ticks = 3;
@@ -1315,7 +1401,73 @@ static void test_color_pulse_phantom_trigger(void) {
     }
 }
 
+static void test_pending_delivery_and_host_rate(void) {
+    CupidGb gb;
+    prepare_dc(&gb);
+    cupid_gb_tick_apu_divider(&gb, 4);
+    const uint32_t credit = gb.apu.output.sample_acc;
+    const uint64_t elapsed = gb.elapsed_cycles;
+    cupid_gb_apu_run(&gb, false);
+    assert(gb.apu.pending_cycles == 4 && gb.apu.output.buf_write == 0);
+    (void)cupid_gb_read_u8(&gb, 0xff26);
+    assert(gb.apu.pending_cycles == 4); /* Debugger inspection is passive. */
+    (void)cupid_gb_read_bus_u8(&gb, 0xff26);
+    assert(gb.apu.pending_cycles == 0 && gb.apu.output.sample_acc == credit);
+    assert(gb.elapsed_cycles == elapsed);
+    cupid_gb_tick_apu_divider(&gb, 4);
+    const uint32_t before_change = gb.apu.output.sample_acc;
+    assert(cupid_gb_apu_set_sample_rate(&gb, 192000));
+    assert(gb.apu.pending_cycles == 0);
+    assert(gb.apu.output.sample_acc == before_change && gb.elapsed_cycles == elapsed);
+    assert(cupid_gb_apu_set_channel_muted(&gb, 0, true));
+    cupid_gb_write_u8(&gb, 0xff24, gb.io_registers[0x24]);
+    assert(gb.apu.output.channels[0].input[0] == 0);
+    assert(gb.apu.ch1_dac && gb.io_registers[0x12] == 0xf0);
+}
+
+static void test_interference_instance_history(void) {
+    CupidGb first, second;
+    prepare_dc(&first);
+    assert(cupid_gb_apu_set_interference_volume(&first, 0.25));
+    second = first;
+    tick_audio(&first, 4096);
+    tick_audio(&second, 4096);
+    assert(first.apu.output.noise_state != 0);
+    assert(memcmp(&first.apu.output, &second.apu.output, sizeof(first.apu.output)) == 0);
+    const uint32_t sequence = first.apu.output.noise_state;
+    const double history = first.apu.output.filter.interference;
+    assert(cupid_gb_apu_set_interference_volume(&first, 0));
+    tick_audio(&first, 4096);
+    assert(first.apu.output.noise_state == sequence);
+    assert(first.apu.output.filter.interference == history);
+}
+
+static void test_frozen_audio_backlog(void) {
+    const CupidGbModel models[] = {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_CGB, CUPID_GB_MODEL_SGB,
+                                   CUPID_GB_MODEL_SGB2};
+    const uint32_t rates[] = {8000, 44100, 48000, 110250, 176400, 190000, 192000};
+    for (unsigned model = 0; model < sizeof(models) / sizeof(models[0]); ++model) {
+        for (unsigned rate = 0; rate < sizeof(rates) / sizeof(rates[0]); ++rate) {
+            CupidGb gb = {0};
+            gb.model = models[model];
+            assert(cupid_gb_apu_set_sample_rate(&gb, rates[rate]));
+            cupid_gb_tick_apu_divider(&gb, 2048);
+            const uint32_t clock = cupid_gb_base_clock_hz(&gb);
+            const uint32_t credit = rates[rate] * 2048u;
+            assert(gb.apu.output.sample_acc == credit && gb.apu.pending_cycles == 2048);
+            cupid_gb_apu_run(&gb, true);
+            assert(gb.apu.pending_cycles == 0);
+            assert(gb.apu.output.buf_write == credit / clock);
+            assert(gb.apu.output.sample_acc == credit % clock);
+            assert(gb.apu.output.sample_fraction < (2u << 28));
+        }
+    }
+}
+
 int main(void) {
+    test_pending_delivery_and_host_rate();
+    test_interference_instance_history();
+    test_frozen_audio_backlog();
     test_pulse_trigger_length_enable();
     test_pulse_dac_hold();
     test_monochrome_pulse_clock_lifetime();
@@ -1345,6 +1497,7 @@ int main(void) {
     test_sweep_zero_period_and_shadow();
     test_pulse_pitch();
     test_noise_clock();
+    test_monochrome_noise_latches();
     test_partial_drain();
     test_stop_oscillator(false);
     test_stop_oscillator(true);

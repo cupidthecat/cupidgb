@@ -1,6 +1,36 @@
+/**
+ * @file    main_window_audio.cpp
+ * @brief   Qt audio output, listening preferences, and recording lifecycle.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <https://gnu.org>.
+ */
+
 #include "main_window_internal.h"
 
 #include <QScopeGuard>
+
+void MainWindow::applyAudioPolicy(CupidGb *gb) const {
+    cupid_gb_apu_set_filter_mode(gb, configuredAudioFilter(settings_));
+    cupid_gb_apu_set_interference_volume(gb, double(configuredAudioInterference(settings_)) / 100);
+    for (size_t channel = 0; channel < audioChannelActions_.size(); ++channel)
+        cupid_gb_apu_set_channel_muted(gb, unsigned(channel),
+                                       !audioChannelActions_[channel]->isChecked());
+}
 
 void MainWindow::setupAudio() {
     // Some audio backends dispatch Qt events while opening or closing a stream.

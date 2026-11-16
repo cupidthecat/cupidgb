@@ -115,7 +115,11 @@ Import Palette reads `.sbp` files, adds a named library entry using the filename
 
 Audio > Mute and the Settings volume slider control host playback. The frontend requests stereo signed 16-bit audio at 44,100 Hz and converts generated samples when the output device needs a different supported format.
 
-Settings > Audio output selects System Default or an enumerated device. A saved device that is unavailable appears as Unavailable device (using System Default); playback falls back while retaining the requested device ID. Device-list changes trigger stream renegotiation. This changes host conversion/output, not the core's sample rate or an active recording. Real hardware unplug/replug behavior still needs broader validation. Advanced filtering controls remain pending.
+Settings > Audio output selects System Default or an enumerated device. A saved device that is unavailable appears as Unavailable device (using System Default); playback falls back while retaining the requested device ID. Device-list changes renegotiate playback while preserving the core rate and active recording. Real hardware unplug/replug behavior still needs broader validation.
+
+Settings > Highpass Filter offers None (Keep DC Offset), Accurate and Preserve Waveform. Accurate is the default. Interference Volume adds modeled console noise from 0% through 100% and defaults to zero. These settings persist across application restarts. Loading a state, rewinding or using Backstep keeps your current choices.
+
+Audio > Audio Channels enables or mutes Square Channel 1, Square Channel 2, Wave Channel and Noise Channel. Alt+1 through Alt+4 are the default shortcuts; Settings can reassign them. Channel choices last for the current application session and also affect recordings. They do not change the game's sound registers. Global listening mute and volume remain separate.
 
 Audio > Start Audio Recording writes stereo 16-bit PCM into a WAVE file. Choose the action again to stop. Recording captures forward core output before host volume, mute, and resampling. Pause and rewind add no samples. Reset, cartridge replacement, closing, or a core sample-rate change ends the recording. Loading a state at the same rate continues the recording with the new forward timeline.
 

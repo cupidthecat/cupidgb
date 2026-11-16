@@ -1,5 +1,28 @@
+/**
+ * @file    state.c
+ * @brief   Portable native snapshots and transactional hardware restoration.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <https://gnu.org>.
+ */
+
 #include "cupid/gb/state.h"
 
+#include "audio_state.h"
 #include "cupid/common/sha256.h"
 #include "cupid/gb/apu.h"
 #include "cupid/gb/camera.h"
@@ -10,6 +33,7 @@
 #include "cupid/gb/ppu.h"
 #include "cupid/gb/tpp1.h"
 #include "printer_internal.h"
+#include "state_io.h"
 
 #include <limits.h>
 #include <stdlib.h>
@@ -17,6 +41,7 @@
 
 enum {
     STATE_HEADER_SIZE = 128,
+    STATE_VERSION_V14 = 14,
     STATE_VERSION_V13 = 13,
     STATE_VERSION_V12 = 12,
     STATE_INFRARED_SIZE = 6,
@@ -67,139 +92,12 @@ enum {
 
 static const uint8_t state_magic[8] = {'C', 'U', 'P', 'I', 'D', 'G', 'B', 0};
 
-typedef struct StateIo {
-    const uint8_t *input;
-    uint8_t *output;
-    size_t offset;
-    size_t capacity;
-    bool invalid;
-} StateIo;
-
-static bool reserve(StateIo *io, size_t count) {
-    if (io->invalid || io->offset > io->capacity || count > io->capacity - io->offset) {
-        io->invalid = true;
-        return false;
-    }
-    return true;
-}
-
-static void bytes(StateIo *io, uint8_t *value, size_t count) {
-    if (!reserve(io, count)) {
-        return;
-    }
-    if (io->input) {
-        memcpy(value, io->input + io->offset, count);
-    } else if (io->output) {
-        memcpy(io->output + io->offset, value, count);
-    }
-    io->offset += count;
-}
-
-static void byte(StateIo *io, uint8_t *value) {
-    bytes(io, value, 1);
-}
-
-static void boolean(StateIo *io, bool *value) {
-    uint8_t raw = io->input ? 0 : (uint8_t)*value;
-    byte(io, &raw);
-    if (io->input) {
-        if (raw > 1) {
-            io->invalid = true;
-        } else {
-            *value = raw != 0;
-        }
-    }
-}
-
-static void word(StateIo *io, uint16_t *value) {
-    uint8_t raw[2] = {(uint8_t)*value, (uint8_t)(*value >> 8)};
-    bytes(io, raw, sizeof(raw));
-    if (io->input) {
-        *value = (uint16_t)((uint16_t)raw[0] | (uint16_t)((uint16_t)raw[1] << 8));
-    }
-}
-
-static void double_word(StateIo *io, uint32_t *value) {
-    uint8_t raw[4];
-    for (unsigned i = 0; i < 4; ++i) {
-        raw[i] = (uint8_t)(*value >> (i * 8));
-    }
-    bytes(io, raw, sizeof(raw));
-    if (io->input) {
-        *value = 0;
-        for (unsigned i = 0; i < 4; ++i) {
-            *value |= (uint32_t)raw[i] << (i * 8);
-        }
-    }
-}
-
-static void quad_word(StateIo *io, uint64_t *value) {
-    uint8_t raw[8];
-    for (unsigned i = 0; i < 8; ++i) {
-        raw[i] = (uint8_t)(*value >> (i * 8));
-    }
-    bytes(io, raw, sizeof(raw));
-    if (io->input) {
-        *value = 0;
-        for (unsigned i = 0; i < 8; ++i) {
-            *value |= (uint64_t)raw[i] << (i * 8);
-        }
-    }
-}
-
-static void signed_quad_word(StateIo *io, int64_t *value) {
-    uint64_t raw = (uint64_t)*value;
-    quad_word(io, &raw);
-    if (io->input) {
-        *value = raw <= INT64_MAX ? (int64_t)raw : -1 - (int64_t)(UINT64_MAX - raw);
-    }
-}
-
-static void size_value(StateIo *io, size_t *value) {
-    uint64_t raw = (uint64_t)*value;
-    quad_word(io, &raw);
-    if (io->input) {
-        if (raw > SIZE_MAX) {
-            io->invalid = true;
-        } else {
-            *value = (size_t)raw;
-        }
-    }
-}
-
-static void words(StateIo *io, uint16_t *values, size_t count) {
-    /* Check the entire wire range before touching an array. Each element still has
-     * an explicit byte order, including when the state buffer is unaligned. */
-    if (count > SIZE_MAX / 2) {
-        io->invalid = true;
-        return;
-    }
-    const size_t byte_count = count * 2;
-    if (!reserve(io, byte_count)) {
-        return;
-    }
-    if (io->input) {
-        const uint8_t *source = io->input + io->offset;
-        for (size_t i = 0; i < count; ++i) {
-            values[i] =
-                (uint16_t)((uint16_t)source[i * 2] | (uint16_t)((uint16_t)source[i * 2 + 1] << 8));
-        }
-    } else if (io->output) {
-        uint8_t *destination = io->output + io->offset;
-        for (size_t i = 0; i < count; ++i) {
-            destination[i * 2] = (uint8_t)values[i];
-            destination[i * 2 + 1] = (uint8_t)(values[i] >> 8);
-        }
-    }
-    io->offset += byte_count;
-}
-
 /* The order below is the v2 wire schema. Every scalar has an explicit width and every
  * array has an explicit element encoding. Never replace this with a structure dump:
  * host padding, pointer widths, and bool representations are not part of the format.
  * New hardware state requires a format revision and continuation tests.
  */
-static void state_fields(StateIo *io, CupidGb *gb) {
+static void state_fields(StateIo *io, CupidGb *gb, unsigned version) {
 #define U8(field) byte(io, &gb->field)
 #define BOOL(field) boolean(io, &gb->field)
 #define U16(field) word(io, &gb->field)
@@ -379,24 +277,37 @@ static void state_fields(StateIo *io, CupidGb *gb) {
     BOOL(apu.ch4_width7);
     U32(apu.ch4_timer);
     U16(apu.ch4_lfsr);
-    U32(apu.sample_acc);
+    U32(apu.output.sample_acc);
     /* Signed PCM is stored as explicit two's-complement 16-bit little-endian samples. */
-    for (size_t i = 0; i < sizeof(gb->apu.buf) / sizeof(gb->apu.buf[0]); ++i) {
-        uint16_t raw = (uint16_t)gb->apu.buf[i];
+    for (size_t i = 0; i < sizeof(gb->apu.output.buf) / sizeof(gb->apu.output.buf[0]); ++i) {
+        uint16_t raw = (uint16_t)gb->apu.output.buf[i];
         word(io, &raw);
         if (io->input) {
-            gb->apu.buf[i] = raw <= INT16_MAX ? (int16_t)raw : (int16_t)((int32_t)raw - 65536);
+            gb->apu.output.buf[i] =
+                raw <= INT16_MAX ? (int16_t)raw : (int16_t)((int32_t)raw - 65536);
         }
     }
-    U32(apu.buf_write);
+    U32(apu.output.buf_write);
     BOOL(boot_rom_enabled);
-    U32(apu.sample_rate);
-    signed_quad_word(io, &gb->apu.mix_left);
-    signed_quad_word(io, &gb->apu.mix_right);
-    signed_quad_word(io, &gb->apu.highpass_left);
-    signed_quad_word(io, &gb->apu.highpass_right);
-    U32(apu.highpass_rate);
-    BOOL(apu.highpass_disabled);
+    U32(apu.output.sample_rate);
+    /* These V2 slots describe the retired integer mixer. Keep their wire
+     * positions and validate old files, while new snapshots write zeroes. */
+    int64_t legacy_history[4] = {0};
+    for (unsigned i = 0; i < 4; ++i)
+        signed_quad_word(io, &legacy_history[i]);
+    uint32_t legacy_retention = 0;
+    double_word(io, &legacy_retention);
+    BOOL(apu.output.policy.filter_disabled);
+    const int64_t area_limit = INT64_C(16320) * gb->apu.output.sample_acc;
+    if (legacy_history[0] < -area_limit || legacy_history[0] > area_limit ||
+        legacy_history[1] < -area_limit || legacy_history[1] > area_limit ||
+        legacy_history[2] < -INT64_C(1069547520) || legacy_history[2] > INT64_C(1069547520) ||
+        legacy_history[3] < -INT64_C(1069547520) || legacy_history[3] > INT64_C(1069547520) ||
+        legacy_retention > UINT32_C(1073741824) ||
+        (version >= STATE_VERSION_V14 &&
+         (legacy_history[0] || legacy_history[1] || legacy_history[2] || legacy_history[3] ||
+          legacy_retention)))
+        io->invalid = true;
     U16(pixels.dot);
     U8(pixels.line);
     U8(pixels.x);
@@ -843,12 +754,8 @@ static bool ready(const CupidGb *gb) {
 static bool valid_hardware_prefix(const CupidGb *gb, unsigned version) {
     const CupidGbApu *a = &gb->apu;
     const CupidGbPixels *p = &gb->pixels;
-    const int64_t area_limit = INT64_C(16320) * a->sample_acc;
-    if ((a->sample_rate && (a->sample_rate < 8000 || a->sample_rate > 192000)) ||
-        a->highpass_rate > UINT32_C(1073741824) || a->mix_left < -area_limit ||
-        a->mix_left > area_limit || a->mix_right < -area_limit || a->mix_right > area_limit ||
-        a->highpass_left < -INT64_C(1069547520) || a->highpass_left > INT64_C(1069547520) ||
-        a->highpass_right < -INT64_C(1069547520) || a->highpass_right > INT64_C(1069547520) ||
+    const CupidGbAudioOutput *output = &a->output;
+    if ((output->sample_rate && (output->sample_rate < 8000 || output->sample_rate > 192000)) ||
         p->dot >= 456 || p->line >= 154 || p->x > 160 || p->read >= 8 || p->count > 8 ||
         p->phase > 6 || p->column > 31 || p->discard > 7 || p->delay > 12 || p->address >= 0x4000 ||
         p->object_count > 10 || p->fetched_objects > 0x3ff || p->object_delay > 11 ||
@@ -891,8 +798,9 @@ static bool valid_hardware_prefix(const CupidGb *gb, unsigned version) {
         a->ch1_sweep_period > 7 || a->ch1_sweep_shift > 7 || a->ch3_out_level > 3 ||
         a->ch3_wave_pos > 31 || a->ch3_current_byte > 15 || a->ch3_wave_access_ticks > 1 ||
         a->ch3_sample > 15 || a->ch4_div_code > 7 || a->ch4_shift > 15 || a->ch4_lfsr > 0x7fff ||
-        a->sample_acc >= cupid_gb_base_clock_hz(gb) || a->buf_write > CUPID_GB_APU_BUF_FRAMES ||
-        !gb->sgb.player_count || gb->sgb.player_count > 4 ||
+        (version < STATE_VERSION_V14 && output->sample_acc >= cupid_gb_base_clock_hz(gb)) ||
+        output->buf_write > CUPID_GB_APU_BUF_FRAMES || !gb->sgb.player_count ||
+        gb->sgb.player_count > 4 ||
         (gb->sgb.player_count == 3 &&
          (version < STATE_VERSION_V4 || (gb->sgb.current_player & 1u))) ||
         gb->sgb.current_player >= gb->sgb.player_count || gb->sgb.mask_mode > 3 ||
@@ -940,8 +848,9 @@ static bool valid_hardware_extension(const CupidGb *gb) {
 }
 
 static bool valid_hardware(const CupidGb *gb, unsigned sections) {
-    return valid_hardware_prefix(gb, STATE_VERSION_V4) && valid_hardware_extension(gb) &&
-           valid_v5_sections(gb, sections) && valid_infrared(gb) && gb->divider_subcycle <= 3 &&
+    return valid_hardware_prefix(gb, STATE_VERSION_V14) && valid_hardware_extension(gb) &&
+           cupid_gb_audio_state_valid(gb) && valid_v5_sections(gb, sections) &&
+           valid_infrared(gb) && gb->divider_subcycle <= 3 &&
            (gb->header.mbc_type != CUPID_GB_TPP1 || gb->tpp1.motor_strength <= 3);
 }
 
@@ -951,7 +860,7 @@ size_t cupid_gb_state_size(const CupidGb *gb) {
     }
     const unsigned sections = state_sections(gb);
     return extended_wire_size(sections) + STATE_V11_TAIL_SIZE + infrared_wire_size(sections) +
-           STATE_CLOCK_HISTORY_SIZE + STATE_ACCESSORY_DESCRIPTOR_SIZE +
+           STATE_CLOCK_HISTORY_SIZE + CUPID_GB_AUDIO_STATE_SIZE + STATE_ACCESSORY_DESCRIPTOR_SIZE +
            (cupid_gb_printer_attached(gb) ? PRINTER_STATE_WIRE_SIZE : 0);
 }
 
@@ -1006,7 +915,8 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
     }
     const unsigned sections = state_sections(gb);
     const size_t hardware_size = extended_wire_size(sections) + STATE_V11_TAIL_SIZE +
-                                 infrared_wire_size(sections) + STATE_CLOCK_HISTORY_SIZE;
+                                 infrared_wire_size(sections) + STATE_CLOCK_HISTORY_SIZE +
+                                 CUPID_GB_AUDIO_STATE_SIZE;
     const CupidGbPrinter *printer = cupid_gb_printer_attached(gb);
     const size_t size =
         hardware_size + STATE_ACCESSORY_DESCRIPTOR_SIZE + (printer ? PRINTER_STATE_WIRE_SIZE : 0);
@@ -1019,7 +929,7 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
     }
     memset(data, 0, STATE_HEADER_SIZE);
     memcpy(data, state_magic, sizeof(state_magic));
-    put_u32(data + 8, STATE_VERSION_V13);
+    put_u32(data + 8, STATE_VERSION_V14);
     put_u32(data + 12, (uint32_t)size);
     put_u32(data + 16, (uint32_t)gb->model);
     put_u32(data + 20, (uint32_t)gb->rom_size);
@@ -1034,7 +944,7 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
         cupid_sha256(gb->boot_rom, gb->boot_rom_size, data + 64);
     }
     StateIo io = {NULL, data, STATE_HEADER_SIZE, hardware_size, false};
-    state_fields(&io, (CupidGb *)gb);
+    state_fields(&io, (CupidGb *)gb, STATE_VERSION_V14);
     state_extension_v3(&io, (CupidGb *)gb);
     state_extension_v4(&io, (CupidGb *)gb);
     state_extension_v5(&io, (CupidGb *)gb, sections);
@@ -1051,6 +961,10 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
     if (!(sections & STATE_SECTION_HUC3))
         state_infrared(&io, (CupidGb *)gb);
     state_clock_history(&io, (CupidGb *)gb);
+    if (!reserve(&io, CUPID_GB_AUDIO_STATE_SIZE) ||
+        !cupid_gb_audio_state_encode(gb, data + io.offset, CUPID_GB_AUDIO_STATE_SIZE))
+        io.invalid = true;
+    io.offset += CUPID_GB_AUDIO_STATE_SIZE;
     if (io.invalid || io.offset != hardware_size) {
         return CUPID_GB_STATE_INVALID;
     }
@@ -1106,22 +1020,25 @@ static void import_legacy_sgb_startup(CupidGb *gb) {
 }
 
 static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t length,
-                                     const uint8_t *rom_digest) {
+                                     const uint8_t *rom_digest, bool live_audio) {
     if (!ready(gb)) {
         return CUPID_GB_STATE_NO_ROM;
     }
+    if (live_audio && !cupid_gb_audio_state_valid(gb))
+        return CUPID_GB_STATE_INVALID;
     CupidGbPrinter *printer = cupid_gb_printer_attached(gb);
     if (!data || (printer && overlaps(data, length, printer, sizeof(*printer))) ||
         length < STATE_HEADER_SIZE || memcmp(data, state_magic, sizeof(state_magic))) {
         return CUPID_GB_STATE_INVALID;
     }
     const uint32_t version = get_u32(data + 8);
-    if (version < STATE_VERSION_V2 || version > STATE_VERSION_V13) {
+    if (version < STATE_VERSION_V2 || version > STATE_VERSION_V14) {
         return CUPID_GB_STATE_UNSUPPORTED_VERSION;
     }
     const size_t infrared_size =
         version >= STATE_VERSION_V12 ? infrared_wire_size(state_sections(gb)) : 0;
     const size_t clock_size = version >= STATE_VERSION_V13 ? STATE_CLOCK_HISTORY_SIZE : 0;
+    const size_t audio_size = version >= STATE_VERSION_V14 ? CUPID_GB_AUDIO_STATE_SIZE : 0;
     const size_t prefix_size = version == STATE_VERSION_V2   ? STATE_WIRE_SIZE_V2
                                : version == STATE_VERSION_V3 ? STATE_WIRE_SIZE_V3
                                                              : STATE_WIRE_SIZE_V4;
@@ -1136,10 +1053,11 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
     if (length != get_u32(data + 12))
         return CUPID_GB_STATE_INVALID;
     if (version >= STATE_VERSION_V12) {
-        if (length < prefix_size + tail_size + infrared_size + clock_size +
+        if (length < prefix_size + tail_size + infrared_size + clock_size + audio_size +
                          STATE_ACCESSORY_DESCRIPTOR_SIZE ||
             length > extended_wire_size(STATE_SECTIONS_ALL) + tail_size + STATE_INFRARED_SIZE +
-                         clock_size + STATE_ACCESSORY_DESCRIPTOR_SIZE + PRINTER_STATE_WIRE_SIZE)
+                         clock_size + audio_size + STATE_ACCESSORY_DESCRIPTOR_SIZE +
+                         PRINTER_STATE_WIRE_SIZE)
             return CUPID_GB_STATE_INVALID;
     } else if (version >= STATE_VERSION_V5
                    ? device_size < prefix_size ||
@@ -1171,7 +1089,8 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
     const uint8_t *printer_payload = NULL;
     if (version >= STATE_VERSION_V12) {
         device_size = extended_wire_size(sections);
-        const size_t accessory_offset = device_size + tail_size + infrared_size + clock_size;
+        const size_t accessory_offset =
+            device_size + tail_size + infrared_size + clock_size + audio_size;
         if (accessory_offset > length ||
             length - accessory_offset < STATE_ACCESSORY_DESCRIPTOR_SIZE)
             return CUPID_GB_STATE_INVALID;
@@ -1229,9 +1148,13 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
     /* Host resources, cartridge metadata, and immutable inputs come only from the live
      * instance. Decode into separate storage and never run bus writes while loading. */
     *candidate = *gb;
+    /* Absent legacy output fields must never borrow an unrelated live timeline. */
+    memset(&candidate->apu.output, 0, sizeof(candidate->apu.output));
+    memset(candidate->apu.dac_sample, 0, sizeof(candidate->apu.dac_sample));
+    candidate->apu.pending_cycles = 0;
     const size_t hardware_length = length - accessory_size;
     StateIo io = {data, NULL, STATE_HEADER_SIZE, hardware_length, false};
-    state_fields(&io, candidate);
+    state_fields(&io, candidate, version);
     if (version >= STATE_VERSION_V3) {
         state_extension_v3(&io, candidate);
     }
@@ -1323,6 +1246,12 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
         candidate->tpp1.motor_strength =
             sections & STATE_SECTION_TPP1 ? (uint8_t)(candidate->tpp1.status & 3u) : 0;
     }
+    if (audio_size) {
+        if (!reserve(&io, audio_size) ||
+            !cupid_gb_audio_state_decode(candidate, data + io.offset, audio_size))
+            io.invalid = true;
+        io.offset += audio_size;
+    }
     if (io.invalid || io.offset != hardware_length || candidate->boot_rom_enabled != (flags != 0) ||
         !valid_hardware_prefix(candidate, version) || !valid_v5_sections(candidate, sections) ||
         !valid_infrared(candidate)) {
@@ -1389,13 +1318,29 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
          * Validate first, then derive missing monochrome history from the file. */
         cupid_gb_apu_import_monochrome_pulses(candidate);
     }
-    if (candidate->model == CUPID_GB_MODEL_SGB && candidate->apu.highpass_rate) {
-        /* Older SGB snapshots used the handheld clock for this derived host filter
-         * coefficient. Refresh it at the same rate without dropping queued samples
-         * or the partially integrated frame. Keep the zero/default rate sentinel. */
-        uint32_t configured_rate = candidate->apu.sample_rate;
-        cupid_gb_apu_set_sample_rate(candidate, cupid_gb_apu_get_sample_rate(candidate));
-        candidate->apu.sample_rate = configured_rate;
+    if (version < STATE_VERSION_V14) {
+        cupid_gb_apu_import_monochrome_noise(candidate);
+        cupid_gb_audio_import_legacy(candidate);
+    }
+    if (!cupid_gb_audio_state_valid(candidate)) {
+        free(candidate);
+        return CUPID_GB_STATE_INVALID;
+    }
+    if (live_audio) {
+        /* Finish the saved timeline's deferred digital clocks against its own
+         * output credit. A different listening rate cannot safely fund that work.
+         * Only the candidate changes; its queued audio is discarded below. */
+        cupid_gb_apu_run(candidate, true);
+        /* Live listening retains its stream, DAC and filter history. Rebase only
+         * the reconstruction fraction at the newly selected guest timeline. */
+        candidate->apu.output = gb->apu.output;
+        candidate->apu.output.sample_fraction = 0;
+        candidate->apu.output.fraction_half = false;
+        /* Validate the combined history before touching either live owner. */
+        if (!cupid_gb_audio_state_valid(candidate)) {
+            free(candidate);
+            return CUPID_GB_STATE_INVALID;
+        }
     }
     CupidGbPrinterState *printer_candidate = NULL;
     if (printer_payload || printer) {
@@ -1436,7 +1381,7 @@ CupidGbStateResult cupid_gb_save_state(const CupidGb *gb, uint8_t *data, size_t 
 }
 
 CupidGbStateResult cupid_gb_load_state(CupidGb *gb, const uint8_t *data, size_t length) {
-    return load_state(gb, data, length, NULL);
+    return load_state(gb, data, length, NULL, false);
 }
 
 CupidGbStateResult cupid_gb_state_context_init(CupidGbStateContext *context, const CupidGb *gb) {
@@ -1493,7 +1438,20 @@ CupidGbStateResult cupid_gb_save_state_with_context(const CupidGb *gb, uint8_t *
 CupidGbStateResult cupid_gb_load_state_with_context(CupidGb *gb, const uint8_t *data, size_t length,
                                                     const CupidGbStateContext *context) {
     CupidGbStateResult result = check_context(gb, context);
-    return result == CUPID_GB_STATE_OK ? load_state(gb, data, length, context->rom_digest) : result;
+    return result == CUPID_GB_STATE_OK ? load_state(gb, data, length, context->rom_digest, false)
+                                       : result;
+}
+
+CupidGbStateResult cupid_gb_load_state_live(CupidGb *gb, const uint8_t *data, size_t length) {
+    return load_state(gb, data, length, NULL, true);
+}
+
+CupidGbStateResult cupid_gb_load_state_live_with_context(CupidGb *gb, const uint8_t *data,
+                                                         size_t length,
+                                                         const CupidGbStateContext *context) {
+    const CupidGbStateResult result = check_context(gb, context);
+    return result == CUPID_GB_STATE_OK ? load_state(gb, data, length, context->rom_digest, true)
+                                       : result;
 }
 
 const char *cupid_gb_state_result_name(CupidGbStateResult result) {

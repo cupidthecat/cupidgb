@@ -1,3 +1,26 @@
+/**
+ * @file    test_printer_state.c
+ * @brief   Printer snapshot continuation and transactional accessory-state validation.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <https://gnu.org>.
+ */
+
+#include "../src/gb/audio_state.h"
 #include "cupid/common/sha256.h"
 #include "cupid/gb/printer.h"
 #include "cupid/gb/state.h"
@@ -14,8 +37,8 @@ enum {
     INFRARED_HISTORY_BYTES = 6,
     RTC_HISTORY_BYTES = 6,
     MOTOR_HISTORY_OFFSET = 4,
-    BARE_STATE_BYTES =
-        300600 + INFRARED_HISTORY_BYTES + RTC_HISTORY_BYTES + DEVICE_DESCRIPTOR_BYTES,
+    BARE_STATE_BYTES = 300600 + INFRARED_HISTORY_BYTES + RTC_HISTORY_BYTES +
+                       CUPID_GB_AUDIO_STATE_SIZE + DEVICE_DESCRIPTOR_BYTES,
     PRINTER_WIRE_BYTES = 32687,
     WIRE_PHASE = 0,
     WIRE_HEADER = 1,
@@ -216,7 +239,7 @@ static Blob save_rig(const Rig *rig, bool trusted) {
                                                    &rig->context)
                 : cupid_gb_save_state(rig->gb, blob.bytes, blob.length, &written);
     assert(result == CUPID_GB_STATE_OK && written == blob.length);
-    assert(read_le(blob.bytes + 8, 4) == 13);
+    assert(read_le(blob.bytes + 8, 4) == 14);
     return blob;
 }
 
@@ -806,11 +829,12 @@ static void test_malformed_devices(void) {
                 case 8:
                     /* Valid accessory data must not commit before a later
                      * hardware validation failure has been resolved. */
-                    bad.bytes[descriptor - RTC_HISTORY_BYTES - 1] = 16;
+                    bad.bytes[descriptor - CUPID_GB_AUDIO_STATE_SIZE - RTC_HISTORY_BYTES - 1] = 16;
                     break;
                 case 9:
                     /* A non-TPP1 core must reject even an otherwise valid motor value. */
-                    bad.bytes[descriptor - RTC_HISTORY_BYTES + MOTOR_HISTORY_OFFSET] = 1;
+                    bad.bytes[descriptor - CUPID_GB_AUDIO_STATE_SIZE - RTC_HISTORY_BYTES +
+                              MOTOR_HISTORY_OFFSET] = 1;
                     break;
                 default:
                     break;
@@ -1040,8 +1064,9 @@ static void test_legacy_fresh_device(void) {
     source->gb->elapsed_cycles = 0x1234567;
     memset(source->gb->apu.pulse_timing, 0, sizeof(source->gb->apu.pulse_timing));
     Blob current = save_rig(source, false);
-    const size_t hardware_size =
-        current.length - DEVICE_DESCRIPTOR_BYTES - RTC_HISTORY_BYTES - INFRARED_HISTORY_BYTES;
+    const size_t hardware_size = current.length - DEVICE_DESCRIPTOR_BYTES -
+                                 CUPID_GB_AUDIO_STATE_SIZE - RTC_HISTORY_BYTES -
+                                 INFRARED_HISTORY_BYTES;
     const size_t lengths[] = {300518,
                               300568,
                               300572,

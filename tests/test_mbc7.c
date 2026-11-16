@@ -1,3 +1,26 @@
+/**
+ * @file    test_mbc7.c
+ * @brief   Regression tests for MBC7 gates, motion latches, EEPROM, and persistence.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://gnu.org>.
+ */
+
+#include "../src/gb/audio_state.h"
 #include "cupid/common/sha256.h"
 #include "cupid/gb/battery.h"
 #include "cupid/gb/mbc7.h"
@@ -154,13 +177,13 @@ static void test_resume(CupidGb *first, CupidGb *second) {
     command(first, WRITE | 0x7f);
     shift(first, 0x6e, 8);
     const size_t size = cupid_gb_state_size(first);
-    /* Controller history, V11 tail, shared receiver state, then the empty device descriptor. */
-    assert(size == V4_SIZE + 8 + 28 + 6 + RTC_HISTORY_BYTES + 8);
+    /* Controller, receiver, clock and audio history precede the empty device descriptor. */
+    assert(size == V4_SIZE + 8 + 28 + 6 + RTC_HISTORY_BYTES + CUPID_GB_AUDIO_STATE_SIZE + 8);
     uint8_t *saved = malloc(size), *restored = malloc(size);
     assert(saved && restored);
     size_t written = 0;
     assert(cupid_gb_save_state(first, saved, size, &written) == CUPID_GB_STATE_OK &&
-           written == size && saved[8] == 13);
+           written == size && saved[8] == 14);
     cupid_gb_mbc7_set_motion(second, -112, 112);
     assert(cupid_gb_load_state(second, saved, size) == CUPID_GB_STATE_OK);
     assert(cupid_gb_read_u8(first, PORT) == cupid_gb_read_u8(second, PORT));

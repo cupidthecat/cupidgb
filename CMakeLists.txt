@@ -46,6 +46,8 @@ add_library(cupidgb_core STATIC
     src/gb/tpp1.c
     src/gb/huc3.c
     src/gb/infrared.c
+    src/gb/apu_noise.c src/gb/audio_synthesis.c
+    src/gb/audio_filter.c src/gb/audio_output.c src/gb/audio_state.c
 )
 target_include_directories(cupidgb_core PUBLIC include)
 if(NOT MSVC)
@@ -122,6 +124,7 @@ if(CUPIDGB_BUILD_QT)
         src/frontend/qt/main_window_cheats.cpp
         src/frontend/qt/main_window_cheat_tests.cpp
         src/frontend/qt/main_window_audio.cpp
+        src/frontend/qt/main_window_audio_policy_tests.cpp
         src/frontend/qt/main_window_input.cpp
         src/frontend/qt/main_window_motion.cpp
         src/frontend/qt/main_window_session.cpp
@@ -192,7 +195,7 @@ if(CUPIDGB_BUILD_QT)
 endif()
 if(CUPIDGB_ENABLE_TESTS)
     enable_testing()
-    foreach(test_name IN ITEMS smoke gb startup rtc rtc_timing rtc_dma rtc_state divider_phase serial printer printer_state ppu stat apu cpu_timing cpu_lockup dma video_bus bus state battery native_v1_recovery sgb input cartridge camera mbc7 tpp1 huc3 infrared cheats debugger sha256)
+    foreach(test_name IN ITEMS smoke gb startup rtc rtc_timing rtc_dma rtc_state divider_phase serial printer printer_state ppu stat apu audio_synthesis audio_filter audio_state audio_clock cpu_timing cpu_lockup dma video_bus bus state battery native_v1_recovery sgb input cartridge camera mbc7 tpp1 huc3 infrared cheats debugger sha256)
         add_executable(cupidgb_${test_name} tests/test_${test_name}.c)
         target_link_libraries(cupidgb_${test_name} PRIVATE cupidgb_core)
         # Tests use assert for setup and checks, including in Release builds.

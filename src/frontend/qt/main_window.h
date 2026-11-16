@@ -1,3 +1,25 @@
+/**
+ * @file    main_window.h
+ * @brief   Qt main window interfaces and desktop session state.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <https://gnu.org>.
+ */
+
 #pragma once
 
 #include "color_pipeline.h"
@@ -130,6 +152,7 @@ class MainWindow final : public QMainWindow {
     void notifyOnScreen(const QString &message);
     void advanceScreenMessages();
     bool screenMessagesSmokeTest(const QString &path, const QString &directory);
+    void applyAudioPolicy(CupidGb *gb) const;
     void setupAudio();
     void stopAudio();
     void clearAudio();
@@ -137,6 +160,7 @@ class MainWindow final : public QMainWindow {
     QByteArray convertPlaybackAudio(const int16_t *samples, size_t frames,
                                     const QAudioFormat &format);
     bool audioLifecycleSmokeTest(const QString &path);
+    bool audioPolicySmokeTest(const QString &directory);
     bool startRecording(const QString &path);
     bool stopRecording();
     void screenshot();
@@ -267,6 +291,7 @@ class MainWindow final : public QMainWindow {
     QMenu *recentMenu_ = nullptr;
     QAction *pauseAction_ = nullptr;
     QAction *muteAction_ = nullptr;
+    std::array<QAction *, 4> audioChannelActions_{};
     QAction *recordingAction_ = nullptr;
     QAction *closeAction_ = nullptr;
     QAction *resetAction_ = nullptr;

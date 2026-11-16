@@ -1,3 +1,25 @@
+/**
+ * @file    test_divider_phase.c
+ * @brief   Regression tests for divider phase across partial clocks, STOP, and DMA.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://gnu.org>.
+ */
+
 #include "cupid/gb/apu.h"
 #include "cupid/gb/gb.h"
 #include "cupid/gb/timer.h"
@@ -123,22 +145,22 @@ static void test_freeze_and_audio_clocks(void) {
     for (unsigned fast = 0; fast < 2; ++fast) {
         CupidGb *gb = machine(CUPID_GB_MODEL_CGB, fast != 0, 0);
         assert(cupid_gb_apu_set_sample_rate(gb, 32000));
-        const uint32_t initial_audio = gb->apu.sample_acc;
+        const uint32_t initial_audio = gb->apu.output.sample_acc;
         const uint64_t initial_time = gb->elapsed_cycles;
         gb->speed_switch_freeze_cycles = 8;
         unsigned phase = cupid_gb_tick_color_dma_slot(gb, 8, 0);
         assert(divider(gb) == 8 && gb->elapsed_cycles == initial_time);
-        assert(gb->apu.sample_acc == initial_audio + (fast ? 4u : 8u) * 32000u);
+        assert(gb->apu.output.sample_acc == initial_audio + (fast ? 4u : 8u) * 32000u);
         assert(gb->speed_switch_freeze_cycles == 0);
 
         cupid_gb_write_u8(gb, 0xff04, 0);
         gb->stop_divider_hold_cycles = 4;
-        const uint32_t held_audio = gb->apu.sample_acc;
+        const uint32_t held_audio = gb->apu.output.sample_acc;
         phase = cupid_gb_tick_color_dma_slot(gb, 4, phase);
-        assert(divider(gb) == 0 && gb->apu.sample_acc == held_audio);
+        assert(divider(gb) == 0 && gb->apu.output.sample_acc == held_audio);
         (void)cupid_gb_tick_color_dma_slot(gb, 4, phase);
         assert(divider(gb) == 4);
-        assert(gb->apu.sample_acc == held_audio + (fast ? 2u : 4u) * 32000u);
+        assert(gb->apu.output.sample_acc == held_audio + (fast ? 2u : 4u) * 32000u);
         release(gb);
     }
 }

@@ -1,3 +1,25 @@
+/**
+ * @file    main_window.cpp
+ * @brief   Qt main window, cartridge lifecycle, menus, and application controls.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <https://gnu.org>.
+ */
+
 #include "cheats_window.h"
 #include "main_window_internal.h"
 
@@ -361,6 +383,22 @@ void MainWindow::buildMenus() {
         if (audio_)
             audio_->setVolume(muted ? 0.0f : settings_.value("audio/volume", 100).toFloat() / 100);
     });
+    auto *channels = audio->addMenu("Audio Channels");
+    channels->setObjectName("audioChannels");
+    for (size_t channel = 0; channel < audioChannelActions_.size(); ++channel) {
+        auto *action = channels->addAction(audioChannelNames[channel],
+                                           QKeySequence(QString("Alt+%1").arg(channel + 1)));
+        audioChannelActions_[channel] = action;
+        action->setCheckable(true);
+        action->setChecked(true);
+        registerShortcut(action, QString("audioChannel/%1").arg(channel));
+        connect(action, &QAction::toggled, this, [this, channel](bool audible) {
+            if (emulator_)
+                cupid_gb_apu_set_channel_muted(&emulator_->gb, unsigned(channel), !audible);
+            notifyOnScreen(
+                QString("Channel %1 %2").arg(channel + 1).arg(audible ? "unmuted" : "muted"));
+        });
+    }
     recordingAction_ = audio->addAction("Start Audio &Recording…");
     recordingAction_->setToolTip(
         "Record forward stereo audio before host mute, volume, and resampling. "
@@ -437,6 +475,7 @@ void MainWindow::buildMenus() {
             "Hold Shift for slow motion. Rapid A/B keys are configurable and start unassigned.\n\n"
             "Open: Ctrl+O   Reset: Ctrl+R   Pause: Ctrl+P\n"
             "Fullscreen: Ctrl+F   Mute: Ctrl+M   Screenshot: F12\n\n"
+            "Audio channels: Alt+1–4. Change shortcuts and audio filters in Settings.\n\n"
             "Save state: Ctrl+0–9   Load state: Ctrl+Shift+0–9\n\n"
             "Debugger: Ctrl+C. Use Tools for memory and graphics inspectors.\n"
             "Controller devices remain incomplete.");
@@ -650,6 +689,9 @@ bool MainWindow::openRom(const QString &path, bool reload) {
     // cartridge loading and battery import have prepared persistent clock history.
     if (!bootFolder.isEmpty())
         cupid_gb_start_boot_rom(&candidate->gb);
+    // Startup may rebuild the APU. Install host choices after its final reset,
+    // before the candidate can execute or produce its first audio sample.
+    applyAudioPolicy(&candidate->gb);
     const bool sameCartridge = emulator_ && romData_ == data &&
                                romPath_.compare(absolute, pathCase) == 0 &&
                                emulator_->gb.model == candidate->gb.model;

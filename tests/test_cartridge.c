@@ -1,3 +1,25 @@
+/**
+ * @file    test_cartridge.c
+ * @brief   Regression tests for cartridge headers, storage geometry, and mapper banking.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://gnu.org>.
+ */
+
 #include "cupid/gb/battery.h"
 #include "cupid/gb/cartridge.h"
 #include "cupid/gb/state.h"
@@ -696,7 +718,7 @@ static void test_mmm01_menu_and_lock(void) {
         const size_t length = cupid_gb_state_size(&gb);
         uint8_t *state = malloc(length);
         assert(state && cupid_gb_save_state(&gb, state, length, NULL) == CUPID_GB_STATE_OK);
-        assert(state[8] == 13);
+        assert(state[8] == 14);
         assert(cupid_gb_load_rom(&gb, rom, size));
         assert(cupid_gb_load_state(&gb, state, length) == CUPID_GB_STATE_OK);
         assert(cupid_gb_read_u8(&gb, 0) == menu_offset);
