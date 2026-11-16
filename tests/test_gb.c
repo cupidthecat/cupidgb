@@ -853,12 +853,17 @@ static void test_unprefixed_opcode_coverage(void) {
 
     for (opcode = 0u; opcode <= 0xffu; ++opcode) {
         prepare_gb(&gb, rom, (uint8_t)opcode, 0x00u, 0x00u);
-
+        CupidGbStepTrace trace;
+        assert(cupid_gb_step_observed(&gb, &trace));
+        assert(trace.address == 0x100u && trace.opcode == opcode);
         if (is_illegal_unprefixed((uint8_t)opcode)) {
-            assert(!cupid_gb_step(&gb));
+            assert(trace.event == CUPID_GB_STEP_ILLEGAL_OPCODE);
+            assert(gb.cpu.halted && !gb.interrupt_enable);
         } else {
-            assert(cupid_gb_step(&gb));
+            assert(trace.event == CUPID_GB_STEP_INSTRUCTION);
         }
+        assert(cupid_gb_opcode_is_illegal((uint8_t)opcode) ==
+               is_illegal_unprefixed((uint8_t)opcode));
     }
     cupid_gb_cleanup(&gb);
 }

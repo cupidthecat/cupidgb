@@ -20,6 +20,8 @@ Hash regressions cover known vectors, span partitions, large inputs, unaligned b
 
 Core tests exercise lifecycle, CPU/memory behavior, serial, timer/bus phases, graphics, audio, cartridge persistence, native snapshots, older-state battery recovery, and SGB behavior. Frontend checks cover sample conversion, WAVE file output, display processing, and integrated desktop workflows as those targets are present in the current build. Query the exact list with `ctest --test-dir build -N`; avoid carrying test counts from an older revision into a new result.
 
+The CPU lockup target covers all eleven illegal primary bytes, model/speed/IME combinations, fetch timing, IE clearing, pending requests, explicit debugger release, and state continuation. It also checks CB operands, the actual fetched address during the HALT bug, peripheral progress, and OAM DMA suspension and release. Runner regressions require an explicit illegal-opcode result even when a protocol success or duration limit occurs on the same fetch. Qt workflows cover debugger inspection and Backstep as well as continued graphics/audio generation during ordinary halted playback.
+
 The standalone `cupidgb_turbo_audio_window` target checks complete-frame selection, phase and block boundaries, every cap, normal bypass, host-rate changes, capacity drops and transactional rejection. It has no Qt dependency. Integrated playback workflows check history consumption and forward replay, exhaustion/release, current input, recording isolation, invalid snapshots, combined pacing, integer/float host formats, queue boundaries and focus-loss resets. These checks do not establish audible output or total device latency.
 
 Run the generated mapper, persistence, and SGB continuation checks together:
@@ -105,7 +107,7 @@ Create the output directory first. Model names are `dmg`, `mgb`, `cgb`, `sgb`, a
 | Protocol | Required observation |
 | --- | --- |
 | `serial` | Explicit success or failure text emitted by the cartridge's serial transfer protocol |
-| `register` | The selected debug-marker opcode with the expected success/failure register pattern |
+| `register` | A completed fetch of the selected debug-marker opcode with the expected success/failure register pattern |
 | `fibonacci` | The register convention above, or six serial bytes `03 05 08 0d 15 22` for success and six `42` bytes for failure |
 | `memory` | The expected memory signature, observed running status, and final result code |
 | `none` | Measurement only; no test-pass verdict |
@@ -116,9 +118,11 @@ The `fibonacci` serial form is binary, independent of success/failure text. It r
 
 The runner always observes completed serial bytes, reports their count as `serial_bytes`, and evaluates serial verdict text when that protocol is selected. It suppresses raw serial output by default. Add `--serial-output` to emit the transmitted bytes to stdout; the host buffers them and flushes at the report boundary. This diagnostic choice does not change serial clocks or verdict detection. Output errors are reported as `output_error`.
 
+An illegal primary fetch ends the runner with status `illegal_opcode`. The report includes its numeric byte and fetch address in `illegal_opcode` and `illegal_address`; both fields are `-1` when no illegal fetch occurred. Its completed step, clocks, presentation event, and generated PCM are included before termination. This failure takes priority over a test-protocol success or a duration/step bound reached on that fetch. The register protocol likewise counts its completed marker instruction. Compare reports from the same runner revision when using terminal step counts or throughput: observed stepping adds host work that ordinary frontend playback does not request.
+
 The runner prints a `CUPIDGB_RESULT` JSON object containing status, model, protocol, executed steps, base cycles, `base_clock_hz`, VBlank and presentation-event counts, audio-frame and serial-byte counts, output checksums, and elapsed host time. Memory-protocol results include the code and encoded diagnostic text. Raw bytes requested with `--serial-output` can appear before that record, so consumers should locate the prefixed result rather than treating all stdout as JSON.
 
-Exit codes are zero for an explicit pass or a completed measurement, one for a test failure, two for input/core/output errors, and three for a verdict-enabled run without an explicit pass. Measurement status `bounded` or `step_limit` remains inconclusive even when exit code is zero. Inspect both status and process exit code.
+Exit codes are zero for an explicit pass or a completed measurement, one for a test failure or illegal opcode, two for input/core/output errors, and three for a verdict-enabled run without an explicit pass. Measurement status `bounded` or `step_limit` remains inconclusive even when exit code is zero. Inspect both status and process exit code.
 
 The image output is binary PPM at native dimensions. Raw audio output is interleaved little-endian signed 16-bit stereo PCM, without a file header, at the configured core rate. Checksums help detect differences; matching checksums alone do not explain their cause or establish hardware accuracy.
 
@@ -132,7 +136,7 @@ python3 scripts/run_rom_suite.py ./build/cupidgb_rom_runner /private/tests \
     --boot /private/dmg_boot.bin --output .local-research/suite.json
 ```
 
-The suite default protocol is `serial`, unlike the bare runner's `none`. The wrapper hashes each ROM, enforces a host timeout, checks the result record against the exit code, retains bounded output, and writes a private JSON report. It returns success only when every case explicitly passes. `bounded`, `step_limit`, `timeout`, launch errors, and missing or invalid result records are separate outcomes.
+The suite default protocol is `serial`, unlike the bare runner's `none`. The wrapper hashes each ROM, enforces a host timeout, checks the result record against the exit code, retains bounded output, and writes a private JSON report. It returns success only when every case explicitly passes. `bounded`, `step_limit`, `illegal_opcode`, `core_error`, `timeout`, launch errors, and missing or invalid result records are separate outcomes.
 
 Do not apply one protocol blindly to unrelated ROMs. Group cases by model, startup requirements, and result mechanism. Preserve failing and inconclusive cases in reports rather than excluding them from aggregate counts.
 

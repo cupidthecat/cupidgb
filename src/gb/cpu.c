@@ -981,28 +981,33 @@ static void cupid_gb_daa(CupidGbCpu *cpu) {
 
 // Instruction decode
 
-/**
- * @brief Handles an unsupported or illegal opcode.
- *
- * Logs an error with the opcode and current PC, then halts the CPU.
- *
- * @param gb       Pointer to the Game Boy state.
- * @param opcode   The illegal opcode byte.
- * @param prefixed `true` if this is a CB-prefixed sub-opcode, `false` otherwise.
- *
- * @return Always returns 0.
- */
-static uint8_t cupid_gb_unsupported_opcode(CupidGb *gb, uint16_t opcode, bool prefixed) {
-    if (prefixed) {
-        cupid_log_errorf("Unsupported Game Boy CB opcode 0x%02X at PC=0x%04X", (unsigned int)opcode,
-                         (unsigned int)(gb->cpu.pc - 1u));
-    } else {
-        cupid_log_errorf("Unsupported Game Boy opcode 0x%02X at PC=0x%04X", (unsigned int)opcode,
-                         (unsigned int)(gb->cpu.pc - 1u));
+bool cupid_gb_opcode_is_illegal(uint8_t opcode) {
+    switch (opcode) {
+        case 0xd3u:
+        case 0xdbu:
+        case 0xddu:
+        case 0xe3u:
+        case 0xe4u:
+        case 0xebu:
+        case 0xecu:
+        case 0xedu:
+        case 0xf4u:
+        case 0xfcu:
+        case 0xfdu:
+            return true;
+        default:
+            return false;
     }
+}
 
+static uint8_t cupid_gb_illegal_opcode(CupidGb *gb, uint8_t opcode) {
+    cupid_log_errorf("Illegal Game Boy opcode 0x%02X. CPU halted.", (unsigned int)opcode);
+    /* These bytes leave the CPU halted with no enabled interrupts. Peripheral
+     * clocks still run, including the fetch's final machine cycle. Keeping the
+     * ordinary HALT and IE fields lets a debugger deliberately re-enable IE. */
+    gb->interrupt_enable = 0;
     gb->cpu.halted = true;
-    return 0u;
+    return 1u;
 }
 
 static void cupid_gb_write_modified_reg8(CupidGb *gb, uint8_t reg, uint8_t value,
@@ -1107,8 +1112,8 @@ static uint8_t cupid_gb_execute_cb(CupidGb *gb, uint8_t opcode, CupidGbCpuBus *b
  * @param gb     Pointer to the Game Boy state.
  * @param opcode The opcode byte to execute (already fetched from PC-1).
  *
- * @return The number of machine cycles consumed by the instruction
- *         (the final tick is performed by the caller).
+ * @return Remaining machine cycles, zero for timing completed inline, or
+ *         CUPID_GB_CPU_DECODE_ERROR for an unexpected decoder failure.
  */
 uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode, CupidGbCpuBus *bus) {
     if ((opcode & 0xc0u) == 0x40u) {
@@ -1638,7 +1643,7 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode, CupidGbCpuBus *
         case 0xf4u:
         case 0xfcu:
         case 0xfdu:
-            return cupid_gb_unsupported_opcode(gb, opcode, false);
+            return cupid_gb_illegal_opcode(gb, opcode);
         case 0xd5u: {
             /* PUSH DE: M1=opcode M2=internal M3=write_hi M4=write_lo */
             uint16_t val = cupid_gb_get_de(&gb->cpu);
@@ -1799,6 +1804,7 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode, CupidGbCpuBus *
             cupid_gb_cp_a(&gb->cpu, cupid_gb_fetch_u8(gb));
             return 1u;
         default:
-            return cupid_gb_unsupported_opcode(gb, opcode, false);
+            cupid_log_errorf("Cannot decode Game Boy opcode 0x%02X.", (unsigned int)opcode);
+            return CUPID_GB_CPU_DECODE_ERROR;
     }
 }

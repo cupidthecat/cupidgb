@@ -26,7 +26,8 @@ typedef enum CupidGbDebugStop {
     CUPID_GB_DEBUG_STOP_TARGET,
     CUPID_GB_DEBUG_STOP_BUDGET,
     CUPID_GB_DEBUG_STOP_NO_ROM,
-    CUPID_GB_DEBUG_STOP_ERROR
+    CUPID_GB_DEBUG_STOP_ERROR,
+    CUPID_GB_DEBUG_STOP_ILLEGAL_OPCODE
 } CupidGbDebugStop;
 
 typedef struct CupidGbDebugBreakpoint {
@@ -116,6 +117,8 @@ void cupid_gb_debugger_begin(CupidGbDebugger *debugger, const CupidGb *gb, Cupid
 CupidGbDebugStop cupid_gb_debugger_check(CupidGbDebugger *debugger, const CupidGb *gb);
 /* Step executes at most one instruction or HALT/STOP idle cycle. A stopped
  * result pauses the session, except BUDGET, which leaves its command active.
+ * ILLEGAL_OPCODE follows a completed fetch and retains the resulting halt;
+ * continuing advances peripheral clocks until an explicit IE edit releases it.
  * Run budgets count calls to the hardware step, not guest clocks. */
 CupidGbDebugStop cupid_gb_debugger_step(CupidGbDebugger *debugger, CupidGb *gb);
 CupidGbDebugStop cupid_gb_debugger_run(CupidGbDebugger *debugger, CupidGb *gb, uint64_t budget);

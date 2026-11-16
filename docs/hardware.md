@@ -54,6 +54,8 @@ The frontend saves battery SRAM, MBC3, TPP1 and HuC3 clock data, and MBC7 EEPROM
 
 The CPU executes SM83 instructions with instruction-specific bus phases, interrupt dispatch, delayed interrupt enable, HALT, and STOP handling. CPU and timer work use machine cycles; elapsed guest time is counted in base-speed T-cycles. CGB double speed increases CPU-domain work without doubling LCD or sound generator clocks.
 
+The eleven illegal primary opcodes consume their fetch cycle, clear IE, and halt the CPU. Graphics, sound, timer, and serial clocks continue under the ordinary HALT rules; OAM DMA remains suspended until wakeup. Pending interrupt requests cannot wake the CPU while IE stays clear. Debugger execution reports the illegal fetch separately from a core failure. Every CB-prefixed sub-opcode remains valid.
+
 Interrupt entry samples enable and request state separately because either stack byte can target an I/O register. STAT transients and LCDC control phases can change which interrupt wins before the T18 acknowledgment. The entry still consumes 20 CPU T-cycles, including cancellation. [Timing and clock domains](timing.md) describes the tested stack-register phases and the limits of that coverage.
 
 The memory map includes cartridge windows, VRAM, banked WRAM, echo RAM, OAM, I/O, high RAM, and interrupt enable. Device access restrictions depend on LCD and DMA state. Open-bus decay, fine bus conflicts, interrupt races, and revision differences remain incomplete. Passing ordinary instruction tests cannot establish those behaviors.

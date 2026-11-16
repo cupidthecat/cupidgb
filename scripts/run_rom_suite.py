@@ -34,7 +34,8 @@ def run_case(runner, rom, model, protocol, frames, timeout, boot=None):
     record["exit_code"] = completed.returncode
     record["stdout"] = output[-16384:]
     record["stderr"] = completed.stderr.decode("utf-8", errors="replace")[-16384:]
-    allowed_codes = {"pass": (0,), "bounded": (0, 3), "step_limit": (0, 3), "fail": (1,)}
+    allowed_codes = {"pass": (0,), "bounded": (0, 3), "step_limit": (0, 3), "fail": (1,),
+                     "illegal_opcode": (1,), "core_error": (2,), "output_error": (2,)}
     if (record.get("status") in allowed_codes
             and completed.returncode not in allowed_codes[record["status"]]):
         record["status"] = "runner_error"

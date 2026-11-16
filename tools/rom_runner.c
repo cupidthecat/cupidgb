@@ -47,10 +47,9 @@ static bool positive_integer(const char *text, uint64_t *value) {
     return !errno && end && !*end && *value > 0 && *value <= UINT64_C(10000000000);
 }
 
-static int register_result(const CupidGb *gb) {
+static int register_result(const CupidGb *gb, const CupidGbStepTrace *trace) {
     /* The debug opcode is meaningful only when this protocol is explicitly selected. */
-    if (gb->cpu.halted || gb->cpu.stopped || cupid_gb_read_u8(gb, gb->cpu.pc) != 0x40 ||
-        (gb->cpu.ime && (gb->interrupt_enable & gb->interrupt_flags & 0x1f))) {
+    if (trace->event != CUPID_GB_STEP_INSTRUCTION || trace->opcode != 0x40) {
         return 0;
     }
     const uint8_t registers[] = {gb->cpu.b, gb->cpu.c, gb->cpu.d, gb->cpu.e, gb->cpu.h, gb->cpu.l};
@@ -297,6 +296,7 @@ int main(int argc, char **argv) {
     cupid_gb_set_serial_output_callback(gb, observe_serial, &serial);
     bool memory_running = false;
     int memory_code = -1;
+    int illegal_opcode = -1, illegal_address = -1;
     const char *status = "bounded";
     int result = 0;
     double start = host_seconds();
@@ -305,58 +305,65 @@ int main(int argc, char **argv) {
                gb->elapsed_cycles >= events[event_index].frame * UINT64_C(70224)) {
             cupid_gb_set_buttons(gb, events[event_index++].mask);
         }
-        if (protocol_register) {
-            int detected = register_result(gb);
-            if (detected) {
-                status = detected > 0 ? "pass" : "fail";
-                break;
-            }
-        }
-        if (!cupid_gb_step(gb)) {
+        CupidGbStepTrace trace;
+        if (!cupid_gb_step_observed(gb, &trace)) {
             status = "core_error";
             result = 2;
             break;
         }
         ++steps;
         bool test_finished = false;
-        if (protocol_memory && cupid_gb_read_u8(gb, 0xa001) == 0xde &&
-            cupid_gb_read_u8(gb, 0xa002) == 0xb0 && cupid_gb_read_u8(gb, 0xa003) == 0x61) {
-            memory_code = cupid_gb_read_u8(gb, 0xa000);
-            if (memory_code == 0x80) {
-                memory_running = true;
-            } else if (memory_code == 0x81) {
-                status = "reset_required";
-                test_finished = true;
-            } else if (memory_running && memory_code < 0x80) {
-                /* Observe running first: initialization writes the signature before status. */
-                status = memory_code == 0 ? "pass" : "fail";
+        if (trace.event == CUPID_GB_STEP_ILLEGAL_OPCODE) {
+            illegal_opcode = trace.opcode;
+            illegal_address = trace.address;
+            status = "illegal_opcode";
+            result = 1;
+        } else {
+            if (protocol_register) {
+                int detected = register_result(gb, &trace);
+                if (detected) {
+                    status = detected > 0 ? "pass" : "fail";
+                    test_finished = true;
+                }
+            }
+            if (protocol_memory && cupid_gb_read_u8(gb, 0xa001) == 0xde &&
+                cupid_gb_read_u8(gb, 0xa002) == 0xb0 && cupid_gb_read_u8(gb, 0xa003) == 0x61) {
+                memory_code = cupid_gb_read_u8(gb, 0xa000);
+                if (memory_code == 0x80) {
+                    memory_running = true;
+                } else if (memory_code == 0x81) {
+                    status = "reset_required";
+                    test_finished = true;
+                } else if (memory_running && memory_code < 0x80) {
+                    /* Observe running first: initialization writes the signature before status. */
+                    status = memory_code == 0 ? "pass" : "fail";
+                    test_finished = true;
+                }
+            }
+            if (protocol_serial && serial.changed) {
+                serial.changed = false;
+                if (strstr(serial.text, "Failed") || strstr(serial.text, "FAILED")) {
+                    status = "fail";
+                    test_finished = true;
+                } else if (strstr(serial.text, "Passed") || strstr(serial.text, "PASSED")) {
+                    status = "pass";
+                    test_finished = true;
+                }
+            }
+            if (protocol_fibonacci && serial.signature_result) {
+                status = serial.signature_result > 0 ? "pass" : "fail";
                 test_finished = true;
             }
         }
         if (serial.output_error) {
             status = "output_error";
             result = 2;
-            break;
-        }
-        if (protocol_serial && serial.changed) {
-            serial.changed = false;
-            if (strstr(serial.text, "Failed") || strstr(serial.text, "FAILED")) {
-                status = "fail";
-                test_finished = true;
-            } else if (strstr(serial.text, "Passed") || strstr(serial.text, "PASSED")) {
-                status = "pass";
-                test_finished = true;
-            }
-        }
-        if (protocol_fibonacci && serial.signature_result) {
-            status = serial.signature_result > 0 ? "pass" : "fail";
-            test_finished = true;
         }
         if (gb->frame_ready) {
             ++presentation_events;
             gb->frame_ready = false;
         }
-        /* Drain per instruction, including with the LCD off, to avoid audio overflow. */
+        /* The final fetch can produce PCM or a frame even when it locks the CPU. */
         int16_t samples[128];
         uint32_t count = cupid_gb_apu_drain(gb, samples, 64);
         audio_frames += count;
@@ -411,10 +418,11 @@ int main(int argc, char **argv) {
            "\"audio_frames\":%" PRIu64 ",\"serial_bytes\":%" PRIu64 ","
            "\"audio_crc32\":\"%08" PRIx32 "\","
            "\"image_crc32\":\"%08" PRIx32 "\",\"host_seconds\":%.9f,"
-           "\"memory_result_code\":%d,\"memory_text_hex\":\"%s\"}\n",
+           "\"memory_result_code\":%d,\"memory_text_hex\":\"%s\","
+           "\"illegal_opcode\":%d,\"illegal_address\":%d}\n",
            status, model_name, protocol, steps, gb->elapsed_cycles, cupid_gb_base_clock_hz(gb),
            vblank_frames, presentation_events, audio_frames, serial.bytes, audio_crc ^ UINT32_MAX,
-           image_crc, elapsed, memory_code, memory_text);
+           image_crc, elapsed, memory_code, memory_text, illegal_opcode, illegal_address);
     if (!strcmp(status, "fail")) {
         result = 1;
     } else if (strcmp(protocol, "none") && strcmp(status, "pass") && !result) {

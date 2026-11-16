@@ -1394,8 +1394,8 @@ void cupid_gb_write_u8(CupidGb *gb, uint16_t address, uint8_t value) {
  *
  * @param gb Pointer to the Game Boy state.
  *
- * @return `true` if an instruction (or halt cycle) was executed,
- *         `false` if @p gb is NULL or no ROM is loaded.
+ * @return `true` if the hardware step completed, including an illegal opcode
+ *         entering HALT; `false` for an invalid instance or decoder failure.
  */
 static bool cupid_gb_step_internal(CupidGb *gb, CupidGbStepTrace *trace) {
     uint8_t cycles;
@@ -1458,32 +1458,31 @@ static bool cupid_gb_step_internal(CupidGb *gb, CupidGbStepTrace *trace) {
     }
     opcode = cupid_gb_fetch_u8(gb);
     cupid_cgb_run_pending_dma(gb);
-    if (trace)
+    if (trace) {
         trace->opcode = opcode;
+        if (cupid_gb_opcode_is_illegal(opcode))
+            trace->event = CUPID_GB_STEP_ILLEGAL_OPCODE;
+    }
 
     cycles = cupid_gb_execute_unprefixed(gb, opcode, &bus);
+    if (cycles == CUPID_GB_CPU_DECODE_ERROR)
+        return false;
 
     if (cycles > 0u) {
         cupid_gb_cpu_finish(gb, cycles, &bus);
     }
 
-    if (cycles > 0u || opcode == 0x10u || opcode == 0x76u || opcode == 0xf0u || opcode == 0xe0u ||
-        opcode == 0xc3u || opcode == 0xc2u || opcode == 0xcau || opcode == 0xd2u ||
-        opcode == 0xdau) {
-        if (opcode == 0xfbu) {
-            if (ime_enable_pending) {
-                gb->cpu.ime = true;
-            }
-            gb->cpu.ime_delay = 1u;
-        } else if (opcode != 0xf3u && ime_enable_pending) {
-            gb->cpu.ime_delay = 0u;
+    if (opcode == 0xfbu) {
+        if (ime_enable_pending) {
             gb->cpu.ime = true;
         }
+        gb->cpu.ime_delay = 1u;
+    } else if (opcode != 0xf3u && ime_enable_pending) {
+        gb->cpu.ime_delay = 0u;
+        gb->cpu.ime = true;
     }
 
-    return cycles > 0u || opcode == 0x10u || opcode == 0x76u || opcode == 0xf0u ||
-           opcode == 0xe0u || opcode == 0xc3u || opcode == 0xc2u || opcode == 0xcau ||
-           opcode == 0xd2u || opcode == 0xdau;
+    return true;
 }
 
 bool cupid_gb_step(CupidGb *gb) {

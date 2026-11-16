@@ -1421,7 +1421,8 @@ are not yet restored with native snapshots. These remain explicit parity gaps.
 
 ## Peripheral continuation and desktop lifecycle, 2026-11-15
 
-This checkpoint adds native V12 printer and infrared history, shared CGB/HuC1/HuC3
+Checkpoint `40c299b0e92fe6e94c5bd84e3cb9db205ad195ac` adds native V12 printer and
+infrared history, shared CGB/HuC1/HuC3
 infrared connections, explicit cartridge/symbol reload, and reduced Qt polling
 while idle. The comparison revision remains
 `ea667ad79aa28409f034b1fd6da7304e1844750d`. Generated probes and commercial replay
@@ -1558,3 +1559,126 @@ Formatting and whitespace checks pass. All 170 project C/C++ source and header
 files remain below 2,000 lines; the largest is the 1,957-line state regression.
 No obsolete root `licenses` directory is present. The project license and
 required notices for retained dependencies remain intact.
+
+## Illegal-opcode halt and bounded library scan, 2026-11-16
+
+The follow-up corrects the CPU defect recorded above. All eleven illegal primary
+bytes now complete their fetch cycle, clear IE, and enter the existing halted
+state. Timer, serial, graphics, and sound continue under the normal hardware
+gates. OAM DMA remains suspended until wakeup. Pending IF bits alone cannot wake
+the CPU with IE clear; a debugger can deliberately restore IE and release it.
+Native V12 already represents this state, so no format or legacy-load change is
+needed.
+
+Observed stepping reports the actual illegal byte and address. Explicit debugger
+commands stop with a distinct diagnostic and retain Backstep. Ordinary playback
+continues the halted hardware. The runner ends with `illegal_opcode` and exit 1,
+including the final fetch's clocks, presentation event, and PCM. A simultaneous
+protocol success or duration limit cannot turn that outcome into a pass.
+
+### Core and paired lockup checks
+
+The targeted Linux Release run passes GB, CPU timing, CPU lockup, native state,
+and debugger checks. The new target covers 198 illegal-opcode cases: eleven
+bytes, six model/speed profiles, and IME off, on, or enabled by a preceding EI.
+It also checks all 1,536 CB-subopcode/profile combinations, blocked bus fetches,
+HALT-bug addresses, interrupt preemption, IF-only non-wake, explicit IE release,
+plain/observed equivalence, peripheral output, and snapshot continuation.
+
+The first new peripheral fixture incorrectly expected OAM DMA to finish during
+HALT. The inspected memory path requires suspension; the corrected fixture
+checks unchanged pending DMA/OAM and completion after explicit wakeup. No DMA
+production behavior was changed to satisfy that test.
+
+Fresh paired probes use comparison revision
+`ea667ad79aa28409f034b1fd6da7304e1844750d` and frozen candidate library
+`4f8d9ba46870ec9a867c76249c5ab39238e5cefff648a25e6158e22c20ebfaa9`.
+All 66 cases and 396 observations agree across fetch, idle, an IF request,
+further idle, explicit IE release, and the following instruction. They cover
+all eleven bytes, both CGB speeds, and all three IME conditions. Separate
+event, cycle, PC, IE, and IME expectations also pass. The retained pre-change
+negative control differs in all 396 observations, including every initial
+fetch. Protected inputs and the 55 frozen core source/header files remain
+unchanged.
+
+The seven affected library inputs still reach illegal instructions in both
+engines. Their final 256 instruction/register records, total instruction counts,
+and total base clocks now agree in every pair. Six cases gain the missing two
+base cycles of a double-speed fetch; one gains four. These comparisons use the
+same color boot binary, released buttons, no battery load, and a controlled
+startup state. Matching the terminal path and halt behavior does not establish
+successful gameplay or justify classifying every input as a bad dump.
+
+### Completed pre-fix library scan
+
+The retained runner with SHA-256
+`865b517e19d9a168c2540b1f0b45f8cce836ae10fa1a42b4d4b8c4e18dd072ec`
+completes the 880-input scan: 873 reach the 3,600-interval guest-time bound and
+seven report the original core error. This executable was frozen before the CPU
+repair; these totals do not describe a rescan of the new executable.
+
+The inventory contains 878 distinct ROM hashes. Model selection is 198 DMG,
+556 CGB, and 126 SGB runs, using the corresponding recorded boot inputs. The
+mapper inventory is 500 MBC5, 272 MBC1, 81 MBC3, 12 ROM-only, 11 MBC2, and one
+each for MBC7, HuC3, Camera, and an unknown header type. All seven errors occur
+among the MBC5 inputs. No HuC1, MMM01, TPP1, or MBC6 commercial input is present.
+Generated controller probes supply separate coverage where applicable.
+
+Every protected original retains its bytes and modification time; the frozen
+runner is unchanged. A bounded result records execution through the chosen
+guest-clock limit. It does not establish active play, correct pixels or sound,
+successful persistence, every mapper feature, or sustained native performance.
+
+### Final builds, CLI outcomes, and native workflows
+
+The final Release builds pass all 50 Windows checks and all 48 Linux checks,
+including the expanded Qt workflow and required archive tests. The Linux
+address/undefined-behavior sanitizer build passes all 29 checks with leak
+detection. The new CPU lockup target and the complete runner regression run in
+each configuration. The 194 recorded build/test inputs remain unchanged through
+these final gates and native validation.
+
+The first Windows suite passed 49 of 50 checks. Its new debugger fixture invoked
+bare `reset`, which is not implemented by the current console. The diagnostic
+run located the failed post-reset assertion. Changing that fixture to the
+existing `reset reload` command made the focused check and subsequent full
+suite pass. Bare and quick-reset console commands remain explicit checklist
+gaps; no production reset behavior was changed to satisfy this fixture.
+
+The actual runner also rechecks the seven library failures on both hosts. All
+fourteen executions return `illegal_opcode` with exit 1, the expected fetched
+byte/address, and one additional completed step. Six gain two base cycles and
+one gains four. All seven parsed result records agree across platforms except
+host elapsed time, including audio and image checksums. Their other output
+counters remain equal to the retained pre-fix scan. These checks use frozen
+Windows runner
+`8abe3f9a7633ee93ed6bccb53a188cee24c4bc4752056b8e9a05b8ec72f98e4b`
+and Linux runner
+`db6c70b52d16914e44fd985baefa4c8513994984c63e54b9924c7d64ad389cab`.
+The private guard records the exact one-line Qt fixture correction during the
+Windows run; the runner/core inputs, binaries, ROMs, boot input, and saves remain
+unchanged. No successful case was repeated to replace its evidence.
+
+The new Windows runner also repeats the 243-case external gate: 242 explicit
+passes and the same bounded OAM timing logger. The passing groups contain 119
+model-qualified acceptance cases, 56 mapper cases, 24 audio cases, 22 CPU cases,
+14 timing cases, and seven OAM cases. The remaining logger reports code 128
+after 3,600 intervals without a success verdict. It remains inconclusive; the
+runner hash is unchanged throughout the gate.
+
+Fresh installations pass the complete native Qt workflow with real audio on
+Windows and Linux/Xcb. Both verify the expected runtime paths and retain ten
+captures. The debugger, map overlay, startup message, and palette views remain
+readable. Native save/load, rewind, and reentrant audio-write cartridge close
+checks also pass. These runs establish the stated integration scope under
+concurrent validation load, without a performance or audible-quality claim.
+
+The Windows build and installed executable hash is
+`6addb20d9aaff6ddb892b26f68eea1233b268ec206bce040ec06c48848c0eb30`.
+The Linux build hash is
+`b65f7b2cd9f79381323ccbab419cfc3edd2096426ddfa8985e4f8db6d483843f`;
+the installed ELF hash is
+`dc3b9867ddee0840bab8e47cdb063fed9e2f81535b82323c73f64983918dca47`.
+The installation receipt retains the normal Linux RPATH change and runtime
+dependencies. All 171 project C/C++ source and header files remain below 2,000
+lines, with formatting and whitespace checks passing.

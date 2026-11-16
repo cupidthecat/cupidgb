@@ -458,6 +458,8 @@ CupidGbDebugStop cupid_gb_debugger_step(CupidGbDebugger *debugger, CupidGb *gb) 
     ++debugger->steps;
     if (!cupid_gb_step_observed(gb, &trace))
         return stopped(debugger, CUPID_GB_DEBUG_STOP_ERROR);
+    if (trace.event == CUPID_GB_STEP_ILLEGAL_OPCODE)
+        return stopped(debugger, CUPID_GB_DEBUG_STOP_ILLEGAL_OPCODE);
     const bool stack_push = gb->cpu.sp == (uint16_t)(stack - 2u);
     const bool stack_pop = gb->cpu.sp == (uint16_t)(stack + 2u);
     const bool interrupt_entry = trace.event == CUPID_GB_STEP_INTERRUPT;
@@ -524,6 +526,8 @@ const char *cupid_gb_debugger_stop_name(CupidGbDebugStop stop) {
             return "No cartridge loaded";
         case CUPID_GB_DEBUG_STOP_ERROR:
             return "Debugger execution failed";
+        case CUPID_GB_DEBUG_STOP_ILLEGAL_OPCODE:
+            return "Illegal opcode: CPU halted";
         default:
             return "Unknown debugger stop";
     }

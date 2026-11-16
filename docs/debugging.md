@@ -17,7 +17,9 @@ The debugger shows CPU registers, flags, interrupt-enable state, HALT/STOP state
 | Finish | Run until the current function or interrupt handler returns |
 | Backstep | Restore the preceding retained instruction boundary |
 
-Next and Finish run in small event-loop slices so Break and the rest of the interface remain available. A command stops after one million hardware-step attempts if its target has not been reached. HALT, STOP, an endless loop, a missing return, or modified stack contents can prevent a target from being reached. The status message distinguishes a completed command, breakpoint, exhausted budget, and execution error.
+Next and Finish run in small event-loop slices so Break and the rest of the interface remain available. A command stops after one million hardware-step attempts if its target has not been reached. HALT, STOP, an endless loop, a missing return, or modified stack contents can prevent a target from being reached. The status message distinguishes a completed command, breakpoint, exhausted budget, illegal opcode, and execution error.
+
+An illegal primary opcode completes its fetch, clears IE, and halts the CPU. An explicit execution command stops with `Illegal opcode: CPU halted`, keeping its pre-step snapshot available for Backstep. Continue resumes peripheral clocks while the CPU remains halted; setting IF alone cannot wake it. A deliberate IE edit can enable wakeup. Ordinary gameplay also keeps clocks running after this hardware halt, without reporting it as a host execution failure. A frozen game still requires diagnosis and is not a successful compatibility result.
 
 With IME clear, a HALT wake can consume one hardware step without fetching an opcode. Step exposes that event with an unchanged PC. Next continues through the wake and then tracks the instruction actually fetched, including calls or a newly blocked memory region. Expiry of the timed CGB speed-switch wait can fetch the next opcode in the expiring step.
 
@@ -108,4 +110,4 @@ Inspector raw grayscale mode bypasses color correction. Palette-selected color p
 
 ## Remaining debugger scope
 
-Read/write watchpoints, a full expression language, saved debugger sessions, continuous-playback instruction replay, arbitrary physical-bank memory editing, ROM patching, interactive palette editing, and presentation layer/channel toggles remain pending. Inspector rendering and the bounded instruction history are useful diagnostic tools, not complete debugger or hardware parity.
+Bare `reset` and `reset quick` console commands remain pending; use the implemented `reset reload` command or the ordinary Reset action for the documented current workflows. Read/write watchpoints, a full expression language, saved debugger sessions, continuous-playback instruction replay, arbitrary physical-bank memory editing, ROM patching, interactive palette editing, and presentation layer/channel toggles also remain pending. Inspector rendering and the bounded instruction history are useful diagnostic tools, not complete debugger or hardware parity.

@@ -205,9 +205,12 @@ static void test_interrupts_and_halt(CupidGb *gb) {
     const size_t size = cupid_gb_state_size(gb);
     uint8_t *before_error = malloc(size);
     assert(before_error && cupid_gb_save_state(gb, before_error, size, NULL) == CUPID_GB_STATE_OK);
+    const uint64_t before_illegal = gb->elapsed_cycles;
     cupid_gb_debugger_begin(&debug, gb, CUPID_GB_DEBUG_STEP);
-    assert(cupid_gb_debugger_step(&debug, gb) == CUPID_GB_DEBUG_STOP_ERROR);
+    assert(cupid_gb_debugger_step(&debug, gb) == CUPID_GB_DEBUG_STOP_ILLEGAL_OPCODE);
     assert(debug.steps == 1 && gb->cpu.pc == 0x101 && gb->cpu.halted);
+    assert(!gb->interrupt_enable && gb->elapsed_cycles == before_illegal + 4);
+    assert(!strcmp(cupid_gb_debugger_stop_name(debug.last_stop), "Illegal opcode: CPU halted"));
     assert(cupid_gb_load_state(gb, before_error, size) == CUPID_GB_STATE_OK);
     assert(gb->cpu.pc == 0x100 && !gb->cpu.halted);
     free(before_error);
@@ -448,7 +451,7 @@ static void test_step_observation(CupidGb *gb) {
     CupidGb *observed = calloc(1, sizeof(*observed));
     assert(observed);
     prepare(observed);
-    for (unsigned scenario = 0; scenario < 6; ++scenario) {
+    for (unsigned scenario = 0; scenario < 7; ++scenario) {
         prepare(gb);
         CupidGbStepEvent event = CUPID_GB_STEP_IDLE;
         uint16_t address = 0x100;
@@ -466,10 +469,14 @@ static void test_step_observation(CupidGb *gb) {
             gb->cpu.stopped = true;
             if (scenario == 4)
                 gb->joypad = 0;
-        } else {
+        } else if (scenario == 5) {
             halt_at_vram_boundary(gb);
             address = 0x8000;
             assert(cupid_gb_read_u8(gb, address) == 0);
+        } else {
+            event = CUPID_GB_STEP_ILLEGAL_OPCODE;
+            gb->rom[0x100] = opcode = 0xd3;
+            gb->interrupt_enable = 0xff;
         }
         uint8_t *owned_rom = observed->rom;
         *observed = *gb;

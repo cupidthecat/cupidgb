@@ -60,7 +60,9 @@ Loading a cartridge resets hardware. The direct loader is not a transactional se
 
 ## Execution and clocks
 
-`cupid_gb_step` and `cupid_emulator_step` execute one instruction, interrupt entry, or bounded HALT/STOP work. They return false when execution cannot continue. They do not sleep or synchronize with a display.
+`cupid_gb_step` and `cupid_emulator_step` execute one hardware step: an instruction, interrupt entry, or bounded HALT/STOP work. A true result means that step completed. It does not establish instruction progress or successful gameplay. False reports an invalid instance, an absent cartridge, or a decoder failure. These functions do not sleep or synchronize with a display.
+
+The eleven illegal primary opcodes complete their fetch, clear IE, and halt the CPU. Their step returns true so the host can continue clocks and consume subsequent graphics and sound. Interrupt requests alone cannot wake that halt because no interrupts remain enabled. A debugger can deliberately restore IE; reset or an earlier snapshot can also replace the halted state. Native states retain it through the existing CPU and IE fields, without a new format version.
 
 An IME-clear HALT wake can return successfully with an unchanged PC and no fetched opcode. A fully frozen CGB speed-switch poll can update CPU-domain sequencing without advancing `elapsed_cycles`. Use observed step-event information when tracking executed instructions, rather than assuming every successful call fetched the byte currently at PC.
 
@@ -149,7 +151,9 @@ Sensor charge and decay follow guest execution. Native version 12 preserves thei
 
 Begin RUN, STEP, NEXT, or FINISH with `cupid_gb_debugger_begin`, then call `cupid_gb_debugger_step` or the bounded `cupid_gb_debugger_run`. Budgets count hardware-step attempts. A budget result leaves the command active for a later slice; an actual stop pauses the debugger. Ordinary hosts can use the before-instruction `cupid_gb_debugger_check` hook for execution breakpoints. A breakpoint resumes past its stopped occurrence once, without disabling later matches.
 
-`cupid_gb_step_observed` fills a caller-owned `CupidGbStepTrace` for actual CPU fetch, interrupt dispatch, or an idle step. It uses the same hardware execution path as `cupid_gb_step`, so debugger call/return tracking does not infer opcodes from a raw memory view. No trace or debugger resource is added to a native snapshot.
+`cupid_gb_step_observed` fills a caller-owned `CupidGbStepTrace` for an instruction fetch, interrupt dispatch, idle step, or illegal primary opcode. `CUPID_GB_STEP_ILLEGAL_OPCODE` occurs once for the completed illegal fetch and records its actual address and byte, including HALT-bug PC suppression. Subsequent halted steps report `CUPID_GB_STEP_IDLE`. All CB-prefixed sub-opcodes are defined; their primary trace byte remains `CB`. This API uses the same hardware execution path as `cupid_gb_step`, so consumers do not infer fetched opcodes from an unrestricted memory view. No trace or debugger resource is added to a native snapshot.
+
+An explicit debugger execution command stops with `CUPID_GB_DEBUG_STOP_ILLEGAL_OPCODE` after the illegal fetch. This is distinct from `CUPID_GB_DEBUG_STOP_ERROR`. The resulting hardware state remains available for inspection, saving, and instruction Backstep. Continuing playback advances the halted hardware under the ordinary execution contract.
 
 `cupid_gb_debug_peek` reads underlying mapped memory without ticking hardware or applying CPU VRAM/OAM/wave restrictions. `cupid_gb_debug_poke` rejects ROM/unusable ranges, edits writable mapped storage, and applies device semantics for I/O. It requires the same exclusive instruction-boundary access as state operations. Raw observation and intentional edits are different contracts; an I/O edit can have hardware side effects.
 

@@ -8,10 +8,11 @@ import sys
 import tempfile
 
 
-def make_rom(program):
+def make_rom(program, *, color=False):
     rom = bytearray(32768)
     rom[0x100:0x104] = bytes((0x00, 0xC3, 0x50, 0x01))
     rom[0x134:0x13C] = b"RUNTEST\0"
+    rom[0x143] = 0x80 if color else 0
     checksum = 0
     for byte in rom[0x134:0x14D]:
         checksum = (checksum - byte - 1) & 255
@@ -59,6 +60,85 @@ def run(runner, rom, *options, expected_code=0):
     return records[0]
 
 
+def illegal_opcode_checks(runner, root):
+    rom = root / "illegal.gb"
+    opcodes = (0xD3, 0xDB, 0xDD, 0xE3, 0xE4, 0xEB, 0xEC, 0xED, 0xF4, 0xFC, 0xFD)
+    for model in ("dmg", "cgb"):
+        for opcode in opcodes:
+            rom.write_bytes(make_rom(bytes((opcode,)), color=model == "cgb"))
+            record = run(runner, rom, "--model", model, expected_code=1)
+            assert record["status"] == "illegal_opcode", record
+            assert record["illegal_opcode"] == opcode and record["illegal_address"] == 0x150
+            assert record["steps"] == 3 and record["base_cycles"] == 24, record
+    for protocol in ("serial", "register", "fibonacci", "memory"):
+        rom.write_bytes(make_rom(bytes((0xD3,))))
+        record = run(runner, rom, "--protocol", protocol, expected_code=1)
+        assert record["status"] == "illegal_opcode", record
+    # A CB operand with the same byte value remains a valid instruction.
+    rom.write_bytes(make_rom(bytes((0xCB, 0xD3, 0x76))))
+    assert run(runner, rom, "--frames", "1")["status"] == "bounded"
+
+    # At 96 base cycles the last fetch emits the first PCM sample. Both the
+    # completed fetch and its output must survive a simultaneous step limit.
+    audio = root / "illegal.pcm"
+    rom.write_bytes(make_rom(bytes(19)))
+    control = run(runner, rom, "--max-steps", "21")
+    assert control["status"] == "step_limit"
+    assert control["illegal_opcode"] == -1 and control["illegal_address"] == -1
+    rom.write_bytes(make_rom(bytes(18) + bytes((0xD3,))))
+    final = run(runner, rom, "--max-steps", "21", "--audio", str(audio), expected_code=1)
+    assert final["status"] == "illegal_opcode" and final["illegal_address"] == 0x162
+    assert final["audio_frames"] == 1 and audio.stat().st_size == 4
+    for field in ("steps", "base_cycles", "presentation_events", "audio_frames", "audio_crc32"):
+        assert final[field] == control[field], (field, final, control)
+
+    # Complete an LCD-off presentation on the illegal fetch and frame deadline.
+    program = bytes((0xF3, 0xAF, 0xE0, 0x40)) + bytes(17545)
+    rom.write_bytes(make_rom(program + bytes((0,))))
+    control = run(runner, rom, "--frames", "1")
+    rom.write_bytes(make_rom(program + bytes((0xD3,))))
+    final = run(runner, rom, "--frames", "1", expected_code=1)
+    assert control["status"] == "bounded" and final["status"] == "illegal_opcode"
+    assert final["base_cycles"] == 70224 and final["presentation_events"] == 1
+    assert final["vblank_frames"] == 0 and final["illegal_address"] == 0x150 + len(program)
+    for field in ("steps", "base_cycles", "presentation_events", "audio_frames", "audio_crc32"):
+        assert final[field] == control[field], (field, final, control)
+
+    # HALT's PC suppression changes the following PC, not the fetched address.
+    rom.write_bytes(make_rom(bytes((0xF3, 0x3E, 1, 0xEA, 0xFF, 0xFF,
+                                   0xE0, 0x0F, 0x76, 0xD3))))
+    halted = run(runner, rom, expected_code=1)
+    assert halted["status"] == "illegal_opcode" and halted["illegal_address"] == 0x159
+
+    for protocol, message in (("serial", b"Passed"),
+                              ("fibonacci", bytes((3, 5, 8, 13, 21, 34)))):
+        program = serial_program(message[:-1])[:-3]
+        # Disarm the old byte, reset DIV, then arm the final byte. The write
+        # leaves DIV at 11 M-cycles; bit eight completes at cycle 1024.
+        program.extend((0xAF, 0xE0, 0x02, 0xE0, 0x04,
+                        0x3E, message[-1], 0xE0, 0x01, 0x3E, 0x81, 0xE0, 0x02))
+        program.extend(bytes(1012))
+        address = 0x150 + len(program)
+        rom.write_bytes(make_rom(program + bytes((0,))))
+        control = run(runner, rom, "--protocol", protocol)
+        assert control["status"] == "pass" and control["serial_bytes"] == len(message)
+        rom.write_bytes(make_rom(program + bytes((0xD3,))))
+        final = run(runner, rom, "--protocol", protocol, expected_code=1)
+        assert final["status"] == "illegal_opcode" and final["illegal_address"] == address
+        assert final["serial_bytes"] == len(message)
+        for field in ("steps", "base_cycles", "audio_frames", "audio_crc32"):
+            assert final[field] == control[field], (field, final, control)
+
+    report = root / "illegal-report.json"
+    suite = Path(__file__).with_name("run_rom_suite.py")
+    completed = subprocess.run([sys.executable, str(suite), str(runner), str(rom),
+                                "--output", str(report)], capture_output=True, timeout=15)
+    assert completed.returncode == 1, completed.stderr
+    result = json.loads(report.read_text())
+    assert result["counts"] == {"illegal_opcode": 1}, result
+    assert result["results"][0]["exit_code"] == 1
+
+
 def main():
     runner = Path(sys.argv[1]).resolve(strict=True)
     with tempfile.TemporaryDirectory(prefix="cupidgb-runner-") as directory:
@@ -102,12 +182,15 @@ def main():
         assert run(runner, rom, "--protocol", "serial", expected_code=1)["status"] == "fail"
         rom.write_bytes(make_rom(bytes((0x06, 3, 0x0E, 5, 0x16, 8, 0x1E, 13,
                                        0x26, 21, 0x2E, 34, 0x40, 0x18, 0xFD))))
-        assert run(runner, rom, "--protocol", "register")["status"] == "pass"
+        register = run(runner, rom, "--protocol", "register")
+        assert register["status"] == "pass"
+        assert register["steps"] == 9 and register["base_cycles"] == 72, register
         # Identical registers alone must not terminate a plain measurement run.
         assert run(runner, rom, "--frames", "1")["status"] == "bounded"
         rom.write_bytes(make_rom(bytes((0x06, 0x42, 0x0E, 0x42, 0x16, 0x42,
                                        0x1E, 0x42, 0x26, 0x42, 0x2E, 0x42, 0x40))))
         assert run(runner, rom, "--protocol", "register", expected_code=1)["status"] == "fail"
+        illegal_opcode_checks(runner, root)
         for data, expected, code in ((bytes((3, 5, 8, 13, 21, 34)), "pass", 0),
                                      (bytes((0x42,)) * 6, "fail", 1)):
             rom.write_bytes(make_rom(serial_program(data)))

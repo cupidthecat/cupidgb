@@ -110,7 +110,8 @@ void MainWindow::pauseDebugger() {
     // The pause transition also resets execution, so retain the stopped reason
     // after it completes. Errors must remain inspectable without skipping a hit.
     if (debugger_ && (previousStop == CUPID_GB_DEBUG_STOP_BREAKPOINT ||
-                      previousStop == CUPID_GB_DEBUG_STOP_ERROR))
+                      previousStop == CUPID_GB_DEBUG_STOP_ERROR ||
+                      previousStop == CUPID_GB_DEBUG_STOP_ILLEGAL_OPCODE))
         debugger_->last_stop = previousStop;
 }
 

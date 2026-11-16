@@ -368,22 +368,97 @@ bool MainWindow::debuggerSmokeTest(const QString &directory) {
         QString::fromUtf8(cupid_gb_debugger_symbol_for_address(debugger_.get(), 0, 0x159, true)) !=
             "Replacement")
         return smokeFailure(__FILE__, __LINE__);
-    rom[0x150] = char(0xd3);
+    QByteArray illegalRom = rom;
+    illegalRom[0x143] = char(0x80);
+    illegalRom[0x150] = char(0xd3);
+    illegalRom[0x151] = char(0x3c); // INC A; JR back to INC after a debugger releases HALT.
+    illegalRom[0x152] = char(0x18);
+    illegalRom[0x153] = char(0xfd);
+    uint8_t illegalChecksum = 0;
+    for (int i = 0x134; i <= 0x14c; ++i)
+        illegalChecksum = uint8_t(illegalChecksum - uint8_t(illegalRom[i]) - 1);
+    illegalRom[0x14d] = char(illegalChecksum);
     const QString illegalPath = QDir(directory).filePath("illegal-debugger.gb");
     QFile illegal(illegalPath);
-    if (!illegal.open(QIODevice::WriteOnly) || illegal.write(rom) != rom.size())
+    if (!illegal.open(QIODevice::WriteOnly) || illegal.write(illegalRom) != illegalRom.size())
         return smokeFailure(__FILE__, __LINE__);
     illegal.close();
     if (!openRom(illegalPath))
         return smokeFailure(__FILE__, __LINE__);
     openDebugger();
     debuggerWindow_->submitCommand("set pc $0150");
+    debuggerWindow_->submitCommand("write $ffff $1f");
     const QByteArray beforeIllegal = captureState();
+    const uint64_t beforeIllegalCycles = emulator_->gb.elapsed_cycles;
+    const auto beforeIllegalOutput = debuggerWindow_->outputText().size();
+    const bool beforeIllegalFailure = failed_;
     debuggerWindow_->submitCommand("step");
-    if (!complete() || !emulator_->gb.cpu.halted ||
-        debugger_->last_stop != CUPID_GB_DEBUG_STOP_ERROR || debuggerHistory_.size() != 1 ||
-        !debuggerBackstep() || captureState() != beforeIllegal)
+    if (!complete() || !emulator_->gb.cpu.halted || emulator_->gb.interrupt_enable ||
+        emulator_->gb.cpu.pc != 0x151 || emulator_->gb.elapsed_cycles != beforeIllegalCycles + 4 ||
+        debugger_->last_stop != CUPID_GB_DEBUG_STOP_ILLEGAL_OPCODE ||
+        debuggerHistory_.size() != 1 ||
+        !debuggerWindow_->outputText()
+             .mid(beforeIllegalOutput)
+             .contains("Illegal opcode: CPU halted") ||
+        failed_ != beforeIllegalFailure || !debuggerBackstep() || captureState() != beforeIllegal)
         return smokeFailure(__FILE__, __LINE__);
+    debuggerWindow_->submitCommand("step");
+    if (!complete() || !saveSlot(9))
+        return smokeFailure(__FILE__, __LINE__);
+    const QByteArray lockedState = captureState();
+    const uint64_t lockedCycles = emulator_->gb.elapsed_cycles;
+    debuggerWindow_->submitCommand("write $ff0f $1f");
+    debuggerWindow_->submitCommand("step");
+    if (!complete() || !emulator_->gb.cpu.halted || emulator_->gb.cpu.pc != 0x151 ||
+        emulator_->gb.interrupt_enable || emulator_->gb.elapsed_cycles != lockedCycles + 4)
+        return smokeFailure(__FILE__, __LINE__);
+    debuggerWindow_->submitCommand("continue");
+    const uint64_t beforeContinue = emulator_->gb.elapsed_cycles;
+    if (paused_ || !runFrame() || paused_ || failed_ != beforeIllegalFailure ||
+        !emulator_->gb.cpu.halted || emulator_->gb.cpu.pc != 0x151 ||
+        emulator_->gb.elapsed_cycles <= beforeContinue)
+        return smokeFailure(__FILE__, __LINE__);
+    pauseDebugger();
+    // IF cannot wake the locked CPU until a host explicitly restores IE.
+    debuggerWindow_->submitCommand("write $ffff $1f");
+    debuggerWindow_->submitCommand("step");
+    if (!complete() || emulator_->gb.cpu.halted || emulator_->gb.cpu.pc != 0x151)
+        return smokeFailure(__FILE__, __LINE__);
+    const uint8_t beforeReleasedA = emulator_->gb.cpu.a;
+    debuggerWindow_->submitCommand("step");
+    if (!complete() || emulator_->gb.cpu.pc != 0x152 ||
+        emulator_->gb.cpu.a != uint8_t(beforeReleasedA + 1) || !loadSlot(9) ||
+        captureState() != lockedState || !emulator_->gb.cpu.halted ||
+        emulator_->gb.interrupt_enable)
+        return smokeFailure(__FILE__, __LINE__);
+    debuggerWindow_->submitCommand("reset reload");
+    if (!emulator_ || emulator_->gb.cpu.halted || emulator_->gb.cpu.pc != 0x100 ||
+        emulator_->gb.elapsed_cycles || failed_ != beforeIllegalFailure)
+        return smokeFailure(__FILE__, __LINE__);
+    for (const auto model : {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_CGB}) {
+        MainWindow session(true, true, false, QStringLiteral(""), int(model));
+        session.timer_.stop();
+        if (!session.openRom(illegalPath) || session.debugger_)
+            return smokeFailure(__FILE__, __LINE__);
+        for (unsigned frame = 0; frame < 3; ++frame) {
+            const uint64_t beforeCycles = session.emulator_->gb.elapsed_cycles;
+            const uint64_t beforeAudio = session.generatedAudioFrames_;
+            if (!session.runFrame() || session.failed_ || session.paused_ || session.debugger_ ||
+                !session.emulator_->gb.cpu.halted || session.emulator_->gb.cpu.pc != 0x151 ||
+                session.emulator_->gb.interrupt_enable || !session.emulator_->gb.frame_ready ||
+                session.emulator_->gb.elapsed_cycles <= beforeCycles ||
+                session.generatedAudioFrames_ <= beforeAudio)
+                return smokeFailure(__FILE__, __LINE__);
+        }
+        const QByteArray savedLock = session.captureState();
+        if (!session.saveSlot(8) || !session.runFrame() || !session.loadSlot(8) ||
+            session.captureState() != savedLock || !session.runFrame() || session.failed_ ||
+            session.paused_ || !session.emulator_->gb.cpu.halted || !session.restart() ||
+            session.emulator_->gb.cpu.halted || session.emulator_->gb.cpu.pc != 0x100 ||
+            !session.runFrame() || session.failed_ || session.paused_ ||
+            !session.emulator_->gb.cpu.halted || !session.closeRom())
+            return smokeFailure(__FILE__, __LINE__);
+    }
     // Both MMM01 dump layouts share logical labels and qualified expressions.
     QByteArray menuFirst(0x20000, char(0));
     for (int bank = 0; bank < 8; ++bank)

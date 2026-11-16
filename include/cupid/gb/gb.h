@@ -464,7 +464,8 @@ typedef struct CupidGb {
 typedef enum CupidGbStepEvent {
     CUPID_GB_STEP_IDLE = 0,
     CUPID_GB_STEP_INSTRUCTION,
-    CUPID_GB_STEP_INTERRUPT
+    CUPID_GB_STEP_INTERRUPT,
+    CUPID_GB_STEP_ILLEGAL_OPCODE
 } CupidGbStepEvent;
 
 typedef struct CupidGbStepTrace {
@@ -512,6 +513,11 @@ bool cupid_gb_parse_header(const uint8_t *rom_data, size_t rom_size,
                            CupidGbCartridgeHeader *header);
 bool cupid_gb_load_rom_file(CupidGb *gb, const char *path);
 bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size);
+/* True means the hardware step completed, including an illegal opcode's fetch
+ * and halt. It does not imply instruction progress or successful gameplay.
+ * False reports an invalid instance, absent cartridge, or decoder failure.
+ * Observed stepping reports an illegal primary opcode once, at its actual fetch
+ * address. Later halted steps report IDLE and continue peripheral clocks. */
 bool cupid_gb_step(CupidGb *gb);
 bool cupid_gb_step_observed(CupidGb *gb, CupidGbStepTrace *trace);
 uint8_t cupid_gb_read_u8(const CupidGb *gb, uint16_t address);

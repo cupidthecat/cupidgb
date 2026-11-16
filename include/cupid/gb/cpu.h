@@ -18,12 +18,17 @@ enum {
     CUPID_GB_INTERRUPT_SERIAL = 0x08,
     CUPID_GB_INTERRUPT_JOYPAD = 0x10,
     CUPID_GB_INTERRUPT_CYCLES = 5,
-    CUPID_GB_HALT_CYCLES = 1
+    CUPID_GB_HALT_CYCLES = 1,
+    CUPID_GB_CPU_DECODE_ERROR = UINT8_MAX
 };
 
 void cupid_gb_request_interrupt(CupidGb *gb, uint8_t mask);
 bool cupid_gb_service_interrupt(CupidGb *gb);
 void cupid_gb_trigger_oam_bug_write_access(CupidGb *gb, uint16_t address);
+/* Classify the primary byte only; every CB-prefixed sub-opcode is defined. */
+bool cupid_gb_opcode_is_illegal(uint8_t opcode);
+/* Returns remaining machine cycles, zero for timing completed inline, or
+ * CUPID_GB_CPU_DECODE_ERROR. Check the failure sentinel before advancing clocks. */
 uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode, CupidGbCpuBus *bus);
 uint8_t cupid_gb_fetch_u8(CupidGb *gb);
 
