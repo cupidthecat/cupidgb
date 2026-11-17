@@ -32,6 +32,7 @@
 #include "cupid/gb/printer.h"
 #include "cupid/gb/startup.h"
 #include "cupid/gb/state.h"
+#include "test_state_layout.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -382,9 +383,7 @@ static uint8_t *encode_legacy_sgb_profile(const CupidGb *gb, size_t *length) {
     assert(memcmp(bytes + descriptor, empty, sizeof(empty)) == 0);
     /* Remove later clock and reconstruction history before the descriptor. The archived V12
      * receiver history and empty accessory descriptor remain byte-for-byte. */
-    size_t startup_bytes = 0;
-    assert(cupid_gb_sgb_startup_state_size(gb, &startup_bytes));
-    const size_t removed = startup_bytes + SRAM_LENGTH_BYTES + IO_HISTORY_BYTES +
+    const size_t removed = test_state_post_ram_size(gb) + SRAM_LENGTH_BYTES + IO_HISTORY_BYTES +
                            RTC_HISTORY_BYTES + CUPID_GB_AUDIO_STATE_SIZE +
                            CUPID_GB_DISPLAY_CLOCK_STATE_SIZE + CUPID_GB_PIXEL_TIMING_STATE_SIZE +
                            CUPID_GB_VRAM_BUS_STATE_SIZE;
@@ -745,10 +744,9 @@ static void test_policy_and_state_lifetime(void) {
         };
 
         assert(bytes[8] == CUPID_GB_STATE_VERSION && length > NATIVE_HEADER_BYTES);
-        size_t startup_bytes = 0;
-        assert(cupid_gb_sgb_startup_state_size(a, &startup_bytes));
-        const size_t stop_offset = length - startup_bytes - SRAM_LENGTH_BYTES - IO_HISTORY_BYTES -
-                                   ACCESSORY_DESCRIPTOR_BYTES - CUPID_GB_DISPLAY_CLOCK_STATE_SIZE -
+        const size_t stop_offset = length - test_state_post_ram_size(a) - SRAM_LENGTH_BYTES -
+                                   IO_HISTORY_BYTES - ACCESSORY_DESCRIPTOR_BYTES -
+                                   CUPID_GB_DISPLAY_CLOCK_STATE_SIZE -
                                    CUPID_GB_PIXEL_TIMING_STATE_SIZE - CUPID_GB_VRAM_BUS_STATE_SIZE -
                                    CUPID_GB_AUDIO_STATE_SIZE - RTC_HISTORY_BYTES -
                                    INFRARED_HISTORY_BYTES - PULSE_DAC_BYTES - STOP_PORT_BYTES;
@@ -816,14 +814,12 @@ static void test_printer_state_policy(void) {
                     cupid_gb_clear_power_on_seed(b);
                 const CupidGbPowerOn policy = b->power_on;
                 const size_t empty_size = cupid_gb_state_size(a);
-                size_t startup_bytes = 0;
-                assert(cupid_gb_sgb_startup_state_size(a, &startup_bytes));
                 const size_t stop_offset =
-                    empty_size - startup_bytes - SRAM_LENGTH_BYTES - IO_HISTORY_BYTES -
-                    ACCESSORY_DESCRIPTOR_BYTES - CUPID_GB_DISPLAY_CLOCK_STATE_SIZE -
-                    CUPID_GB_PIXEL_TIMING_STATE_SIZE - CUPID_GB_VRAM_BUS_STATE_SIZE -
-                    CUPID_GB_AUDIO_STATE_SIZE - RTC_HISTORY_BYTES - INFRARED_HISTORY_BYTES -
-                    PULSE_DAC_BYTES - STOP_PORT_BYTES;
+                    empty_size - test_state_post_ram_size(a) - SRAM_LENGTH_BYTES -
+                    IO_HISTORY_BYTES - ACCESSORY_DESCRIPTOR_BYTES -
+                    CUPID_GB_DISPLAY_CLOCK_STATE_SIZE - CUPID_GB_PIXEL_TIMING_STATE_SIZE -
+                    CUPID_GB_VRAM_BUS_STATE_SIZE - CUPID_GB_AUDIO_STATE_SIZE - RTC_HISTORY_BYTES -
+                    INFRARED_HISTORY_BYTES - PULSE_DAC_BYTES - STOP_PORT_BYTES;
                 unsigned callbacks = 0;
                 register_observers(b, &callbacks);
                 CupidGbPrinter *source =

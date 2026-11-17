@@ -6,9 +6,9 @@ for Qt playback and pacing. This record identifies the verified behavior and
 the checks that remain open. Implementation details are in [SGB startup](sgb-startup.md).
 
 The checkpoint has passed its complete Windows, Linux and sanitizer gates,
-paired startup timing checks, four Windows commercial sessions and a separate
-synthetic startup pacing run. Cross-platform state exchange and normal native
-Linux audio qualification remain open. The results below do not establish
+paired startup timing checks, cross-platform state exchange, four Windows
+commercial sessions and a separate synthetic startup pacing run. Normal native
+Linux audio qualification remains open. The results below do not establish
 complete hardware, frontend or all-game parity.
 
 ## Source and build identity
@@ -26,7 +26,7 @@ part of the build-input digest.
 | Windows Qt executable | `3f545f09a65f208eaa7525453f97788d48707e4e064dd1ca231831f6fa05b2f1` |
 | Linux Qt executable | `d7393f4296367914a195b8b8ec8001e75e10347decc81fda0e9c619c2ba70e70` |
 
-Private inputs and runtime evidence stay outside the repository. These digests
+Private inputs and runtime evidence stay out of public commits. These digests
 identify the retained records without publishing games, firmware, saves or
 screenshots. The earlier [storage, wave audio and camera checkpoint](validation-storage-wave.md)
 retains its own source identity, results and limitations.
@@ -89,27 +89,52 @@ compatibility, artwork identity or acoustic fidelity.
 
 ## Portable state exchange
 
-The version 21 exchange attempt completed 16 captures and 32 resume processes
-across Windows and Linux. It compared both models, both header classes and two
+The completed version 21 exchange made 16 captures and ran 32 resume processes
+across Windows and Linux. It covered both models, both header classes and two
 partial-output positions through all four exact/live and ordinary/trusted load
-APIs. Independent no-load continuations provide its controls.
+APIs. Eighty independent no-load controls were compared with 128 restored
+continuations, including the phase 199-to-200 startup completion boundary.
 
-The attempt failed 32 of 1,024 byte comparisons. All 32 differences are in final
-state files for the API route using one-frame drains, including same-host
-routes. The other 992 file comparisons matched. Byte inspection localized every
-payload difference to consumed ordinary PCM slots; the queue counts were zero.
-The format preserves that complete array, and the fixture's control used a
-different drain capacity. Replaying the array compaction on captured bytes
-accounts for every difference. Immediate states, guest/timing traces, emitted
-PCM, origin streams and summaries matched for all 32 pairs.
+All 1,480 whole-file comparisons matched:
 
-A corrected exchange is being prepared with independent no-load controls for
-each drain history. It will retain full byte comparisons and separate
-cross-capacity output checks. The original failed verdict remains unchanged;
-neither this diagnosis nor local codec tests constitute a completed exchange.
+| Comparison | Matching files |
+| --- | ---: |
+| Captured states and controls between Windows and Linux | 296 |
+| Restored continuations against controls with the same drain history | 896 |
+| Continuation outputs across drain capacities | 288 |
 
-Inputs remained unchanged and process cleanup completed. The failed receipt is
-`303daa0bceaced9f1e0734de2f4313240197bfb60c9e6a4c9e489c3b13226935`.
+Each exact or live load uses a control with the same drain capacity. Those
+comparisons include the complete final state file. Separate comparisons across
+capacities retain immediate states, guest and timing traces, emitted PCM,
+origin streams and summaries; they exclude the final state array because its
+consumed slots retain the different drain history. Live controls use fresh
+receivers, so they also check receiver-owned audio state.
+
+All 52 owned commands completed successfully, with final input guards and
+complete waits. The receipt records 106 guard checks, unchanged inputs, zero
+mismatches, no cancellation and no unresolved cleanup. Its SHA-256 is
+`bab44e652801171e45056eae1e81eff450dddfb1edf838413cd521f3cc43eba8`.
+This result covers the frozen version 21 build and synthetic inputs. The
+version 22 header extension needs its own validation.
+
+The earlier failed attempts remain part of the evidence. The first compared
+one-frame drains with a control using a different capacity and failed 32 of
+1,024 comparisons. Every difference was in consumed ordinary PCM slots of the
+final state; queue counts were zero and the other 992 comparisons matched.
+Replaying array compaction on captured bytes accounts for those differences.
+The format preserves the full array, so the correction supplied independent
+controls for each drain history without changing the core or state format.
+
+Two later attempts stopped during Windows process cleanup: one after 185
+matching comparisons and the other before any comparison. Neither partial run
+counts as a completed exchange. Their receipts and the original failed result
+remain unchanged:
+
+| Retained attempt | SHA-256 |
+| --- | --- |
+| Different drain histories | `303daa0bceaced9f1e0734de2f4313240197bfb60c9e6a4c9e489c3b13226935` |
+| Partial 185-comparison run | `4bdcb325d15cdbb543c858129a92bb5f9d8529a3b27e83c49375827d9b61e5f3` |
+| Setup stopped before comparisons | `ac7ee7c31f6ab53cc8c22d405bd8a12aff6952fbf38b667fd9ff8006e69e1a84` |
 
 ## Native Qt and audio
 
@@ -196,9 +221,10 @@ palette, reset and partial-packet scenarios on both physical models and header
 classes. Its controls passed, but 258 compared public fields differed: 60
 baseline colors, 58 button results, 82 palette results and 58 controller IDs.
 All 80 same-engine restored continuations matched their independent controls.
-These differences confirm incomplete boot-header validation, command disabling
-and physical receive eligibility. They are a failed parity result that guides
-the next implementation, not a qualification of current header handling.
+These differences confirmed incomplete boot-header validation, command disabling
+and physical receive eligibility in this version 21 checkpoint. The failed result
+remains preserved. The later [header checkpoint](validation-sgb-protocol.md)
+records the implementation and its separate positive comparison.
 
 The baseline completed in 17.0931 seconds with unchanged protected inputs and
 all children waited. Its receipt is
@@ -206,10 +232,15 @@ all children waited. Its receipt is
 The earlier incomplete observer attempt is retained separately; it omitted a
 required PCM callback and produced no complete comparison.
 
-Linux sustained gameplay remains unqualified after the earlier 300-second
-clock-readiness check found host-clock disagreement. A build, short native
-workflow or core timing comparison cannot establish sustained Linux speed.
-No new sustained-readiness result is claimed here.
+The earlier 300-second Linux clock-readiness attempt found host-clock
+disagreement and launched no games. After a later host boot, a fresh clock-only
+attempt passed four consecutive ten-second samples using the same 0.1%
+tolerance. Its full bracketed ratios ranged from 0.999161575 to 1.000026812;
+boot identity, environment and protected inputs remained unchanged throughout.
+The Linux receipt is
+`3124567123ea2526faae0dedcdc21b1a87298f9fcfaebcb72d3235eded438dd3`.
+This establishes readiness for that interval. It contains no gameplay or
+audio-output qualification, and sustained Linux playback remains unqualified.
 
 PAL and other host-integration variants, title-specific adapter palettes,
 physical device behavior and acoustic fidelity remain open. MBC6 has a generic

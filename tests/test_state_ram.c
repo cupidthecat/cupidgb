@@ -36,6 +36,7 @@
 enum {
     HEADER_BYTES = 128,
     DESCRIPTOR_BYTES = 8,
+    PROTOCOL_BYTES = 85,
     SELECTOR_BYTES = 1,
     WAVE_HISTORY_BYTES = 1,
     RAM_LENGTH_BYTES = 4
@@ -202,8 +203,8 @@ static size_t ram_extension(const CupidGb *gb) {
 
 static Blob legacy_blob(const CupidGb *gb, Blob current, unsigned version) {
     assert(version == 17 || version == 18);
-    const size_t removed =
-        ram_extension(gb) + WAVE_HISTORY_BYTES + (version < 18 ? SELECTOR_BYTES : 0);
+    const size_t removed = PROTOCOL_BYTES + ram_extension(gb) + WAVE_HISTORY_BYTES +
+                           (version < 18 ? SELECTOR_BYTES : 0);
     const size_t prefix = current.size - DESCRIPTOR_BYTES - removed;
     Blob old = {malloc(current.size - removed), current.size - removed};
     assert(old.data && !cupid_gb_printer_attached(gb));
@@ -217,14 +218,16 @@ static Blob legacy_blob(const CupidGb *gb, Blob current, unsigned version) {
 /* A public V18 header describes the serial selector without an SRAM extension.
  * The older unpublished SRAM experiment omitted that selector and fetch history. */
 static Blob invalid_v18_ram_extension(const CupidGb *gb, Blob current) {
-    const size_t selector =
-        current.size - DESCRIPTOR_BYTES - ram_extension(gb) - WAVE_HISTORY_BYTES - SELECTOR_BYTES;
-    const size_t removed = SELECTOR_BYTES + WAVE_HISTORY_BYTES;
+    const size_t selector = current.size - DESCRIPTOR_BYTES - PROTOCOL_BYTES - ram_extension(gb) -
+                            WAVE_HISTORY_BYTES - SELECTOR_BYTES;
+    const size_t removed = SELECTOR_BYTES + WAVE_HISTORY_BYTES + PROTOCOL_BYTES;
     Blob invalid = {malloc(current.size - removed), current.size - removed};
     assert(invalid.data && !cupid_gb_printer_attached(gb));
     memcpy(invalid.data, current.data, selector);
-    memcpy(invalid.data + selector, current.data + selector + removed,
-           current.size - selector - removed);
+    memcpy(invalid.data + selector, current.data + selector + SELECTOR_BYTES + WAVE_HISTORY_BYTES,
+           ram_extension(gb));
+    memcpy(invalid.data + selector + ram_extension(gb),
+           current.data + current.size - DESCRIPTOR_BYTES, DESCRIPTOR_BYTES);
     write_u32(invalid.data + 8, 18);
     seal(invalid);
     return invalid;
@@ -289,8 +292,8 @@ static void roundtrip(CupidGbModel model, unsigned code) {
             Blob expected = {malloc(snapshot.size), snapshot.size};
             assert(expected.data);
             memcpy(expected.data, snapshot.data, snapshot.size);
-            const size_t selector = snapshot.size - DESCRIPTOR_BYTES - ram_extension(source) -
-                                    WAVE_HISTORY_BYTES - SELECTOR_BYTES;
+            const size_t selector = snapshot.size - DESCRIPTOR_BYTES - PROTOCOL_BYTES -
+                                    ram_extension(source) - WAVE_HISTORY_BYTES - SELECTOR_BYTES;
             const bool expected_selector = version == 18 ? saved_selector : projected_selector;
             expected.data[selector] = expected_selector;
             expected.data[selector + SELECTOR_BYTES] = projected_wave_byte;
@@ -367,7 +370,7 @@ static void transactions(void) {
     Blob bad = {malloc(valid.size + 1), valid.size};
     assert(bad.data);
     const size_t descriptor = valid.size - PRINTER_STATE_WIRE_SIZE - DESCRIPTOR_BYTES;
-    const size_t length_offset = descriptor - ram_extension(source);
+    const size_t length_offset = descriptor - PROTOCOL_BYTES - ram_extension(source);
     const uint32_t bad_lengths[] = {0, CUPID_GB_INLINE_RAM_SIZE, CUPID_GB_MAX_RAM_SIZE - 1,
                                     CUPID_GB_MAX_RAM_SIZE + 1, UINT32_MAX};
     for (unsigned i = 0; i < sizeof(bad_lengths) / sizeof(bad_lengths[0]); ++i) {
@@ -420,7 +423,13 @@ static void transactions(void) {
     destroy(target);
 }
 
-typedef enum WireLayout { WIRE_CURRENT, WIRE_V20, WIRE_V19_WAVE, WIRE_V19_SRAM } WireLayout;
+typedef enum WireLayout {
+    WIRE_CURRENT,
+    WIRE_V21,
+    WIRE_V20,
+    WIRE_V19_WAVE,
+    WIRE_V19_SRAM
+} WireLayout;
 
 /* Frozen TPP1 placement through the public v18 serial selector, including its
  * 128-byte header. Keep this independent of the current size calculation. */
@@ -435,21 +444,25 @@ static Blob format_blob(const CupidGb *gb, Blob current, WireLayout layout) {
     const size_t history = TPP1_V18_HARDWARE_BYTES;
     const size_t descriptor = descriptor_offset(gb, current);
     assert(current.data[8] == CUPID_GB_STATE_VERSION);
-    assert(descriptor == history + WAVE_HISTORY_BYTES + ram_extension(gb));
+    assert(descriptor == history + WAVE_HISTORY_BYTES + ram_extension(gb) + PROTOCOL_BYTES);
     assert(current.data[history] == gb->apu.ch3_sample_byte);
-    if (layout == WIRE_CURRENT || layout == WIRE_V20) {
-        Blob copy = {malloc(current.size), current.size};
+    if (layout <= WIRE_V20) {
+        const size_t removed = layout == WIRE_CURRENT ? 0 : PROTOCOL_BYTES;
+        Blob copy = {malloc(current.size - removed), current.size - removed};
         assert(copy.data);
-        memcpy(copy.data, current.data, current.size);
-        if (layout == WIRE_V20) {
-            write_u32(copy.data + 8, 20);
+        memcpy(copy.data, current.data, descriptor - removed);
+        memcpy(copy.data + descriptor - removed, current.data + descriptor,
+               current.size - descriptor);
+        if (layout != WIRE_CURRENT) {
+            write_u32(copy.data + 8, layout == WIRE_V21 ? 21 : 20);
             seal(copy);
         }
         return copy;
     }
     if (layout == WIRE_V19_WAVE) {
         assert(gb->cartridge_ram_size <= CUPID_GB_INLINE_RAM_SIZE);
-        Blob old = {malloc(current.size - ram_extension(gb)), current.size - ram_extension(gb)};
+        const size_t removed = ram_extension(gb) + PROTOCOL_BYTES;
+        Blob old = {malloc(current.size - removed), current.size - removed};
         assert(old.data);
         memcpy(old.data, current.data, history + WAVE_HISTORY_BYTES);
         memcpy(old.data + history + WAVE_HISTORY_BYTES, current.data + descriptor,
@@ -459,11 +472,13 @@ static Blob format_blob(const CupidGb *gb, Blob current, WireLayout layout) {
         return old;
     }
     assert(layout == WIRE_V19_SRAM);
-    Blob old = {malloc(current.size - WAVE_HISTORY_BYTES), current.size - WAVE_HISTORY_BYTES};
+    const size_t removed = WAVE_HISTORY_BYTES + PROTOCOL_BYTES;
+    Blob old = {malloc(current.size - removed), current.size - removed};
     assert(old.data);
     memcpy(old.data, current.data, history);
-    memcpy(old.data + history, current.data + history + WAVE_HISTORY_BYTES,
-           current.size - history - WAVE_HISTORY_BYTES);
+    memcpy(old.data + history, current.data + history + WAVE_HISTORY_BYTES, ram_extension(gb));
+    memcpy(old.data + history + ram_extension(gb), current.data + descriptor,
+           current.size - descriptor);
     write_u32(old.data + 8, 19);
     seal(old);
     return old;
@@ -490,7 +505,8 @@ static void draft_roundtrip(CupidGbModel model, unsigned code, unsigned attachme
         attach_printer(target, 3);
     Blob current = save(source);
     const size_t extra = code > 5 ? source->cartridge_ram_size - CUPID_GB_INLINE_RAM_SIZE : 0;
-    assert(current.size == 305116u + extra + ((attachments & 1u) ? PRINTER_STATE_WIRE_SIZE : 0));
+    assert(current.size ==
+           305116u + PROTOCOL_BYTES + extra + ((attachments & 1u) ? PRINTER_STATE_WIRE_SIZE : 0));
     CupidGbStateContext context;
     assert(cupid_gb_state_context_init(&context, target) == CUPID_GB_STATE_OK);
     for (unsigned layout = WIRE_CURRENT; layout <= WIRE_V19_SRAM; ++layout) {
@@ -543,7 +559,8 @@ static void draft_roundtrip(CupidGbModel model, unsigned code, unsigned attachme
                 Blob upgraded = save(target);
                 assert(upgraded.data[TPP1_V18_HARDWARE_BYTES] == expected_byte);
                 assert(descriptor_offset(target, upgraded) ==
-                       TPP1_V18_HARDWARE_BYTES + WAVE_HISTORY_BYTES + ram_extension(target));
+                       TPP1_V18_HARDWARE_BYTES + WAVE_HISTORY_BYTES + ram_extension(target) +
+                           PROTOCOL_BYTES);
                 free(upgraded.data);
             }
         }

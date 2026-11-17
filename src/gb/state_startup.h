@@ -43,8 +43,8 @@ bool cupid_gb_sgb_startup_state_valid(const CupidGb *gb);
 bool cupid_gb_sgb_startup_state_size(const CupidGb *gb, size_t *length);
 
 /* Preflight reads only the receiving physical model, not its phase, rate, queued
- * output, or guest clocks. Available may include the following accessory. The
- * caller must validate that descriptor at the exact returned extension length. */
+ * output, or guest clocks. Available may include later extensions and the accessory.
+ * The caller validates those fields after the exact returned startup length. */
 bool cupid_gb_sgb_startup_state_measure(const CupidGb *gb, const uint8_t *data, size_t available,
                                         size_t *length);
 

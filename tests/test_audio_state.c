@@ -350,7 +350,7 @@ static void test_live_rate_changes(void) {
 }
 
 static Blob legacy_v13(const CupidGb *gb, const Blob *current) {
-    const size_t removed = test_state_startup_size(gb) + SRAM_LENGTH_BYTES + IO_HISTORY_BYTES +
+    const size_t removed = test_state_post_ram_size(gb) + SRAM_LENGTH_BYTES + IO_HISTORY_BYTES +
                            CUPID_GB_AUDIO_STATE_SIZE + CUPID_GB_DISPLAY_CLOCK_STATE_SIZE +
                            CUPID_GB_PIXEL_TIMING_STATE_SIZE + CUPID_GB_VRAM_BUS_STATE_SIZE;
     Blob old = {malloc(current->length), current->length - removed};
@@ -392,6 +392,7 @@ static void test_v13_import(void) {
             cupid_gb_pixels_import_legacy(source);
             cupid_gb_display_clock_import_legacy(source);
             cupid_gb_vram_bus_import_legacy(source);
+            test_state_legacy_protocol(source);
             cupid_gb_input_import_legacy(source);
             source->serial_fast_clock = source->cgb_mode && (source->io_registers[2] & 2u);
             source->apu.ch3_sample_byte = (uint8_t)(source->apu.ch3_sample * 0x11u);
@@ -465,9 +466,10 @@ static void test_malformed_history(void) {
     cupid_gb_tick(target, 133);
     Blob valid = encode(source), bad = {malloc(valid.length), valid.length};
     assert(bad.bytes);
-    const size_t audio = valid.length - SRAM_LENGTH_BYTES - IO_HISTORY_BYTES - ACCESSORY_BYTES -
-                         CUPID_GB_DISPLAY_CLOCK_STATE_SIZE - CUPID_GB_PIXEL_TIMING_STATE_SIZE -
-                         CUPID_GB_VRAM_BUS_STATE_SIZE - CUPID_GB_AUDIO_STATE_SIZE;
+    const size_t audio = valid.length - TEST_STATE_SGB_PROTOCOL_BYTES - SRAM_LENGTH_BYTES -
+                         IO_HISTORY_BYTES - ACCESSORY_BYTES - CUPID_GB_DISPLAY_CLOCK_STATE_SIZE -
+                         CUPID_GB_PIXEL_TIMING_STATE_SIZE - CUPID_GB_VRAM_BUS_STATE_SIZE -
+                         CUPID_GB_AUDIO_STATE_SIZE;
 
     const struct Mutation {
         size_t offset;

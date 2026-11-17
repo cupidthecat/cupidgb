@@ -28,7 +28,8 @@
 enum {
     HEADER_BYTES = 128,
     ACCESSORY_BYTES = 8,
-    CURRENT_BYTES = 305095,
+    PROTOCOL_BYTES = 85,
+    CURRENT_BYTES = 305095 + PROTOCOL_BYTES,
     SRAM_LENGTH_BYTES = 4,
     MBC7_EXTENSION_BYTES = 8,
     MBC7_CARTRIDGE_TYPE = 0x22
@@ -50,7 +51,7 @@ static Blob capture(const CupidGb *gb) {
     const size_t extension = gb->header.mbc_type == CUPID_GB_MBC7 ? MBC7_EXTENSION_BYTES : 0;
     assert(written == blob.size && blob.size == CURRENT_BYTES + extension);
     assert(blob.bytes[8] == CUPID_GB_STATE_VERSION &&
-           blob.bytes[blob.size - ACCESSORY_BYTES - SRAM_LENGTH_BYTES - 1] ==
+           blob.bytes[blob.size - ACCESSORY_BYTES - PROTOCOL_BYTES - SRAM_LENGTH_BYTES - 1] ==
                gb->apu.ch3_sample_byte);
     return blob;
 }
@@ -70,8 +71,8 @@ static void resign(Blob *blob) {
  * inline SRAM and no accessory payload, so only the one- or four-byte tail differs. */
 static Blob draft_blob(const Blob *current, bool wave_history) {
     assert(current->bytes[8] == CUPID_GB_STATE_VERSION);
-    const size_t wave = current->size - ACCESSORY_BYTES - SRAM_LENGTH_BYTES - 1;
-    const size_t removed = wave_history ? SRAM_LENGTH_BYTES : 1;
+    const size_t wave = current->size - ACCESSORY_BYTES - PROTOCOL_BYTES - SRAM_LENGTH_BYTES - 1;
+    const size_t removed = PROTOCOL_BYTES + (wave_history ? SRAM_LENGTH_BYTES : 1);
     Blob draft = {malloc(current->size - removed), current->size - removed};
     assert(draft.bytes);
     if (wave_history) {
@@ -80,7 +81,9 @@ static Blob draft_blob(const Blob *current, bool wave_history) {
                ACCESSORY_BYTES);
     } else {
         memcpy(draft.bytes, current->bytes, wave);
-        memcpy(draft.bytes + wave, current->bytes + wave + 1, SRAM_LENGTH_BYTES + ACCESSORY_BYTES);
+        memcpy(draft.bytes + wave, current->bytes + wave + 1, SRAM_LENGTH_BYTES);
+        memcpy(draft.bytes + wave + SRAM_LENGTH_BYTES,
+               current->bytes + current->size - ACCESSORY_BYTES, ACCESSORY_BYTES);
     }
     put_u32(draft.bytes + 8, 19);
     resign(&draft);
@@ -178,7 +181,7 @@ static void test_draft_continuation(void) {
 }
 
 static void test_native_continuation(unsigned version) {
-    assert(version == 20 || version == CUPID_GB_STATE_VERSION);
+    assert(version >= 20 && version <= CUPID_GB_STATE_VERSION);
     for (unsigned color = 0; color < 2; ++color)
         for (unsigned fast = 0; fast < 2; ++fast)
             for (unsigned after = 0; after < 2; ++after)
@@ -191,6 +194,11 @@ static void test_native_continuation(unsigned version) {
                     assert(source->apu.ch3_sample_byte == 0x69);
                     assert(source->apu.ch3_sample == (after ? 6 : 9));
                     Blob saved = capture(source);
+                    if (version < 22) {
+                        memmove(saved.bytes + saved.size - ACCESSORY_BYTES - PROTOCOL_BYTES,
+                                saved.bytes + saved.size - ACCESSORY_BYTES, ACCESSORY_BYTES);
+                        saved.size -= PROTOCOL_BYTES;
+                    }
                     put_u32(saved.bytes + 8, version);
                     resign(&saved);
                     for (unsigned api = 0; api < 4; ++api)
@@ -396,7 +404,7 @@ static void test_transactional_rejection(void) {
     CupidGb *target = different_receiver(true, false, 1);
     cupid_gb_tick_apu_divider(target, 4);
     Blob good = capture(source);
-    const size_t latch = good.size - ACCESSORY_BYTES - SRAM_LENGTH_BYTES - 1;
+    const size_t latch = good.size - ACCESSORY_BYTES - PROTOCOL_BYTES - SRAM_LENGTH_BYTES - 1;
     Blob bad = copy_blob(&good, 0);
     bad.bytes[latch] ^= 0xff;
     reject_unchanged(target, &bad, CUPID_GB_STATE_INVALID);
@@ -456,6 +464,7 @@ static void test_transactional_rejection(void) {
 
 int main(void) {
     test_native_continuation(20);
+    test_native_continuation(21);
     test_native_continuation(CUPID_GB_STATE_VERSION);
     test_draft_continuation();
     test_pending_fetch_before_live_output();

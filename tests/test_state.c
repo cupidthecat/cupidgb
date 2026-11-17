@@ -113,7 +113,7 @@ static size_t v11_hardware_size(const CupidGb *gb, size_t length) {
     enum { ACCESSORY_DESCRIPTOR_BYTES = 8, INFRARED_HISTORY_BYTES = 6, RTC_HISTORY_BYTES = 6 };
 
     /* These fixtures have no attached device. HuC3 keeps its existing IR section. */
-    const size_t tail = test_state_startup_size(gb) + SRAM_LENGTH_BYTES + IO_HISTORY_BYTES +
+    const size_t tail = test_state_post_ram_size(gb) + SRAM_LENGTH_BYTES + IO_HISTORY_BYTES +
                         ACCESSORY_DESCRIPTOR_BYTES + RTC_HISTORY_BYTES + CUPID_GB_AUDIO_STATE_SIZE +
                         CUPID_GB_DISPLAY_CLOCK_STATE_SIZE + CUPID_GB_PIXEL_TIMING_STATE_SIZE +
                         CUPID_GB_VRAM_BUS_STATE_SIZE +
@@ -633,6 +633,7 @@ static void test_v2_import(void) {
             cupid_gb_pixels_import_legacy(expected);
             cupid_gb_display_clock_import_legacy(expected);
             cupid_gb_vram_bus_import_legacy(expected);
+            test_state_legacy_protocol(expected);
             cupid_gb_input_import_legacy(expected);
             cupid_gb_sgb_startup_state_import_legacy(expected);
             if (expected->model == CUPID_GB_MODEL_SGB) {
@@ -1392,6 +1393,7 @@ static void test_v5_sgb_mapper_sections(void) {
         cupid_gb_pixels_import_legacy(source);
         cupid_gb_display_clock_import_legacy(source);
         cupid_gb_vram_bus_import_legacy(source);
+        test_state_legacy_protocol(source);
         cupid_gb_input_import_legacy(source);
         if (types[mapper] == 0xbc) {
             /* Old controller readback determined mapping despite a stale generic
@@ -1435,7 +1437,7 @@ static void test_sgb_sample_phase_and_legacy_filter(void) {
     source->apu.output.buf[0] = 1234;
     source->apu.output.buf[1] = -2345;
     state = encode(source, &length);
-    const size_t removed = test_state_startup_size(source) + SRAM_LENGTH_BYTES + IO_HISTORY_BYTES +
+    const size_t removed = test_state_post_ram_size(source) + SRAM_LENGTH_BYTES + IO_HISTORY_BYTES +
                            CUPID_GB_AUDIO_STATE_SIZE + CUPID_GB_DISPLAY_CLOCK_STATE_SIZE +
                            CUPID_GB_PIXEL_TIMING_STATE_SIZE + CUPID_GB_VRAM_BUS_STATE_SIZE;
     const size_t audio_offset = length - 8 - removed;
@@ -1463,6 +1465,7 @@ static void test_sgb_sample_phase_and_legacy_filter(void) {
     cupid_gb_pixels_import_legacy(source);
     cupid_gb_display_clock_import_legacy(source);
     cupid_gb_vram_bus_import_legacy(source);
+    test_state_legacy_protocol(source);
     cupid_gb_input_import_legacy(source);
     assert(target->apu.output.sample_rate == 0);
     assert(target->apu.output.filter.retention == source->apu.output.filter.retention);

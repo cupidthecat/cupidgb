@@ -386,7 +386,7 @@ bool MainWindow::debuggerBackstep() {
     cancelCameraCapture();
     resetControllerRumble();
     controllerPlayerCount_ =
-        cupid_gb_sgb_active(&emulator_->gb) ? emulator_->gb.sgb.player_count : 1;
+        cupid_gb_sgb_host_present(&emulator_->gb) ? emulator_->gb.sgb.player_count : 1;
     debuggerHistoryBytes_ -= debuggerHistory_.back().capacity() + qsizetype(sizeof(QByteArray));
     debuggerHistory_.pop_back();
     // Live Backstep retains receiving stream history, just like disk load and

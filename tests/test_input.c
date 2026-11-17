@@ -104,6 +104,7 @@ static void adapter_player_identity(CupidGb *gb) {
 
 static void adapter_player_buttons(CupidGb *gb) {
     gb->sgb.enabled = true;
+    gb->sgb.commands_disabled = false;
     gb->sgb.player_count = 4;
     for (unsigned selected = 0; selected < 4; ++selected) {
         gb->sgb.current_player = (uint8_t)selected;
@@ -137,11 +138,13 @@ static void adapter_player_buttons(CupidGb *gb) {
         assert(cupid_gb_input_read(gb) == 0xff - (player & 3));
     }
     gb->sgb.enabled = false;
+    gb->sgb.commands_disabled = true;
     gb->io_registers[0] = 0x20;
     gb->sgb.current_player = 3;
     assert(cupid_gb_set_buttons_for_player(gb, 3, 0));
     cupid_gb_input_tick(gb, 1u);
-    assert(cupid_gb_input_read(gb) == 0xef);
+    /* A disabled command receiver retains the selected physical controller. */
+    assert(cupid_gb_input_read(gb) == 0xea);
     const uint8_t old = gb->joypad;
     assert(!cupid_gb_set_buttons_for_player(gb, 4, 0));
     assert(gb->joypad == old);
@@ -151,6 +154,10 @@ static void adapter_player_buttons(CupidGb *gb) {
 static void prepare_rows(CupidGb *gb, CupidGbModel model, uint8_t rows, uint8_t buttons) {
     gb->model = model;
     gb->sgb.enabled = false;
+    /* Row timing uses one pad without an active adapter command stream. */
+    gb->sgb.commands_disabled = model == CUPID_GB_MODEL_SGB || model == CUPID_GB_MODEL_SGB2;
+    gb->sgb.player_count = 1;
+    gb->sgb.current_player = 0;
     gb->io_registers[0] = selected_lines(buttons, rows >> 4u);
     gb->joypad = buttons;
     gb->joyp_sample_pending = false;
@@ -317,8 +324,11 @@ int main(void) {
     all_masks_and_selection_edges(gb);
     gb->model = CUPID_GB_MODEL_DMG_ABC;
     all_button_transitions(gb);
-    adapter_player_identity(gb);
-    adapter_player_buttons(gb);
+    for (unsigned model = CUPID_GB_MODEL_SGB; model <= CUPID_GB_MODEL_SGB2; ++model) {
+        gb->model = (CupidGbModel)model;
+        adapter_player_identity(gb);
+        adapter_player_buttons(gb);
+    }
     monochrome_row_release(gb);
     pending_row_writes(gb);
     settling_interrupts(gb);

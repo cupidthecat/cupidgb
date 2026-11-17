@@ -1,6 +1,6 @@
 /**
  * @file    test_state_layout.h
- * @brief   Independent native startup-tail measurements for historical fixtures.
+ * @brief   Independent native extension widths for historical wire fixtures.
  * @author  cupidthecat
  * @date    2026-11-17
  *
@@ -28,6 +28,8 @@
 #include <assert.h>
 #include <stddef.h>
 
+enum { TEST_STATE_SGB_PROTOCOL_BYTES = 85 };
+
 /* These wire widths stay explicit so older fixture lengths do not depend on
  * the current encoder's own size calculation or the in-memory struct layout. */
 static size_t test_state_startup_size(const CupidGb *gb) {
@@ -42,6 +44,21 @@ static size_t test_state_startup_size(const CupidGb *gb) {
         length += 2u * (batch->length - batch->cursor);
     }
     return length;
+}
+
+/* Current bytes after the SRAM extension and before the accessory descriptor.
+ * Keep the v21 startup measurement separate from the fixed v22 protocol tail. */
+static size_t test_state_post_ram_size(const CupidGb *gb) {
+    return test_state_startup_size(gb) + TEST_STATE_SGB_PROTOCOL_BYTES;
+}
+
+/* Expected projection for pre-v22 equality checks. Preserve the original ROM
+ * fixture and its digest; only newly absent receiver history gets a default. */
+static inline void test_state_legacy_protocol(CupidGb *gb) {
+    gb->sgb.commands_disabled =
+        (gb->model == CUPID_GB_MODEL_SGB || gb->model == CUPID_GB_MODEL_SGB2) && !gb->sgb.enabled;
+    for (unsigned index = 0; index < 84; ++index)
+        gb->sgb.received_header[index] = 0;
 }
 
 #endif

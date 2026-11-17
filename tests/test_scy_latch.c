@@ -27,6 +27,7 @@
 #include "cupid/gb/ppu.h"
 #include "cupid/gb/state.h"
 #include "cupid/gb/timer.h"
+#include "test_state_layout.h"
 
 #include <assert.h>
 #include <stdlib.h>
@@ -171,13 +172,15 @@ static void test_snapshot(bool compatibility, bool fast, bool changed) {
      * latch is reconstructed from the saved registers, before commit. */
     assert(source->gb->cartridge_ram_size <= CUPID_GB_INLINE_RAM_SIZE);
     const size_t descriptor_offset = size - ACCESSORY_DESCRIPTOR_BYTES;
-    const size_t latch_offset = descriptor_offset - SRAM_LENGTH_BYTES - WAVE_HISTORY_BYTES -
-                                SERIAL_CLOCK_BYTES - INPUT_SAMPLE_BYTES -
-                                CUPID_GB_VRAM_BUS_STATE_SIZE - 1u;
+    const size_t latch_offset = descriptor_offset - test_state_post_ram_size(source->gb) -
+                                SRAM_LENGTH_BYTES - WAVE_HISTORY_BYTES - SERIAL_CLOCK_BYTES -
+                                INPUT_SAMPLE_BYTES - CUPID_GB_VRAM_BUS_STATE_SIZE - 1u;
     const uint8_t new_latch = bytes[latch_offset];
     assert(new_latch == 7);
-    /* V16 retains sampled input but predates serial selection, fetch history and SRAM length. */
-    const size_t removed = SERIAL_CLOCK_BYTES + WAVE_HISTORY_BYTES + SRAM_LENGTH_BYTES;
+    /* V16 retains sampled input but predates serial selection, fetch history,
+     * SRAM length and both host extensions. */
+    const size_t removed = test_state_post_ram_size(source->gb) + SERIAL_CLOCK_BYTES +
+                           WAVE_HISTORY_BYTES + SRAM_LENGTH_BYTES;
     memmove(bytes + descriptor_offset - removed, bytes + descriptor_offset,
             ACCESSORY_DESCRIPTOR_BYTES);
     const size_t v16_size = size - removed;

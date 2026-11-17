@@ -602,6 +602,7 @@ void cupid_gb_enter_boot_rom(CupidGb *gb) {
     gb->stat_irq_line = false;
     gb->window_line_counter = 0u;
     cupid_gb_display_clock_reset(gb);
+    cupid_gb_sgb_begin_boot(gb);
     cupid_gb_sgb_startup_reset(gb, true);
     CupidGbPrinter *printer = cupid_gb_printer_attached(gb);
     if (printer)

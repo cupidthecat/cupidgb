@@ -92,6 +92,7 @@ static Rig *create_rig(CupidGbModel model, bool firmware, bool printer) {
     memcpy(rom + 0x134, "INPUT SAMPLE", 12);
     rom[0x143] = model == CUPID_GB_MODEL_CGB ? 0x80 : 0;
     rom[0x146] = 3;
+    rom[0x14b] = 0x33;
     for (unsigned index = 0x134; index <= 0x14c; ++index)
         rom[0x14d] = (uint8_t)(rom[0x14d] - rom[index] - 1u);
     cupid_gb_set_model(gb, model);
@@ -174,7 +175,7 @@ static void resign(Blob *blob) {
 }
 
 static size_t pending_offset(const Rig *rig, const Blob *blob) {
-    return blob->size - DESCRIPTOR_BYTES - test_state_startup_size(rig->gb) - SRAM_LENGTH_BYTES -
+    return blob->size - DESCRIPTOR_BYTES - test_state_post_ram_size(rig->gb) - SRAM_LENGTH_BYTES -
            WAVE_HISTORY_BYTES - SERIAL_CLOCK_BYTES - INPUT_SAMPLE_BYTES -
            (rig->printer ? PRINTER_STATE_WIRE_SIZE : 0);
 }
@@ -421,11 +422,12 @@ static void native_continuation(void) {
 
 static Blob legacy_blob(const Rig *source, const Blob *current, unsigned version) {
     assert(version == 14 || version == 15);
-    const size_t startup = test_state_startup_size(source->gb);
-    const size_t removed = startup + SRAM_LENGTH_BYTES + WAVE_HISTORY_BYTES + INPUT_SAMPLE_BYTES +
+    const size_t post_ram = test_state_post_ram_size(source->gb);
+    const size_t removed = post_ram + SRAM_LENGTH_BYTES + WAVE_HISTORY_BYTES + INPUT_SAMPLE_BYTES +
                            SERIAL_CLOCK_BYTES + (version == 14 ? V15_TIMING_BYTES : 0);
     const size_t descriptor = pending_offset(source, current) + INPUT_SAMPLE_BYTES +
-                              SERIAL_CLOCK_BYTES + WAVE_HISTORY_BYTES + SRAM_LENGTH_BYTES + startup;
+                              SERIAL_CLOCK_BYTES + WAVE_HISTORY_BYTES + SRAM_LENGTH_BYTES +
+                              post_ram;
     Blob legacy = {malloc(current->size - removed), current->size - removed};
     assert(legacy.bytes);
     memcpy(legacy.bytes, current->bytes, descriptor - removed);

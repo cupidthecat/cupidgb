@@ -10,7 +10,7 @@ Load a native state file through File > Load State File or drop a `.s0` through 
 
 Writes use an atomic file replacement. Loading checks the complete cartridge identity and hardware model. A state captured with an active boot overlay requires the matching local boot binary. Failed validation preserves the running session and its host audio queue. A successful load replaces the emulated state, reapplies current physical input, clears queued host audio, and realigns pacing.
 
-New files use CupidGB native version 21. Versions 2 through 20, including both supported version 19 development layouts, remain loadable when they contain all SRAM required by the receiving cartridge. Desktop loads retain current audio choices and both receiving output owners: ordinary reconstruction/filter history and startup synthesis/queued batches. The saved hardware startup phase and host-only time still restore. Interoperable BESS state imports remain pending.
+New files use CupidGB native version 22. Versions 2 through 21, including both supported version 19 development layouts, remain loadable when they contain all SRAM required by the receiving cartridge. Desktop loads retain current audio choices and both receiving output owners: ordinary reconstruction/filter history and startup synthesis/queued batches. Saved hardware startup phase, host-only time and command-receiver history still restore. Interoperable BESS state imports remain pending.
 
 Host camera images and pending device requests stay with the receiving session. Saving a pending host capture writes an idle camera to the file while the live request continues. After full validation, a load into host-camera mode cancels obsolete requests and clears imported busy state while retaining the current image. This also applies to a saved generated countdown. Without a provider, generated captures retain their countdown, while a host-origin snapshot starts idle. The existing 64-byte camera section and strict busy/countdown validator are unchanged. See [Camera cartridges](host-camera.md) for reset, rewind and embedding rules.
 
@@ -303,6 +303,23 @@ Before allocating, the loader bounds startup metadata and locates the accessory 
 Live loading decodes the saved startup state before finishing the candidate's pending APU clocks. Those clocks use saved credit and suppression state; they generate no new presentation event or intro batch. Only afterward does the loader replace both output owners with receiving history and rebase the ordinary reconstruction fraction. A host then discards all stale output and resets conversion/pacing. Exact loading does not execute pending clocks. Neither path restarts startup merely because a state is loaded.
 
 The writer keeps the version 20 CH3/SRAM ordering, and the reader retains the two strict version 19 layout decisions. Older fixture lengths and digests remain historical contracts. The [startup guide](sgb-startup.md) covers execution, reset and playback behavior. The [startup validation record](validation-sgb-startup.md) distinguishes portable-format regression checks from actual state exchange between Windows and Linux.
+
+### Adapter header protocol in version 22
+
+Version 22 preserves the earlier hardware, SRAM and startup layout, then appends an 85-byte protocol record before the accessory descriptor. This record is present on every model. Its position follows the complete variable-length startup extension on physical SGB/SGB2 and directly follows the earlier hardware/RAM fields on other models.
+
+| Offset | Bytes | Value |
+| --- | --- | --- |
+| 0 | 1 | Command receiver disabled, canonical boolean `00` or `01` |
+| 1 | 84 | Received boot-header sections in cache order |
+
+Physical SGB/SGB2 retain every cache byte, including incomplete, repeated and out-of-order sections. The codec does not require a valid cartridge header, infer missing sections, or equate the disable latch with cartridge declaration metadata. Both exact and live loading restore this hardware history. Existing prefix fields retain the partial command, bit position, pulse/stop flags, player count and selected controller.
+
+Other models require an all-zero protocol record. Invalid booleans, noncanonical non-adapter data, truncated records and invalid accessory boundaries reject the complete load transaction before changing the live machine. Saving and loading use explicit bytes rather than the host structure's alignment or padding.
+
+Versions 2 through 21 never stored this latch or cache. Their migration clears the cache and disables reception only when physical SGB/SGB2 had a false saved enhancement declaration. This preserves the old format's receiver eligibility. It cannot reconstruct header packets received before a mapped-firmware checkpoint, determine whether an earlier checksum failed, or recover later cached replacements. New version 22 captures retain those distinctions.
+
+The [boot-header contract](sgb-startup.md#boot-headers-and-command-permission) describes reception, handoff, controller visibility and reset behavior. The protocol and state regression targets exercise the new behavior; their platform and paired-runtime qualification is separate from the historical version 21 results below.
 
 ## Validation scope
 

@@ -37,7 +37,7 @@
  *
  * The SGB command stream is clocked in via writes to the P1/JOYP register
  * (0xFF00). @ref cupid_gb_sgb_write_joyp should be called on every JOYP
- * write while the SGB is active.
+ * write on physical SGB/SGB2 hardware while its receiver accepts commands.
  */
 
 #include "cupid/gb/sgb.h"
@@ -344,7 +344,40 @@ static void cupid_gb_sgb_attribute_characters(CupidGb *gb) {
     }
 }
 
+static bool handle_boot_header(CupidGb *gb) {
+    CupidGbSgb *sgb = &gb->sgb;
+    const uint8_t identifier = sgb->command[0];
+    if ((identifier & 0xf1u) != 0xf1u)
+        return false;
+
+    /* The completed boot handoff makes header packets inert, including a bad
+     * checksum. Ordinary commands still use the existing receiver permission. */
+    if (!gb->boot_rom_enabled)
+        return true;
+
+    uint8_t sum = 0;
+    for (unsigned byte = 2; byte < CUPID_SGB_PACKET_BYTES; ++byte)
+        sum = (uint8_t)(sum + sgb->command[byte]);
+    if (sum != sgb->command[1]) {
+        sgb->commands_disabled = true;
+        return true;
+    }
+
+    const unsigned section = (identifier & 0x0eu) / 2u;
+    if (section < CUPID_SGB_HEADER_BYTES / 14u) {
+        memcpy(sgb->received_header + section * 14u, sgb->command + 2, 14u);
+        /* Only the final section examines permission. Missing, repeated and
+         * reordered sections use the cache as it stands; there is no bitmap. */
+        if (section == 5u &&
+            (sgb->received_header[0x42] != 3u || sgb->received_header[0x47] != 0x33u))
+            sgb->commands_disabled = true;
+    }
+    return true;
+}
+
 static void cupid_gb_sgb_handle_command(CupidGb *gb) {
+    if (handle_boot_header(gb))
+        return;
     uint8_t command = (uint8_t)(gb->sgb.command[0] >> 3u);
 
     if ((gb->sgb.command[0] & 0x07u) == 0u) {
@@ -511,6 +544,23 @@ void cupid_gb_sgb_init(CupidGb *gb) {
     cupid_gb_sgb_set_default_palettes(gb);
 }
 
+void cupid_gb_sgb_begin_boot(CupidGb *gb) {
+    if (!cupid_gb_sgb_host_present(gb))
+        return;
+    CupidGbSgb *sgb = &gb->sgb;
+    sgb->commands_disabled = false;
+    memset(sgb->received_header, 0, sizeof(sgb->received_header));
+    memset(sgb->command, 0, sizeof(sgb->command));
+    sgb->command_write_index = 0;
+    sgb->ready_for_pulse = false;
+    sgb->ready_for_write = false;
+    sgb->ready_for_stop = false;
+    sgb->player_count = 1;
+    sgb->current_player = 0;
+    /* Explicit firmware reentry restarts reception and pad selection. Palette,
+     * border and transfer storage retain the enclosing memory-preserving policy. */
+}
+
 /**
  * @brief Applies a CGB compatibility palette to the SGB screen palettes.
  *
@@ -546,17 +596,21 @@ void cupid_gb_sgb_apply_compatibility_palette(CupidGb *gb) {
 }
 
 /**
- * @brief Returns whether the SGB enhancement layer is active.
+ * @brief Reports the cartridge's SGB declaration on the selected hardware.
  *
- * The SGB is considered active when the emulator is in SGB/SGB2 mode
- * and the cartridge declared SGB support (SGB flag byte = 0x03).
+ * This metadata is set during cartridge initialization. Physical packet reception
+ * has a separate permission latch and does not depend on this declaration.
  *
  * @param gb Pointer to the Game Boy state.
  *
- * @return `true` if SGB enhancements are active, `false` otherwise.
+ * @return `true` if the selected adapter cartridge declares enhancements.
  */
 bool cupid_gb_sgb_active(const CupidGb *gb) {
     return gb != NULL && gb->sgb.enabled;
+}
+
+bool cupid_gb_sgb_commands_enabled(const CupidGb *gb) {
+    return cupid_gb_sgb_host_present(gb) && !gb->sgb.commands_disabled;
 }
 
 /* A data pulse is sampled when both select lines return high. The reset
@@ -564,7 +618,7 @@ bool cupid_gb_sgb_active(const CupidGb *gb) {
  * Keeping the pending pulse in JOYP itself also preserves it across snapshots.
  */
 void cupid_gb_sgb_write_joyp(CupidGb *gb, uint8_t value) {
-    if (!cupid_gb_sgb_active(gb)) {
+    if (!cupid_gb_sgb_commands_enabled(gb)) {
         return;
     }
     CupidGbSgb *receiver = &gb->sgb;

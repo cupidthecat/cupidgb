@@ -214,7 +214,7 @@ static bool inspect_fields(const CupidGb *gb, const uint8_t *data, size_t availa
     if (io.invalid || !fields_size(fields, cupid_gb_base_clock_hz(gb), &size) || size > available)
         return false;
     /* Preflight checks negative-phase silence without allocating or consulting
-     * receiving output. The accessory starts at the returned exact byte count. */
+     * receiving output. Later fields begin after the returned exact byte count. */
     for (unsigned index = 0; index < fields->batch_count; ++index) {
         const StartupBatchFields *batch = &fields->batches[index];
         const size_t bytes_remaining = 2u * (batch->length - batch->cursor);

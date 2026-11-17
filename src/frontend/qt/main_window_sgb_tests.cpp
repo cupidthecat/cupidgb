@@ -96,6 +96,7 @@ bool MainWindow::sgbSmokeTest(const QString &directory) {
         rom[0x101] = char(0xfe);
         std::memcpy(rom.data() + 0x134, "CUPID HOST", 10);
         rom[0x146] = enhanced ? 3 : 0;
+        rom[0x14b] = enhanced ? 0x33 : 0;
         for (unsigned index = 0x134; index <= 0x14c; ++index)
             rom[0x14d] = char(uint8_t(rom[0x14d]) - uint8_t(rom[index]) - 1);
         const QString path = fixtures.filePath(enhanced ? "enhanced.gb" : "ordinary.gb");

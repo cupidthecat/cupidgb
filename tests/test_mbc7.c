@@ -28,6 +28,7 @@
 #include "cupid/gb/mbc7.h"
 #include "cupid/gb/ppu.h"
 #include "cupid/gb/state.h"
+#include "test_state_layout.h"
 
 #include <assert.h>
 #include <stdlib.h>
@@ -184,9 +185,10 @@ static void test_resume(CupidGb *first, CupidGb *second) {
     shift(first, 0x6e, 8);
     const size_t size = cupid_gb_state_size(first);
     /* Controller, receiver, clock and audio history precede the empty device descriptor. */
-    assert(size == SRAM_LENGTH_BYTES + IO_HISTORY_BYTES + V4_SIZE + 8 + 28 + 6 + RTC_HISTORY_BYTES +
-                       CUPID_GB_AUDIO_STATE_SIZE + CUPID_GB_DISPLAY_CLOCK_STATE_SIZE +
-                       CUPID_GB_PIXEL_TIMING_STATE_SIZE + CUPID_GB_VRAM_BUS_STATE_SIZE + 8);
+    assert(size == test_state_post_ram_size(first) + SRAM_LENGTH_BYTES + IO_HISTORY_BYTES +
+                       V4_SIZE + 8 + 28 + 6 + RTC_HISTORY_BYTES + CUPID_GB_AUDIO_STATE_SIZE +
+                       CUPID_GB_DISPLAY_CLOCK_STATE_SIZE + CUPID_GB_PIXEL_TIMING_STATE_SIZE +
+                       CUPID_GB_VRAM_BUS_STATE_SIZE + 8);
     uint8_t *saved = malloc(size), *restored = malloc(size);
     assert(saved && restored);
     size_t written = 0;

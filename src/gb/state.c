@@ -38,6 +38,7 @@
 #include "printer_internal.h"
 #include "state_internal.h"
 #include "state_io.h"
+#include "state_sgb_protocol.h"
 #include "state_startup.h"
 #include "vram_bus.h"
 
@@ -47,7 +48,8 @@
 
 enum {
     STATE_HEADER_SIZE = 128,
-    STATE_VERSION_V21 = CUPID_GB_STATE_VERSION,
+    STATE_VERSION_V22 = CUPID_GB_STATE_VERSION,
+    STATE_VERSION_V21 = 21,
     STATE_VERSION_V20 = 20,
     STATE_VERSION_V19 = 19,
     STATE_VERSION_V18 = 18,
@@ -891,11 +893,12 @@ static bool valid_hardware_extension(const CupidGb *gb) {
 }
 
 static bool valid_hardware(const CupidGb *gb, unsigned sections, const CupidGbCamera *camera) {
-    return valid_hardware_prefix(gb, STATE_VERSION_V21) && valid_hardware_extension(gb) &&
+    return valid_hardware_prefix(gb, STATE_VERSION_V22) && valid_hardware_extension(gb) &&
            cupid_gb_audio_state_valid(gb) && cupid_gb_sgb_startup_state_valid(gb) &&
-           valid_v5_sections(gb, sections, camera) && valid_infrared(gb) &&
-           cupid_gb_display_clock_state_valid(gb) && cupid_gb_pixels_timing_valid(gb) &&
-           cupid_gb_vram_bus_state_valid(gb) && gb->divider_subcycle <= 3 &&
+           cupid_gb_sgb_protocol_state_valid(gb) && valid_v5_sections(gb, sections, camera) &&
+           valid_infrared(gb) && cupid_gb_display_clock_state_valid(gb) &&
+           cupid_gb_pixels_timing_valid(gb) && cupid_gb_vram_bus_state_valid(gb) &&
+           gb->divider_subcycle <= 3 &&
            (gb->header.mbc_type != CUPID_GB_TPP1 || gb->tpp1.motor_strength <= 3);
 }
 
@@ -919,7 +922,7 @@ static void state_ram_extension(StateIo *io, CupidGb *gb) {
 
 static size_t current_hardware_size(const CupidGb *gb, size_t *startup_length) {
     size_t startup = 0;
-    if (!cupid_gb_sgb_startup_state_size(gb, &startup))
+    if (!cupid_gb_sgb_startup_state_size(gb, &startup) || !cupid_gb_sgb_protocol_state_valid(gb))
         return 0;
     if (startup_length)
         *startup_length = startup;
@@ -928,7 +931,8 @@ static size_t current_hardware_size(const CupidGb *gb, size_t *startup_length) {
            STATE_CLOCK_HISTORY_SIZE + CUPID_GB_AUDIO_STATE_SIZE +
            CUPID_GB_DISPLAY_CLOCK_STATE_SIZE + CUPID_GB_PIXEL_TIMING_STATE_SIZE +
            CUPID_GB_VRAM_BUS_STATE_SIZE + STATE_INPUT_SAMPLE_SIZE + STATE_SERIAL_CLOCK_SIZE +
-           STATE_WAVE_HISTORY_SIZE + ram_extension_size(gb) + startup;
+           STATE_WAVE_HISTORY_SIZE + ram_extension_size(gb) + startup +
+           CUPID_GB_SGB_PROTOCOL_STATE_SIZE;
 }
 
 size_t cupid_gb_state_size(const CupidGb *gb) {
@@ -1038,7 +1042,7 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
     }
     memset(data, 0, STATE_HEADER_SIZE);
     memcpy(data, state_magic, sizeof(state_magic));
-    put_u32(data + 8, STATE_VERSION_V21);
+    put_u32(data + 8, STATE_VERSION_V22);
     put_u32(data + 12, (uint32_t)size);
     put_u32(data + 16, (uint32_t)gb->model);
     put_u32(data + 20, (uint32_t)gb->rom_size);
@@ -1053,7 +1057,7 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
         cupid_sha256(gb->boot_rom, gb->boot_rom_size, data + 64);
     }
     StateIo io = {NULL, data, STATE_HEADER_SIZE, hardware_size, false};
-    state_fields(&io, (CupidGb *)gb, STATE_VERSION_V21);
+    state_fields(&io, (CupidGb *)gb, STATE_VERSION_V22);
     state_extension_v3(&io, (CupidGb *)gb);
     state_extension_v4(&io, (CupidGb *)gb);
     state_extension_v5(&io, (CupidGb *)gb, sections, &camera);
@@ -1064,7 +1068,7 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
     if (gb->dma_phase > 3u)
         io.invalid = true;
     state_input_and_display(&io, (CupidGb *)gb);
-    state_video_bus(&io, (CupidGb *)gb, STATE_VERSION_V21);
+    state_video_bus(&io, (CupidGb *)gb, STATE_VERSION_V22);
     state_stop_ports(&io, (CupidGb *)gb);
     bytes(&io, ((CupidGb *)gb)->apu.pulse_dac_hold, 2);
     if (!(sections & STATE_SECTION_HUC3))
@@ -1095,6 +1099,10 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
         !cupid_gb_sgb_startup_state_encode(gb, data + io.offset, startup_size))
         io.invalid = true;
     io.offset += startup_size;
+    if (!reserve(&io, CUPID_GB_SGB_PROTOCOL_STATE_SIZE) ||
+        !cupid_gb_sgb_protocol_state_encode(gb, data + io.offset, CUPID_GB_SGB_PROTOCOL_STATE_SIZE))
+        io.invalid = true;
+    io.offset += CUPID_GB_SGB_PROTOCOL_STATE_SIZE;
     if (io.invalid || io.offset != hardware_size) {
         return CUPID_GB_STATE_INVALID;
     }
@@ -1172,7 +1180,7 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
         return CUPID_GB_STATE_INVALID;
     }
     const uint32_t version = get_u32(data + 8);
-    if (version < STATE_VERSION_V2 || version > STATE_VERSION_V21 ||
+    if (version < STATE_VERSION_V2 || version > STATE_VERSION_V22 ||
         (version < STATE_VERSION_V19 && gb->cartridge_ram_size > CUPID_GB_INLINE_RAM_SIZE)) {
         return CUPID_GB_STATE_UNSUPPORTED_VERSION;
     }
@@ -1195,6 +1203,8 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
     const size_t startup_maximum =
         version >= STATE_VERSION_V21 ? CUPID_GB_STARTUP_STATE_MAX_SIZE : 0;
     size_t startup_size = 0;
+    const size_t protocol_size =
+        version >= STATE_VERSION_V22 ? CUPID_GB_SGB_PROTOCOL_STATE_SIZE : 0;
     /* Version 19 had two complete layouts. Bound the input before hashing, then
      * choose one by exact geometry and descriptor validation below. */
     const size_t minimum_history =
@@ -1220,12 +1230,12 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
     if (version >= STATE_VERSION_V12) {
         if (length < prefix_size + tail_size + infrared_size + clock_size + audio_size +
                          display_clock_size + pixel_timing_size + vram_bus_size +
-                         input_sample_size + serial_clock_size + minimum_history +
+                         input_sample_size + serial_clock_size + minimum_history + protocol_size +
                          STATE_ACCESSORY_DESCRIPTOR_SIZE ||
             length > extended_wire_size(STATE_SECTIONS_ALL) + tail_size + STATE_INFRARED_SIZE +
                          clock_size + audio_size + display_clock_size + pixel_timing_size +
                          vram_bus_size + input_sample_size + serial_clock_size + maximum_history +
-                         startup_maximum + STATE_ACCESSORY_DESCRIPTOR_SIZE +
+                         startup_maximum + protocol_size + STATE_ACCESSORY_DESCRIPTOR_SIZE +
                          PRINTER_STATE_WIRE_SIZE)
             return CUPID_GB_STATE_INVALID;
     } else if (version >= STATE_VERSION_V5
@@ -1281,7 +1291,12 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
              !cupid_gb_sgb_startup_state_measure(gb, data + startup_offset, length - startup_offset,
                                                  &startup_size)))
             return CUPID_GB_STATE_INVALID;
-        const size_t accessory_offset = startup_offset + startup_size;
+        const size_t protocol_offset = startup_offset + startup_size;
+        if (protocol_offset > length || protocol_size > length - protocol_offset ||
+            (protocol_size &&
+             !cupid_gb_sgb_protocol_wire_valid(gb, data + protocol_offset, protocol_size)))
+            return CUPID_GB_STATE_INVALID;
+        const size_t accessory_offset = protocol_offset + protocol_size;
         accessory_size = accessory_wire_size(data, length, accessory_offset, &printer_payload);
         if (!accessory_size)
             return CUPID_GB_STATE_INVALID;
@@ -1480,6 +1495,14 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
             io.invalid = true;
         io.offset += startup_size;
     }
+    if (protocol_size) {
+        if (!reserve(&io, protocol_size) ||
+            !cupid_gb_sgb_protocol_state_decode(candidate, data + io.offset, protocol_size))
+            io.invalid = true;
+        io.offset += protocol_size;
+    } else {
+        cupid_gb_sgb_protocol_state_import_legacy(candidate);
+    }
     if (io.invalid || io.offset != hardware_length || candidate->boot_rom_enabled != (flags != 0) ||
         !valid_hardware_prefix(candidate, version) ||
         !valid_v5_sections(candidate, sections, &candidate->camera) || !valid_infrared(candidate)) {
@@ -1583,7 +1606,8 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
     }
     if (!cupid_gb_audio_state_valid(candidate) || !cupid_gb_display_clock_state_valid(candidate) ||
         !cupid_gb_pixels_timing_valid(candidate) || !cupid_gb_vram_bus_state_valid(candidate) ||
-        !cupid_gb_sgb_startup_state_valid(candidate)) {
+        !cupid_gb_sgb_startup_state_valid(candidate) ||
+        !cupid_gb_sgb_protocol_state_valid(candidate)) {
         discard_candidate(candidate);
         return CUPID_GB_STATE_INVALID;
     }

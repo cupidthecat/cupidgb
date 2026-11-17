@@ -41,7 +41,7 @@ typedef enum CupidGbStateResult {
     CUPID_GB_STATE_NO_ROM
 } CupidGbStateResult;
 
-#define CUPID_GB_STATE_VERSION 21u
+#define CUPID_GB_STATE_VERSION 22u
 
 /* Trusted in-memory snapshots may cache the immutable cartridge identity. Initialize
  * once for the current instance and discard the context on cartridge replacement,
@@ -78,6 +78,15 @@ CupidGbStateResult cupid_gb_load_state_with_context(CupidGb *gb, const uint8_t *
  * validation, retains the receiving image and rejects older device completions.
  * Generated captures preserve their ordinary countdown when no provider is attached.
  * The camera wire section and its busy/countdown validation remain unchanged.
+ * Version 22 appends an 85-byte adapter protocol extension after the variable
+ * startup extension and before the accessory descriptor. It contains one strict
+ * command-disable boolean and all 84 received-header bytes. Non-adapter models
+ * encode only zeros. Exact and live loads restore these guest fields alike,
+ * including incomplete headers and disabled receivers with retained player state.
+ * Versions 2 through 21 import an empty cache and preserve their old receiver
+ * permission: a physical adapter is disabled when its saved declaration is false.
+ * This deterministic projection cannot recover packets received before the save,
+ * and never borrows the receiving session's header cache or command permission.
  * Version 21 adds a physical-SGB startup extension after the complete version 20
  * hardware/RAM prefix and before the accessory descriptor. It retains intro phase,
  * host-only elapsed base cycles, independent fixed-point sound/noise history, two
@@ -92,7 +101,7 @@ CupidGbStateResult cupid_gb_load_state_with_context(CupidGb *gb, const uint8_t *
  * The receiving cartridge determines storage geometry; a file cannot resize its SRAM.
  * Two earlier version 19 layouts remain readable: fetch-byte-only for cartridges up to
  * 128 KiB, and SRAM-size/tail without the fetch byte. Exact lengths and validated accessory
- * descriptors distinguish them. Version 20 remains readable; only version 21 is written.
+ * descriptors distinguish them. Versions 20 and 21 remain readable; only version 22 is written.
  * Public versions 2 through 18
  * retain their meanings and require cartridge SRAM no larger than 128 KiB.
  * The fetch byte belongs to guest hardware, separate from wave RAM and output reconstruction.

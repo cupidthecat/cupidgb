@@ -36,6 +36,7 @@
 #include "cupid/gb/startup.h"
 #include "cupid/gb/state.h"
 #include "cupid/gb/timer.h"
+#include "test_state_layout.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -156,6 +157,7 @@ static CupidGb *create_machine(CupidGbModel model, Cartridge cartridge, Host *ho
     rom[0x147] = cartridge.type;
     rom[0x148] = rom_size == 0x8000u ? 0 : 2;
     rom[0x149] = cartridge.ram;
+    rom[0x14b] = 0x33;
     if (cartridge.type == 0xbc) {
         rom[0x14a] = 0x65;
         rom[0x150] = 1;
@@ -577,17 +579,19 @@ static void compare_timing(const CupidGb *left, const CupidGb *right) {
     CHECK(!memcmp(a, b, sizeof(a)));
 }
 
-static size_t legacy_tpp1(uint8_t *legacy, const uint8_t *saved, size_t size, unsigned version) {
+static size_t legacy_tpp1(const CupidGb *gb, uint8_t *legacy, const uint8_t *saved, size_t size,
+                          unsigned version) {
     CHECK(version == 14 || version == 15);
     memcpy(legacy, saved, size);
     const size_t descriptor = size - ACCESSORY_DESCRIPTOR_BYTES;
     CHECK(filled(saved + descriptor, ACCESSORY_DESCRIPTOR_BYTES, 0));
     if (version == 15)
-        legacy[descriptor - SRAM_LENGTH_BYTES - IO_HISTORY_BYTES - CUPID_GB_VRAM_BUS_STATE_SIZE -
-               1u] = 0;
-    /* Both versions precede this I/O history and SRAM length; V14 predates display timing. */
-    const size_t removed =
-        SRAM_LENGTH_BYTES + IO_HISTORY_BYTES + (version == 14 ? TIMING_BYTES : 0);
+        legacy[descriptor - test_state_post_ram_size(gb) - SRAM_LENGTH_BYTES - IO_HISTORY_BYTES -
+               CUPID_GB_VRAM_BUS_STATE_SIZE - 1u] = 0;
+    /* Both versions precede the protocol, startup, I/O and SRAM extensions;
+     * V14 also predates display timing. */
+    const size_t removed = test_state_post_ram_size(gb) + SRAM_LENGTH_BYTES + IO_HISTORY_BYTES +
+                           (version == 14 ? TIMING_BYTES : 0);
     memmove(legacy + descriptor - removed, legacy + descriptor, ACCESSORY_DESCRIPTOR_BYTES);
     size -= removed;
     legacy[8] = (uint8_t)version;
@@ -616,7 +620,7 @@ static void test_tpp1_legacy_states(void) {
             uint8_t *saved = malloc(size), *legacy = malloc(size);
             CHECK(saved && legacy);
             CHECK(cupid_gb_save_state(gb, saved, size, NULL) == CUPID_GB_STATE_OK);
-            const size_t legacy_size = legacy_tpp1(legacy, saved, size, version);
+            const size_t legacy_size = legacy_tpp1(gb, legacy, saved, size, version);
             if (version == 14) {
                 cupid_gb_pixels_import_legacy(expected);
                 cupid_gb_display_clock_import_legacy(expected);

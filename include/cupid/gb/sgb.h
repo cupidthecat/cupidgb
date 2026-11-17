@@ -38,6 +38,7 @@
 #define CUPID_SGB_PACKET_BYTES 16u
 #define CUPID_SGB_MAX_PACKETS 7u
 #define CUPID_SGB_MAX_COMMAND_BYTES (CUPID_SGB_PACKET_BYTES * CUPID_SGB_MAX_PACKETS)
+#define CUPID_SGB_HEADER_BYTES 84u
 #define CUPID_SGB_FRAME_DOTS 70224u
 #define CUPID_SGB_TRANSFER_FRAMES 3u
 #define CUPID_SGB_BORDER_TRANSITION_FRAMES 105u
@@ -70,7 +71,9 @@ typedef struct CupidGbSgbTransfer {
 } CupidGbSgbTransfer;
 
 typedef struct CupidGbSgb {
-    bool enabled;
+    bool enabled; /* Cartridge declaration; independent of physical packet reception. */
+    bool commands_disabled;
+    uint8_t received_header[CUPID_SGB_HEADER_BYTES];
     uint8_t player_count;
     uint8_t current_player;
     uint8_t mask_mode;
@@ -97,11 +100,17 @@ typedef struct CupidGbSgb {
 struct CupidGb;
 
 void cupid_gb_sgb_init(struct CupidGb *gb);
+/* Firmware reentry clears packet history and pad selection while retaining
+ * palette, border, mask and transfer storage. Cold/reset initialization clears all. */
+void cupid_gb_sgb_begin_boot(struct CupidGb *gb);
 void cupid_gb_sgb_apply_compatibility_palette(struct CupidGb *gb);
 void cupid_gb_sgb_write_joyp(struct CupidGb *gb, uint8_t value);
 void cupid_gb_sgb_clock(struct CupidGb *gb, uint32_t dots);
 void cupid_gb_sgb_present(struct CupidGb *gb, bool complete, uint32_t dots_after_frame);
 void cupid_gb_sgb_render_argb(const struct CupidGb *gb, uint32_t *pixels, size_t pixel_count);
+/* Cartridge declaration only; use commands_enabled for packet permission. */
 bool cupid_gb_sgb_active(const struct CupidGb *gb);
+/* Physical adapter receiver permission, including ordinary cartridges in firmware. */
+bool cupid_gb_sgb_commands_enabled(const struct CupidGb *gb);
 
 #endif

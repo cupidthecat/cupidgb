@@ -29,6 +29,7 @@
 enum {
     HEADER_BYTES = 128,
     ACCESSORY_BYTES = 8,
+    PROTOCOL_BYTES = 85,
     SELECTOR_BYTES = 1,
     WAVE_HISTORY_BYTES = 1,
     SRAM_LENGTH_BYTES = 4
@@ -67,6 +68,7 @@ static Blob capture(const CupidGb *gb) {
 static size_t selector_offset(const Blob *blob) {
     assert(blob->bytes[8] >= 18 && blob->bytes[8] <= CUPID_GB_STATE_VERSION);
     return blob->size - ACCESSORY_BYTES - SELECTOR_BYTES -
+           (blob->bytes[8] >= 22 ? PROTOCOL_BYTES : 0) -
            (blob->bytes[8] >= 19 ? SRAM_LENGTH_BYTES : 0) -
            (blob->bytes[8] >= 20 ? WAVE_HISTORY_BYTES : 0);
 }
@@ -116,12 +118,12 @@ static void test_reset_selection_is_independent(void) {
     cupid_gb_write_u8(gb, 0xff02, 2);
     Blob fast = capture(gb);
     const size_t selector = selector_offset(&slow);
-    assert(slow.size == 305103 && fast.size == slow.size);
+    assert(slow.size == 305103 + PROTOCOL_BYTES && fast.size == slow.size);
     assert(!slow.bytes[selector] && fast.bytes[selector] == 1);
     /* Identical SC, phase and hardware prefix do not identify the selected tap. */
     assert(!memcmp(slow.bytes + HEADER_BYTES, fast.bytes + HEADER_BYTES, selector - HEADER_BYTES));
     assert(!memcmp(slow.bytes + selector + SELECTOR_BYTES, fast.bytes + selector + SELECTOR_BYTES,
-                   WAVE_HISTORY_BYTES + SRAM_LENGTH_BYTES + ACCESSORY_BYTES));
+                   slow.size - selector - SELECTOR_BYTES));
     free(slow.bytes);
     free(fast.bytes);
     serial_test_free(gb);
@@ -192,8 +194,8 @@ static void test_native_continuation(void) {
 static Blob legacy_blob(const Blob *current, unsigned version) {
     static const size_t lengths[] = {300518, 300568, 300572, 300580, 300584, 300585, 300596,
                                      300602, 300606, 300608, 300622, 300628, 305062, 305096,
-                                     305097, 305097, 305098, 305102, 305103};
-    assert(version >= 2 && version <= 20 && current->size == 305103);
+                                     305097, 305097, 305098, 305102, 305103, 305103};
+    assert(version >= 2 && version <= 21 && current->size == 305103 + PROTOCOL_BYTES);
     Blob legacy = {NULL, lengths[version - 2]};
     legacy.bytes = malloc(legacy.size);
     assert(legacy.bytes);
@@ -201,8 +203,8 @@ static Blob legacy_blob(const Blob *current, unsigned version) {
     memcpy(legacy.bytes, current->bytes, hardware);
     if (version == 19) {
         /* This fixture selects the SRAM-only draft, whose size is fixed above. */
-        const size_t wave =
-            current->size - ACCESSORY_BYTES - SRAM_LENGTH_BYTES - WAVE_HISTORY_BYTES;
+        const size_t wave = current->size - ACCESSORY_BYTES - PROTOCOL_BYTES - SRAM_LENGTH_BYTES -
+                            WAVE_HISTORY_BYTES;
         memcpy(legacy.bytes + wave, current->bytes + wave + WAVE_HISTORY_BYTES, SRAM_LENGTH_BYTES);
     }
     if (version >= 12)
@@ -308,7 +310,7 @@ static void test_invalid_selector(void) {
         CupidGb *target = new_machine(models[model]);
         for (unsigned version = 18; version <= CUPID_GB_STATE_VERSION; ++version) {
             Blob current = capture(source);
-            Blob blob = version <= 20 ? legacy_blob(&current, version) : current;
+            Blob blob = version <= 21 ? legacy_blob(&current, version) : current;
             const size_t selector = selector_offset(&blob);
             const uint8_t invalid[] = {2, 0x80, 0xff};
             for (unsigned index = 0; index < sizeof(invalid); ++index) {
@@ -327,7 +329,7 @@ static void test_invalid_selector(void) {
             blob.size -= SELECTOR_BYTES;
             resign(&blob);
             reject_unchanged(target, &blob);
-            if (version <= 20)
+            if (version <= 21)
                 free(blob.bytes);
             free(current.bytes);
         }

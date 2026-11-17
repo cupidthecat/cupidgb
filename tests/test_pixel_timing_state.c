@@ -354,7 +354,8 @@ static void prepare_scene(Rig *rig, Scene scene) {
 static Blob save_rig(const Rig *rig) {
     Blob blob = {NULL, cupid_gb_state_size(rig->gb)};
     const bool sgb = rig->gb->model == CUPID_GB_MODEL_SGB || rig->gb->model == CUPID_GB_MODEL_SGB2;
-    assert(blob.length == CURRENT_BYTES + (sgb ? SGB_BYTES : 0) + test_state_startup_size(rig->gb) +
+    assert(blob.length == CURRENT_BYTES + (sgb ? SGB_BYTES : 0) +
+                              test_state_post_ram_size(rig->gb) +
                               (rig->printer ? PRINTER_STATE_WIRE_SIZE : 0));
     blob.bytes = malloc(blob.length);
     CupidGb *before = malloc(sizeof(*before));
@@ -392,7 +393,7 @@ static size_t descriptor_offset(const Rig *rig, const Blob *blob) {
 }
 
 static size_t pixel_offset(const Rig *rig, const Blob *blob) {
-    return descriptor_offset(rig, blob) - test_state_startup_size(rig->gb) - SRAM_LENGTH_BYTES -
+    return descriptor_offset(rig, blob) - test_state_post_ram_size(rig->gb) - SRAM_LENGTH_BYTES -
            IO_HISTORY_BYTES - CUPID_GB_VRAM_BUS_STATE_SIZE - CUPID_GB_PIXEL_TIMING_STATE_SIZE;
 }
 
@@ -534,9 +535,10 @@ static Blob legacy_blob(const Rig *rig, const Blob *source, unsigned version) {
     Blob old = copy_blob(source);
     if (version >= 12) {
         const size_t descriptor = descriptor_offset(rig, source);
-        const size_t removed =
-            test_state_startup_size(rig->gb) + SRAM_LENGTH_BYTES + IO_HISTORY_BYTES + TIMING_BYTES +
-            (version < 14 ? CUPID_GB_AUDIO_STATE_SIZE : 0) + (version < 13 ? RTC_BYTES : 0);
+        const size_t removed = test_state_post_ram_size(rig->gb) + SRAM_LENGTH_BYTES +
+                               IO_HISTORY_BYTES + TIMING_BYTES +
+                               (version < 14 ? CUPID_GB_AUDIO_STATE_SIZE : 0) +
+                               (version < 13 ? RTC_BYTES : 0);
         memmove(old.bytes + descriptor - removed, old.bytes + descriptor,
                 source->length - descriptor);
         old.length -= removed;

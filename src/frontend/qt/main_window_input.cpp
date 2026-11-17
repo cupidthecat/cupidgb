@@ -127,7 +127,7 @@ std::array<uint8_t, 4> MainWindow::livePlayerButtons() const {
 
 void MainWindow::applyPlayerButtons(const std::array<uint8_t, 4> &buttons) {
     controllerPlayerCount_ =
-        cupid_gb_sgb_active(&emulator_->gb) ? emulator_->gb.sgb.player_count : 1;
+        cupid_gb_sgb_host_present(&emulator_->gb) ? emulator_->gb.sgb.player_count : 1;
     uint8_t first = buttons[0];
     if (controllerPlayerCount_ == 1)
         for (unsigned player = 1; player < 4; ++player)
@@ -144,7 +144,8 @@ void MainWindow::applyPlayerButtons(const std::array<uint8_t, 4> &buttons) {
 void MainWindow::refreshControllerPlayerCount() {
     if (!emulator_)
         return;
-    const unsigned count = cupid_gb_sgb_active(&emulator_->gb) ? emulator_->gb.sgb.player_count : 1;
+    const unsigned count =
+        cupid_gb_sgb_host_present(&emulator_->gb) ? emulator_->gb.sgb.player_count : 1;
     if (count == controllerPlayerCount_)
         return;
     // An SGB command can change routing inside one guest frame. Update before the next opcode.

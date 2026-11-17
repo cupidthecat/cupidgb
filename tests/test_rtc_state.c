@@ -288,7 +288,7 @@ static size_t expected_size(const Rig *rig) {
     const size_t border = (size_t)(is_sgb(gb) ? SGB_SECTION_BYTES : 0);
     const size_t infrared = (size_t)(gb->header.mbc_type == CUPID_GB_HUC3 ? 0 : INFRARED_BYTES);
     const size_t accessory = (size_t)(rig->printer ? PRINTER_BYTES : 0);
-    return test_state_startup_size(gb) + SRAM_LENGTH_BYTES + IO_HISTORY_BYTES + V4_BYTES + border +
+    return test_state_post_ram_size(gb) + SRAM_LENGTH_BYTES + IO_HISTORY_BYTES + V4_BYTES + border +
            mapper + V11_TAIL_BYTES + infrared + RTC_HISTORY_BYTES + CUPID_GB_AUDIO_STATE_SIZE +
            CUPID_GB_DISPLAY_CLOCK_STATE_SIZE + CUPID_GB_PIXEL_TIMING_STATE_SIZE +
            CUPID_GB_VRAM_BUS_STATE_SIZE + DESCRIPTOR_BYTES + accessory;
@@ -307,7 +307,7 @@ static Blob legacy_blob(const Rig *rig, const Blob *current, unsigned version) {
     Blob legacy;
     if (version >= 12) {
         legacy = copy_blob(current, current->length);
-        const size_t removed = test_state_startup_size(rig->gb) + SRAM_LENGTH_BYTES +
+        const size_t removed = test_state_post_ram_size(rig->gb) + SRAM_LENGTH_BYTES +
                                IO_HISTORY_BYTES + CUPID_GB_AUDIO_STATE_SIZE +
                                CUPID_GB_DISPLAY_CLOCK_STATE_SIZE +
                                CUPID_GB_PIXEL_TIMING_STATE_SIZE + CUPID_GB_VRAM_BUS_STATE_SIZE +
@@ -317,7 +317,7 @@ static Blob legacy_blob(const Rig *rig, const Blob *current, unsigned version) {
                 current->length - descriptor);
         legacy.length -= removed;
     } else {
-        const size_t v11 = descriptor - test_state_startup_size(rig->gb) - SRAM_LENGTH_BYTES -
+        const size_t v11 = descriptor - test_state_post_ram_size(rig->gb) - SRAM_LENGTH_BYTES -
                            IO_HISTORY_BYTES - CUPID_GB_DISPLAY_CLOCK_STATE_SIZE -
                            CUPID_GB_PIXEL_TIMING_STATE_SIZE - CUPID_GB_VRAM_BUS_STATE_SIZE -
                            CUPID_GB_AUDIO_STATE_SIZE - RTC_HISTORY_BYTES -
@@ -400,7 +400,7 @@ static void test_history_roundtrip(void) {
                     Blob saved = save_rig(source, api != 0);
                     assert(saved.length == expected_size(source));
                     const size_t rtc =
-                        descriptor_offset(source, &saved) - test_state_startup_size(source->gb) -
+                        descriptor_offset(source, &saved) - test_state_post_ram_size(source->gb) -
                         SRAM_LENGTH_BYTES - IO_HISTORY_BYTES - CUPID_GB_DISPLAY_CLOCK_STATE_SIZE -
                         CUPID_GB_PIXEL_TIMING_STATE_SIZE - CUPID_GB_VRAM_BUS_STATE_SIZE -
                         CUPID_GB_AUDIO_STATE_SIZE - RTC_HISTORY_BYTES;
@@ -479,7 +479,7 @@ static void test_legacy_defaults(void) {
                        target->gb->huc3.ir_detected == infrared);
                 Blob resaved = save_rig(target, true);
                 const size_t history =
-                    descriptor_offset(target, &resaved) - test_state_startup_size(target->gb) -
+                    descriptor_offset(target, &resaved) - test_state_post_ram_size(target->gb) -
                     SRAM_LENGTH_BYTES - IO_HISTORY_BYTES - CUPID_GB_DISPLAY_CLOCK_STATE_SIZE -
                     CUPID_GB_PIXEL_TIMING_STATE_SIZE - CUPID_GB_VRAM_BUS_STATE_SIZE -
                     CUPID_GB_AUDIO_STATE_SIZE - RTC_HISTORY_BYTES;
@@ -575,7 +575,8 @@ static void test_transactional_rejection(void) {
             for (unsigned scenario = 0; scenario < 8; ++scenario) {
                 Blob bad = copy_blob(&valid, valid.length + (scenario == 4) - (scenario == 5));
                 if (scenario < 2)
-                    bad.bytes[descriptor - SRAM_LENGTH_BYTES - IO_HISTORY_BYTES -
+                    bad.bytes[descriptor - test_state_post_ram_size(source->gb) -
+                              SRAM_LENGTH_BYTES - IO_HISTORY_BYTES -
                               CUPID_GB_DISPLAY_CLOCK_STATE_SIZE - CUPID_GB_PIXEL_TIMING_STATE_SIZE -
                               CUPID_GB_VRAM_BUS_STATE_SIZE - CUPID_GB_AUDIO_STATE_SIZE -
                               RTC_HISTORY_BYTES + MOTOR_HISTORY_OFFSET] =
@@ -584,7 +585,8 @@ static void test_transactional_rejection(void) {
                     const size_t ir_boolean =
                         types[type] == 0xfe
                             ? V4_BYTES + HUC3_SECTION_BYTES - 1
-                            : descriptor - SRAM_LENGTH_BYTES - IO_HISTORY_BYTES -
+                            : descriptor - test_state_post_ram_size(source->gb) -
+                                  SRAM_LENGTH_BYTES - IO_HISTORY_BYTES -
                                   CUPID_GB_DISPLAY_CLOCK_STATE_SIZE -
                                   CUPID_GB_PIXEL_TIMING_STATE_SIZE - CUPID_GB_VRAM_BUS_STATE_SIZE -
                                   CUPID_GB_AUDIO_STATE_SIZE - RTC_HISTORY_BYTES - 1;
@@ -592,7 +594,8 @@ static void test_transactional_rejection(void) {
                 } else if (scenario == 3)
                     bad.bytes[descriptor + 2] = 1;
                 else if (scenario >= 6)
-                    bad.bytes[descriptor - SRAM_LENGTH_BYTES - IO_HISTORY_BYTES -
+                    bad.bytes[descriptor - test_state_post_ram_size(source->gb) -
+                              SRAM_LENGTH_BYTES - IO_HISTORY_BYTES -
                               CUPID_GB_DISPLAY_CLOCK_STATE_SIZE - CUPID_GB_PIXEL_TIMING_STATE_SIZE -
                               CUPID_GB_VRAM_BUS_STATE_SIZE - CUPID_GB_AUDIO_STATE_SIZE -
                               RTC_HISTORY_BYTES + DIVIDER_HISTORY_OFFSET] = scenario == 6 ? 4 : 255;
@@ -691,10 +694,10 @@ static void test_v12_printer_tail(void) {
          * therefore leave four bits captured by the printer's launch callback. */
         assert(current.bytes[descriptor + DESCRIPTOR_BYTES + PRINTER_INCOMING_BITS] == 4);
         Blob legacy = legacy_blob(source, &current, 12);
-        assert(memcmp(legacy.bytes + descriptor - SRAM_LENGTH_BYTES - IO_HISTORY_BYTES -
-                          CUPID_GB_DISPLAY_CLOCK_STATE_SIZE - CUPID_GB_PIXEL_TIMING_STATE_SIZE -
-                          CUPID_GB_VRAM_BUS_STATE_SIZE - CUPID_GB_AUDIO_STATE_SIZE -
-                          RTC_HISTORY_BYTES,
+        assert(memcmp(legacy.bytes + descriptor - test_state_post_ram_size(source->gb) -
+                          SRAM_LENGTH_BYTES - IO_HISTORY_BYTES - CUPID_GB_DISPLAY_CLOCK_STATE_SIZE -
+                          CUPID_GB_PIXEL_TIMING_STATE_SIZE - CUPID_GB_VRAM_BUS_STATE_SIZE -
+                          CUPID_GB_AUDIO_STATE_SIZE - RTC_HISTORY_BYTES,
                       current.bytes + descriptor, DESCRIPTOR_BYTES + PRINTER_BYTES) == 0);
         assert(load_rig(target, &legacy, api != 0) == CUPID_GB_STATE_OK);
         assert(target->gb->rtc_cycles == 0 && target->gb->tpp1.status == 0x0a &&

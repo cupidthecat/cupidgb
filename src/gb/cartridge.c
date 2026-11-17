@@ -835,6 +835,11 @@ void cupid_gb_cartridge_post_boot(CupidGb *gb) {
     gb->cgb_mode = gb->model == CUPID_GB_MODEL_CGB && (gb->header.cgb_flag & 0x80u) != 0;
     gb->sgb.enabled = (gb->model == CUPID_GB_MODEL_SGB || gb->model == CUPID_GB_MODEL_SGB2) &&
                       gb->header.sgb_flag == 3;
+    /* Without executed firmware, project the two header permission bytes into
+     * the post-boot latch. No received packet history is invented. */
+    gb->sgb.commands_disabled = cupid_gb_sgb_host_present(gb) &&
+                                (!gb->sgb.enabled || gb->header.old_licensee_code != 0x33u);
+    memset(gb->sgb.received_header, 0, sizeof(gb->sgb.received_header));
     gb->double_speed = false;
     gb->speed_switch_armed = false;
     gb->speed_phase = false;

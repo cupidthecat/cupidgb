@@ -115,6 +115,9 @@ bool MainWindow::controllerSmokeTest(const QString &directory) {
     rom[0x151] = char(0xfe);
     rom[0x146] = 3;
     rom[0x147] = char(0x1c); // MBC5 motor, with no RAM needed by this generated cartridge.
+    rom[0x14b] = char(0x33);
+    for (unsigned index = 0x134; index <= 0x14c; ++index)
+        rom[0x14d] = char(uint8_t(rom[0x14d]) - uint8_t(rom[index]) - 1);
     QFile file(QDir(directory).filePath("controller-workflow.gb"));
     if (!file.open(QIODevice::WriteOnly) || file.write(rom) != rom.size())
         return smokeFailure(__FILE__, __LINE__);
@@ -216,6 +219,31 @@ bool MainWindow::controllerSmokeTest(const QString &directory) {
     cupid_gb_write_u8(&emulator_->gb, 0xff00, 0x10);
     if ((cupid_gb_read_u8(&emulator_->gb, 0xff00) & 0xf) != 0xd)
         return smokeFailure(__FILE__, __LINE__);
+    {
+        // A physical adapter retains four-player routing after header rejection.
+        // This host fixture isolates routing from the separately tested packet decoder.
+        emulator_->gb.sgb.enabled = false;
+        emulator_->gb.sgb.commands_disabled = true;
+        applyHeldButtons();
+        const QByteArray rejectedHeader = captureState();
+        if (rejectedHeader.isEmpty() || controllerPlayerCount_ != 4 ||
+            emulator_->gb.joypad != 0xef || emulator_->gb.joypad_extra[0] != 0xdf)
+            return smokeFailure(__FILE__, __LINE__);
+        emulator_->gb.sgb.player_count = 1;
+        applyHeldButtons();
+        if (emulator_->gb.joypad != 0xcf || !restoreState(rejectedHeader, false))
+            return smokeFailure(__FILE__, __LINE__);
+        applyHeldButtons();
+        cupid_gb_write_u8(&emulator_->gb, 0xff00, 0x30);
+        cupid_gb_write_u8(&emulator_->gb, 0xff00, 0x10);
+        if (emulator_->gb.sgb.enabled || !emulator_->gb.sgb.commands_disabled ||
+            controllerPlayerCount_ != 4 || emulator_->gb.joypad != 0xef ||
+            emulator_->gb.joypad_extra[0] != 0xdf ||
+            cupid_gb_read_u8(&emulator_->gb, 0xff00) != 0xdd)
+            return smokeFailure(__FILE__, __LINE__);
+        emulator_->gb.sgb.enabled = true;
+        emulator_->gb.sgb.commands_disabled = false;
+    }
     QKeyEvent press(QEvent::KeyPress, keys_[4], Qt::NoModifier);
     QKeyEvent release(QEvent::KeyRelease, keys_[4], Qt::NoModifier);
     QApplication::sendEvent(this, &press);

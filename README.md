@@ -35,7 +35,7 @@ Emulation > Controllers selects devices and configures buttons, axes, hats, play
 
 Battery data uses `.sav` beside the cartridge. State slots use `.s0` through `.s9`, with the zero key selecting slot 10. Archive storage names include the archive extension, such as `game.zip.sav`. Settings offers system-time or Accurate emulated-time policies for supported [cartridge clocks](docs/rtc.md).
 
-New states use CupidGB native version 21 and retain hardware, peripheral, audio reconstruction, display synchronization, pixel-fetch, VRAM read, serial clock-selection and wave fetch history, together with complete cartridge SRAM and SGB startup progress. Older formats remain loadable when they contain the storage required by the receiving cartridge. Desktop loads keep current listening settings. File > Recover Battery from Older State can export supported battery data from version 1. See [save states and rewind](docs/save-states.md) for compatibility and backup guidance.
+New states use CupidGB native version 22 and retain hardware, peripheral, audio reconstruction, display synchronization, pixel-fetch, VRAM read, serial clock-selection and wave fetch history, together with complete cartridge SRAM, SGB startup progress and boot-header receiver history. Older formats remain loadable when they contain the storage required by the receiving cartridge. Desktop loads keep current listening settings. File > Recover Battery from Older State can export supported battery data from version 1. See [save states and rewind](docs/save-states.md) for compatibility and backup guidance.
 
 Audio settings include Accurate, waveform-preserving and disabled high-pass filtering, optional interference and individual channel toggles. [The audio guide](docs/audio.md) explains how these controls affect playback and recording.
 
@@ -82,6 +82,7 @@ See [build and installation](docs/building.md) for Ninja, core-only builds, sani
 - [Controllers](docs/controllers.md): layouts, capture, devices, player routing, native menus, feedback and qualification limits.
 - [Hardware support](docs/hardware.md): current models/controllers and their limits.
 - [SGB startup](docs/sgb-startup.md): adapter introduction, guest and presentation clocks, ordered audio and state continuation.
+- [SGB header validation](docs/validation-sgb-protocol.md): checked command reception, native continuation, platform gates and bounded gameplay results.
 - [Debugger and inspectors](docs/debugging.md): execution controls, breakpoints, symbols, memory editing, and hardware views.
 - [Cheats and memory search](docs/cheats.md) covers codes, banked rules, persistence, RAM searches, and freeze controls.
 - [Battery saves](docs/battery-saves.md) and [save states/rewind](docs/save-states.md): locations, encodings, continuation, and recovery.

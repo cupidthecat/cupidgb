@@ -44,10 +44,11 @@ enum {
     INFRARED_HISTORY_BYTES = 6,
     RTC_HISTORY_BYTES = 6,
     MOTOR_HISTORY_OFFSET = 4,
-    BARE_STATE_BYTES = SRAM_LENGTH_BYTES + IO_HISTORY_BYTES + 300600 + INFRARED_HISTORY_BYTES +
-                       RTC_HISTORY_BYTES + CUPID_GB_AUDIO_STATE_SIZE +
-                       CUPID_GB_DISPLAY_CLOCK_STATE_SIZE + CUPID_GB_PIXEL_TIMING_STATE_SIZE +
-                       CUPID_GB_VRAM_BUS_STATE_SIZE + DEVICE_DESCRIPTOR_BYTES,
+    BARE_STATE_BYTES = TEST_STATE_SGB_PROTOCOL_BYTES + SRAM_LENGTH_BYTES + IO_HISTORY_BYTES +
+                       300600 + INFRARED_HISTORY_BYTES + RTC_HISTORY_BYTES +
+                       CUPID_GB_AUDIO_STATE_SIZE + CUPID_GB_DISPLAY_CLOCK_STATE_SIZE +
+                       CUPID_GB_PIXEL_TIMING_STATE_SIZE + CUPID_GB_VRAM_BUS_STATE_SIZE +
+                       DEVICE_DESCRIPTOR_BYTES,
     PRINTER_WIRE_BYTES = 32687,
     WIRE_PHASE = 0,
     WIRE_HEADER = 1,
@@ -838,14 +839,16 @@ static void test_malformed_devices(void) {
                 case 8:
                     /* Valid accessory data must not commit before a later
                      * hardware validation failure has been resolved. */
-                    bad.bytes[descriptor - SRAM_LENGTH_BYTES - IO_HISTORY_BYTES -
+                    bad.bytes[descriptor - test_state_post_ram_size(source->gb) -
+                              SRAM_LENGTH_BYTES - IO_HISTORY_BYTES -
                               CUPID_GB_DISPLAY_CLOCK_STATE_SIZE - CUPID_GB_PIXEL_TIMING_STATE_SIZE -
                               CUPID_GB_VRAM_BUS_STATE_SIZE - CUPID_GB_AUDIO_STATE_SIZE -
                               RTC_HISTORY_BYTES - 1] = 16;
                     break;
                 case 9:
                     /* A non-TPP1 core must reject even an otherwise valid motor value. */
-                    bad.bytes[descriptor - SRAM_LENGTH_BYTES - IO_HISTORY_BYTES -
+                    bad.bytes[descriptor - test_state_post_ram_size(source->gb) -
+                              SRAM_LENGTH_BYTES - IO_HISTORY_BYTES -
                               CUPID_GB_DISPLAY_CLOCK_STATE_SIZE - CUPID_GB_PIXEL_TIMING_STATE_SIZE -
                               CUPID_GB_VRAM_BUS_STATE_SIZE - CUPID_GB_AUDIO_STATE_SIZE -
                               RTC_HISTORY_BYTES + MOTOR_HISTORY_OFFSET] = 1;
@@ -1079,7 +1082,7 @@ static void test_legacy_fresh_device(void) {
     memset(source->gb->apu.pulse_timing, 0, sizeof(source->gb->apu.pulse_timing));
     Blob current = save_rig(source, false);
     const size_t hardware_size =
-        current.length - test_state_startup_size(source->gb) - DEVICE_DESCRIPTOR_BYTES -
+        current.length - test_state_post_ram_size(source->gb) - DEVICE_DESCRIPTOR_BYTES -
         SRAM_LENGTH_BYTES - IO_HISTORY_BYTES - CUPID_GB_DISPLAY_CLOCK_STATE_SIZE -
         CUPID_GB_PIXEL_TIMING_STATE_SIZE - CUPID_GB_VRAM_BUS_STATE_SIZE -
         CUPID_GB_AUDIO_STATE_SIZE - RTC_HISTORY_BYTES - INFRARED_HISTORY_BYTES;

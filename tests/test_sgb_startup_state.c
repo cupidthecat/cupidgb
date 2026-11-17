@@ -35,6 +35,7 @@
 enum {
     HEADER_BYTES = 128,
     ACCESSORY_BYTES = 8,
+    PROTOCOL_BYTES = 85,
     MAX_STREAM_FRAMES =
         CUPID_GB_APU_BUF_FRAMES + CUPID_GB_SGB_AUDIO_BATCHES * CUPID_GB_SGB_AUDIO_BATCH_FRAMES
 };
@@ -278,10 +279,10 @@ static void check_wire_and_legacy(void) {
     assert(cupid_gb_sgb_startup_state_size(source, &extension));
     assert(extension == CUPID_GB_STARTUP_STATE_MAX_SIZE);
     Blob original = save(source);
-    const size_t offset = original.length - ACCESSORY_BYTES - extension;
+    const size_t offset = original.length - ACCESSORY_BYTES - PROTOCOL_BYTES - extension;
     size_t measured = 0;
-    assert(cupid_gb_sgb_startup_state_measure(target, original.data + offset,
-                                              extension + ACCESSORY_BYTES, &measured));
+    assert(cupid_gb_sgb_startup_state_measure(
+        target, original.data + offset, extension + PROTOCOL_BYTES + ACCESSORY_BYTES, &measured));
     assert(measured == extension); /* The receiver has a different listening rate. */
 
     const struct Mutation {
@@ -322,10 +323,11 @@ static void check_wire_and_legacy(void) {
     free(before);
 
     /* This new projection test supplements the immutable historical fixtures. */
-    Blob legacy = {malloc(original.length - extension), original.length - extension};
+    const size_t removed = extension + PROTOCOL_BYTES;
+    Blob legacy = {malloc(original.length - removed), original.length - removed};
     assert(legacy.data);
     memcpy(legacy.data, original.data, offset);
-    memcpy(legacy.data + offset, original.data + offset + extension, ACCESSORY_BYTES);
+    memcpy(legacy.data + offset, original.data + offset + removed, ACCESSORY_BYTES);
     put(legacy.data + 8, 20, 4);
     seal(legacy);
     for (unsigned kind = 0; kind < 4; ++kind) {

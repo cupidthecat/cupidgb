@@ -45,6 +45,7 @@ static CupidGb *machine(CupidGbModel model, bool enhanced, bool firmware) {
     uint8_t rom[0x8000] = {0};
     memcpy(rom + 0x134, "CUPID HOST", 10);
     rom[0x146] = enhanced ? 3 : 0;
+    rom[0x14b] = enhanced ? 0x33 : 0;
     rom[0x147] = 0x10; /* MBC3 timer, SRAM and battery. */
     rom[0x149] = 2;
     for (unsigned address = 0x134; address <= 0x14c; ++address)

@@ -27,10 +27,10 @@
 
 static uint8_t electrical_lines(const CupidGb *gb) {
     const uint8_t rows = gb->io_registers[0] & 0x30u;
-    const unsigned player = cupid_gb_sgb_active(gb) ? gb->sgb.current_player & 3u : 0u;
+    const unsigned player = cupid_gb_sgb_host_present(gb) ? gb->sgb.current_player & 3u : 0u;
     const uint8_t buttons = player ? gb->joypad_extra[player - 1u] : gb->joypad;
     uint8_t lines = 0x0fu;
-    if (rows == 0x30u && cupid_gb_sgb_active(gb) && gb->sgb.player_count > 1u) {
+    if (rows == 0x30u && cupid_gb_sgb_host_present(gb) && gb->sgb.player_count > 1u) {
         lines = (uint8_t)(0x0fu - (gb->sgb.current_player & 3u));
     } else {
         if (!(rows & 0x10u)) {
@@ -106,7 +106,7 @@ void cupid_gb_input_select(CupidGb *gb, uint8_t value) {
     if (active == selected)
         return;
     if (gb->model != CUPID_GB_MODEL_CGB && gb->model != CUPID_GB_MODEL_SGB &&
-        gb->model != CUPID_GB_MODEL_SGB2 && !cupid_gb_sgb_active(gb)) {
+        gb->model != CUPID_GB_MODEL_SGB2) {
         /* A second write starts from the previous requested row but cannot
          * shorten an outstanding release. Newly selected rows pull low at
          * once; deselected rows take longer to float high. */
