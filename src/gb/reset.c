@@ -142,6 +142,8 @@ bool cupid_gb_reset(CupidGb *gb, CupidGbResetKind kind) {
     next->presentation_user_data = gb->presentation_user_data;
     next->infrared_callback = gb->infrared_callback;
     next->infrared_user_data = gb->infrared_user_data;
+    next->memory_access_callback = gb->memory_access_callback;
+    next->memory_access_user_data = gb->memory_access_user_data;
     next->mbc7.motion_x = gb->mbc7.motion_x;
     next->mbc7.motion_y = gb->mbc7.motion_y;
     next->joypad = gb->joypad;

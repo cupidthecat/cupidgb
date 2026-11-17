@@ -39,7 +39,7 @@ New states use CupidGB native version 17 and retain hardware, peripheral, audio 
 
 Audio settings include Accurate, waveform-preserving and disabled high-pass filtering, optional interference and individual channel toggles. [The audio guide](docs/audio.md) explains how these controls affect playback and recording.
 
-Physical controller/motion qualification, advanced debugger commands/watchpoints, paired cable sessions and other accessories, custom cheat expressions, state interchange, individual hardware revisions, uncommon cartridge behavior, and advanced display/audio features remain incomplete. [The parity checklist](docs/parity.md) records the full scope.
+Physical controller/motion qualification, advanced debugger commands, paired cable sessions and other accessories, custom cheat expressions, state interchange, individual hardware revisions, uncommon cartridge behavior, and advanced display/audio features remain incomplete. [The parity checklist](docs/parity.md) records the full scope.
 
 Ordinary Reset restarts play with the selected hardware settings and clears rewind. Quick Reset retains physical memory and compatible rewind; installed firmware executes again and can overwrite that memory. Reload refreshes assets while keeping the active model and pause choice. All reset workflows retain an active recording. See [the user guide](docs/user-guide.md#open-reset-and-close) for storage and firmware details.
 

@@ -376,6 +376,12 @@ typedef struct CupidGbDisplayClock {
     uint8_t fine_wait_half_dots;
 } CupidGbDisplayClock;
 
+struct CupidGb;
+/* Host-only observation of the original guest bus address before any bus-lock
+ * or DMA redirection. An observer must not mutate or reenter the machine. */
+typedef void (*CupidGbMemoryAccessCallback)(void *user_data, struct CupidGb *gb, uint16_t address,
+                                            bool writing, uint8_t value);
+
 typedef struct CupidGb {
     CupidGbCpu cpu;
     CupidGbModel model;
@@ -516,6 +522,8 @@ typedef struct CupidGb {
     void *presentation_user_data;
     CupidGbInfraredCallback infrared_callback;
     void *infrared_user_data;
+    CupidGbMemoryAccessCallback memory_access_callback;
+    void *memory_access_user_data;
     uint16_t oam_vram_row;      /* Retained source-bus row; UINT16_MAX releases the latch. */
     uint16_t oam_search_word;   /* Last word sampled by the shared OAM port. */
     bool stop_ppu_vram_blocked; /* STOP holds the sampled PPU access gate until wake. */
@@ -602,6 +610,11 @@ void cupid_gb_set_rumble_sample_callback(CupidGb *gb, CupidGbRumbleSampleCallbac
  * Registration survives init/reset/state loads and is never serialized. */
 void cupid_gb_set_presentation_callback(CupidGb *gb, CupidGbPresentationCallback callback,
                                         void *user_data);
+/* Host observer of guest bus accesses. The registration survives reset and
+ * state loads and is excluded from native save states. Debugger registrations
+ * must be scoped to a guest step and detached after that step completes. */
+void cupid_gb_set_memory_access_callback(CupidGb *gb, CupidGbMemoryAccessCallback callback,
+                                         void *user_data);
 void cupid_gb_set_model(CupidGb *gb, CupidGbModel model);
 /* Physical base-speed T-cycles per second, independent of CGB double speed.
  * SGB uses its NTSC host-derived clock; other current models use 4194304 Hz.

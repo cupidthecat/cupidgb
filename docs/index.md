@@ -8,7 +8,7 @@ CupidGB emulates Game Boy and Game Boy Color hardware with a C core and a Qt des
 | [User guide](user-guide.md) | Opening cartridges, controls, settings, display, audio, capture, and save workflows |
 | [Controllers](controllers.md) | Device selection, capture, mappings, dead zones, player routing, focus, native menus and cartridge feedback |
 | [Hardware support](hardware.md) | Models, startup, cartridge controllers, hardware subsystems, and known limits |
-| [Debugger and inspectors](debugging.md) | CPU execution controls, breakpoints, symbols, memory editing, and graphics views |
+| [Debugger and inspectors](debugging.md) | CPU execution controls, breakpoints, memory watchpoints, symbols, memory editing, and graphics views |
 | [Cheats and memory search](cheats.md) | Codes, banked rules, persistence, physical memory searches, and host integration |
 | [Battery saves](battery-saves.md) | Save locations, clock behavior, file encoding, and recovery |
 | [Cartridge clocks](rtc.md) | Host and emulated clock policies, counter behavior, time providers, and period controls |
@@ -25,5 +25,7 @@ CupidGB emulates Game Boy and Game Boy Color hardware with a C core and a Qt des
 | [Cartridge-clock validation](validation-rtc.md) | Counter comparisons, clock policies, divider timing, native continuation, and remaining qualification |
 | [Audio and native-state validation](validation-audio.md) | Reconstruction, live restoration, SGB phase bounds, Camera processing, mapper comparisons, and native continuation |
 | [Display and infrared validation](validation-timing.md) | Display delivery, window/object edges, VRAM ownership, retained timing history and scoped comparison results |
+| [Fetch and feedback validation](validation-fetch-feedback.md) | Retained color tile rows, motor sampling, guest speed switches and bounded desktop measurements |
+| [Watchpoint validation](validation-watchpoints.md) | Guest access observation, debugger lifecycle checks, source conventions and current validation scope |
 
 Start with the build guide if you have a source checkout. For an executable that already runs, use the user guide. A result in the validation record applies to the stated revision, inputs, settings, and duration; it does not qualify every later build.

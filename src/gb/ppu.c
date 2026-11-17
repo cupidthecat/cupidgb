@@ -386,9 +386,14 @@ void cupid_gb_tick_dma_tcycles(CupidGb *gb, unsigned cycles) {
             uint8_t value;
             if (source >= 0xe000u && gb->model == CUPID_GB_MODEL_CGB)
                 value = 0xffu;
-            else if (source >= 0x8000u && source < 0xa000u)
+            else if (source >= 0x8000u && source < 0xa000u) {
+                /* VRAM DMA sources use the independent video port. Preserve
+                 * that port's timing and data while observing the original
+                 * guest bus address, just like the other DMA source ranges. */
+                if (gb->memory_access_callback)
+                    gb->memory_access_callback(gb->memory_access_user_data, gb, source, false, 0);
                 value = cupid_gb_vram_bus_read(gb, gb, source, true);
-            else
+            } else
                 value = cupid_gb_read_bus_u8(gb, source);
             gb->object_attribute_memory[gb->dma_index] = value;
         }

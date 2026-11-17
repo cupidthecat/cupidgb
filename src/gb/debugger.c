@@ -97,8 +97,16 @@ bool cupid_gb_debug_poke(CupidGb *gb, uint16_t address, uint8_t value) {
         gb->io_registers[address - 0xff00u] = value;
     } else {
         /* Register edits intentionally apply device side effects. A semantic
-         * DIV write, for example, can clock a timer edge without a CPU cycle. */
+         * DIV write, for example, can clock a timer edge without a CPU cycle.
+         * An editor action is never a guest bus watchpoint, even if a host
+         * mistakenly invokes it within a watched execution scope. */
+        const CupidGbMemoryAccessCallback observer = gb->memory_access_callback;
+        void *observer_data = gb->memory_access_user_data;
+        if (observer)
+            cupid_gb_set_memory_access_callback(gb, NULL, NULL);
         cupid_gb_write_u8(gb, address, value);
+        if (observer)
+            cupid_gb_set_memory_access_callback(gb, observer, observer_data);
     }
     return true;
 }
@@ -316,6 +324,9 @@ void cupid_gb_debugger_reset_execution(CupidGbDebugger *debugger) {
     debugger->call_depth = 0;
     debugger->call_count = 0;
     debugger->skip_breakpoint = false;
+    debugger->watch_pending = false;
+    debugger->watch_error = false;
+    debugger->watch_evaluating = false;
 }
 
 void cupid_gb_debugger_symbols_clear(CupidGbDebugger *debugger) {
@@ -328,6 +339,10 @@ void cupid_gb_debugger_symbols_clear(CupidGbDebugger *debugger) {
 
 void cupid_gb_debugger_cleanup(CupidGbDebugger *debugger) {
     if (debugger) {
+        /* A host destroying its debugger during a watched step must not
+         * leave a callback retaining the cleared debugger pointer. */
+        if (debugger->watch_active)
+            (void)cupid_gb_debugger_watch_end(debugger, debugger->watch_gb);
         cupid_gb_debugger_symbols_clear(debugger);
         cupid_gb_debugger_init(debugger);
     }
@@ -478,8 +493,13 @@ CupidGbDebugStop cupid_gb_debugger_step(CupidGbDebugger *debugger, CupidGb *gb) 
     const uint16_t stack = gb->cpu.sp;
     CupidGbStepTrace trace;
     ++debugger->steps;
-    if (!cupid_gb_step_observed(gb, &trace))
+    cupid_gb_debugger_watch_begin(debugger, gb);
+    const bool completed = cupid_gb_step_observed(gb, &trace);
+    const CupidGbDebugStop watch_stop = cupid_gb_debugger_watch_end(debugger, gb);
+    if (!completed)
         return stopped(debugger, CUPID_GB_DEBUG_STOP_ERROR);
+    if (watch_stop != CUPID_GB_DEBUG_STOP_NONE)
+        return watch_stop;
     if (trace.event == CUPID_GB_STEP_ILLEGAL_OPCODE)
         return stopped(debugger, CUPID_GB_DEBUG_STOP_ILLEGAL_OPCODE);
     const bool stack_push = gb->cpu.sp == (uint16_t)(stack - 2u);
@@ -550,6 +570,8 @@ const char *cupid_gb_debugger_stop_name(CupidGbDebugStop stop) {
             return "Debugger execution failed";
         case CUPID_GB_DEBUG_STOP_ILLEGAL_OPCODE:
             return "Illegal opcode: CPU halted";
+        case CUPID_GB_DEBUG_STOP_WATCHPOINT:
+            return "Watchpoint";
         default:
             return "Unknown debugger stop";
     }
@@ -728,9 +750,23 @@ static const ExpressionOperator expression_operators[] = {
     {">", 1, EXPR_GREATER},
 };
 
+/* Only watchpoint conditions can read old/new. As in the guest memory access
+ * path, old for a write samples the CPU-visible bus at the original address.
+ * Each extra read is performed only when the condition evaluates that token;
+ * ordinary expressions keep their existing passive debug-peek semantics. */
+typedef struct WatchConditionContext {
+    CupidGb *gb;
+    uint16_t address;
+    uint8_t new_value;
+    uint8_t old_value;
+    bool writing;
+    bool old_sampled;
+} WatchConditionContext;
+
 typedef struct ExpressionParser {
     const CupidGbDebugger *debugger;
     const CupidGb *gb;
+    WatchConditionContext *watch;
     const char *start, *cursor;
     unsigned depth;
     bool failed;
@@ -838,6 +874,19 @@ static CupidGbDebugValue expression_primary(ExpressionParser *parser) {
             name[length++] = *parser->cursor++;
         name[length] = 0;
         const CupidGbCpu *cpu = &parser->gb->cpu;
+        if (parser->watch && !strcmp(name, "old")) {
+            WatchConditionContext *watch = parser->watch;
+            if (watch->writing) {
+                watch->old_value = cupid_gb_read_bus_u8(watch->gb, watch->address);
+                watch->old_sampled = true;
+            }
+            result.value = watch->old_value;
+            goto finished;
+        }
+        if (parser->watch && !strcmp(name, "new")) {
+            result.value = parser->watch->new_value;
+            goto finished;
+        }
         if (length == 1) {
             switch (name[0]) {
                 case 'a':
@@ -990,9 +1039,9 @@ static CupidGbDebugValue expression_parse(ExpressionParser *parser, unsigned min
     return left;
 }
 
-bool cupid_gb_debugger_evaluate(const CupidGbDebugger *debugger, const CupidGb *gb,
-                                const char *expression, CupidGbDebugValue *result,
-                                size_t *error_offset) {
+static bool debugger_evaluate_internal(const CupidGbDebugger *debugger, const CupidGb *gb,
+                                       const char *expression, CupidGbDebugValue *result,
+                                       size_t *error_offset, WatchConditionContext *watch) {
     if (error_offset)
         *error_offset = 0;
     if (!debugger || !gb || !gb->loaded || !expression || !result)
@@ -1003,7 +1052,7 @@ bool cupid_gb_debugger_evaluate(const CupidGbDebugger *debugger, const CupidGb *
     if (!length || length == CUPID_GB_DEBUG_EXPRESSION_SIZE)
         return false;
     ExpressionParser parser = {
-        .debugger = debugger, .gb = gb, .start = expression, .cursor = expression};
+        .debugger = debugger, .gb = gb, .watch = watch, .start = expression, .cursor = expression};
     CupidGbDebugValue value = expression_parse(&parser, 1);
     expression_space(&parser);
     if (parser.failed || *parser.cursor) {
@@ -1013,4 +1062,152 @@ bool cupid_gb_debugger_evaluate(const CupidGbDebugger *debugger, const CupidGb *
     }
     *result = value;
     return true;
+}
+
+bool cupid_gb_debugger_evaluate(const CupidGbDebugger *debugger, const CupidGb *gb,
+                                const char *expression, CupidGbDebugValue *result,
+                                size_t *error_offset) {
+    return debugger_evaluate_internal(debugger, gb, expression, result, error_offset, NULL);
+}
+
+bool cupid_gb_debugger_watchpoint_add(CupidGbDebugger *debugger, const CupidGb *gb, int bank,
+                                      uint16_t start, uint16_t end, uint8_t access,
+                                      const char *condition) {
+    if (!debugger || bank < -1 || bank > UINT16_MAX || start > end || !access ||
+        (access & (uint8_t)~CUPID_GB_DEBUG_ACCESS_RW))
+        return false;
+    if (!condition)
+        condition = "";
+    size_t length = 0;
+    while (length < CUPID_GB_DEBUG_EXPRESSION_SIZE && condition[length])
+        ++length;
+    if (length == CUPID_GB_DEBUG_EXPRESSION_SIZE)
+        return false;
+    if (length) {
+        CupidGbDebugValue result;
+        /* Defining a condition checks its grammar without performing a guest
+         * bus read. During real write matches, old is sampled only on demand. */
+        WatchConditionContext validation = {
+            .gb = (CupidGb *)gb, .address = start, .old_sampled = true};
+        if (!debugger_evaluate_internal(debugger, gb, condition, &result, NULL, &validation))
+            return false;
+    }
+    if (debugger->wp_count == CUPID_GB_DEBUG_MAX_WATCHPOINTS)
+        return false;
+    uint32_t id = 1;
+    if (debugger->wp_count) {
+        const uint32_t last = debugger->watchpoints[debugger->wp_count - 1u].id;
+        if (last == UINT32_MAX)
+            return false;
+        id = last + 1u;
+    }
+    CupidGbDebugWatchpoint point = {
+        .id = id, .start = start, .end = end, .bank = bank, .access = access, .enabled = true};
+    memcpy(point.condition, condition, length + 1u);
+    debugger->watchpoints[debugger->wp_count++] = point;
+    return true;
+}
+
+bool cupid_gb_debugger_watchpoint_remove(CupidGbDebugger *debugger, uint32_t id) {
+    if (!debugger || !id)
+        return false;
+    for (size_t index = 0; index < debugger->wp_count; ++index) {
+        if (debugger->watchpoints[index].id != id)
+            continue;
+        --debugger->wp_count;
+        memmove(debugger->watchpoints + index, debugger->watchpoints + index + 1u,
+                (debugger->wp_count - index) * sizeof(debugger->watchpoints[0]));
+        return true;
+    }
+    return false;
+}
+
+void cupid_gb_debugger_watchpoints_clear(CupidGbDebugger *debugger) {
+    if (debugger)
+        debugger->wp_count = 0;
+}
+
+static void debugger_watch_access(void *user_data, CupidGb *gb, uint16_t address, bool writing,
+                                  uint8_t value) {
+    CupidGbDebugger *debugger = user_data;
+    if (!debugger)
+        return;
+    if (debugger->previous_memory_access_callback)
+        debugger->previous_memory_access_callback(debugger->previous_memory_access_user_data, gb,
+                                                  address, writing, value);
+    if (debugger->watch_pending || debugger->watch_evaluating)
+        return;
+    const uint8_t access = writing ? CUPID_GB_DEBUG_ACCESS_WRITE : CUPID_GB_DEBUG_ACCESS_READ;
+    const int bank = cupid_gb_debugger_bank(gb, address);
+    for (size_t index = 0; index < debugger->wp_count; ++index) {
+        const CupidGbDebugWatchpoint *point = &debugger->watchpoints[index];
+        if (!point->enabled || !(point->access & access) || address < point->start ||
+            address > point->end || (point->bank >= 0 && point->bank != bank))
+            continue;
+        WatchConditionContext context = {
+            .gb = gb, .address = address, .new_value = writing ? value : 0, .writing = writing};
+        CupidGbDebugValue evaluated = {0};
+        bool valid = true;
+        if (point->condition[0]) {
+            debugger->watch_evaluating = true;
+            valid = debugger_evaluate_internal(debugger, gb, point->condition, &evaluated, NULL,
+                                               &context);
+            debugger->watch_evaluating = false;
+        }
+        if (valid && point->condition[0] && !evaluated.value)
+            continue;
+        debugger->last_watch_hit = (CupidGbDebugWatchHit){
+            .id = point->id,
+            .address = address,
+            .bank = bank,
+            .access = access,
+            .old_value = writing ? (context.old_sampled ? context.old_value
+                                                        : cupid_gb_debug_peek(gb, address))
+                                 : 0,
+            .new_value = writing ? value : 0};
+        debugger->watch_error = !valid;
+        debugger->watch_pending = true;
+        return;
+    }
+}
+
+void cupid_gb_debugger_watch_begin(CupidGbDebugger *debugger, CupidGb *gb) {
+    if (!debugger || debugger->watch_active)
+        return;
+    debugger->watch_pending = false;
+    debugger->watch_error = false;
+    debugger->watch_evaluating = false;
+    debugger->last_watch_hit = (CupidGbDebugWatchHit){0};
+    if (gb && gb->loaded && debugger->wp_count) {
+        debugger->watch_gb = gb;
+        debugger->previous_memory_access_callback = gb->memory_access_callback;
+        debugger->previous_memory_access_user_data = gb->memory_access_user_data;
+        debugger->watch_active = true;
+        cupid_gb_set_memory_access_callback(gb, debugger_watch_access, debugger);
+    }
+}
+
+CupidGbDebugStop cupid_gb_debugger_watch_end(CupidGbDebugger *debugger, CupidGb *gb) {
+    (void)gb;
+    if (debugger && debugger->watch_active) {
+        /* Restore the exact machine on which begin installed the observer.
+         * A caller passing a different/null end argument must not strand a
+         * callback that still retains the debugger pointer. */
+        CupidGb *watched = debugger->watch_gb;
+        if (watched && watched->memory_access_callback == debugger_watch_access &&
+            watched->memory_access_user_data == debugger)
+            cupid_gb_set_memory_access_callback(watched, debugger->previous_memory_access_callback,
+                                                debugger->previous_memory_access_user_data);
+        debugger->watch_active = false;
+        debugger->watch_gb = NULL;
+        debugger->previous_memory_access_callback = NULL;
+        debugger->previous_memory_access_user_data = NULL;
+    }
+    if (!debugger || !debugger->watch_pending)
+        return CUPID_GB_DEBUG_STOP_NONE;
+    const CupidGbDebugStop reason =
+        debugger->watch_error ? CUPID_GB_DEBUG_STOP_ERROR : CUPID_GB_DEBUG_STOP_WATCHPOINT;
+    debugger->watch_pending = false;
+    debugger->watch_error = false;
+    return stopped(debugger, reason);
 }

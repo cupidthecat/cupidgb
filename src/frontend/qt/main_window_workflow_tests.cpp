@@ -1028,7 +1028,7 @@ bool MainWindow::smokeTest() {
     if (dropFile(nativeStatePath) || emulator_)
         return smokeFailure(__FILE__, __LINE__);
     failed_ = false; // Loading a dropped state requires an active cartridge.
-    if (!debuggerSmokeTest(directory.path()))
+    if (!debuggerSmokeTest(directory.path()) || !watchpointSmokeTest(directory.path()))
         return smokeFailure(__FILE__, __LINE__);
     if (!pacingSmokeTest(path) || !modelSmokeTest(directory.path()) ||
         !cheatSmokeTest(path, directory.path()) || !printerSmokeTest(path, directory.path()) ||

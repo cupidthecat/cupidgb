@@ -20,21 +20,54 @@ The resume check also retains samples delivered after a presentation within the 
 
 | Environment | Configuration | Result |
 | --- | --- | --- |
-| Windows x64, MSVC 19.43, Qt 6.8.3 | Earlier Release build with IPO, SDL2, Qt and core | 72 of 72 CTest checks passed before the final dialog/debugger review |
-| Windows x64, final local source | Release, IPO, one compiler job | The corrected resume regression could not be rebuilt locally: MSVC stopped with `C1060: compiler is out of heap space` before the test suite |
-| Ubuntu under WSLg, GCC 13.3, Qt 6.8.3 | Earlier Release desktop build with IPO and SDL2 | 69 of 69 CTest checks passed before the final presentation-observer integration; final desktop revalidation remains pending |
+| Windows x64, MSVC 19.43, Qt 6.8.3 | Release with IPO, SDL2, Qt and core; one compiler job | 72 of 72 CTest checks passed after the dialog/debugger corrections |
+| Ubuntu under WSLg, GCC 13.3, Qt 6.8.3 | Release desktop build with IPO and SDL2 | 70 of 70 CTest checks passed after presentation, feedback and desktop focus corrections |
 | Linux GCC | Debug core, AddressSanitizer, UndefinedBehaviorSanitizer and leak detection | 51 of 51 checks passed |
 | Linux GCC, portable hashing | Debug with the same sanitizers | State, SHA-256 and core interoperability checks all passed |
 
-Earlier Windows and Linux executables passed the native Qt workflow suite while requiring a real audio sink. Each produced fifteen private captures, including settings and debugger images that were visually inspected. The checks exercise reset, state loading, audio restoration, recording, input, controller routing, inspectors and motor behavior. The Windows receipt predates the final dialog/debugger review. The Linux receipt predates the final presentation-observer integration. Neither receipt qualifies its newer desktop executable.
+The completed local Windows and Linux executables passed the native Qt workflow suite while requiring a real audio sink. Each produced fifteen private captures. The checks exercise reset, state loading, audio restoration, recording, input, controller routing, inspectors and motor behavior. Their executable SHA-256 values are `fce08980ba1a6d13504c4361e0b80581c770426cfbdb2e496d08bd51c852e493` on Windows and `c96799d047517521395540d71bca8568902ef0aceabebe430fda2756960a8163` on Linux. These receipts qualify those binaries; later changes require their own validation.
 
 The first Linux native attempt failed because the WSLg audio-server socket was absent. Its receipt remains in the private evidence. A later run, after the real server became available and with the live runtime directory selected, passed without changing product code. Neither a successful sink request nor the absence of backend errors establishes audible quality on every device. Physical controller motors and device-disconnect behavior remain unqualified.
 
-The final local Linux rebuild linked the core, runner and Qt executable, then stopped after 80 of 175 build steps. It did not reach the full test suite. Recovery attempts subsequently failed in WSL with RPC/GPU setup errors and `Wsl/Service/E_UNEXPECTED`; a brief successful startup did not restore reliable command execution. The final core archive retains the hash used by the state-continuation probes below. The newer desktop executable still needs a completed build/test run and native audio workflow check.
+Earlier local attempts failed during compilation or WSL startup, including RPC/GPU initialization errors and `Wsl/Service/E_UNEXPECTED`. The retained failure receipts remain part of the record. The completed Linux build and native run above supersede those attempts for their recorded binary. The core archive retains the hash used by the state-continuation probes below.
 
 Windows compilation used one Ninja job and one [LTCG code-generation thread](https://learn.microsoft.com/en-us/cpp/build/reference/cgthreads-compiler-threads). Release interprocedural optimization remained enabled. Earlier attempts encountered compiler heap exhaustion and a code-generation stack overflow; a broad optional dependency search also picked up incompatible headers. The retained failure logs identify those attempts. The final configuration selects the Qt SDK and SDL2 package explicitly and limits build concurrency. It does not change guest timing or disable audio.
 
-The post-review Windows gate passed 71 of 72 checks before reaching the resume test's incorrect constant-amplitude expectation described above. After that expectation was corrected, the next compilation failed with `C1060`. The host had about 1.7 GiB of remaining commit space at the subsequent inspection, despite having free physical RAM. Hosted checks for the committed source are recorded on the draft pull request. Final local native workflows and new throughput/runtime measurements remain pending; older measurements retain their original executable identities.
+The initial post-review Windows gate passed 71 of 72 checks before reaching the resume test's incorrect constant-amplitude expectation described above. A later build failed with `C1060` while host commit space was nearly exhausted. Subsequent serial compilation completed and the local gate passed all 72 checks. The final commit also adjusts offscreen focus between workflow tests. All six hosted Windows, Linux and sanitizer checks passed on `546edf9e39242fba545b5781a590e8adc52679ae` in [the pull-request run](https://github.com/cupidthecat/cupidgb/actions/runs/43959157793) and [the push run](https://github.com/cupidthecat/cupidgb/actions/runs/43959146934). The local Windows receipt precedes that final test-only change; the hosted Windows result covers it.
+
+## Headless throughput
+
+A serial Windows comparison alternated baseline and current runner order for four repetitions of four fixed private workloads. Each run used seed zero and a target of 3,000 nominal 70,224-cycle intervals. Compiler optimization and IPO settings matched; the baseline used the Visual Studio generator and the current build used Ninja. Each reported guest field, including image and PCM checksums, matched across the 32 runs. Executables and cartridge copies retained their hashes.
+
+| Workload | Baseline median wall time | Current median wall time | Current time change |
+| --- | ---: | ---: | ---: |
+| DMG, ROM-only | 7.8231 s | 8.1587 s | +4.29% |
+| CGB, MBC5 | 10.2456 s | 9.7721 s | -4.62% |
+| SGB, MBC1 | 7.2016 s | 7.1944 s | -0.10% |
+| CGB, MBC5 with motor | 9.0150 s | 9.3652 s | +3.88% |
+
+Wall time includes process startup, input/output and shutdown. These short samples show mixed changes and substantial run-to-run variation. They do not establish a general speedup, native presentation pacing or every-game full speed. The current runner SHA-256 is `76730800dd9a1718219733f48109e703d23d8293b408f1981cc01786b48c367f`; the baseline is `04d5c53c110bb916bfe85c17e6a3d5cc386eb3c38818057c427eba2ed7221245`.
+
+## Sustained desktop samples
+
+The desktop binaries identified above each completed four 120-second native sessions. Runs used seed zero, post-boot startup, normal audio, disposable cartridge copies and deterministic input traces. The private `native-546edf9-20261116` receipts retain executable/cartridge/input hashes, reports, process logs, battery output and captures. All input events were applied, the audio sink consumed generated PCM, battery flushing completed, rewind capture succeeded and each process exited cleanly.
+
+The table reports the interval after the five-second warmup. Guest speed divides emulated base clocks by the selected model's oscillator and the application's elapsed clock. Paint intervals measure widget delivery separately. Every sample recorded zero audio idle events and zero audio errors during this interval.
+
+| Platform | Model / cartridge controller | Guest speed | Paint interval, 99th percentile | Peak resident memory |
+| --- | --- | ---: | ---: | ---: |
+| Windows | DMG / ROM-only | 99.9998% | 18.58 ms | 110.7 MiB |
+| Windows | CGB / MBC5 | 99.9997% | 18.97 ms | 213.6 MiB |
+| Windows | SGB / MBC1 | 99.9977% | 18.54 ms | 215.6 MiB |
+| Windows | CGB / MBC5 motor | 99.9907% | 19.73 ms | 289.4 MiB |
+| Linux / WSLg | DMG / ROM-only | 99.9872% | 18.28 ms | 143.9 MiB |
+| Linux / WSLg | CGB / MBC5 | 99.9995% | 18.64 ms | 243.1 MiB |
+| Linux / WSLg | SGB / MBC1 | 100.0001% | 18.86 ms | 233.2 MiB |
+| Linux / WSLg | CGB / MBC5 motor | 100.0049% | 20.19 ms | 313.2 MiB |
+
+The Linux receipt also measures `CLOCK_MONOTONIC_RAW`. Its whole-process intervals were 125.49–125.86 seconds, compared with 121.39–121.64 seconds on the process monotonic clock. Including startup and shutdown, guest progress was 95.02%–95.64% against that raw clock. This unresolved host-clock discrepancy limits a physical wall-time speed claim even though application-clock pacing remained near 100%. The Windows clocks agreed to their recorded precision.
+
+The ROM-only, ordinary MBC5 and SGB captures show active gameplay. The motor cartridge remained at its menu; that run qualifies menu execution and audio delivery, not motor use or gameplay completion. These samples do not establish every game's speed, long-term save reliability, audible quality, physical display pacing or complete playthrough compatibility.
 
 ## Paired fetch comparisons
 
@@ -54,7 +87,13 @@ The product regressions also cover window rows, direct pixel execution, schedule
 
 All 19,627 paired cases matched sample counts and program counters. All 6,493 cases that also record effective strength sums matched those sums. Eighty speed-transition cases differ by one reported half-dot clock unit. The probe compares CupidGB's whole-dot elapsed counter, multiplied by two, with a native half-dot counter. Every differing comparison value is odd, and every product value is even. The other recorded clock results match.
 
-CPU and DMA delivery paths round odd half-dot spans differently, so a guest phase error remains possible. These cases inject countdown fields directly with the LCD off; 54 satisfy the individual state-field bounds and 26 exceed them. Those bounds do not establish that real guest STOP execution can produce each combination. The next comparison must drive both speed transitions through guest instructions and trace display, interrupt and DMA timing through subsequent instructions. The retained motor results do not qualify complete timing equivalence.
+The original cases inject countdown fields directly with the LCD off; 54 satisfy the individual state-field bounds and 26 exceed them. Those bounds do not establish that guest STOP execution can produce each combination. Their odd half-dot results therefore required a separate guest-driven experiment before changing clock delivery.
+
+That follow-up runs 72 generated cartridge programs against the frozen Linux core archive identified below and the pinned CGB-E build. Each program writes KEY1 and executes both STOP transitions. Variations cover LCD off/on and off-to-on transitions, zero or seven NOP offsets, absent/pending/injected-during-halt interrupts, and guest-requested general or HBlank DMA. Initial LCD, sound, DIV, interrupt, register and DMA-source conditions are aligned explicitly; this is a transition experiment, not a firmware-startup comparison.
+
+All 144 STOP checkpoints and 3,148,380 paired hardware steps agreed on measured half-dot progress, PC, LY, STAT mode, IF, speed and DIV. The sampled first VRAM destination byte also matched. Both cores produced 3,153,678 motor samples, a strength sum of 9,461,034, 64 real VBlank events and equal total presentation-callback counts. No native step returned an odd half-dot total. Private source, frozen headers, identities, logs and a result checker are retained under `stop-continuation-20261116`.
+
+These reachable sequences do not reproduce the injected countdown discrepancy, so no timing change was made for it. They cover one color revision, limited initial phases and short continuations. They do not establish every speed-switch phase, full DMA memory equality, presentation-kind sequence equality or complete timing equivalence.
 
 An unequal-span fixture distinguishes the corrected mean, two thirds, from the previous time-weighted result, about 0.7333. Qt checks use an SDL virtual device to verify constant and changing levels, motor capability, zero/half/full strength, rapid requests and restoration after reset, state loading and pause. Virtual-device results establish the requests sent by the application, not the response of a physical motor.
 

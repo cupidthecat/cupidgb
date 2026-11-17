@@ -30,8 +30,15 @@ extern "C" {
 #include "cupid/gb/gb.h"
 
 #define CUPID_GB_DEBUG_MAX_BREAKPOINTS 128u
+#define CUPID_GB_DEBUG_MAX_WATCHPOINTS 128u
 #define CUPID_GB_DEBUG_SYMBOL_NAME 128u
 #define CUPID_GB_DEBUG_EXPRESSION_SIZE 256u
+
+enum {
+    CUPID_GB_DEBUG_ACCESS_READ = 1u,
+    CUPID_GB_DEBUG_ACCESS_WRITE = 2u,
+    CUPID_GB_DEBUG_ACCESS_RW = CUPID_GB_DEBUG_ACCESS_READ | CUPID_GB_DEBUG_ACCESS_WRITE
+};
 
 typedef enum CupidGbDebugMode {
     CUPID_GB_DEBUG_PAUSED = 0,
@@ -49,7 +56,8 @@ typedef enum CupidGbDebugStop {
     CUPID_GB_DEBUG_STOP_BUDGET,
     CUPID_GB_DEBUG_STOP_NO_ROM,
     CUPID_GB_DEBUG_STOP_ERROR,
-    CUPID_GB_DEBUG_STOP_ILLEGAL_OPCODE
+    CUPID_GB_DEBUG_STOP_ILLEGAL_OPCODE,
+    CUPID_GB_DEBUG_STOP_WATCHPOINT
 } CupidGbDebugStop;
 
 typedef struct CupidGbDebugBreakpoint {
@@ -58,6 +66,31 @@ typedef struct CupidGbDebugBreakpoint {
     bool enabled;
     char condition[CUPID_GB_DEBUG_EXPRESSION_SIZE]; /* Empty means unconditional. */
 } CupidGbDebugBreakpoint;
+
+/* Inclusive virtual address range. A negative bank matches all mappings;
+ * otherwise the currently mapped bank must match at the original bus address. */
+typedef struct CupidGbDebugWatchpoint {
+    uint32_t id;
+    uint16_t start;
+    uint16_t end;
+    int bank;
+    uint8_t access;
+    bool enabled;
+    char condition[CUPID_GB_DEBUG_EXPRESSION_SIZE];
+} CupidGbDebugWatchpoint;
+
+/* First matched guest access in a hardware step. For reads, old/new are zero.
+ * For writes, new is the attempted byte. Old is a passive pre-write view for
+ * unconditional matches, or the sampled guest bus value when a write condition
+ * evaluates the old token. */
+typedef struct CupidGbDebugWatchHit {
+    uint32_t id;
+    uint16_t address;
+    int bank;
+    uint8_t access;
+    uint8_t old_value;
+    uint8_t new_value;
+} CupidGbDebugWatchHit;
 
 typedef struct CupidGbDebugValue {
     uint16_t value;
@@ -83,6 +116,16 @@ typedef struct CupidGbDebugInstruction {
 typedef struct CupidGbDebugger {
     CupidGbDebugBreakpoint breakpoints[CUPID_GB_DEBUG_MAX_BREAKPOINTS];
     size_t bp_count;
+    CupidGbDebugWatchpoint watchpoints[CUPID_GB_DEBUG_MAX_WATCHPOINTS];
+    size_t wp_count;
+    CupidGbDebugWatchHit last_watch_hit;
+    bool watch_pending;
+    bool watch_error;
+    bool watch_evaluating;
+    bool watch_active;
+    CupidGb *watch_gb;
+    CupidGbMemoryAccessCallback previous_memory_access_callback;
+    void *previous_memory_access_user_data;
     CupidGbDebugSymbol *symbols;
     size_t symbol_count;
     CupidGbDebugMode mode;
@@ -133,6 +176,25 @@ bool cupid_gb_debugger_evaluate(const CupidGbDebugger *debugger, const CupidGb *
 bool cupid_gb_debugger_breakpoint_remove(CupidGbDebugger *debugger, size_t index);
 void cupid_gb_debugger_breakpoints_clear(CupidGbDebugger *debugger);
 bool cupid_gb_debugger_match_breakpoint(const CupidGbDebugger *debugger, const CupidGb *gb);
+/* Watch definitions are host metadata, never native hardware-state fields.
+ * Writes match attempted guest accesses before DMA redirects and bus locks.
+ * Conditions use the same bounded expressions as execution breakpoints and
+ * additionally accept old/new during watch evaluation. Ranges are inclusive.
+ * Invalid definitions do not modify existing watches. IDs remain stable after
+ * removal. Each successful add creates a watchpoint even for an identical
+ * definition. New IDs follow the last live ID plus one, or start at one when
+ * empty; removing the tail or clearing all entries permits ID reuse. */
+bool cupid_gb_debugger_watchpoint_add(CupidGbDebugger *debugger, const CupidGb *gb, int bank,
+                                      uint16_t start, uint16_t end, uint8_t access,
+                                      const char *condition);
+bool cupid_gb_debugger_watchpoint_remove(CupidGbDebugger *debugger, uint32_t id);
+void cupid_gb_debugger_watchpoints_clear(CupidGbDebugger *debugger);
+/* Surround exactly one guest hardware step with these hooks when the host uses
+ * the normal execution API. End always unregisters the scoped observer and
+ * reports a matched access only after the hardware step has completed. Pure
+ * debugger peeks, expression reads, and editor pokes remain unobserved. */
+void cupid_gb_debugger_watch_begin(CupidGbDebugger *debugger, CupidGb *gb);
+CupidGbDebugStop cupid_gb_debugger_watch_end(CupidGbDebugger *debugger, CupidGb *gb);
 void cupid_gb_debugger_begin(CupidGbDebugger *debugger, const CupidGb *gb, CupidGbDebugMode mode);
 /* Check is the before-instruction hook for a host's ordinary run loop. It
  * checks breakpoints regardless of the command mode, including after reset. */

@@ -253,6 +253,8 @@ void cupid_gb_init(CupidGb *gb) {
     void *presentation_user_data;
     CupidGbInfraredCallback infrared_callback;
     void *infrared_user_data;
+    CupidGbMemoryAccessCallback memory_access_callback;
+    void *memory_access_user_data;
 
     if (gb == 0) {
         return;
@@ -273,6 +275,8 @@ void cupid_gb_init(CupidGb *gb) {
     presentation_user_data = gb->presentation_user_data;
     infrared_callback = gb->infrared_callback;
     infrared_user_data = gb->infrared_user_data;
+    memory_access_callback = gb->memory_access_callback;
+    memory_access_user_data = gb->memory_access_user_data;
     const int16_t motion_x = gb->mbc7.motion_x;
     const int16_t motion_y = gb->mbc7.motion_y;
     const bool huc3_ir_input = gb->huc3_ir_input;
@@ -299,6 +303,8 @@ void cupid_gb_init(CupidGb *gb) {
     gb->presentation_user_data = presentation_user_data;
     gb->infrared_callback = infrared_callback;
     gb->infrared_user_data = infrared_user_data;
+    gb->memory_access_callback = memory_access_callback;
+    gb->memory_access_user_data = memory_access_user_data;
     cupid_gb_mbc7_set_motion(gb, motion_x, motion_y);
     gb->huc3_ir_input = huc3_ir_input;
     gb->cheats = cheats;
@@ -609,6 +615,8 @@ void cupid_gb_cleanup(CupidGb *gb) {
     gb->presentation_user_data = NULL;
     gb->infrared_callback = NULL;
     gb->infrared_user_data = NULL;
+    gb->memory_access_callback = NULL;
+    gb->memory_access_user_data = NULL;
     gb->cheats = NULL;
     gb->power_on = (CupidGbPowerOn){0};
     gb->rtc_policy = (CupidGbRtcPolicy){0};
@@ -688,6 +696,14 @@ void cupid_gb_set_presentation_callback(CupidGb *gb, CupidGbPresentationCallback
         return;
     gb->presentation_callback = callback;
     gb->presentation_user_data = callback ? user_data : NULL;
+}
+
+void cupid_gb_set_memory_access_callback(CupidGb *gb, CupidGbMemoryAccessCallback callback,
+                                         void *user_data) {
+    if (!gb)
+        return;
+    gb->memory_access_callback = callback;
+    gb->memory_access_user_data = callback ? user_data : NULL;
 }
 
 // Memory map: read
@@ -1027,6 +1043,8 @@ uint8_t cupid_gb_read_u8(const CupidGb *gb, uint16_t address) {
 }
 
 uint8_t cupid_gb_read_bus_u8(CupidGb *gb, uint16_t address) {
+    if (gb && gb->memory_access_callback)
+        gb->memory_access_callback(gb->memory_access_user_data, gb, address, false, 0);
     if (gb && gb->dma_active && !resolve_dma_access(gb, &address, false, 0))
         return 0xffu;
     /* Keep the common instruction fetch out of the slower I/O and RAM map. */
@@ -1092,6 +1110,9 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
     if (gb == 0) {
         return;
     }
+
+    if (gb->memory_access_callback)
+        gb->memory_access_callback(gb->memory_access_user_data, gb, address, true, value);
 
     if (on_main_bus(gb, address))
         drive_cartridge_bus(gb, value, half_dot);

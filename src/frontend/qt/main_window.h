@@ -203,6 +203,9 @@ class MainWindow final : public QMainWindow {
     bool printerSmokeTest(const QString &romPath, const QString &directory);
     void refreshDebugger();
     void debuggerCommand(const QString &command);
+    bool debuggerWatchCommand(const QString &command);
+    QString debuggerWatchpointListing() const;
+    QString debuggerWatchMessage(bool conditionError = false) const;
     bool loadDebuggerSymbols(const QString &path);
     void resetDebuggerTimeline(bool clearSession = false);
     void pauseDebugger();
@@ -213,6 +216,7 @@ class MainWindow final : public QMainWindow {
     bool debuggerWrite(uint16_t address, uint8_t value);
     void drainDebuggerAudio();
     bool debuggerSmokeTest(const QString &directory);
+    bool watchpointSmokeTest(const QString &directory);
     bool pacingSmokeTest(const QString &path);
     bool idleTimerSmokeTest(const QString &path);
     bool turboCapSmokeTest(const QString &path);

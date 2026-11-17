@@ -132,6 +132,7 @@ void MainWindow::pauseDebugger() {
     // The pause transition also resets execution, so retain the stopped reason
     // after it completes. Errors must remain inspectable without skipping a hit.
     if (debugger_ && (previousStop == CUPID_GB_DEBUG_STOP_BREAKPOINT ||
+                      previousStop == CUPID_GB_DEBUG_STOP_WATCHPOINT ||
                       previousStop == CUPID_GB_DEBUG_STOP_ERROR ||
                       previousStop == CUPID_GB_DEBUG_STOP_ILLEGAL_OPCODE))
         debugger_->last_stop = previousStop;
@@ -189,6 +190,7 @@ void MainWindow::refreshDebugger() {
     }
     if (!debugger_->bp_count)
         breakpoints += "None\n";
+    breakpoints += debuggerWatchpointListing();
     breakpoints += QString("\nSymbols: %1\nInstruction history: %2 / 128")
                        .arg(debugger_->symbol_count)
                        .arg(debuggerHistory_.size());
@@ -336,8 +338,14 @@ void MainWindow::debuggerSlice() {
         drainDebuggerAudio();
         updatePrinter();
         if (result != CUPID_GB_DEBUG_STOP_NONE) {
-            stopDebugger(conditionError ? "Breakpoint condition evaluation failed."
-                                        : QString::fromUtf8(cupid_gb_debugger_stop_name(result)));
+            if (result == CUPID_GB_DEBUG_STOP_WATCHPOINT ||
+                (result == CUPID_GB_DEBUG_STOP_ERROR && !conditionError &&
+                 debugger_->last_watch_hit.id))
+                stopDebugger(debuggerWatchMessage(result == CUPID_GB_DEBUG_STOP_ERROR));
+            else
+                stopDebugger(conditionError
+                                 ? "Breakpoint condition evaluation failed."
+                                 : QString::fromUtf8(cupid_gb_debugger_stop_name(result)));
             return;
         }
         if (debuggerCommandSteps_ >= 1000000) {
@@ -408,6 +416,8 @@ void MainWindow::debuggerCommand(const QString &input) {
     const auto output = [this](const QString &text) { debuggerWindow_->appendOutput(text); };
     if (verb == "help" || verb == "?") {
         output("break [bank:address|symbol] [if expression]   delete NUMBER|all   breakpoints\n"
+               "watch[/r|/w|/rw] address [to end [inclusive]] [if condition]\n"
+               "unwatch [ID|all]   watchpoints   list\n"
                "continue (c)   step (s)   next (n)   finish (f)   backstep (bs)\n"
                "registers (r)   print (p) expression   disassemble [address]\n"
                "x address [decimal count]\n"
@@ -416,6 +426,8 @@ void MainWindow::debuggerCommand(const QString &input) {
                "Backstep retains up to 128 explicit debugger steps within 32 MiB.\n"
                "Continuous playback does not record instruction history.\n"
                "Expressions are pure 16-bit values; [address] reads a byte and {address} a word.\n"
+               "Watchpoints default to writes; range ends are excluded unless inclusive is given.\n"
+               "Write conditions also accept old and new; read conditions use zero for both.\n"
                "Precedence: comparisons; + - | ||; * / % & ^ &&; shifts; bank:address.\n"
                "Assignment and unary operators are not supported.");
         return;
@@ -435,6 +447,8 @@ void MainWindow::debuggerCommand(const QString &input) {
         output("Open a cartridge before using debugger execution or memory commands.");
         return;
     }
+    if (debuggerWatchCommand(command))
+        return;
     if (verb == "reset") {
         if (words.size() == 1) {
             if (resetConsole(CUPID_GB_RESET_HARD))

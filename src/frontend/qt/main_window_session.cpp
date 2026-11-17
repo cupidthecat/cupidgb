@@ -164,13 +164,25 @@ bool MainWindow::runFrame(Playback playback, PlaybackResult *result) {
         // Clear it only when this call actually proceeds into guest execution.
         if (!steps)
             gb.frame_ready = false;
-        if (!cupid_emulator_step(emulator_.get())) {
+        // Install memory observation only around forward hardware execution.
+        // Inspector reads, edits and rewind replay must not consume watchpoints.
+        const bool watching = !replay && debugger_ && debugger_->wp_count;
+        if (watching)
+            cupid_gb_debugger_watch_begin(debugger_.get(), &gb);
+        const bool executed = cupid_emulator_step(emulator_.get());
+        const auto watchStop =
+            watching ? cupid_gb_debugger_watch_end(debugger_.get(), &gb) : CUPID_GB_DEBUG_STOP_NONE;
+        if (!executed) {
             setPaused(true);
             reportError("CPU execution stopped. The cartridge remains open for inspection.");
             return false;
         }
         if (gb.sgb.player_count != controllerPlayerCount_)
             refreshControllerPlayerCount();
+        if (watchStop == CUPID_GB_DEBUG_STOP_WATCHPOINT || watchStop == CUPID_GB_DEBUG_STOP_ERROR) {
+            stopDebugger(debuggerWatchMessage(watchStop == CUPID_GB_DEBUG_STOP_ERROR));
+            return true;
+        }
         if (lastInstruction || gb.frame_ready || gb.elapsed_cycles - startCycles >= 70224)
             break;
     }

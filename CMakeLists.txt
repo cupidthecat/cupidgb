@@ -1,3 +1,23 @@
+# @file    CMakeLists.txt
+# @brief   Configure the hardware core, Qt desktop, regression checks, and installation.
+# @author  cupidthecat
+# @date    2026-11-16
+#
+# Copyright (C) 2026 cupidthecat
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <https://gnu.org>.
+
 cmake_minimum_required(VERSION 3.21)
 project(CupidGB VERSION 0.3.0 LANGUAGES C CXX)
 
@@ -141,6 +161,8 @@ if(CUPIDGB_BUILD_QT)
         src/frontend/qt/palette_library.cpp
         src/frontend/qt/palette_editor.cpp
         src/frontend/qt/main_window_debugger.cpp
+        src/frontend/qt/main_window_watchpoints.cpp
+        src/frontend/qt/main_window_watchpoint_tests.cpp
         src/frontend/qt/main_window_workflow_tests.cpp
         src/frontend/qt/main_window_startup_tests.cpp
         src/frontend/qt/main_window_rtc_tests.cpp
@@ -198,7 +220,7 @@ if(CUPIDGB_BUILD_QT)
 endif()
 if(CUPIDGB_ENABLE_TESTS)
     enable_testing()
-    foreach(test_name IN ITEMS smoke gb startup reset rtc rtc_timing rtc_dma rtc_state divider_phase serial printer printer_state ppu pixel_timing pixel_timing_state scy_latch stat apu audio_synthesis audio_filter audio_state audio_clock cpu_timing cpu_lockup dma video_bus vram_bus vram_quiet bus state battery native_v1_recovery sgb input input_sampling cartridge camera mbc7 tpp1 rumble rumble_sampling presentation_observer huc3 infrared infrared_state infrared_guest cheats debugger sha256)
+    foreach(test_name IN ITEMS smoke gb startup reset rtc rtc_timing rtc_dma rtc_state divider_phase serial printer printer_state ppu pixel_timing pixel_timing_state scy_latch stat apu audio_synthesis audio_filter audio_state audio_clock cpu_timing cpu_lockup dma video_bus vram_bus vram_quiet bus state battery native_v1_recovery sgb input input_sampling cartridge camera mbc7 tpp1 rumble rumble_sampling presentation_observer huc3 infrared infrared_state infrared_guest cheats debugger debugger_watchpoints sha256)
         add_executable(cupidgb_${test_name} tests/test_${test_name}.c)
         target_link_libraries(cupidgb_${test_name} PRIVATE cupidgb_core)
         # Tests use assert for setup and checks, including in Release builds.
@@ -228,6 +250,9 @@ if(CUPIDGB_ENABLE_TESTS)
     add_test(NAME cupidgb_core_interop COMMAND cupidgb_core_interop)
     set_tests_properties(cupidgb_core_interop PROPERTIES TIMEOUT 120)
     find_package(Python3 COMPONENTS Interpreter REQUIRED)
+    add_test(NAME cupidgb_source_headers
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check_source_headers.py)
+    set_tests_properties(cupidgb_source_headers PROPERTIES TIMEOUT 30)
     if(TARGET cupidgb_rom_runner)
         add_test(NAME cupidgb_runner
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/test_rom_runner.py

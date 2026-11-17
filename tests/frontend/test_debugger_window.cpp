@@ -23,6 +23,7 @@
 #include "debugger_window.h"
 
 #include <QApplication>
+#include <QComboBox>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
@@ -75,6 +76,21 @@ int main(int argc, char **argv) {
     assert(window.findChild<QLabel *>("debuggerState")->text().startsWith("Running"));
     window.submitCommand("   ");
     assert(commands.size() == 2);
+    auto *watchAddress = window.findChild<QLineEdit *>("debuggerWatchpointAddress");
+    auto *watchMode = window.findChild<QComboBox *>("debuggerWatchpointMode");
+    auto *addWatch = window.findChild<QPushButton *>("debuggerAddWatchpoint");
+    auto *clearWatches = window.findChild<QPushButton *>("debuggerClearWatchpoints");
+    assert(watchAddress && watchMode && addWatch && clearWatches);
+    watchAddress->setText("$c000 to $c010 if new == $42");
+    assert(watchMode->currentData().toString() == "w");
+    for (const auto &mode : QStringList{"w", "r", "rw"}) {
+        watchMode->setCurrentIndex(watchMode->findData(mode));
+        addWatch->click();
+        assert(commands.back() == "watch/" + mode + " $c000 to $c010 if new == $42");
+    }
+    clearWatches->click();
+    assert(commands.back() == "unwatch all");
+    const qsizetype handledCommands = commands.size();
     for (int line = 0; line < 2100; ++line)
         window.appendOutput(QString::number(line));
     assert(window.findChild<QPlainTextEdit *>("debuggerOutput")->blockCount() <= 2000);
@@ -94,6 +110,6 @@ int main(int argc, char **argv) {
     assert(!window.isVisible() && closed == 4);
     window.setHandlers({}, {}, {});
     window.submitCommand("help");
-    assert(commands.size() == 2);
+    assert(commands.size() == handledCommands);
     return 0;
 }

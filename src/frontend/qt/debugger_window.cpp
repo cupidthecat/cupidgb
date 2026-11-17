@@ -22,6 +22,7 @@
 
 #include "debugger_window.h"
 
+#include <QComboBox>
 #include <QFileDialog>
 #include <QFontDatabase>
 #include <QHBoxLayout>
@@ -139,6 +140,28 @@ DebuggerWindow::DebuggerWindow(QWidget *parent) : QDialog(parent, Qt::Window) {
     breakControls->addWidget(add);
     breakControls->addWidget(clear);
     layout->addLayout(breakControls);
+    auto *watchControls = new QHBoxLayout;
+    auto *watchAddress = new QLineEdit(this);
+    watchAddress->setObjectName("debuggerWatchpointAddress");
+    watchAddress->setPlaceholderText("Address or range, optionally followed by if condition");
+    auto *watchMode = new QComboBox(this);
+    watchMode->setObjectName("debuggerWatchpointMode");
+    watchMode->addItem("Write", "w");
+    watchMode->addItem("Read", "r");
+    watchMode->addItem("Read/write", "rw");
+    auto *addWatch = new QPushButton("Add Watchpoint", this);
+    addWatch->setObjectName("debuggerAddWatchpoint");
+    connect(addWatch, &QPushButton::clicked, this, [this, watchAddress, watchMode] {
+        submitCommand("watch/" + watchMode->currentData().toString() + " " + watchAddress->text());
+    });
+    auto *clearWatches = new QPushButton("Clear Watchpoints", this);
+    clearWatches->setObjectName("debuggerClearWatchpoints");
+    connect(clearWatches, &QPushButton::clicked, this, [this] { submitCommand("unwatch all"); });
+    watchControls->addWidget(watchAddress, 1);
+    watchControls->addWidget(watchMode);
+    watchControls->addWidget(addWatch);
+    watchControls->addWidget(clearWatches);
+    layout->addLayout(watchControls);
     output_ = readout("debuggerOutput", this);
     output_->document()->setMaximumBlockCount(2000);
     output_->setMaximumHeight(220);

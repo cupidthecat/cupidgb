@@ -6,12 +6,12 @@ These tools inspect the current emulated session. They do not establish hardware
 
 ## Execution controls
 
-The debugger shows CPU registers, flags, interrupt-enable state, HALT/STOP state, base-speed T-cycles, disassembly, symbols, and breakpoints. Its buttons and console operate on the same session.
+The debugger shows CPU registers, flags, interrupt-enable state, HALT/STOP state, base-speed T-cycles, disassembly, symbols, breakpoints, and memory watchpoints. Its buttons and console operate on the same session.
 
 | Control | Behavior |
 | --- | --- |
 | Break | Pause at the next host instruction boundary |
-| Continue | Resume normal playback and honor execution breakpoints |
+| Continue | Resume normal playback and honor execution breakpoints and memory watchpoints |
 | Step | Execute one hardware step, entering calls or interrupt dispatch; a sleeping CPU may execute an idle cycle |
 | Next | Step over calls and interrupt handlers, stopping at the next appropriate instruction boundary |
 | Finish | Run until the current function or interrupt handler returns |
@@ -42,6 +42,13 @@ Type `help` or `?` for the supported command list. Console numbers are decimal u
 | `break` or `b` | Pause execution |
 | `breakpoints` | List the current breakpoint count and refresh the breakpoint view |
 | `delete 1` / `delete all` | Remove one listed breakpoint or all breakpoints |
+| `watch $c000` | Stop after a guest write to C000; writes are the default access type |
+| `watch/r $c000` / `watch/rw $c000` | Watch reads, or both reads and writes |
+| `watch/w $02:$d000` | Watch writes to D000 when WRAM bank 2 is mapped |
+| `watch/w $c000 to $c010` | Watch C000 through C00F; add `inclusive` to include C010 |
+| `watch/w $c000 if (old == $11) && (new == $12)` | Stop when the old bus value is 11 and the attempted write is 12 |
+| `watchpoints` / `list` | Refresh the watch list, or the combined breakpoint/watchpoint counts |
+| `unwatch 3` / `unwatch all` | Remove a stable watchpoint ID, or clear all watches |
 | `continue` / `c` | Resume normal playback |
 | `step` / `s`, `next` / `n`, `finish` / `f` | Run the corresponding execution command |
 | `backstep` / `bs` | Restore one retained instruction boundary |
@@ -65,7 +72,19 @@ Expressions accept CPU registers, loaded symbols, decimal literals, `$`/`0x` hex
 
 MMM01 uses the same logical ROM-bank numbering for menu-first and menu-last dumps. The file remains in its original order. Before the controller locks, its menu banks display as `FFFE` and `FFFF`; expression values and the `break` command use nine-bit bank qualifiers. Use an address without a bank qualifier to stop in either startup menu bank. Symbol lookup and the raw core breakpoint API retain the full menu-bank identities.
 
-Precedence from lowest to highest is: comparisons; `+ - | ||`; `* / % & ^ &&`; shifts; bank qualification with `:`. Operators in a group associate left to right. These groups differ from C. Expressions are limited to 255 bytes and 32 nested levels. Assignment, unary operators, watchpoints, and range breakpoints remain unsupported.
+Precedence from lowest to highest is: comparisons; `+ - | ||`; `* / % & ^ &&`; shifts; bank qualification with `:`. Operators in a group associate left to right. These groups differ from C, so parenthesize individual comparisons when combining them. Expressions are limited to 255 bytes and 32 nested levels. Assignment, unary operators, and execution range breakpoints remain unsupported.
+
+## Memory watchpoints
+
+Use the Watchpoint address field and its Write, Read, or Read/write selector, or enter a `watch` command. A watch can cover one address or an increasing range within a mapped bank. Up to 128 definitions are retained. Removing a watch does not renumber surviving IDs. A new definition follows the last live ID, so deleting the tail permits ID reuse and clearing the collection starts numbering at 1. `unwatch` without an argument also clears the collection.
+
+Put a bank qualifier on the starting address to select a bank. An ending qualifier alone leaves the range unrestricted; if both endpoints specify a bank, they must agree. A range end must exceed its start even with `inclusive`. Use a single address for a one-byte watch.
+
+A matching access is recorded at its original bus address, before DMA redirection or memory-access restrictions. A blocked write can therefore trigger a watch even though RAM does not change. Instruction fetches and DMA source reads use the same observed guest read path. The first matching access is reported after the entire hardware step finishes. Step, Next, Finish, and normal playback all honor watches. Next and Finish stop early on a match; explicit debugger execution keeps the triggering instruction available for Backstep.
+
+Conditions use the expression syntax above and also accept `old` and `new`. For a write, `new` is the attempted byte. Each evaluated occurrence of `old` reads the guest bus at the original address before the write, including its bus restrictions and device read behavior. An unconditional watch adds no such read. For a read watch, both tokens are zero because matching precedes the read result. Ordinary bracketed expression reads remain passive inspector reads. Watch evaluation suppresses recursive watch hits.
+
+Memory inspection, register queries, host memory edits, and rewind replay do not trigger watches. A condition that can no longer resolve a symbol stops with an error after the triggering step and retains that step for Backstep. Watch definitions are host metadata: state loading and compatible resets retain them, while replacing the cartridge starts a fresh debugger session. Native save files contain neither definitions nor host callback pointers.
 
 ## Symbols
 
@@ -80,7 +99,7 @@ Load Symbols accepts RGBDS-style `.sym` text with hexadecimal `bank:address name
 
 Loading replaces the symbol table only after complete validation. A malformed file leaves existing symbols intact and reports a line number. Duplicate names resolve to their last definition. Files are limited to 4 MiB and 16,384 symbols, with at most 127 bytes per name. The symbol loader does not read object files.
 
-Symbols and breakpoints are host debugger data. They are not embedded in native save states. Native console resets keep them while clearing instruction history. A replacement clears the previous session's debugger data and loads a matching basename `.sym` file if available. The first debugger open also checks for that companion file. A failed cartridge open preserves the current session.
+Symbols, breakpoints, and watchpoints are host debugger data. They are not embedded in native save states. Native console resets keep them while clearing instruction history. A replacement clears the previous session's debugger data and loads a matching basename `.sym` file if available. The first debugger open also checks for that companion file. A failed cartridge open preserves the current session.
 
 Menu Reset, Quick Reset, Reload and `reset reload` refresh cartridge, firmware and companion symbols. An absent companion file clears the old symbols. Malformed symbols or unreadable assets preserve the session and its history. Existing breakpoints remain for compatible sessions. Ordinary Reset clears frame rewind; Quick Reset and Reload retain it when cartridge bytes, model and firmware match. All clear instruction history. Use `symbols` to replace only the symbol table without reloading the cartridge.
 
@@ -116,4 +135,4 @@ Inspector raw grayscale mode bypasses color correction. Palette-selected color p
 
 Use Audio > Audio Channels or Alt+1 through Alt+4 to listen to individual channel combinations. Muting changes output mixing while the emulated channel continues running. These choices persist through state loading, rewind and Backstep for the current session.
 
-Read/write watchpoints, a full expression language, saved debugger sessions, continuous-playback instruction replay, arbitrary physical-bank memory editing, ROM patching, interactive palette editing, and graphics layer toggles remain pending. Inspector rendering and the bounded instruction history are useful diagnostic tools, not complete debugger or hardware parity.
+A full expression language, saved debugger sessions, continuous-playback instruction replay, arbitrary physical-bank memory editing, ROM patching, interactive palette editing, and graphics layer toggles remain pending. Inspector rendering and the bounded instruction history are useful diagnostic tools, not complete debugger or hardware parity.
