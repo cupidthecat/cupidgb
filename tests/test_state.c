@@ -1548,11 +1548,14 @@ static void test_trusted_context(void) {
     CupidGbStateContext empty = {0};
     reject_stale_context(gb, normal, length, &empty, CUPID_GB_STATE_WRONG_ROM);
     uint8_t *original = gb->rom, *replacement = malloc(gb->rom_size);
+    const size_t original_capacity = gb->rom_capacity;
     assert(replacement);
     memcpy(replacement, original, gb->rom_size);
     gb->rom = replacement;
+    gb->rom_capacity = gb->rom_size;
     reject_stale_context(gb, normal, length, &context, CUPID_GB_STATE_WRONG_ROM);
     gb->rom = original;
+    gb->rom_capacity = original_capacity;
     free(replacement);
     --gb->rom_size;
     reject_stale_context(gb, normal, length, &context, CUPID_GB_STATE_WRONG_ROM);

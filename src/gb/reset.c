@@ -34,8 +34,8 @@
 
 static bool valid_request(const CupidGb *gb, CupidGbResetKind kind) {
     if (!gb || !gb->loaded || !gb->rom || !gb->rom_size || gb->rom_size > CUPID_GB_MAX_ROM_SIZE ||
-        gb->cartridge_ram_size > CUPID_GB_MAX_RAM_SIZE || gb->model < CUPID_GB_MODEL_DMG_ABC ||
-        gb->model > CUPID_GB_MODEL_SGB2 ||
+        gb->rom_size > gb->rom_capacity || gb->cartridge_ram_size > CUPID_GB_MAX_RAM_SIZE ||
+        gb->model < CUPID_GB_MODEL_DMG_ABC || gb->model > CUPID_GB_MODEL_SGB2 ||
         (kind != CUPID_GB_RESET_HARD && kind != CUPID_GB_RESET_QUICK))
         return false;
     return !gb->boot_rom_size ||
@@ -91,6 +91,8 @@ bool cupid_gb_reset(CupidGb *gb, CupidGbResetKind kind) {
 
     next->model = gb->model;
     next->rom = gb->rom;
+    next->rom_capacity = gb->rom_capacity;
+    next->rom_generation = gb->rom_generation;
     next->power_on = gb->power_on;
     next->rtc_policy = gb->rtc_policy;
     if (kind == CUPID_GB_RESET_QUICK) {

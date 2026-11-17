@@ -36,11 +36,14 @@ static CupidGb *new_cartridge(CupidGbModel model) {
     rom[0x143] = 0x80;
     rom[0x147] = 0xfe;
     rom[0x149] = 2;
+    for (unsigned i = 0x134; i <= 0x14c; ++i)
+        rom[0x14d] = (uint8_t)(rom[0x14d] - rom[i] - 1);
     CupidGb *gb = calloc(1, sizeof(*gb));
     assert(gb);
-    gb->model = model;
+    cupid_gb_set_model(gb, model);
     assert(cupid_gb_load_rom(gb, rom, sizeof(rom)));
     assert(gb->header.mbc_type == CUPID_GB_HUC3 && gb->header.has_timer);
+    assert(gb->header.header_checksum_valid && gb->cgb_mode == (model == CUPID_GB_MODEL_CGB));
     return gb;
 }
 
@@ -70,8 +73,8 @@ static uint8_t read_window(CupidGb *gb, uint8_t mode) {
     return cupid_gb_read_u8(gb, 0xa031);
 }
 
-static void test_command_bus(void) {
-    CupidGb *gb = new_cartridge(CUPID_GB_MODEL_DMG_ABC);
+static void test_command_bus(CupidGbModel model) {
+    CupidGb *gb = new_cartridge(model);
     assert(read_window(gb, CUPID_GB_HUC3_COMMAND) == 1);
     set_index(gb, 0);
     write_digits(gb, 0x5a5, 3);
@@ -113,7 +116,7 @@ static void test_command_bus(void) {
     destroy(gb);
 }
 
-static void test_clock_and_battery(void) {
+static void test_clock_and_battery(CupidGbModel model) {
     CupidGbHuc3 clock = {.rtc_base_time = 60030, .minutes = 1439, .days = 65535};
     cupid_gb_huc3_advance(&clock, 60059);
     assert(clock.minutes == 1439 && clock.days == 65535);
@@ -129,8 +132,8 @@ static void test_clock_and_battery(void) {
     cupid_gb_huc3_advance(&clock, 60120 + 60 * 1440);
     assert(clock.minutes == 0 && clock.days == 14);
 
-    CupidGb *gb = new_cartridge(CUPID_GB_MODEL_DMG_ABC);
-    CupidGb *target = new_cartridge(CUPID_GB_MODEL_DMG_ABC);
+    CupidGb *gb = new_cartridge(model);
+    CupidGb *target = new_cartridge(model);
     gb->huc3 = (CupidGbHuc3){.rtc_base_time = 60030,
                              .minutes = 1439,
                              .days = 1,
@@ -301,8 +304,8 @@ static int64_t observe_clock(void *context) {
     return 90000;
 }
 
-static void test_registers_do_not_poll(void) {
-    CupidGb *gb = new_cartridge(CUPID_GB_MODEL_DMG_ABC);
+static void test_registers_do_not_poll(CupidGbModel model) {
+    CupidGb *gb = new_cartridge(model);
     unsigned calls = 0;
     cupid_gb_set_rtc_time_source(gb, observe_clock, &calls);
     gb->huc3 = (CupidGbHuc3){.rtc_base_time = 60030,
@@ -331,9 +334,12 @@ static void test_registers_do_not_poll(void) {
 }
 
 int main(void) {
-    test_command_bus();
-    test_clock_and_battery();
-    test_registers_do_not_poll();
+    const CupidGbModel models[] = {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_CGB};
+    for (size_t model = 0; model < sizeof(models) / sizeof(*models); ++model) {
+        test_command_bus(models[model]);
+        test_clock_and_battery(models[model]);
+        test_registers_do_not_poll(models[model]);
+    }
     test_infrared_and_state();
     test_infrared_during_speed_switch();
     test_legacy_state_without_clock();

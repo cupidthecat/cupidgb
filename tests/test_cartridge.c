@@ -22,12 +22,16 @@
 
 #include "cupid/gb/battery.h"
 #include "cupid/gb/cartridge.h"
+#include "cupid/gb/reset.h"
 #include "cupid/gb/state.h"
 
+#include "../src/gb/cartridge_internal.h"
 #include <assert.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 static void update_header_checksum(uint8_t *rom) {
     uint8_t checksum = 0;
@@ -47,6 +51,14 @@ static uint8_t *make_rom(size_t size, uint8_t type, uint8_t rom_code, uint8_t ra
     rom[0x147] = type;
     rom[0x148] = rom_code;
     rom[0x149] = ram_code;
+    update_header_checksum(rom);
+    return rom;
+}
+
+static uint8_t *make_model_rom(CupidGbModel model, size_t size, uint8_t type, uint8_t rom_code,
+                               uint8_t ram_code) {
+    uint8_t *rom = make_rom(size, type, rom_code, ram_code);
+    rom[0x143] = model == CUPID_GB_MODEL_CGB ? 0x80 : 0;
     update_header_checksum(rom);
     return rom;
 }
@@ -197,19 +209,20 @@ static void test_mmm01_header_storage(void) {
     free(gb);
 }
 
-static void test_address_line_aliases(void) {
+static void test_address_line_aliases(CupidGbModel model) {
     const uint8_t types[] = {0x08, 0x09, 0x03, 0x06, 0x10, 0x13, 0x1b, 0x1e,
                              0x20, 0x22, 0xfc, 0xfe, 0xff, 0x0d, 0xbc};
     const uint8_t ram_codes[] = {0, 1, 2, 3, 4, 5};
     CupidGb *gb = calloc(1, sizeof(*gb));
     assert(gb);
+    cupid_gb_set_model(gb, model);
     assert(cupid_gb_effective_rom_bank(gb, false) == 0);
     assert(cupid_gb_effective_ram_bank(gb) == 0);
     for (unsigned bits = 1; bits <= 9; ++bits) {
         const size_t banks = (size_t)1u << bits;
         const size_t populated = banks * 0x4000 - 0x123;
         for (unsigned type = 0; type < sizeof(types); ++type) {
-            uint8_t *rom = make_rom(populated, types[type], 0, ram_codes[bits % 6]);
+            uint8_t *rom = make_model_rom(model, populated, types[type], 0, ram_codes[bits % 6]);
             if (types[type] == 0xbc) {
                 rom[0x149] = 0xc1;
                 rom[0x14a] = 0x65;
@@ -265,7 +278,7 @@ static void assert_fresh_storage(const CupidGb *gb, size_t expected_size) {
         assert(gb->cartridge_ram[expected_size] == 0);
 }
 
-static void test_fresh_storage_and_restore(void) {
+static void test_fresh_storage_and_restore(CupidGbModel model) {
     const struct {
         uint8_t type, ram_code;
         size_t size;
@@ -278,8 +291,10 @@ static void test_fresh_storage_and_restore(void) {
 
     CupidGb *gb = calloc(1, sizeof(*gb));
     assert(gb);
+    cupid_gb_set_model(gb, model);
     for (size_t variant = 0; variant < sizeof(variants) / sizeof(*variants); ++variant) {
-        uint8_t *rom = make_rom(0x8000, variants[variant].type, 0, variants[variant].ram_code);
+        uint8_t *rom =
+            make_model_rom(model, 0x8000, variants[variant].type, 0, variants[variant].ram_code);
         if (variants[variant].type == 0xbc) {
             rom[0x14a] = 0x65;
             rom[0x152] = 1;
@@ -322,7 +337,7 @@ static void test_fresh_storage_and_restore(void) {
         assert_fresh_storage(gb, ram_size);
         assert(cupid_gb_load_state(gb, state, state_size) == CUPID_GB_STATE_OK);
         assert(memcmp(gb->cartridge_ram, expected, ram_size) == 0);
-        gb->boot_rom_size = 0x100;
+        gb->boot_rom_size = model == CUPID_GB_MODEL_CGB ? 0x900 : 0x100;
         cupid_gb_enter_boot_rom(gb);
         assert(memcmp(gb->cartridge_ram, expected, ram_size) == 0);
         free(battery);
@@ -334,12 +349,13 @@ static void test_fresh_storage_and_restore(void) {
     free(gb);
 }
 
-static void test_physical_rom_address_lines(void) {
+static void test_physical_rom_address_lines(CupidGbModel model) {
     CupidGb gb = {0};
+    cupid_gb_set_model(&gb, model);
     /* File population determines connected address lines; the size byte is
      * metadata. Empty tails of a partially populated chip read as erased ROM. */
     const size_t populated = 0xc001;
-    uint8_t *rom = make_rom(populated, 0x19, 0, 0);
+    uint8_t *rom = make_model_rom(model, populated, 0x19, 0, 0);
     assert(cupid_gb_load_rom(&gb, rom, populated));
     assert(gb.rom_bank_count == 4 && gb.rom_size == populated);
     for (unsigned bank = 0; bank < 16; ++bank) {
@@ -348,7 +364,7 @@ static void test_physical_rom_address_lines(void) {
         assert(cupid_gb_read_u8(&gb, 0x4001) == ((bank & 3) == 3 ? 0xff : bank & 3));
     }
     free(rom);
-    rom = make_rom(0x8000, 0x19, 8, 0);
+    rom = make_model_rom(model, 0x8000, 0x19, 8, 0);
     assert(cupid_gb_load_rom(&gb, rom, 0x8000));
     assert(gb.rom_bank_count == 2 && gb.header.rom_bank_count == 512);
     cupid_gb_write_u8(&gb, 0x2000, 31);
@@ -359,6 +375,264 @@ static void test_physical_rom_address_lines(void) {
     assert(gb.rom_bank_count == 2 && gb.header.rom_bank_count == 0);
     free(rom);
     cupid_gb_cleanup(&gb);
+}
+
+static uint8_t *make_extended_rom(size_t bytes) {
+    uint8_t *rom = make_rom(bytes, 0xbcu, 8u, 0xc1u);
+    rom[0x143u] = 0x80u;
+    rom[0x14au] = 0x65u;
+    rom[0x152u] = 0;
+    rom[0x153u] = 1;
+    update_header_checksum(rom);
+    return rom;
+}
+
+static void select_tpp1_rom_bank(CupidGb *gb, uint16_t bank) {
+    cupid_gb_write_u8(gb, 0x2000u, (uint8_t)bank);
+    cupid_gb_write_u8(gb, 0x2001u, (uint8_t)(bank >> 8u));
+    assert(gb->tpp1.rom_bank == bank && gb->current_rom_bank == bank);
+}
+
+static unsigned failed_rom_allocations;
+
+static void *fail_rom_allocation(size_t bytes) {
+    (void)bytes;
+    ++failed_rom_allocations;
+    return NULL;
+}
+
+static void test_extended_rom_capacity(CupidGbModel model) {
+    enum {
+        FIRST_EXTENDED_BYTE = 0x800000u,
+        LARGER_ROM_SIZE = 0x1000000u,
+        LAST_ROM_BANK = 0xffc000u
+    };
+
+    assert(CUPID_GB_MAX_ROM_SIZE / 0x4000u == 65536u);
+    CupidGb *gb = calloc(1, sizeof(*gb));
+    assert(gb);
+    cupid_gb_set_model(gb, model);
+    cupid_gb_init(gb);
+    assert(gb->rom && gb->rom_capacity == CUPID_GB_MIN_ROM_CAPACITY && !gb->rom_size);
+    const size_t length = FIRST_EXTENDED_BYTE + 1u;
+    uint8_t *rom = make_extended_rom(length);
+    rom[0x7fc000u] = 0x5cu;
+    rom[FIRST_EXTENDED_BYTE] = 0x7bu;
+    assert(cupid_gb_load_rom(gb, rom, length));
+    assert(gb->rom_size == length && gb->rom_capacity == length && gb->rom_bank_count == 1024u &&
+           gb->header.mbc_type == CUPID_GB_TPP1);
+    assert(!memcmp(gb->rom, rom, length));
+    select_tpp1_rom_bank(gb, 511u);
+    assert(cupid_gb_read_u8(gb, 0x4000u) == 0x5cu);
+    select_tpp1_rom_bank(gb, 512u);
+    assert(cupid_gb_read_u8(gb, 0x4000u) == 0x7bu);
+    assert(cupid_gb_read_u8(gb, 0x4001u) == 0xffu);
+    select_tpp1_rom_bank(gb, 1023u);
+    assert(cupid_gb_read_u8(gb, 0x4000u) == 0xffu);
+    select_tpp1_rom_bank(gb, 1024u);
+    assert(cupid_gb_read_u8(gb, 0x4000u) == rom[0]);
+    select_tpp1_rom_bank(gb, 0x8001u);
+    assert(cupid_gb_read_u8(gb, 0x4000u) == rom[0x4000u]);
+
+    select_tpp1_rom_bank(gb, 512u);
+    const size_t state_size = cupid_gb_state_size(gb);
+    uint8_t *state = malloc(state_size);
+    assert(state && cupid_gb_save_state(gb, state, state_size, NULL) == CUPID_GB_STATE_OK);
+    uint8_t *const retained = gb->rom;
+    const size_t retained_capacity = gb->rom_capacity;
+    const uint64_t retained_generation = gb->rom_generation;
+    assert(cupid_gb_reset(gb, CUPID_GB_RESET_QUICK));
+    assert(gb->rom == retained && gb->rom_capacity == retained_capacity &&
+           gb->rom_generation == retained_generation && gb->rom_size == length);
+    assert(cupid_gb_reset(gb, CUPID_GB_RESET_HARD));
+    assert(gb->rom == retained && gb->rom_capacity == retained_capacity &&
+           gb->rom_generation == retained_generation && gb->rom_size == length);
+    assert(cupid_gb_load_state(gb, state, state_size) == CUPID_GB_STATE_OK);
+    assert(gb->rom == retained && gb->rom_capacity == retained_capacity &&
+           gb->rom_generation == retained_generation && gb->current_rom_bank == 512u);
+    assert(cupid_gb_read_u8(gb, 0x4000u) == 0x7bu);
+    free(state);
+
+    /* The host-only cartridge generation binds cached state contexts across
+     * ordinary reset and state import, without entering the native wire bytes. */
+    CupidGbStateContext reset_context = {0};
+    assert(cupid_gb_state_context_init(&reset_context, gb) == CUPID_GB_STATE_OK);
+    assert(cupid_gb_reset(gb, CUPID_GB_RESET_QUICK));
+    state = malloc(cupid_gb_state_size(gb));
+    assert(state);
+    assert(cupid_gb_save_state_with_context(gb, state, cupid_gb_state_size(gb), NULL,
+                                            &reset_context) == CUPID_GB_STATE_OK);
+    free(state);
+
+    CupidGbStateContext old_context = {0};
+    assert(cupid_gb_state_context_init(&old_context, gb) == CUPID_GB_STATE_OK);
+    assert(state_size == cupid_gb_state_size(gb));
+    state = malloc(state_size);
+    assert(state && cupid_gb_save_state(gb, state, state_size, NULL) == CUPID_GB_STATE_OK);
+    assert(cupid_gb_load_rom(gb, gb->rom, gb->rom_size));
+    assert(gb->rom == retained && gb->rom_capacity == length &&
+           gb->rom_generation == retained_generation + 1u);
+    uint8_t *after = malloc(state_size);
+    uint8_t *before = malloc(state_size);
+    assert(after && before &&
+           cupid_gb_save_state(gb, before, state_size, NULL) == CUPID_GB_STATE_OK);
+    memset(after, 0xa5, state_size);
+    size_t written = 17u;
+    assert(cupid_gb_save_state_with_context(gb, after, state_size, &written, &old_context) ==
+           CUPID_GB_STATE_WRONG_ROM);
+    assert(written == 0);
+    for (size_t offset = 0; offset < state_size; ++offset)
+        assert(after[offset] == 0xa5u);
+    assert(cupid_gb_load_state_with_context(gb, state, state_size, &old_context) ==
+           CUPID_GB_STATE_WRONG_ROM);
+    assert(cupid_gb_save_state(gb, after, state_size, NULL) == CUPID_GB_STATE_OK &&
+           memcmp(before, after, state_size) == 0);
+    assert(cupid_gb_load_state(gb, state, state_size) == CUPID_GB_STATE_OK &&
+           gb->rom_generation == retained_generation + 1u);
+    assert(cupid_gb_save_state(gb, after, state_size, NULL) == CUPID_GB_STATE_OK &&
+           memcmp(state, after, state_size) == 0);
+    CupidGbStateContext fresh_context = {0};
+    assert(cupid_gb_state_context_init(&fresh_context, gb) == CUPID_GB_STATE_OK);
+    assert(cupid_gb_save_state_with_context(gb, after, state_size, NULL, &fresh_context) ==
+           CUPID_GB_STATE_OK);
+    free(before);
+    free(after);
+    free(state);
+
+    /* Failed validation or a failed capacity growth cannot discard an active
+     * cartridge, its RAM, its CPU history, or its owned ROM bytes. */
+    CupidGb *snapshot = malloc(sizeof(*snapshot));
+    uint8_t *saved_bytes = malloc(gb->rom_size);
+    assert(snapshot && saved_bytes);
+    memcpy(snapshot, gb, sizeof(*gb));
+    memcpy(saved_bytes, gb->rom, gb->rom_size);
+    assert(!cupid_gb_load_rom(gb, rom, (size_t)CUPID_GB_MAX_ROM_SIZE + 1u));
+    assert(!cupid_gb_load_rom(gb, gb->rom + gb->rom_capacity - 8u, 0x150u));
+    assert(!memcmp(snapshot, gb, sizeof(*gb)) && !memcmp(saved_bytes, gb->rom, gb->rom_size));
+
+    CupidGbStateContext still_valid = {0};
+    assert(cupid_gb_state_context_init(&still_valid, gb) == CUPID_GB_STATE_OK);
+    uint8_t *large = make_extended_rom(LARGER_ROM_SIZE);
+    large[LAST_ROM_BANK] = 0xa6u;
+    failed_rom_allocations = 0;
+    assert(!cupid_gb_load_rom_with_allocator(gb, large, LARGER_ROM_SIZE, fail_rom_allocation));
+    assert(failed_rom_allocations == 1u && !memcmp(snapshot, gb, sizeof(*gb)) &&
+           !memcmp(saved_bytes, gb->rom, gb->rom_size));
+    state = malloc(cupid_gb_state_size(gb));
+    assert(state);
+    assert(cupid_gb_save_state_with_context(gb, state, cupid_gb_state_size(gb), NULL,
+                                            &still_valid) == CUPID_GB_STATE_OK);
+    free(state);
+    free(saved_bytes);
+    free(snapshot);
+
+    assert(cupid_gb_load_rom(gb, large, LARGER_ROM_SIZE));
+    assert(gb->rom_capacity == LARGER_ROM_SIZE && gb->rom_bank_count == 1024u);
+    select_tpp1_rom_bank(gb, 1023u);
+    assert(cupid_gb_read_u8(gb, 0x4000u) == 0xa6u);
+    select_tpp1_rom_bank(gb, 0xffffu);
+    assert(cupid_gb_read_u8(gb, 0x4000u) == 0xa6u);
+    select_tpp1_rom_bank(gb, 1024u);
+    assert(cupid_gb_read_u8(gb, 0x4000u) == large[0]);
+    free(large);
+
+    /* Controllers with narrower bank latches accept the same physical input,
+     * but still retain their existing hardware address-line selection widths. */
+    rom[0x147u] = 0x19u;
+    rom[0x149u] = 0;
+    rom[0x14au] = 0;
+    update_header_checksum(rom);
+    assert(cupid_gb_load_rom(gb, rom, length));
+    assert(gb->header.mbc_type == CUPID_GB_MBC5 && gb->rom_capacity == length);
+    cupid_gb_write_u8(gb, 0x2000u, 0xffu);
+    cupid_gb_write_u8(gb, 0x3000u, 1u);
+    assert(cupid_gb_read_u8(gb, 0x4000u) == 0x5cu);
+    free(rom);
+
+    /* Shrinking from the current ROM bytes reallocates the destination.
+     * A direct copy from the old pointer must finish before that pointer is freed. */
+    uint8_t *original_prefix = malloc(CUPID_GB_MIN_ROM_CAPACITY);
+    assert(original_prefix);
+    memcpy(original_prefix, gb->rom, CUPID_GB_MIN_ROM_CAPACITY);
+    uint8_t *const larger_storage = gb->rom;
+    assert(cupid_gb_load_rom(gb, gb->rom, CUPID_GB_MIN_ROM_CAPACITY));
+    assert(gb->rom != larger_storage && gb->rom_capacity == CUPID_GB_MIN_ROM_CAPACITY &&
+           gb->rom_size == CUPID_GB_MIN_ROM_CAPACITY &&
+           memcmp(gb->rom, original_prefix, CUPID_GB_MIN_ROM_CAPACITY) == 0);
+    free(original_prefix);
+
+    uint8_t *small = make_rom(0x8000u, 0, 0, 0);
+    assert(cupid_gb_load_rom(gb, small, 0x8000u));
+    assert(gb->rom_size == 0x8000u && gb->rom_capacity == CUPID_GB_MIN_ROM_CAPACITY);
+    free(small);
+    uint8_t *inside = make_rom(0x7f00u, 0, 0, 0);
+    uint8_t *const small_storage = gb->rom;
+    memcpy(gb->rom + 0x100u, inside, 0x7f00u);
+    assert(cupid_gb_load_rom(gb, gb->rom + 0x100u, 0x7f00u));
+    assert(gb->rom == small_storage && gb->rom_capacity == CUPID_GB_MIN_ROM_CAPACITY &&
+           gb->rom_size == 0x7f00u && !memcmp(gb->rom, inside, 0x7f00u));
+    free(inside);
+    cupid_gb_cleanup(gb);
+    assert(!gb->rom && !gb->rom_capacity);
+    free(gb);
+}
+
+static void test_rom_capacity_output_overlap(void) {
+    CupidGb *gb = calloc(1, sizeof(*gb));
+    assert(gb);
+    uint8_t *rom = make_rom(0x8000u, 0u, 0u, 0u);
+    assert(cupid_gb_load_rom(gb, rom, 0x8000u));
+    const size_t size = cupid_gb_state_size(gb);
+    assert(size > 0);
+    const size_t enlarged_capacity = gb->rom_size + size + sizeof(size_t);
+    uint8_t *const larger = malloc(enlarged_capacity);
+    assert(larger);
+    memcpy(larger, gb->rom, gb->rom_size);
+    free(gb->rom);
+    gb->rom = larger;
+    gb->rom_capacity = enlarged_capacity;
+    size_t written = 19;
+    assert(cupid_gb_save_state(gb, gb->rom + gb->rom_size, size, &written) ==
+           CUPID_GB_STATE_INVALID);
+    assert(written == 0 && memcmp(gb->rom, rom, gb->rom_size) == 0);
+    uint8_t *state = malloc(size);
+    assert(state && cupid_gb_save_state(gb, state, size, NULL) == CUPID_GB_STATE_OK);
+    assert(cupid_gb_load_state(gb, state, size) == CUPID_GB_STATE_OK);
+    free(state);
+    cupid_gb_cleanup(gb);
+    free(gb);
+    free(rom);
+}
+
+static void test_extended_rom_file(void) {
+    const size_t length = 0x800000u + 1u;
+    uint8_t *rom = make_extended_rom(length);
+    rom[0x800000u] = 0xb7u;
+    char path[112] = {0};
+    struct timespec timestamp = {0};
+    assert(timespec_get(&timestamp, TIME_UTC) == TIME_UTC);
+    FILE *file = NULL;
+    for (unsigned attempt = 0; attempt < 64u && !file; ++attempt) {
+        snprintf(path, sizeof(path), "cupidgb-rom-cap-%lld-%lu-%u.gbc", (long long)timestamp.tv_sec,
+                 (unsigned long)timestamp.tv_nsec, attempt);
+        file = fopen(path, "wbx");
+        assert(file || errno == EEXIST);
+    }
+    assert(file);
+    assert(fwrite(rom, 1u, length, file) == length && fclose(file) == 0);
+
+    CupidGb *gb = calloc(1, sizeof(*gb));
+    assert(gb);
+    cupid_gb_set_model(gb, CUPID_GB_MODEL_CGB);
+    assert(cupid_gb_load_rom_file(gb, path));
+    assert(gb->rom_size == length && gb->rom_capacity == length && gb->rom_bank_count == 1024u &&
+           !memcmp(gb->rom, rom, length));
+    select_tpp1_rom_bank(gb, 512u);
+    assert(cupid_gb_read_u8(gb, 0x4000u) == 0xb7u && cupid_gb_read_u8(gb, 0x4001u) == 0xffu);
+    assert(remove(path) == 0);
+    cupid_gb_cleanup(gb);
+    free(gb);
+    free(rom);
 }
 
 static void test_reject_advance_cartridge(void) {
@@ -375,10 +649,11 @@ static void test_reject_advance_cartridge(void) {
     free(rom);
 }
 
-static void test_multicart_wiring(void) {
+static void test_multicart_wiring(CupidGbModel model) {
     CupidGb gb = {0};
+    cupid_gb_set_model(&gb, model);
     const size_t size = 0x80000;
-    uint8_t *rom = make_rom(size, 3, 4, 3);
+    uint8_t *rom = make_model_rom(model, size, 3, 4, 3);
     /* A second identical logo region identifies 16-bank subcartridges. Two
      * populated headers are enough; checksums of other entries are unrelated. */
     memcpy(rom + 0x40104, rom + 0x104, 48);
@@ -403,11 +678,12 @@ static void test_multicart_wiring(void) {
     cupid_gb_cleanup(&gb);
 }
 
-static void test_small_ram_mirrors(void) {
+static void test_small_ram_mirrors(CupidGbModel model) {
     const uint8_t types[] = {0x09, 0x03, 0x13, 0x1b};
     for (unsigned controller = 0; controller < sizeof(types); ++controller) {
         CupidGb gb = {0};
-        uint8_t *rom = make_rom(0x8000, types[controller], 0, 1);
+        cupid_gb_set_model(&gb, model);
+        uint8_t *rom = make_model_rom(model, 0x8000, types[controller], 0, 1);
         assert(cupid_gb_load_rom(&gb, rom, 0x8000));
         assert(gb.cartridge_ram_size == 0x800);
         cupid_gb_write_u8(&gb, 0, 0x0a);
@@ -426,7 +702,7 @@ static void test_small_ram_mirrors(void) {
     }
 }
 
-static void test_extended_mbc3(void) {
+static void test_extended_mbc3(CupidGbModel model) {
     /* Either a larger ROM or additional RAM selects the wider controller. */
     const size_t sizes[] = {0x400000, 0x8000, 0x400000, 0x8000};
     const uint8_t rom_codes[] = {7, 0, 7, 0};
@@ -434,8 +710,9 @@ static void test_extended_mbc3(void) {
     const uint8_t types[] = {0x10, 0x10, 0x13, 0x13};
     for (unsigned variant = 0; variant < sizeof(types); ++variant) {
         CupidGb gb = {0};
-        uint8_t *rom =
-            make_rom(sizes[variant], types[variant], rom_codes[variant], ram_codes[variant]);
+        cupid_gb_set_model(&gb, model);
+        uint8_t *rom = make_model_rom(model, sizes[variant], types[variant], rom_codes[variant],
+                                      ram_codes[variant]);
         assert(cupid_gb_load_rom(&gb, rom, sizes[variant]));
         cupid_gb_write_u8(&gb, 0, 0x0a);
         for (unsigned bank = 0; bank < 256; ++bank) {
@@ -474,9 +751,10 @@ static void test_extended_mbc3(void) {
     }
 }
 
-static void test_ordinary_mbc3_ram_aliases(void) {
+static void test_ordinary_mbc3_ram_aliases(CupidGbModel model) {
     CupidGb gb = {0};
-    uint8_t *rom = make_rom(0x8000, 0x13, 0, 3);
+    cupid_gb_set_model(&gb, model);
+    uint8_t *rom = make_model_rom(model, 0x8000, 0x13, 0, 3);
     assert(cupid_gb_load_rom(&gb, rom, 0x8000));
     cupid_gb_write_u8(&gb, 0, 10);
     for (unsigned bank = 0; bank < 8; ++bank) {
@@ -492,9 +770,10 @@ static void test_ordinary_mbc3_ram_aliases(void) {
     cupid_gb_cleanup(&gb);
 }
 
-static void test_mbc5_ram_enable(void) {
+static void test_mbc5_ram_enable(CupidGbModel model) {
     CupidGb gb = {0};
-    uint8_t *rom = make_rom(0x8000, 0x1b, 0, 2);
+    cupid_gb_set_model(&gb, model);
+    uint8_t *rom = make_model_rom(model, 0x8000, 0x1b, 0, 2);
     assert(cupid_gb_load_rom(&gb, rom, 0x8000));
     cupid_gb_write_u8(&gb, 0, 0x0a);
     cupid_gb_write_u8(&gb, 0xa000, 0x5a);
@@ -507,9 +786,10 @@ static void test_mbc5_ram_enable(void) {
     cupid_gb_cleanup(&gb);
 }
 
-static void test_huc1_banks_and_ir(void) {
+static void test_huc1_banks_and_ir(CupidGbModel model) {
     CupidGb gb = {0};
-    uint8_t *rom = make_rom(0x100000, 0xff, 5, 5);
+    cupid_gb_set_model(&gb, model);
+    uint8_t *rom = make_model_rom(model, 0x100000, 0xff, 5, 5);
     for (unsigned region = 0; region < 8; ++region) {
         assert(cupid_gb_load_rom(&gb, rom, 0x100000));
         assert(cupid_gb_read_u8(&gb, 0x4000) == 1);
@@ -553,10 +833,11 @@ static void test_huc1_banks_and_ir(void) {
     cupid_gb_cleanup(&gb);
 }
 
-static void test_huc3_banks_and_sram_modes(void) {
+static void test_huc3_banks_and_sram_modes(CupidGbModel model) {
     CupidGb gb = {0};
+    cupid_gb_set_model(&gb, model);
     const size_t rom_size = 0x400000;
-    uint8_t *rom = make_rom(rom_size, 0xfe, 7, 4);
+    uint8_t *rom = make_model_rom(model, rom_size, 0xfe, 7, 4);
     assert(cupid_gb_load_rom(&gb, rom, rom_size));
     assert(gb.header.has_battery && cupid_gb_battery_size(&gb) == 0x20000 + 17);
     assert(cupid_gb_read_u8(&gb, 0x4000) == 1);
@@ -618,11 +899,12 @@ static void observe_rumble(const CupidGb *gb, bool enabled, uint64_t cycles, voi
     events->cycles = cycles;
 }
 
-static void test_mbc5_motor_and_ram(void) {
+static void test_mbc5_motor_and_ram(CupidGbModel model) {
     CupidGb gb = {0};
+    cupid_gb_set_model(&gb, model);
     RumbleEvents events = {0};
     cupid_gb_set_rumble_callback(&gb, observe_rumble, &events);
-    uint8_t *rom = make_rom(0x8000, 0x1e, 0, 4);
+    uint8_t *rom = make_model_rom(model, 0x8000, 0x1e, 0, 4);
     assert(cupid_gb_load_rom(&gb, rom, 0x8000));
     assert(!cupid_gb_rumble_enabled(&gb) && !events.count);
     cupid_gb_write_u8(&gb, 0, 0x0a);
@@ -667,11 +949,12 @@ static void test_mbc5_motor_and_ram(void) {
     cupid_gb_set_rumble_callback(NULL, observe_rumble, &events);
 }
 
-static void test_mmm01_menu_and_lock(void) {
+static void test_mmm01_menu_and_lock(CupidGbModel model) {
     const size_t size = 128u * 0x4000u;
     CupidGb gb = {0};
+    cupid_gb_set_model(&gb, model);
     for (unsigned layout = 0; layout < 2; ++layout) {
-        uint8_t *rom = make_rom(size, 0x0d, 6, 4);
+        uint8_t *rom = make_model_rom(model, size, 0x0d, 6, 4);
         const unsigned menu_offset = layout ? 2u : 0u;
         if (!layout) {
             memcpy(rom + size - 0x8000u + 0x104u, rom + 0x104u, 0x4au);
@@ -786,20 +1069,27 @@ static void test_mbc3_snapshot_writes(void) {
 int main(void) {
     test_header_storage_capabilities();
     test_mmm01_header_storage();
-    test_address_line_aliases();
     test_mbc3_snapshot_writes();
-    test_fresh_storage_and_restore();
-    test_physical_rom_address_lines();
+    test_extended_rom_capacity(CUPID_GB_MODEL_DMG_ABC);
+    test_extended_rom_capacity(CUPID_GB_MODEL_CGB);
+    test_rom_capacity_output_overlap();
+    test_extended_rom_file();
     test_reject_advance_cartridge();
-    test_multicart_wiring();
-    test_small_ram_mirrors();
-    test_extended_mbc3();
-    test_ordinary_mbc3_ram_aliases();
-    test_mbc5_ram_enable();
-    test_huc1_banks_and_ir();
-    test_huc3_banks_and_sram_modes();
-    test_mbc5_motor_and_ram();
-    test_mmm01_menu_and_lock();
+    const CupidGbModel models[] = {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_CGB};
+    for (size_t model = 0; model < sizeof(models) / sizeof(*models); ++model) {
+        test_address_line_aliases(models[model]);
+        test_fresh_storage_and_restore(models[model]);
+        test_physical_rom_address_lines(models[model]);
+        test_multicart_wiring(models[model]);
+        test_small_ram_mirrors(models[model]);
+        test_extended_mbc3(models[model]);
+        test_ordinary_mbc3_ram_aliases(models[model]);
+        test_mbc5_ram_enable(models[model]);
+        test_huc1_banks_and_ir(models[model]);
+        test_huc3_banks_and_sram_modes(models[model]);
+        test_mbc5_motor_and_ram(models[model]);
+        test_mmm01_menu_and_lock(models[model]);
+    }
     puts("Cartridge regressions passed.");
     return 0;
 }

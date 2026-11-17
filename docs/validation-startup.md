@@ -301,3 +301,45 @@ rerun for this parser-only correction. The final desktop receipt has SHA-256
 Native workflow duration is not a speed benchmark. Audio readiness and state
 transitions are asserted, while audible quality and broader desktop coverage
 remain unqualified by these integration checks.
+
+## Later firmware-sensitive controls
+
+The [cartridge and clock checkpoint](validation-cartridge-storage.md) retains
+11 external startup failures. A separate comparison investigates four selected
+cases using the same cartridge bytes with two local firmware profiles. Each
+profile runs on both cores, for 16 complete observations.
+
+| Test | Local firmware, both cores | Generated firmware, both cores |
+| --- | --- | --- |
+| DMG divider startup | Pass | Fail |
+| DMG initial hardware registers | Pass | Fail |
+| DMG serial startup | Pass | Fail |
+| CGB divider startup | Pass | Fail |
+
+Executed assertion values match between cores in every pair. The generated DMG
+register test first differs from its expected value at DIV: it expects `AD` and
+reads `BE`. The DMG serial test has matching eight-shift histories and executed
+interrupt entry within each firmware pair. The firmware profiles reach different
+divider phases, so their distinct verdicts must remain attached to their exact
+firmware inputs. This four-case matrix does not reclassify the other seven
+retained model/test failures.
+
+Observations use stored fields, verified ROM bytes and guest-written assertion
+storage. The observer performs no mapped memory reads that could synchronize
+display or audio work. Raw IF/LY/STAT and I/O arrays are diagnostic only and are
+excluded from equality claims. Serial shift observations are instruction-boundary
+upper bounds, not exact internal edge timestamps. Normal audio generation stays
+enabled; waveform equality is outside this probe's scope.
+
+Seven pairs have no compared differences. The generated-firmware CGB case has
+nine differences in the retained idle serial-clock phase. Its CPU registers,
+executed divider values and elapsed cycles agree. That test starts no CGB serial
+transfer, so this result does not demonstrate a wrong transferred byte or
+interrupt. Source inspection identifies a clock-selector lifetime difference;
+an active-transfer comparison is required before qualifying its guest effect.
+
+All 29 protected inputs and the 264 build inputs remain unchanged. The retained
+receipt has SHA-256
+`4980c616fcbfe365042d26f7ec0be532eaff86f383a357f32fde063693736234`.
+These later observations retain the storage/clock source manifest and executable
+identities; they do not replace the older startup records above.

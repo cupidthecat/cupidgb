@@ -265,7 +265,9 @@ static void install_history(CupidGb *gb, unsigned rate) {
 static void check_boundary(const CupidGb *gb, const CupidGb *before, CupidGbResetKind kind,
                            bool firmware, Host *host, unsigned clock_calls) {
     const bool quick = kind == CUPID_GB_RESET_QUICK;
-    CHECK(gb->rom == before->rom && gb->rom_size == before->rom_size && gb->loaded);
+    CHECK(gb->rom == before->rom && gb->rom_size == before->rom_size &&
+          gb->rom_capacity == before->rom_capacity &&
+          gb->rom_generation == before->rom_generation && gb->loaded);
     CHECK(!memcmp(&gb->header, &before->header, sizeof(gb->header)));
     CHECK(gb->cpu.pc == (firmware ? 0 : 0x100));
     CHECK(!gb->cpu.ime && !gb->cpu.halted && !gb->cpu.stopped && !gb->cpu.halt_bug);

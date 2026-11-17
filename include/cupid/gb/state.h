@@ -46,7 +46,8 @@ typedef enum CupidGbStateResult {
 /* Trusted in-memory snapshots may cache the immutable cartridge identity. Initialize
  * once for the current instance and discard the context on cartridge replacement,
  * model changes, or any mutation of ROM bytes, including future cheat/patch features.
- * Binding checks cannot detect an in-place patch or a replacement that reuses an address.
+ * Binding checks detect successful cartridge loads even when allocation is reused,
+ * but cannot detect manually patched ROM bytes without a new context.
  * Do not use this context to validate untrusted disk files; the ordinary APIs compute
  * the full cartridge digest on every call. Context objects are never serialized.
  */
@@ -54,6 +55,7 @@ typedef struct CupidGbStateContext {
     const CupidGb *owner;
     const uint8_t *rom;
     size_t rom_size;
+    uint64_t rom_generation;
     CupidGbModel model;
     uint8_t rom_digest[32];
 } CupidGbStateContext;

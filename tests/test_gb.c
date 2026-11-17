@@ -662,14 +662,22 @@ static void test_battery_save_ignored_for_invalid_untitled_rom(void) {
     cupid_gb_cleanup(&gb);
 }
 
-static void test_mbc3_selection_aliases_and_unmapped_ram(void) {
+static void load_mapper_rom(CupidGb *gb, uint8_t *rom, size_t size, CupidGbModel model) {
+    rom[0x143] = model == CUPID_GB_MODEL_CGB ? 0x80 : 0;
+    rom[0x14d] = compute_header_checksum(rom);
+    cupid_gb_set_model(gb, model);
+    assert(cupid_gb_load_rom(gb, rom, size));
+    assert(gb->model == model && gb->cgb_mode == (model == CUPID_GB_MODEL_CGB));
+    assert(gb->header.header_checksum_valid);
+}
+
+static void test_mbc3_selection_aliases_and_unmapped_ram(CupidGbModel model) {
     uint8_t rom[32u * 1024u];
     CupidGb gb = {0};
     build_test_rom(rom, sizeof(rom));
     rom[0x147] = 0x10; /* MBC3, RTC, RAM, and battery. */
     rom[0x149] = 3;
-    rom[0x14d] = compute_header_checksum(rom);
-    assert(cupid_gb_load_rom(&gb, rom, sizeof(rom)));
+    load_mapper_rom(&gb, rom, sizeof(rom), model);
     cupid_gb_write_u8(&gb, 0x0000, 0x0a);
     for (unsigned bank = 0; bank < 4; ++bank) {
         cupid_gb_write_u8(&gb, 0x4000, (uint8_t)bank);
@@ -707,12 +715,12 @@ static void test_mbc3_selection_aliases_and_unmapped_ram(void) {
     cupid_gb_cleanup(&gb);
 }
 
-static void test_mbc1_bank_switching(void) {
+static void test_mbc1_bank_switching(CupidGbModel model) {
     uint8_t rom[128u * 1024u];
     CupidGb gb = {0};
 
     build_mbc1_test_rom(rom, sizeof(rom));
-    assert(cupid_gb_load_rom(&gb, rom, sizeof(rom)));
+    load_mapper_rom(&gb, rom, sizeof(rom), model);
     assert(!gb.mbc1_multicart);
 
     assert(cupid_gb_read_u8(&gb, 0x0150u) == 0x00u);
@@ -727,12 +735,12 @@ static void test_mbc1_bank_switching(void) {
     cupid_gb_cleanup(&gb);
 }
 
-static void test_mbc1_multicart_bank_switching(void) {
+static void test_mbc1_multicart_bank_switching(CupidGbModel model) {
     uint8_t rom[1024u * 1024u];
     CupidGb gb = {0};
 
     build_mbc1_multicart_test_rom(rom, sizeof(rom));
-    assert(cupid_gb_load_rom(&gb, rom, sizeof(rom)));
+    load_mapper_rom(&gb, rom, sizeof(rom), model);
     assert(gb.mbc1_multicart);
 
     assert(cupid_gb_read_u8(&gb, 0x4000u) == 0x01u);
@@ -748,12 +756,12 @@ static void test_mbc1_multicart_bank_switching(void) {
     cupid_gb_cleanup(&gb);
 }
 
-static void test_mbc1_ram_banking_mode_switching(void) {
+static void test_mbc1_ram_banking_mode_switching(CupidGbModel model) {
     uint8_t rom[64u * 1024u];
     CupidGb gb = {0};
 
     build_mbc1_ram_test_rom(rom, sizeof(rom));
-    assert(cupid_gb_load_rom(&gb, rom, sizeof(rom)));
+    load_mapper_rom(&gb, rom, sizeof(rom), model);
 
     cupid_gb_write_u8(&gb, 0x0000u, 0x0au);
 
@@ -777,12 +785,12 @@ static void test_mbc1_ram_banking_mode_switching(void) {
     cupid_gb_cleanup(&gb);
 }
 
-static void test_mbc2_address_decoding(void) {
+static void test_mbc2_address_decoding(CupidGbModel model) {
     uint8_t rom[64u * 1024u];
     CupidGb gb = {0};
 
     build_mbc2_test_rom(rom, sizeof(rom));
-    assert(cupid_gb_load_rom(&gb, rom, sizeof(rom)));
+    load_mapper_rom(&gb, rom, sizeof(rom), model);
 
     cupid_gb_write_u8(&gb, 0x0000u, 0x0au);
     cupid_gb_write_u8(&gb, 0xa000u, 0x05u);
@@ -1045,11 +1053,14 @@ int main(void) {
     test_save_path_does_not_overwrite_rom();
     test_battery_save_loads_for_valid_rom();
     test_battery_save_ignored_for_invalid_untitled_rom();
-    test_mbc3_selection_aliases_and_unmapped_ram();
-    test_mbc1_bank_switching();
-    test_mbc1_multicart_bank_switching();
-    test_mbc1_ram_banking_mode_switching();
-    test_mbc2_address_decoding();
+    const CupidGbModel models[] = {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_CGB};
+    for (size_t model = 0; model < sizeof(models) / sizeof(*models); ++model) {
+        test_mbc3_selection_aliases_and_unmapped_ram(models[model]);
+        test_mbc1_bank_switching(models[model]);
+        test_mbc1_multicart_bank_switching(models[model]);
+        test_mbc1_ram_banking_mode_switching(models[model]);
+        test_mbc2_address_decoding(models[model]);
+    }
     test_load_32mb_mbc5_rom();
     test_load_64mb_mbc5_rom();
     test_emulator_executes_program();

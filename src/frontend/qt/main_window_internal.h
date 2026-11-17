@@ -266,7 +266,7 @@ class DisplayWidget final : public QWidget {
     ScreenMessages messages;
     DisplayScaling scaling = DisplayScaling::Integer;
     uint64_t paintCount = 0;
-    QElapsedTimer paintClock;
+    HostElapsedTimer paintClock;
     qint64 lastPaintAt = 0;
     bool collectPaintIntervals = false;
     std::vector<double> paintIntervals;

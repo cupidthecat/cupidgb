@@ -34,7 +34,7 @@ Rewind age advances independently of the guest cycle counter. A retained-history
 
 The debugger has a separate, smaller instruction snapshot history. It captures only explicit debugger stepping and is invalidated when ordinary playback or session-changing operations resume. Breakpoints, symbols, tool windows, and pending host commands are excluded from native state files. See [debugger history](debugging.md#instruction-history-and-playback).
 
-The rewind path caches the identity of the frontend's immutable cartridge. The core context is bound to the instance, ROM pointer, ROM size, and hardware model. A caller that patches ROM bytes in place must discard and recreate this context. Disk-state APIs always recompute the full cartridge hash. Future cheat, patch, or debugger features must honor that cache invalidation rule.
+The rewind path caches the identity of the frontend's immutable cartridge. The core context is bound to the instance, ROM pointer, ROM size, successful-load generation, and hardware model. Loading cartridge bytes invalidates an earlier context even when the same allocation and length are reused. Failed loads and native resets preserve the binding. A caller that patches ROM bytes directly must still discard and recreate the context. Disk-state APIs always recompute the full cartridge hash. Future cheat, patch, or debugger features must honor that cache invalidation rule.
 
 ## Native format
 

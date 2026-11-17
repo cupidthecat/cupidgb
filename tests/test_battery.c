@@ -102,6 +102,95 @@ static void test_raw_ram(void) {
     }
 }
 
+static void test_rom_capacity_output_overlap(void) {
+    CupidGb *gb = cartridge(0x03u, 2u);
+    uint8_t tiny[0x154] = {0};
+    memcpy(tiny + 0x134, "BATTERY TAIL", 12);
+    tiny[0x147] = 0x03;
+    tiny[0x149] = 2;
+    for (unsigned index = 0x134; index < 0x14d; ++index)
+        tiny[0x14d] = (uint8_t)(tiny[0x14d] - tiny[index] - 1u);
+    assert(cupid_gb_load_rom(gb, tiny, sizeof(tiny)));
+    assert(gb->rom_capacity == CUPID_GB_MIN_ROM_CAPACITY && gb->rom_size == sizeof(tiny));
+    const size_t battery_size = cupid_gb_battery_size(gb);
+    assert(battery_size && battery_size <= gb->rom_capacity - gb->rom_size);
+    uint8_t *const output = gb->rom + gb->rom_size;
+    size_t written = 123;
+    assert(cupid_gb_save_battery_at(gb, output, battery_size, &written, test_time) ==
+           CUPID_GB_BATTERY_INVALID_ARGUMENT);
+    assert(written == 0 && !memcmp(gb->rom, tiny, sizeof(tiny)));
+    destroy(gb);
+}
+
+static void test_written_pointer_overlap(void) {
+    CupidGb *gb = cartridge(0x10u, 2u);
+    uint8_t tiny[0x150];
+    memcpy(tiny, gb->rom, sizeof(tiny));
+    assert(cupid_gb_load_rom(gb, tiny, sizeof(tiny)));
+    assert(gb->rom_size < gb->rom_capacity);
+    memset(gb->rom + gb->rom_size, 0x5a, gb->rom_capacity - gb->rom_size);
+    BatteryClock host = {test_time, 0};
+    cupid_gb_set_rtc_time_source(gb, battery_time, &host);
+    const size_t battery_size = cupid_gb_battery_size(gb);
+    const size_t capacity = battery_size + 2u * sizeof(size_t);
+    const size_t storage_size = capacity + sizeof(size_t);
+    uint8_t *output = malloc(storage_size);
+    uint8_t *output_before = malloc(storage_size);
+    uint8_t *rom_before = malloc(gb->rom_capacity);
+    CupidGb *before = malloc(sizeof(*before));
+    assert(output && output_before && rom_before && before);
+    memset(output, 0xa5, storage_size);
+    memcpy(output_before, output, storage_size);
+    memcpy(rom_before, gb->rom, gb->rom_capacity);
+    memcpy(before, gb, sizeof(*before));
+
+    struct {
+        uint8_t *data;
+        size_t capacity;
+        size_t *written;
+    } invalid[] = {
+        {output, capacity, &gb->rom_size},
+        {output, capacity, &gb->rom_capacity},
+        {output, capacity, (size_t *)gb->rom},
+        {output, capacity, (size_t *)(gb->rom + gb->rom_capacity - sizeof(size_t))},
+        {output, capacity, (size_t *)output},
+        {output, capacity, (size_t *)(output + battery_size)},
+        {output, capacity, (size_t *)(output + capacity - sizeof(size_t))},
+        /* The counter starts before the output but overlaps its first bytes. */
+        {output + sizeof(size_t) / 2u, battery_size, (size_t *)output},
+    };
+
+    for (size_t index = 0; index < sizeof(invalid) / sizeof(invalid[0]); ++index) {
+        for (unsigned use_host_clock = 0; use_host_clock < 2; ++use_host_clock) {
+            const unsigned calls = host.calls;
+            const CupidGbBatteryResult result =
+                use_host_clock
+                    ? cupid_gb_save_battery(gb, invalid[index].data, invalid[index].capacity,
+                                            invalid[index].written)
+                    : cupid_gb_save_battery_at(gb, invalid[index].data, invalid[index].capacity,
+                                               invalid[index].written, test_time);
+            assert(result == CUPID_GB_BATTERY_INVALID_ARGUMENT);
+            assert(!memcmp(before, gb, sizeof(*gb)));
+            assert(!memcmp(rom_before, gb->rom, gb->rom_capacity));
+            assert(!memcmp(output_before, output, storage_size));
+            assert(host.calls == calls);
+        }
+    }
+
+    /* Adjacent caller-owned storage is valid; only intersecting ranges fail. */
+    size_t *const written = (size_t *)(output + capacity);
+    assert(cupid_gb_save_battery_at(gb, output, capacity, written, test_time) ==
+           CUPID_GB_BATTERY_OK);
+    assert(*written == battery_size && !memcmp(output, gb->cartridge_ram, gb->cartridge_ram_size));
+    assert(!memcmp(output + battery_size, output_before + battery_size, capacity - battery_size));
+    assert(!memcmp(before, gb, sizeof(*gb)) && !memcmp(rom_before, gb->rom, gb->rom_capacity));
+    free(before);
+    free(rom_before);
+    free(output_before);
+    free(output);
+    destroy(gb);
+}
+
 static void test_rtc_format(void) {
     CupidGb *gb = cartridge(0x10, 2);
     gb->rtc = (CupidGbRtc){.s = 57,
@@ -373,6 +462,8 @@ static void test_observed_fixture(const char *path) {
 int main(int argc, char **argv) {
     assert(argc == 1 || argc == 2);
     test_raw_ram();
+    test_rom_capacity_output_overlap();
+    test_written_pointer_overlap();
     test_write_generation();
     test_clock_policy_roundtrip();
     test_legacy_files();

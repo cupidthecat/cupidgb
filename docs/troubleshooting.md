@@ -4,9 +4,9 @@ Record the CupidGB version or commit, operating system, selected hardware, start
 
 ## The cartridge does not open
 
-Use an extracted cartridge image. ZIP/archive loading is not an implemented workflow. A battery save or native state is not a cartridge: open the matching game first, then load its state.
+Open a cartridge image or a ZIP, 7z or RAR archive containing one unencrypted `.gb`, `.gbc` or `.sgb` file. Archive loading requires 7-Zip (`7z` or `7zz`); its codec support determines which archives can be read. A battery save or native state is not a cartridge: open the matching game first, then load its state.
 
-Check that the file is readable and its size/header are supported. The frontend accepts files from 336 bytes through 8 MiB. Physical ROM banks follow the actual loaded length rather than the header's ROM-size field, with missing tail bytes reading `0xff`. A checksum warning does not by itself establish a corrupted or compatible image.
+Check that the file is readable and its size/header are supported. The frontend accepts cartridge images from 336 bytes through 1 GiB. Raw files and archived members use the same limit; archive output must also match the member's declared length. Physical ROM banks follow the actual loaded length rather than the header's ROM-size field, with missing tail bytes reading `0xff`. A checksum warning does not by itself establish a corrupted or compatible image.
 
 If the game requires color hardware, select Automatic or Game Boy Color in Settings and retry. A `--model` launch override fixes the hardware selector for that session; restart without it to use saved settings, or use `--model auto` for automatic selection. Hardware changes apply on ordinary Reset or cartridge open. Quick Reset and Reload keep the active model. Automatic selection can choose color hardware for some monochrome cartridges; use an explicit model for comparisons.
 
@@ -36,7 +36,7 @@ Background controller input is an explicit preference. Settings and capture dial
 
 If Windows reports a missing SDL2 entry point or DLL, use the runtime copied from the SDL2 SDK selected by CMake. A different SDL2.dll found on a development PATH can be too old. Stage the application with the matching DLL and notices, then test with SDK paths removed. SDL3 cannot replace SDL2.dll. On Linux, verify that the session can access the actual device and driver; this is separate from installing development headers. Virtual tests can pass without any physical input device exposed.
 
-Rumble requires a supported device, enabled cartridge feedback, a nonzero strength and application focus. Supported MBC5 motor cartridges and TPP1 cartridges whose extended header declares a motor drive ordinary feedback. Test rumble checks the request path without changing guest input. A successful software request does not prove physical motor behavior, and a device already disconnected may reject a stop command. Exact variable-level averaging, delivery cadence and nonmaximum strength response remain parity gaps. Physical motion sensors and synthesized feedback remain incomplete. See [controllers](controllers.md).
+Rumble requires a supported device, enabled cartridge feedback, a nonzero strength and application focus. MBC5 motor cartridges and TPP1 cartridges whose extended header declares a motor drive feedback. The core averages delivered motor samples at presentation boundaries, and the frontend applies the configured nonlinear strength response. Test rumble checks the request path without changing guest input. A successful software request does not prove physical motor behavior, and a device already disconnected may reject a stop command. Broader motor/display interactions, physical motion sensors and synthesized feedback remain incomplete. See [controllers](controllers.md).
 
 ## Sound is missing or unstable
 

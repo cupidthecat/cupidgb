@@ -175,6 +175,7 @@ if(CUPIDGB_BUILD_QT)
         src/frontend/qt/main_window_printer_tests.cpp
         src/frontend/qt/printer_window.cpp
         src/frontend/qt/guest_clock_pacer.cpp
+        src/frontend/qt/host_elapsed_timer.cpp
         src/frontend/qt/audio_converter.cpp
         src/frontend/qt/turbo_audio_window.cpp
         src/frontend/qt/wave_recorder.cpp
@@ -302,6 +303,17 @@ if(CUPIDGB_ENABLE_TESTS)
             target_compile_options(cupidgb_guest_clock_pacer PRIVATE -UNDEBUG)
         endif()
         add_test(NAME cupidgb_guest_clock_pacer COMMAND cupidgb_guest_clock_pacer)
+        add_executable(cupidgb_host_elapsed_timer
+            tests/frontend/test_host_elapsed_timer.cpp src/frontend/qt/host_elapsed_timer.cpp)
+        target_include_directories(cupidgb_host_elapsed_timer PRIVATE src/frontend/qt)
+        target_link_libraries(cupidgb_host_elapsed_timer PRIVATE Qt6::Core)
+        if(MSVC)
+            target_compile_options(cupidgb_host_elapsed_timer PRIVATE /UNDEBUG)
+        else()
+            target_compile_options(cupidgb_host_elapsed_timer PRIVATE -UNDEBUG)
+        endif()
+        add_test(NAME cupidgb_host_elapsed_timer COMMAND cupidgb_host_elapsed_timer)
+        set_tests_properties(cupidgb_host_elapsed_timer PROPERTIES TIMEOUT 10)
         add_executable(cupidgb_debugger_window
             tests/frontend/test_debugger_window.cpp src/frontend/qt/debugger_window.cpp)
         target_include_directories(cupidgb_debugger_window PRIVATE src/frontend/qt)

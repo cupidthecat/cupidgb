@@ -22,6 +22,8 @@
 
 #include "main_window_internal.h"
 
+#include <cmath>
+
 void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
     struct WarmupSample {
         bool captured = false;
@@ -36,6 +38,10 @@ void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
     };
 
     constexpr double warmupSeconds = 5;
+    constexpr qint64 warmupNanoseconds = 5000000000LL;
+    /* Qt schedules timer callbacks against its own clock. Sample deadlines
+     * against the same host clock that measures pacing and reported duration. */
+    const qint64 deadlineNanoseconds = qint64(std::ceil(seconds * 1e9));
     const auto warmup = std::make_shared<WarmupSample>();
     telemetryStartCycles_ = emulator_->gb.elapsed_cycles;
     presentedImages_ = 0;
@@ -65,39 +71,56 @@ void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
                boundedRunId_ == measurement && cupid_gb_base_clock_hz(&emulator_->gb) == clockHz &&
                emulator_->gb.elapsed_cycles >= telemetryStartCycles_;
     };
-    if (seconds > warmupSeconds) {
-        QTimer::singleShot(5000, Qt::PreciseTimer, this, [this, warmup, unchanged] {
-            if (!unchanged())
+    auto *deadlineTimer = new QTimer(this);
+    deadlineTimer->setTimerType(Qt::PreciseTimer);
+    deadlineTimer->setInterval(10);
+    connect(
+        deadlineTimer, &QTimer::timeout, this,
+        [this, deadlineTimer, reportPath, seconds, deadlineNanoseconds, warmupSeconds, warmup,
+         measurement, unchanged, clockHz] {
+            if (boundedRunId_ != measurement) {
+                deadlineTimer->stop();
+                deadlineTimer->deleteLater();
                 return;
-            warmup->elapsed = double(telemetryClock_.nsecsElapsed()) / 1e9;
-            warmup->cycles = emulator_->gb.elapsed_cycles;
-            warmup->images = presentedImages_;
-            warmup->paints = display_->paintCount;
-            warmup->audioFrames = generatedAudioFrames_;
-            warmup->audioIdle = audioIdleEvents_;
-            warmup->audioErrors = audioErrorEvents_;
-            // The next recorded interval starts before this sample. Exclude it
-            // from the later window without changing the whole-run history.
-            warmup->firstPaintInterval =
-                display_->paintIntervals.size() + (display_->lastPaintAt ? 1 : 0);
-            warmup->captured = true;
-        });
-    }
-    QTimer::singleShot(
-        int(seconds * 1000), Qt::PreciseTimer, this,
-        [this, reportPath, seconds, warmupSeconds, measurement, warmup, unchanged, clockHz] {
-            if (boundedRunId_ != measurement)
-                return;
-            display_->collectPaintIntervals = false;
+            }
             if (!unchanged()) {
+                deadlineTimer->stop();
+                deadlineTimer->deleteLater();
+                display_->collectPaintIntervals = false;
                 qCritical(
                     "Bounded frontend run cancelled because the cartridge or timeline changed");
                 QApplication::exit(1);
                 return;
             }
-            const double elapsed = double(telemetryClock_.nsecsElapsed()) / 1e9;
+            const qint64 elapsedNanoseconds = telemetryClock_.nsecsElapsed();
+            /* Sample the warmup once, strictly before the final deadline. If
+             * the event loop misses that window, report it as unavailable. */
+            if (seconds > warmupSeconds && !warmup->captured &&
+                elapsedNanoseconds >= warmupNanoseconds &&
+                elapsedNanoseconds < deadlineNanoseconds) {
+                warmup->elapsed = double(elapsedNanoseconds) / 1e9;
+                warmup->cycles = emulator_->gb.elapsed_cycles;
+                warmup->images = presentedImages_;
+                warmup->paints = display_->paintCount;
+                warmup->audioFrames = generatedAudioFrames_;
+                warmup->audioIdle = audioIdleEvents_;
+                warmup->audioErrors = audioErrorEvents_;
+                // The next recorded interval starts before this sample. Exclude it
+                // from the later window without changing the whole-run history.
+                warmup->firstPaintInterval =
+                    display_->paintIntervals.size() + (display_->lastPaintAt ? 1 : 0);
+                warmup->captured = true;
+            }
+            if (elapsedNanoseconds < deadlineNanoseconds)
+                return;
+            deadlineTimer->stop();
+            deadlineTimer->deleteLater();
+            display_->collectPaintIntervals = false;
+            const double elapsed = double(elapsedNanoseconds) / 1e9;
             const uint64_t cycles = emulator_->gb.elapsed_cycles - telemetryStartCycles_;
             QJsonObject report{
+                {"host_clock", QString::fromLatin1(HostElapsedTimer::sourceName())},
+                {"requested_duration_seconds", seconds},
                 {"elapsed_seconds", elapsed},
                 {"guest_base_speed_t_cycles", double(cycles)},
                 {"base_clock_hz", int(clockHz)},
@@ -249,6 +272,7 @@ void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
                 qCritical("Could not write frontend report: %s", qPrintable(file.errorString()));
             QApplication::exit(written && !failed_ ? 0 : 1);
         });
+    deadlineTimer->start();
 }
 
 bool MainWindow::loadInputTrace(const QString &path) {

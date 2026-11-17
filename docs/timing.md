@@ -192,6 +192,8 @@ Every MBC3 write in 6000–7FFF refreshes the clock snapshot, including repeated
 
 Qt calculates playback time from the base T-cycles consumed by its bounded work interval. `GuestClockPacer` divides by the selected physical model clock and playback rate, carrying the fractional nanoseconds across ordinary intervals. A clock/rate change or timeline rebase resets the applicable fraction. Partial LCD intervals are charged only for their consumed cycles.
 
+Guest deadlines, bounded reports, paint intervals and rewind capture measurements share `HostElapsedTimer`. Linux uses `CLOCK_MONOTONIC_RAW`; Windows uses Qt's elapsed timer. Qt timer notifications wake the work loop, while elapsed host time determines its deadlines. A bounded run also checks its final deadline and five-second warmup on that host clock. The [desktop clock record](validation-host-clock.md) explains the independently measured discrepancy that motivated the Linux change.
+
 The work loop stops at a completed image or a bounded base-cycle interval, with a separate step budget. This keeps LCD-off programs and unusual instruction streams responsive. Turbo and rewind use explicit host policies. Audio backpressure can delay more guest work; it must not discard guest clocks or disable audio generation to hide timing errors.
 
 State loads and rewind replace the guest timeline. Reset deadlines and host audio/conversion history, reconcile physical input, and reject stale session measurements. A negative net cycle delta after a restore is not forward throughput. Rewind's duration limit converts stored cycle differences through the model clock.

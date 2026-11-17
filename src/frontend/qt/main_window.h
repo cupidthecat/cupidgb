@@ -26,6 +26,7 @@
 #include "controller_manager.h"
 #include "display_pipeline.h"
 #include "guest_clock_pacer.h"
+#include "host_elapsed_timer.h"
 #include "turbo_audio_window.h"
 
 #include <QElapsedTimer>
@@ -284,7 +285,7 @@ class MainWindow final : public QMainWindow {
     QTimer timer_;
     QTimer saveTimer_;
     QTimer audioRefreshTimer_;
-    QElapsedTimer clock_;
+    HostElapsedTimer clock_;
     qint64 nextFrame_ = 0;
     uint64_t pacingGeneration_ = 0;
     GuestClockPacer clockPacer_;
@@ -383,7 +384,7 @@ class MainWindow final : public QMainWindow {
     bool failed_ = false;
     bool automated_ = false;
     bool audioCheck_ = false;
-    QElapsedTimer telemetryClock_;
+    HostElapsedTimer telemetryClock_;
     uint64_t telemetryStartCycles_ = 0;
     uint64_t presentedImages_ = 0;
     uint64_t generatedAudioFrames_ = 0;

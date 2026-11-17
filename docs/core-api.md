@@ -4,7 +4,7 @@
 
 ## Instance lifetime
 
-Use a zero-initialized instance. `CupidGb` is large, so heap allocation avoids small platform stack limits. Its ROM pointer is owned by the core after initialization. Do not initialize an uninitialized stack object: initialization preserves selected fields, including the ROM pointer and model.
+Use a zero-initialized instance. `CupidGb` is large, so heap allocation avoids small platform stack limits. Its ROM pointer and allocation capacity belong to the core. Initialization preserves those fields and the selected model, so an uninitialized stack object is not a valid input. Cleanup releases the owned ROM allocation.
 
 `CupidEmulator` provides a thin GB/GBC lifecycle wrapper:
 
@@ -56,7 +56,9 @@ extern "C" {
 }
 ```
 
-Loading a cartridge resets hardware. The direct loader is not a transactional session-replacement API. To preserve a running session after a failed load, build a separate candidate and swap it in only after cartridge, battery, and boot inputs validate. The Qt frontend uses that pattern.
+Loading a cartridge resets hardware on success. The loader validates size, header and supported storage before replacing the current ROM, and a failed allocation leaves the live core unchanged. Input may alias the current ROM allocation when the complete source range is valid. Storage follows the actual input length, with a 32 KiB minimum and a 1 GiB image limit. ROM size and allocation capacity are separate: missing bytes in the physical bank population read as `0xff`, and hashes cover only the supplied bytes.
+
+A complete frontend replacement also validates battery and boot inputs. Build a separate candidate and swap it in only after all those inputs succeed. The Qt frontend uses that pattern. Native resets retain the ROM pointer and capacity; native states retain the receiving allocation and do not serialize its capacity.
 
 ## Cold memory and firmware startup
 
@@ -166,6 +168,8 @@ Registration survives initialization, cartridge loading, boot reset, and native-
 
 `cupid_gb_battery_size` returns zero when the loaded cartridge has no supported battery payload. Allocate sufficient independent storage and check both the result and returned length. Rejected loads preserve the instance. The caller handles file I/O and atomic replacement; the codec does not choose paths. Prefer this explicit result-bearing API for new hosts over the older convenience file-save helpers.
 
+The optional byte-count pointer must not overlap the live core, any part of its owned ROM allocation, or the supplied output capacity. Both save variants reject those aliases before clearing the count; the ordinary variant also rejects them before polling its time provider. A rejected count alias leaves the core, ROM and destination unchanged.
+
 Battery data differs from execution state. See [battery saves](battery-saves.md) for encodings and clock semantics.
 
 ## Snapshots and rewind
@@ -174,7 +178,7 @@ Use `cupid_gb_state_size`, `cupid_gb_save_state`, and `cupid_gb_load_state` at a
 
 Normal disk-state APIs recompute cartridge identity. A rejected load leaves the complete target unchanged. The ordinary load APIs restore recorded hardware and audio history exactly. Use `cupid_gb_load_state_live` for desktop timeline changes, or `cupid_gb_load_state_live_with_context` for trusted history. Those variants retain receiving output reconstruction, DAC/filter history, rate and listening policy while rebasing its fractional phase. They validate the combined pending-clock credit before committing. After success, discard stale queued playback, reset host conversion/pacing, reconcile input and redraw.
 
-`CupidGbStateContext` caches cartridge identity for trusted in-memory rewind. It binds to one owner, ROM pointer, ROM size, and model. Discard it after cartridge/model changes or any in-place ROM patch. Binding checks cannot detect a patch that preserves the pointer and size. Never use the cached context to validate an untrusted disk file.
+`CupidGbStateContext` caches cartridge identity for trusted in-memory rewind. It binds to one owner, ROM pointer, ROM size, load generation, and model. Every successful cartridge load advances the generation, so a context becomes stale even when the allocation and length stay the same. Failed loads and native resets preserve the generation. Discard and recreate the context after cartridge/model changes or any in-place ROM patch. Direct external writes cannot be detected by the binding checks. Never use the cached context to validate an untrusted disk file.
 
 The codec checks a complete word-array range before reading or writing its little-endian elements and accepts unaligned buffers. New snapshots use version 17, which preserves the CGB row selected during the tile-map fetch without changing the encoded size. Pending input sampling and TPP1 mapping remain independent of control readback. The codec preserves version 15's display wait and bus-synchronization history used by infrared sensing, interrupted pixel-fetch work and the VRAM read circuit's retained addresses and byte. Version 14's reconstruction rings, DAC delays, filter and policy history, deterministic interference and pending synthesis clocks remain intact. Versions 2 through 16 remain loadable with explicit defaults for missing history; an old file cannot recreate input events, waveform edges, scroll latches or display synchronization it never stored. Version 13's RTC phase, motor strength and divider remainder remain independent of host clock policy. Query the size for every capture because model, cartridge and printer sections change the length. Identity, integrity, final-offset and hardware-domain checks apply to every accepted version.
 

@@ -30,4 +30,12 @@
 void cupid_gb_cartridge_reset_controls(CupidGb *gb);
 void cupid_gb_cartridge_post_boot(CupidGb *gb);
 
+/* A per-call allocator permits deterministic failure tests without global
+ * allocation hooks. It must return NULL or a new non-overlapping allocation
+ * of at least the requested size with ordinary malloc/free-compatible
+ * ownership; the loader retains and later frees successful allocations.
+ * Failure leaves an already loaded cartridge unchanged. */
+bool cupid_gb_load_rom_with_allocator(CupidGb *gb, const uint8_t *rom_data, size_t rom_size,
+                                      void *(*allocate)(size_t));
+
 #endif

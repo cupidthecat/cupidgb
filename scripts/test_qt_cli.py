@@ -25,6 +25,7 @@ import os
 from pathlib import Path
 import shutil
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -56,6 +57,34 @@ def archive_executable():
     return None
 
 
+def extended_cartridge():
+    # Read the first bank beyond 8 MiB and write its marker into battery RAM.
+    program = bytes((0xF3, 0x3E, 0, 0xEA, 0, 0, 0x3E, 2, 0xEA, 1, 0,
+                     0xFA, 0, 0x40, 0x47, 0x3E, 3, 0xEA, 3, 0, 0x78,
+                     0xEA, 0, 0xA0, 0x18, 0xFE))
+    rom = make_rom(b"", color=True)
+    rom.extend(bytes(0x804000 - len(rom)))
+    rom[0x102] = 0x60  # The extension header occupies 0x150 through 0x153.
+    rom[0x147:0x14B] = bytes((0xBC, 8, 0xC1, 0x65))
+    rom[0x152:0x154] = bytes((1, 8))  # One RAM bank with battery storage.
+    rom[0x14D] = (-sum(rom[0x134:0x14D]) - 25) & 255
+    rom[0x160:0x160 + len(program)] = program
+    rom[0x800000] = 0x7B
+    return rom
+
+
+def oversized_archive(path):
+    # The declared size must be rejected before decompression, without allocating a GiB.
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as compressed:
+        compressed.writestr("too-big.gb", cartridge())
+    raw = bytearray(path.read_bytes())
+    size = 1024 * 1024 * 1024 + 1
+    struct.pack_into("<I", raw, 22, size)
+    directory = raw.index(b"PK\x01\x02")
+    struct.pack_into("<I", raw, directory + 24, size)
+    path.write_bytes(raw)
+
+
 def main():
     binary = Path(sys.argv[1]).resolve()
     environment = os.environ | {"QT_QPA_PLATFORM": "offscreen",
@@ -70,21 +99,27 @@ def main():
         color.write_bytes(cartridge(color=0xC0))
         ordinal = 0
 
-        def run(rom, *options, expected=0):
+        def run(rom, *options, expected=0, error_contains=None, duration="0.06"):
             nonlocal ordinal
             ordinal += 1
             report = root / ("report-" + str(ordinal) + ".json")
-            command = [str(binary), "--run-seconds", "0.06", "--report", str(report),
+            command = [str(binary), "--run-seconds", duration, "--report", str(report),
                        *options, str(rom)]
-            process = subprocess.run(command, env=environment, capture_output=True, timeout=12)
+            process = subprocess.run(command, env=environment, capture_output=True,
+                                     timeout=12 if expected else max(12, float(duration) + 12))
             assert process.returncode == expected, (command, process.returncode,
                                                      process.stdout, process.stderr)
             if expected:
                 assert not report.exists(), report
+                if error_contains is not None:
+                    assert error_contains in process.stderr, process.stderr
                 return None
             result = json.loads(report.read_text(encoding="utf-8"))
             assert not result["execution_failed"] and result["screenshot_saved"]
-            assert result["elapsed_seconds"] > 0
+            expected_source = "linux_monotonic_raw" if sys.platform == "linux" else "qt_elapsed_timer"
+            assert result["host_clock"] == expected_source, result
+            assert result["requested_duration_seconds"] == float(duration), result
+            assert result["elapsed_seconds"] >= result["requested_duration_seconds"], result
             assert Path(str(report) + ".png").exists()
             assert result["window_visible"] and result["window_capture_saved"]
             window = Path(str(report) + ".window.png").read_bytes()
@@ -95,6 +130,9 @@ def main():
 
         def seed_options(values):
             return tuple(argument for value in values for argument in ("--power-on-seed", value))
+
+        for duration in ("0", "-1", "nan", "inf", "-inf", "1e100", "86400.01", "invalid"):
+            run(plain, expected=1, duration=duration)
 
         for values, mode, seed in (
             (("0",), "fixed", "0000000000000000"),
@@ -130,6 +168,26 @@ def main():
         assert result["requested_model"] == "auto" and result["hardware_model"] == "cgb"
         result = run(plain)
         assert result["requested_model"] is None
+        assert result["post_warmup"]["reason"] == "run_does_not_exceed_warmup"
+        # Exercise the independent five-second warmup cutoff and the final
+        # deadline on the same host clock. A blocked event loop may miss the
+        # warmup window, but must report that rather than inventing a sample.
+        warmed = run(plain, duration="5.25")
+        post_warmup = warmed["post_warmup"]
+        assert post_warmup["warmup_target_seconds"] == 5
+        if post_warmup["available"]:
+            assert 5 <= post_warmup["sample_start_elapsed_seconds"] < warmed["elapsed_seconds"]
+            assert post_warmup["sample_end_elapsed_seconds"] == warmed["elapsed_seconds"]
+            assert post_warmup["elapsed_seconds"] > 0
+        else:
+            assert post_warmup["reason"] == "warmup_sample_unavailable"
+        extended = root / "extended-tpp1.gbc"
+        extended.write_bytes(extended_cartridge())
+        run(extended, "--model", "cgb")
+        extended_save = extended.with_suffix(".sav").read_bytes()
+        assert len(extended_save) == 8192 + 20
+        assert extended_save[:8192] == bytes((0x7B,)) + bytes((0xFF,)) * 8191
+        assert extended_save[8192:8198] == b"TPP1\x01\x00"
         unsupported = root / "advance.gba"
         unsupported.write_bytes(plain.read_bytes())
         run(unsupported, expected=1)
@@ -157,6 +215,17 @@ def main():
                            capture_output=True, timeout=10)
             assert run(seven_zip, "--model", "auto")["hardware_model"] == "cgb"
 
+            extended_zip = root / "extended-tpp1.zip"
+            with zipfile.ZipFile(extended_zip, "w", zipfile.ZIP_DEFLATED) as compressed:
+                compressed.writestr("cartridge.gbc", extended.read_bytes())
+            run(extended_zip, "--model", "cgb")
+            archived_save = root / "extended-tpp1.zip.sav"
+            archived_battery = archived_save.read_bytes()
+            assert len(archived_battery) == 8192 + 20
+            assert archived_battery[:8192] == extended_save[:8192]
+            assert archived_battery[8192:8198] == b"TPP1\x01\x00"
+            assert extended.with_suffix(".sav").read_bytes() == extended_save
+
             battery = make_rom(bytes((0x3E, 0x42, 0xEA, 0, 0xA0, 0x18, 0xFE)))
             battery[0x147] = 9  # ROM + RAM + battery.
             battery[0x149] = 2  # 8 KiB RAM.
@@ -174,13 +243,16 @@ def main():
             for name, contents in (
                 ("ambiguous", {"one.gb": plain.read_bytes(), "other.gbc": color.read_bytes()}),
                 ("empty", {"notes.txt": b"No cartridge"}),
-                ("large", {"too-big.gb": bytes(8 * 1024 * 1024 + 1)}),
             ):
                 invalid = root / (name + ".zip")
                 with zipfile.ZipFile(invalid, "w", zipfile.ZIP_DEFLATED) as compressed:
                     for member, data in contents.items():
                         compressed.writestr(member, data)
                 run(invalid, expected=1)
+
+            too_large = root / "too-large.zip"
+            oversized_archive(too_large)
+            run(too_large, expected=1, error_contains=b"between 336 bytes and 1024 MiB")
 
             corrupt = root / "bad-crc.zip"
             with zipfile.ZipFile(corrupt, "w") as compressed:

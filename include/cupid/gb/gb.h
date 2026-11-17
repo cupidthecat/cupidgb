@@ -32,7 +32,10 @@
 #include "cupid/gb/sgb.h"
 #include "cupid/gb/startup.h"
 
-#define CUPID_GB_MAX_ROM_SIZE (8u * 1024u * 1024u)
+/* Full 16-bit TPP1 bank span: 65536 physical banks of 16 KiB each.
+ * This bounds input size, not the memory reserved for an unloaded machine. */
+#define CUPID_GB_MAX_ROM_SIZE 0x40000000u
+#define CUPID_GB_MIN_ROM_CAPACITY 0x8000u
 #define CUPID_GB_MAX_RAM_SIZE (128u * 1024u)
 #define CUPID_GB_MAX_BOOT_ROM_SIZE 0x0900u /* CGB boot ROM is 2304 bytes */
 #define CUPID_GB_SCREEN_WIDTH 160u
@@ -389,6 +392,8 @@ typedef struct CupidGb {
     const CupidGbCheats *cheats; /* Borrowed host configuration, outside native snapshots. */
     uint8_t *rom;
     size_t rom_size;
+    size_t rom_capacity;     /* Owned host allocation size; excluded from native save states. */
+    uint64_t rom_generation; /* Successful cartridge loads invalidate cached host state identity. */
     uint8_t video_ram[0x4000];
     uint8_t cartridge_ram[CUPID_GB_MAX_RAM_SIZE];
     size_t cartridge_ram_size;

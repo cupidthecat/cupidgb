@@ -38,7 +38,9 @@ static bool clock_present(const CupidGb *gb) {
 }
 
 static bool valid_cartridge(const CupidGb *gb) {
-    return gb && gb->loaded && gb->rom && gb->cartridge_ram_size <= CUPID_GB_MAX_RAM_SIZE;
+    return gb && gb->loaded && gb->rom && gb->rom_size >= 0x150u &&
+           gb->rom_size <= CUPID_GB_MAX_ROM_SIZE && gb->rom_size <= gb->rom_capacity &&
+           gb->cartridge_ram_size <= CUPID_GB_MAX_RAM_SIZE;
 }
 
 size_t cupid_gb_battery_size(const CupidGb *gb) {
@@ -56,6 +58,15 @@ static bool overlaps(const void *left, size_t left_size, const void *right, size
         return false;
     uintptr_t a = (uintptr_t)left, b = (uintptr_t)right;
     return a >= b ? a - b < right_size : b - a < left_size;
+}
+
+static bool valid_written_pointer(const CupidGb *gb, const uint8_t *data, size_t capacity,
+                                  const size_t *written) {
+    return !written ||
+           ((!gb ||
+             (!overlaps(written, sizeof(*written), gb, sizeof(*gb)) &&
+              (!gb->rom || !overlaps(written, sizeof(*written), gb->rom, gb->rom_capacity)))) &&
+            (!data || !overlaps(written, sizeof(*written), data, capacity)));
 }
 
 static void write_integer(uint8_t *destination, uint64_t value, unsigned bytes) {
@@ -159,6 +170,10 @@ static CupidGbBatteryResult load_tpp1_battery(CupidGb *gb, const uint8_t *data, 
 
 CupidGbBatteryResult cupid_gb_save_battery_at(const CupidGb *gb, uint8_t *data, size_t capacity,
                                               size_t *written, int64_t host_seconds) {
+    /* The count is an output too. Reject aliases before even clearing it, so a
+     * failed save cannot alter cartridge ownership or the destination bytes. */
+    if (!valid_written_pointer(gb, data, capacity, written))
+        return CUPID_GB_BATTERY_INVALID_ARGUMENT;
     if (written)
         *written = 0;
     if (!valid_cartridge(gb))
@@ -169,7 +184,7 @@ CupidGbBatteryResult cupid_gb_save_battery_at(const CupidGb *gb, uint8_t *data, 
     if (capacity < size)
         return CUPID_GB_BATTERY_BUFFER_TOO_SMALL;
     if (!data || overlaps(data, size, gb, sizeof(*gb)) ||
-        overlaps(data, size, gb->rom, gb->rom_size))
+        overlaps(data, size, gb->rom, gb->rom_capacity))
         return CUPID_GB_BATTERY_INVALID_ARGUMENT;
     const CupidGbRtc rtc = gb->rtc;
     memcpy(data, gb->cartridge_ram, gb->cartridge_ram_size);
@@ -192,6 +207,8 @@ CupidGbBatteryResult cupid_gb_save_battery_at(const CupidGb *gb, uint8_t *data, 
 
 CupidGbBatteryResult cupid_gb_save_battery(const CupidGb *gb, uint8_t *data, size_t capacity,
                                            size_t *written) {
+    if (!valid_written_pointer(gb, data, capacity, written))
+        return CUPID_GB_BATTERY_INVALID_ARGUMENT;
     const bool needs_time =
         valid_cartridge(gb) && (clock_present(gb) || gb->header.mbc_type == CUPID_GB_TPP1);
     return cupid_gb_save_battery_at(gb, data, capacity, written,

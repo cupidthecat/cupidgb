@@ -758,7 +758,8 @@ static bool valid_v5_sections(const CupidGb *gb, unsigned sections) {
 }
 
 static bool ready(const CupidGb *gb) {
-    return gb && gb->loaded && gb->rom && gb->rom_size >= 0x150 && gb->rom_size <= UINT32_MAX &&
+    return gb && gb->loaded && gb->rom && gb->rom_size >= 0x150 &&
+           gb->rom_size <= CUPID_GB_MAX_ROM_SIZE && gb->rom_size <= gb->rom_capacity &&
            gb->cartridge_ram_size <= CUPID_GB_MAX_RAM_SIZE;
 }
 
@@ -910,7 +911,7 @@ static bool overlaps_live_storage(const CupidGb *gb, const void *data, size_t si
         return false;
     const CupidGbPrinter *printer = cupid_gb_printer_attached(gb);
     return overlaps(data, size, gb, sizeof(*gb)) ||
-           (gb->rom && overlaps(data, size, gb->rom, gb->rom_size)) ||
+           (gb->rom && overlaps(data, size, gb->rom, gb->rom_capacity)) ||
            (printer && overlaps(data, size, printer, sizeof(*printer)));
 }
 
@@ -1489,6 +1490,7 @@ CupidGbStateResult cupid_gb_state_context_init(CupidGbStateContext *context, con
     context->owner = gb;
     context->rom = gb->rom;
     context->rom_size = gb->rom_size;
+    context->rom_generation = gb->rom_generation;
     context->model = gb->model;
     cupid_sha256(gb->rom, gb->rom_size, context->rom_digest);
     return CUPID_GB_STATE_OK;
@@ -1499,7 +1501,7 @@ static CupidGbStateResult check_context(const CupidGb *gb, const CupidGbStateCon
         return CUPID_GB_STATE_NO_ROM;
     }
     if (!context || context->owner != gb || context->rom != gb->rom ||
-        context->rom_size != gb->rom_size) {
+        context->rom_size != gb->rom_size || context->rom_generation != gb->rom_generation) {
         return CUPID_GB_STATE_WRONG_ROM;
     }
     return context->model == gb->model ? CUPID_GB_STATE_OK : CUPID_GB_STATE_WRONG_MODEL;

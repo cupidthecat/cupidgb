@@ -1196,10 +1196,11 @@ bool MainWindow::audioLifecycleSmokeTest(const QString &path) {
                             session.audio_->error() == QAudio::NoError;
         QElapsedTimer readinessClock;
         readinessClock.start();
-        bool capacityProgress = false;
-        // Stop as soon as the native sink consumes capacity. Sleeping the full
-        // budget would deliberately starve the stopped guest timer's short prime.
-        while (primed && readinessClock.elapsed() < 75) {
+        // Native playback can advance before the first snapshot. Requiring another
+        // capacity increase can starve this deliberately stopped guest timer.
+        bool capacityProgress =
+            primed && initialCapacity >= frameBytes && beforeWait["processed_us"].toDouble() > 0;
+        while (primed && !capacityProgress && readinessClock.elapsed() < 75) {
             QEventLoop played;
             QTimer::singleShot(1, Qt::PreciseTimer, &played, &QEventLoop::quit);
             played.exec();

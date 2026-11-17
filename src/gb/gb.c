@@ -240,6 +240,8 @@ static void cupid_gb_apply_boot_profile(CupidGb *gb) {
 void cupid_gb_init(CupidGb *gb) {
     CupidGbModel model;
     uint8_t *rom;
+    size_t rom_capacity;
+    uint64_t rom_generation;
     CupidGbSerialOutputCallback serial_output_callback;
     void *serial_output_user_data;
     CupidGbSerialLink serial_link;
@@ -262,6 +264,8 @@ void cupid_gb_init(CupidGb *gb) {
 
     model = gb->model;
     rom = gb->rom;
+    rom_capacity = gb->rom_capacity;
+    rom_generation = gb->rom_generation;
     serial_output_callback = gb->serial_output_callback;
     serial_output_user_data = gb->serial_output_user_data;
     serial_link = gb->serial_link;
@@ -290,6 +294,8 @@ void cupid_gb_init(CupidGb *gb) {
     gb->object_fetch_stage = CUPID_GB_OBJECT_IDLE;
     gb->model = model;
     gb->rom = rom;
+    gb->rom_capacity = rom_capacity;
+    gb->rom_generation = rom_generation;
     gb->serial_output_callback = serial_output_callback;
     gb->serial_output_user_data = serial_output_user_data;
     gb->serial_link = serial_link;
@@ -312,11 +318,13 @@ void cupid_gb_init(CupidGb *gb) {
     gb->rtc_policy = rtc_policy;
 
     if (gb->rom == 0) {
-        gb->rom = malloc(CUPID_GB_MAX_ROM_SIZE);
+        gb->rom = malloc(CUPID_GB_MIN_ROM_CAPACITY);
         if (gb->rom == 0) {
+            gb->rom_capacity = 0;
             cupid_log_error("Failed to allocate Game Boy ROM buffer.");
             return;
         }
+        gb->rom_capacity = CUPID_GB_MIN_ROM_CAPACITY;
     }
 
     gb->cgb_mode = gb->model == CUPID_GB_MODEL_CGB;
@@ -602,6 +610,7 @@ void cupid_gb_cleanup(CupidGb *gb) {
 
     free(gb->rom);
     gb->rom = 0;
+    gb->rom_capacity = 0;
     gb->serial_output_callback = NULL;
     gb->serial_output_user_data = NULL;
     gb->serial_link = (CupidGbSerialLink){0};
@@ -1042,8 +1051,18 @@ uint8_t cupid_gb_read_u8(const CupidGb *gb, uint16_t address) {
     return gb && gb->cheats ? cupid_gb_cheats_apply(gb, address, value) : value;
 }
 
+/* Ordinary playback has no bus observer. Keep optional callback dispatch out
+ * of the common instruction-fetch path without changing access ordering. */
+static inline bool memory_access_observed(const CupidGb *gb) {
+#if defined(__GNUC__) || defined(__clang__)
+    return __builtin_expect(gb->memory_access_callback != NULL, 0);
+#else
+    return gb->memory_access_callback != NULL;
+#endif
+}
+
 uint8_t cupid_gb_read_bus_u8(CupidGb *gb, uint16_t address) {
-    if (gb && gb->memory_access_callback)
+    if (gb && memory_access_observed(gb))
         gb->memory_access_callback(gb->memory_access_user_data, gb, address, false, 0);
     if (gb && gb->dma_active && !resolve_dma_access(gb, &address, false, 0))
         return 0xffu;
@@ -1111,7 +1130,7 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
         return;
     }
 
-    if (gb->memory_access_callback)
+    if (memory_access_observed(gb))
         gb->memory_access_callback(gb->memory_access_user_data, gb, address, true, value);
 
     if (on_main_bus(gb, address))

@@ -30,6 +30,8 @@
 #include <QStandardPaths>
 #include <QStringList>
 
+#include <new>
+
 extern "C" {
 #include "cupid/gb/gb.h"
 }
@@ -167,7 +169,9 @@ QByteArray readArchive(const QFileInfo &file, QString &error) {
         return {};
     }
     if (encrypted || !validRomSize(size)) {
-        error = "The archived cartridge must be unencrypted and between 336 bytes and 8 MiB.";
+        error = QStringLiteral("The archived cartridge must be unencrypted and between 336 bytes "
+                               "and %1 MiB.")
+                    .arg(CUPID_GB_MAX_ROM_SIZE / (1024u * 1024u));
         return {};
     }
 
@@ -182,9 +186,8 @@ QByteArray readArchive(const QFileInfo &file, QString &error) {
     }
     return rom;
 }
-} // namespace
 
-QByteArray readCartridgeFile(const QString &path, QString &error) {
+QByteArray readCartridge(const QString &path, QString &error) {
     const QFileInfo info(path);
     if (!info.isFile()) {
         error = "Cannot open ROM. Select a regular cartridge or archive file.";
@@ -205,7 +208,8 @@ QByteArray readCartridgeFile(const QString &path, QString &error) {
     }
     const qint64 size = file.size();
     if (!validRomSize(size)) {
-        error = "Cartridge size must be between 336 bytes and 8 MiB.";
+        error = QStringLiteral("Cartridge size must be between 336 bytes and %1 MiB.")
+                    .arg(CUPID_GB_MAX_ROM_SIZE / (1024u * 1024u));
         return {};
     }
     const QByteArray data = file.read(size + 1);
@@ -214,6 +218,16 @@ QByteArray readCartridgeFile(const QString &path, QString &error) {
         return {};
     }
     return data;
+}
+} // namespace
+
+QByteArray readCartridgeFile(const QString &path, QString &error) {
+    try {
+        return readCartridge(path, error);
+    } catch (const std::bad_alloc &) {
+        error = QStringLiteral("Not enough memory to read the cartridge.");
+        return {};
+    }
 }
 
 QString cartridgeStorageName(const QFileInfo &file) {

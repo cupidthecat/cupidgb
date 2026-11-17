@@ -506,8 +506,10 @@ static void test_step_observation(CupidGb *gb) {
             gb->interrupt_enable = 0xff;
         }
         uint8_t *owned_rom = observed->rom;
+        const size_t owned_capacity = observed->rom_capacity;
         *observed = *gb;
         observed->rom = owned_rom;
+        observed->rom_capacity = owned_capacity;
         memcpy(observed->rom, gb->rom, gb->rom_size);
         CupidGbStepTrace trace;
         assert(cupid_gb_step(gb));

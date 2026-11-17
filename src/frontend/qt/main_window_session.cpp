@@ -503,7 +503,7 @@ void MainWindow::rememberFrame() {
         // need a new binding even when their byte-identical snapshots remain usable.
         rewindContext_ = std::move(context);
     }
-    QElapsedTimer captureTimer;
+    HostElapsedTimer captureTimer;
     captureTimer.start();
     const QByteArray state = captureState(false, true);
     QByteArray compressed = state.isEmpty() ? QByteArray{} : qCompress(state, 1);

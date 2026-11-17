@@ -364,7 +364,9 @@ static uint8_t cupid_gb_compute_header_checksum_at(const uint8_t *rom_data, size
  * @return The computed 8-bit header checksum.
  */
 static uint8_t cupid_gb_compute_header_checksum(const uint8_t *rom_data) {
-    return cupid_gb_compute_header_checksum_at(rom_data, CUPID_GB_MAX_ROM_SIZE, 0u);
+    /* This helper reads only the fixed primary header. The maximum accepted
+     * cartridge size is unrelated to the bytes required for this checksum. */
+    return cupid_gb_compute_header_checksum_at(rom_data, CUPID_GB_HEADER_CHECKSUM + 1u, 0u);
 }
 
 /**
@@ -870,6 +872,19 @@ void cupid_gb_cartridge_reset_controls(CupidGb *gb) {
     }
 }
 
+/* A source inside this instance's ROM buffer must fit before any header read,
+ * including when the source starts at an interior offset. Compare integer
+ * addresses so unrelated allocations never undergo ordered pointer comparison. */
+static bool rom_source_fits(const CupidGb *gb, const uint8_t *source, size_t length) {
+    if (!gb->rom || !gb->rom_capacity)
+        return true;
+    const uintptr_t base = (uintptr_t)gb->rom;
+    const uintptr_t address = (uintptr_t)source;
+    if (address < base || address - base > gb->rom_capacity)
+        return true;
+    return length <= gb->rom_capacity - (size_t)(address - base);
+}
+
 /**
  * @brief Loads a Game Boy ROM from a memory buffer.
  *
@@ -889,14 +904,19 @@ void cupid_gb_cartridge_reset_controls(CupidGb *gb) {
  * @note An invalid header checksum is non-fatal; a warning is logged and
  *       loading continues.
  */
-bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size) {
+bool cupid_gb_load_rom_with_allocator(CupidGb *gb, const uint8_t *rom_data, size_t rom_size,
+                                      void *(*allocate)(size_t)) {
     CupidGbCartridgeHeader header;
-    if (gb == 0 || rom_data == 0) {
+    if (gb == 0 || rom_data == 0 || allocate == 0) {
         return false;
     }
 
     if (rom_size < 0x0150u || rom_size > CUPID_GB_MAX_ROM_SIZE) {
         cupid_log_error("Game Boy ROM size is out of supported range.");
+        return false;
+    }
+    if (!rom_source_fits(gb, rom_data, rom_size)) {
+        cupid_log_error("ROM input extends beyond the current cartridge buffer.");
         return false;
     }
 
@@ -970,11 +990,30 @@ bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size) {
         return false;
     }
 
-    cupid_gb_init(gb);
-    if (gb->rom == 0) {
-        return false;
+    /* No preparation step after this point can fail. Derive all header-dependent
+     * state before a self-input copy can overlap the source or reset this GB. */
+    const bool mbc1_multicart = cupid_gb_detect_mbc1_multicart(rom_data, rom_size, &header);
+    const size_t required_capacity =
+        rom_size < CUPID_GB_MIN_ROM_CAPACITY ? CUPID_GB_MIN_ROM_CAPACITY : rom_size;
+    uint8_t *const previous_rom = gb->rom;
+    uint8_t *candidate_rom = previous_rom;
+    if (!previous_rom || gb->rom_capacity != required_capacity) {
+        candidate_rom = allocate(required_capacity);
+        if (!candidate_rom) {
+            cupid_log_error("Failed to allocate Game Boy ROM buffer.");
+            return false;
+        }
+        /* The old buffer is still owned and readable, including aliased input. */
+        memcpy(candidate_rom, rom_data, rom_size);
+        gb->rom = candidate_rom;
+        gb->rom_capacity = required_capacity;
+    } else {
+        /* Self-input and interior slices are valid when fully in capacity.
+         * memmove also permits an ordinary external input with no overlap. */
+        memmove(candidate_rom, rom_data, rom_size);
     }
-    memcpy(gb->rom, rom_data, rom_size);
+
+    cupid_gb_init(gb);
     gb->rom_size = rom_size;
 
     gb->header = header;
@@ -999,7 +1038,7 @@ bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size) {
      * Keep rom_size unpadded so hashes and native states identify the input file. */
     gb->rom_bank_count = rom_bank_count;
     gb->ram_bank_count = (ram_size + 0x1fffu) / 0x2000u;
-    gb->mbc1_multicart = cupid_gb_detect_mbc1_multicart(rom_data, rom_size, &gb->header);
+    gb->mbc1_multicart = mbc1_multicart;
     gb->mmm01_menu_first = mmm01_menu_first;
     cupid_gb_cartridge_reset_controls(gb);
     /* Initial cartridge setup precedes a native reset. Its initial TPP1 register
@@ -1011,7 +1050,10 @@ bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size) {
     memset(gb->cartridge_ram, 0xff, gb->cartridge_ram_size);
 
     gb->loaded = true;
+    ++gb->rom_generation;
     cupid_gb_rtc_bind_cartridge(gb);
+    if (candidate_rom != previous_rom)
+        free(previous_rom);
 
     cupid_log_infof("Loaded Game Boy ROM: %s",
                     gb->header.title[0] != '\0' ? gb->header.title : "<untitled>");
@@ -1023,6 +1065,10 @@ bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size) {
     }
 
     return true;
+}
+
+bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size) {
+    return cupid_gb_load_rom_with_allocator(gb, rom_data, rom_size, malloc);
 }
 
 // Name helpers

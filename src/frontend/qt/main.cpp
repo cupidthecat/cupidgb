@@ -29,6 +29,8 @@
 #include <QIcon>
 #include <QTemporaryDir>
 
+#include <cmath>
+
 int main(int argc, char **argv) {
     QApplication app(argc, argv);
     QCoreApplication::setOrganizationName("CupidGB");
@@ -136,8 +138,8 @@ int main(int argc, char **argv) {
     if (bounded) {
         bool valid = false;
         const double seconds = parser.value("run-seconds").toDouble(&valid);
-        if (!valid || seconds <= 0 || seconds > 86400 || parser.value("report").isEmpty() ||
-            parser.positionalArguments().isEmpty())
+        if (!valid || !std::isfinite(seconds) || seconds <= 0 || seconds > 86400 ||
+            parser.value("report").isEmpty() || parser.positionalArguments().isEmpty())
             parser.showHelp(1);
         if (parser.isSet("input-trace") && !window.loadInputTrace(parser.value("input-trace")))
             return 1;
