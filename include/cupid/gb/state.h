@@ -41,7 +41,7 @@ typedef enum CupidGbStateResult {
     CUPID_GB_STATE_NO_ROM
 } CupidGbStateResult;
 
-#define CUPID_GB_STATE_VERSION 17u
+#define CUPID_GB_STATE_VERSION 18u
 
 /* Trusted in-memory snapshots may cache the immutable cartridge identity. Initialize
  * once for the current instance and discard the context on cartridge replacement,
@@ -72,6 +72,13 @@ CupidGbStateResult cupid_gb_load_state_with_context(CupidGb *gb, const uint8_t *
  * ROMs, boot ROMs, and save paths are session resources and are never included in state data.
  * Restoring an active boot overlay requires the same boot ROM to be available in the target.
  * The target's current boot-overlay enabled flag need not match the saved flag.
+ * Version 18 appends the retained serial-clock selector after the version 17 hardware tail.
+ * Reset selects the slow clock independently of SC readback. An SC write selects a new tap;
+ * later compatibility-mode changes leave it intact. Older files project the absent selector
+ * from their decoded mode and SC speed bit, preserving phase and literal I/O bytes.
+ * A legacy CGB state with SC bit 1 clear can now read that retained bit after a mode change;
+ * the older engine recomputed it on reads. Import does not alter the recorded byte or issue
+ * a control write. Missing selector history cannot reproduce an earlier firmware write.
  * Version 16 gives TPP1 an independent mapped ROM-bank cache. Control readback is
  * zero immediately after native reset while bank 1 remains mapped until a control
  * write. Older imports reconstruct the mapping from their TPP1 control register.
@@ -111,7 +118,7 @@ CupidGbStateResult cupid_gb_load_state_with_context(CupidGb *gb, const uint8_t *
  * STOP access gates, the palette-port release edge, object fetch stage, pending
  * JOYP row release, and presentation events. Applicable SGB, MMM01, MBC7, Camera,
  * TPP1, and HuC3 sections are included.
- * Versions 2 through 16 remain readable. Versions 2 through 13 receive deterministic
+ * Versions 2 through 17 remain readable. Versions 2 through 13 receive deterministic
  * settled-channel defaults for missing reconstruction history; queued PCM, output rate, rational
  * credit and the disabled-filter flag survive import. Retired integer mixer/filter history is
  * validated but cannot reproduce the new reconstruction waveform exactly. Versions 2 through 12 use

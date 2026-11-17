@@ -35,7 +35,7 @@ Emulation > Controllers selects devices and configures buttons, axes, hats, play
 
 Battery data uses `.sav` beside the cartridge. State slots use `.s0` through `.s9`, with the zero key selecting slot 10. Archive storage names include the archive extension, such as `game.zip.sav`. Settings offers system-time or Accurate emulated-time policies for supported [cartridge clocks](docs/rtc.md).
 
-New states use CupidGB native version 17 and retain hardware, peripheral, audio reconstruction, display synchronization, pixel-fetch and VRAM read history. Version 17 also preserves the CGB tile row selected before a later scroll write. Versions 2 through 16 remain loadable with explicit defaults for missing history. Pending input samples and TPP1's mapped bank remain independent of reset control readback. Desktop loads keep current listening settings. File > Recover Battery from Older State can export supported battery data from version 1. See [save states and rewind](docs/save-states.md) for compatibility and backup guidance.
+New states use CupidGB native version 18 and retain hardware, peripheral, audio reconstruction, display synchronization, pixel-fetch, VRAM read and serial clock-selection history. Versions 2 through 17 remain loadable with explicit defaults for missing history. Desktop loads keep current listening settings. File > Recover Battery from Older State can export supported battery data from version 1. See [save states and rewind](docs/save-states.md) for compatibility and backup guidance.
 
 Audio settings include Accurate, waveform-preserving and disabled high-pass filtering, optional interference and individual channel toggles. [The audio guide](docs/audio.md) explains how these controls affect playback and recording.
 

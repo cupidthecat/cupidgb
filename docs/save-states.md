@@ -10,7 +10,7 @@ Load a native state file through File > Load State File or drop a `.s0` through 
 
 Writes use an atomic file replacement. Loading checks the complete cartridge identity and hardware model. A state captured with an active boot overlay requires the matching local boot binary. Failed validation preserves the running session and its host audio queue. A successful load replaces the emulated state, reapplies current physical input, clears queued host audio, and realigns pacing.
 
-New files use CupidGB native version 17. Versions 2 through 16 remain loadable. Desktop loads retain the current audio filter, interference level, channel choices, sample rate and receiving output history. Interoperable BESS state imports remain pending.
+New files use CupidGB native version 18. Versions 2 through 17 remain loadable. Desktop loads retain the current audio filter, interference level, channel choices, sample rate and receiving output history. Interoperable BESS state imports remain pending.
 
 The version identifies the wire encoding. Subsequent execution follows the current engine. Version 3 records pending CGB DMA work, CPU speed-switch sequencing, and audio clock, held-output, envelope, sweep, and noise latches. Version 2 has no values for these latches. Its loader initializes them deterministically after validating the old payload; it never takes missing hardware history from the target's running session. Pending DMA and speed-switch delays start cleared, while an old armed HBlank transfer retains its saved block count. On color hardware, pulse clock startup follows the saved channel enable, and held pulse output follows the saved duty position. Monochrome pulse history uses the import rules described under version 11 below. Noise gates and held output derive from the saved channel/DAC and LFSR state, with a canonical prescaler phase. The old LFSR, timer and queued PCM remain intact. Version 14 initializes missing reconstruction and filter history as described below. Keep the original state if you need to revisit its earlier build.
 
@@ -224,6 +224,20 @@ Version 17 uses the previously reserved fourth byte of the pixel-timing record f
 The encoded size and all other field offsets stay the same as version 16. The loader still requires that byte to be zero in version 15 and 16 files. Older versions reconstruct the missing row from their saved scanline and SCY, or the saved window line when the window is active. That deterministic projection cannot recover a prior SCY value changed after the original tile-map selection. Keep the older build and state when exact historical continuation is required.
 
 The row latch belongs to guest state. Motor sample callback registrations and the frontend's accumulated samples remain host state and add no serialized fields. Exact, live and trusted loading paths retain registrations without emitting samples; the frontend clears its pending feedback at a successful timeline change.
+
+### Serial clock selection in version 18
+
+Version 18 adds one byte after the pending-input byte and before the accessory descriptor. Zero selects the slow serial divider tap; one selects the fast tap. A fast selector is valid only on physical CGB hardware, including a saved state that has subsequently entered monochrome compatibility mode. Other values reject the whole load without changing the console or an attached device. Earlier hardware offsets stay fixed; the descriptor and any printer payload move forward by exactly one byte.
+
+An ordinary version 18 state without model or cartridge extensions occupies 305,090 bytes without a printer and 337,777 bytes with one. The MBC7 extension adds eight bytes. Hosts must continue to query `cupid_gb_state_size` for each capture.
+
+The selector records the last SC write separately from the stored SC byte, master-clock phase, remaining bits and transmit latch. Reset selects the slow tap even though SC reads `7E`. Writing SC selects a tap using the operating mode at that write, including when no transfer is active. A later KEY0 mode change, boot-overlay removal, DIV reset or CPU speed change does not select another tap. DIV and CPU clocks still drive edges of the retained tap. The approximate startup profile used without a boot binary also starts slow; it cannot recover serial writes from firmware that was never executed.
+
+Versions 2 through 17 lack this byte. Import selects fast only when the decoded state has CGB mode enabled and stored SC bit 1 set. It uses the loaded values, never the receiving machine's selector, and preserves the saved master phase, bit count and transmit latch. This projection matches the old engine's tap selection at the saved boundary, but cannot recover earlier SC writes or mode transitions that the file did not record.
+
+Import preserves every stored SC bit and does not issue a control write. Current execution reads SC bit 1 from its retained value on physical CGB hardware, including compatibility mode. For example, a legacy compatibility state with raw SC `7C` now reads `7C`; older builds forced that read to `7E`. Reserved-bit read masks still apply, and monochrome hardware still forces bit 1 high. Rewriting the saved byte would discard recorded state without recovering its absent write history. The same current-engine continuation rule applies to exact, live and trusted loaders.
+
+See [serial selection validation](validation-serial-selection.md) for the original guest programs, retained baseline differences, regression coverage and remaining checks. The existing format fixtures remove the additional byte when constructing earlier versions; their original lengths and frozen hashes remain fixed.
 
 ## Validation scope
 

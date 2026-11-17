@@ -37,7 +37,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum { INPUT_SAMPLE_BYTES = 1 };
+enum { IO_HISTORY_BYTES = 2 }; /* Sampled JOYP and retained serial selector. */
 
 enum {
     HEADER_BYTES = 128,
@@ -204,7 +204,7 @@ static Blob save_rig(const Rig *rig) {
     Blob blob = {NULL, cupid_gb_state_size(rig->gb)};
     const bool huc3 = rig->gb->header.mbc_type == CUPID_GB_HUC3;
     const bool sgb = rig->gb->model == CUPID_GB_MODEL_SGB || rig->gb->model == CUPID_GB_MODEL_SGB2;
-    const size_t expected = INPUT_SAMPLE_BYTES + V4_BYTES + (sgb ? SGB_BYTES : 0) +
+    const size_t expected = IO_HISTORY_BYTES + V4_BYTES + (sgb ? SGB_BYTES : 0) +
                             (huc3 ? HUC3_BYTES : SHARED_IR_BYTES) + V11_TAIL_BYTES + RTC_BYTES +
                             CUPID_GB_AUDIO_STATE_SIZE + CUPID_GB_DISPLAY_CLOCK_STATE_SIZE +
                             CUPID_GB_PIXEL_TIMING_STATE_SIZE + CUPID_GB_VRAM_BUS_STATE_SIZE +
@@ -261,7 +261,7 @@ static size_t descriptor_offset(const Rig *rig, const Blob *blob) {
 }
 
 static size_t clock_offset(const Rig *rig, const Blob *blob) {
-    return descriptor_offset(rig, blob) - INPUT_SAMPLE_BYTES - CUPID_GB_PIXEL_TIMING_STATE_SIZE -
+    return descriptor_offset(rig, blob) - IO_HISTORY_BYTES - CUPID_GB_PIXEL_TIMING_STATE_SIZE -
            CUPID_GB_VRAM_BUS_STATE_SIZE - CUPID_GB_DISPLAY_CLOCK_STATE_SIZE;
 }
 
@@ -439,7 +439,7 @@ static Blob legacy_blob(const Rig *rig, const Blob *current, unsigned version) {
     const size_t descriptor = descriptor_offset(rig, current);
     Blob old = copy_blob(current);
     if (version >= 12) {
-        const size_t removed = INPUT_SAMPLE_BYTES + CUPID_GB_DISPLAY_CLOCK_STATE_SIZE +
+        const size_t removed = IO_HISTORY_BYTES + CUPID_GB_DISPLAY_CLOCK_STATE_SIZE +
                                CUPID_GB_PIXEL_TIMING_STATE_SIZE + CUPID_GB_VRAM_BUS_STATE_SIZE +
                                (version < 14 ? CUPID_GB_AUDIO_STATE_SIZE : 0) +
                                (version < 13 ? RTC_BYTES : 0);
@@ -579,8 +579,8 @@ static void test_malformed_history(void) {
             reject_unchanged(target, &bad);
             free(bad.bytes);
         }
-        /* Keep sampled input and the accessory intact while removing each timing suffix. */
-        const size_t timing_end = descriptor - INPUT_SAMPLE_BYTES;
+        /* Keep input, serial selection and the accessory intact while removing timing suffixes. */
+        const size_t timing_end = descriptor - IO_HISTORY_BYTES;
         for (unsigned missing = 1;
              missing <= CUPID_GB_DISPLAY_CLOCK_STATE_SIZE + CUPID_GB_PIXEL_TIMING_STATE_SIZE +
                             CUPID_GB_VRAM_BUS_STATE_SIZE;

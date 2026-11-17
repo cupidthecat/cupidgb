@@ -51,6 +51,13 @@ bool MainWindow::resetAudioSmokeTest(const QString &directory) {
     if (QFileInfo::exists(recording) || !startRecording(recording))
         return smokeFailure(__FILE__, __LINE__);
     QJsonArray observations;
+    // Evidence output can block while the manually driven stream is draining.
+    // Flush stored observations only after the consecutive playback proofs.
+    const auto publishObservations = qScopeGuard([&] {
+        for (const auto &row : observations)
+            qInfo("CupidGB native reset audio observation: %s",
+                  QJsonDocument(row.toObject()).toJson(QJsonDocument::Compact).constData());
+    });
     const auto snapshot = [&] {
         const auto state = audio_ ? audio_->state() : QAudio::StoppedState;
         // Buffer capacity is only available after the backend opens its stream.
@@ -86,8 +93,6 @@ bool MainWindow::resetAudioSmokeTest(const QString &directory) {
     const auto record = [&](const QString &phase, const QJsonObject &details) {
         QJsonObject row{{"phase", phase}, {"details", details}};
         observations.append(row);
-        qInfo("CupidGB native reset audio observation: %s",
-              QJsonDocument(row).toJson(QJsonDocument::Compact).constData());
     };
     constexpr qint64 budgetMs = 500;
     constexpr unsigned maximumFrames = 48;

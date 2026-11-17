@@ -333,6 +333,9 @@ void cupid_gb_init(CupidGb *gb) {
     gb->io_registers[CUPID_GB_IO_LCDC] = 0x91u;
     gb->io_registers[0x01u] = 0x00u;
     gb->io_registers[0x02u] = 0x7eu;
+    /* The approximate handoff uses the slow reset tap independently of SC
+     * readback. It cannot reconstruct earlier firmware control-write history. */
+    gb->serial_fast_clock = false;
     gb->io_registers[0x05u] = 0x00u;
     gb->io_registers[0x06u] = 0x00u;
     gb->io_registers[0x07u] = 0x00u;
@@ -570,6 +573,7 @@ void cupid_gb_enter_boot_rom(CupidGb *gb) {
     gb->divider_subcycle = 0u;
     gb->ppu_counter = 0u;
     gb->serial_master_clock = false;
+    gb->serial_fast_clock = false;
     gb->interrupt_flags = 0x00u;
     gb->interrupt_enable = 0x00u;
 
@@ -988,7 +992,9 @@ static uint8_t read_data_bus(const CupidGb *gb, uint16_t address, CupidGb *bus, 
     }
 
     if (address == 0xff02u) {
-        uint8_t writable = gb->cgb_mode ? 0x83u : 0x81u;
+        /* On color hardware, KEY0 does not rewrite the retained speed bit.
+         * Compatibility mode affects the next SC write, not this readback. */
+        uint8_t writable = gb->model == CUPID_GB_MODEL_CGB ? 0x83u : 0x81u;
         return (uint8_t)(gb->io_registers[2] | (uint8_t)~writable);
     }
 

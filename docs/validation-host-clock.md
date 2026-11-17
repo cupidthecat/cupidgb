@@ -54,8 +54,8 @@ successful battery flush. Inputs and executables retain their hashes.
 | SGB MBC1 | 100.0015% | 18.496 ms | 215.0 MiB |
 | CGB MBC5 motor hardware | 99.9947% | 19.165 ms | 253.2 MiB |
 
-Guest speed counts emulated base-clock cycles. Paint intervals describe host
-presentation and are a separate measurement. Whole-process speed is lower
+Guest speed counts emulated base-clock cycles. Paint intervals describe Qt
+widget events and are a separate measurement. Whole-process speed is lower
 because its interval also includes startup and shutdown. The inspected CGB
 captures show gameplay. Nineteen bounded core replays separately inspect the
 DMG and SGB input routes: the DMG route reaches moving pieces, game over and a
@@ -116,6 +116,139 @@ rate differs from independent host time. Correct sustained Linux playback
 remains unverified until the host clock/audio path is corrected or the same
 checks pass in another Linux environment. Increasing the queue would only delay
 backpressure and cannot resolve a sustained rate mismatch.
+
+A later held-session check sampled the raw, monotonic and PulseAudio clocks for
+604.394675 raw seconds. It required four consecutive ten-second samples within
+0.1% of raw time before starting another native playback run. None of the 57
+samples qualified: monotonic/raw ratios ranged from 0.9166664 to 0.9862124.
+The check ended without launching a game. Its boot identity, executable and all
+264 source inputs remained unchanged.
+
+Read-only kernel queries observed the coarse tick change from 10,000 to 9,167
+microseconds, with a further fine adjustment of about -33.6 ppm. That combination
+explains the approximately 8.33% slowest measured rate. The caller changing the
+tick has not been identified. Ubuntu's guest time service and Hyper-V implicit
+time synchronization were both enabled. The corresponding kernel source steps
+wall time in its implicit-sync path; that path is not established as the coarse
+tick writer.
+
+A follow-up read found Ubuntu's `systemd-timesyncd` following an NTP server while
+a chrony endpoint in the system distribution reported PHC0 as its selected
+reference. The exact installed Ubuntu source, version `255.4-1ubuntu8.18`, uses
+offset adjustments without requesting `ADJ_TICK`. The inspected
+[chrony 4.1 implementation](https://github.com/mlichvar/chrony/blob/885e7774fd87ce1a27d42371ea6adf2ce2a8e383/sys_linux.c)
+can combine coarse tick and fine frequency adjustments. Its documented default
+[maximum slew rate](https://chrony-project.org/doc/4.1/chrony.conf.html#maxslewrate)
+is 83,333.333 ppm, consistent with the earlier one-twelfth slowdown. The responding
+daemon's executable, version and clock-control flags were not visible; the
+available client version does not establish those properties. Two process views
+of `systemd-timesyncd` were confirmed to identify one instance.
+
+These observations support a time-source conflict as a hypothesis, without
+attributing the historical tick writes to a verified process.
+[Ubuntu's time-synchronization guidance](https://ubuntu.com/wsl/docs/latest/explanation/time-sync/)
+describes conflicts between guest NTP and host synchronization. This read-only
+stage changed no service, clock or configuration. The controlled experiment
+below follows that investigation; it does not establish sustained playback.
+
+## Controlled time-service experiment
+
+A later bounded experiment sampled the Linux raw, adjusted monotonic and
+PulseAudio clocks before, during and after temporarily stopping Ubuntu's
+`systemd-timesyncd.service`. It used two ten-second baseline samples, required
+four consecutive ten-second stopped samples within 0.1% of raw time, restored
+the service, and collected two more samples. A separate guardian owned both
+service transitions and verified cleanup. The Windows parent recorded sample
+arrival times with its performance counter.
+
+| Service phase | Samples | Monotonic/raw ratios | PulseAudio/raw ratios |
+| --- | ---: | --- | --- |
+| Active baseline | 2 | 1.000000202; 1.000000284 | 0.999999320; 1.000000384 |
+| Temporarily stopped | 4 | 0.999999373 to 1.000000525 | 0.999999389 to 1.000000288 |
+| Restored active | 2 | 1.005047108; 1.001307604 | 1.005047166; 1.001307598 |
+
+The baseline was already stable. All four stopped samples also qualified,
+while both restored samples exceeded the 0.1% rate tolerance. The latter
+ran about 0.50% and 0.13% fast. Windows arrival intervals agreed with raw time
+within about 20 ppm for the recorded phase spans, including IPC arrival jitter.
+The complete experiment took 83.293110 Windows performance-counter seconds.
+
+The guardian's single stop and replacement start commands both completed
+successfully. Final state was active/running with an empty job. Enablement,
+unit configuration, dependencies, boot identity and protected inputs remained
+unchanged. No configuration, direct clock adjustment or permanent service
+change was made, and cleanup was verified without a fallback start.
+
+An earlier attempt stopped before any clock sample or service action because
+the preflight compared the order of dependency names. The corrected comparison
+accepts reordered relationships while rejecting added, removed or duplicated
+names. Configuration paths and enable state still require exact matches.
+Both attempts and the intermediate review evidence remain preserved.
+
+The observed change after restart supports further investigation of interacting
+time sources, but an already-stable baseline cannot show that stopping the
+service cured the historical slowdown. The experiment does not identify the
+earlier coarse-tick writer. It measures the PulseAudio clock utility, without
+opening an audio stream, so native playback still needs its own qualification.
+The service remains enabled and running after this experiment.
+
+The completed experiment receipt is SHA-256
+`0a69962bfe438fbe6a23893ad34fe201eb16880daaa5b22d1f2b64363355974c`.
+Its Linux receipt is
+`46146179cf2fcccf1ab7e22e07266eebace23507f05c5f58f18a757445b4265e`;
+the verified guardian receipt is
+`49c3f9849d4342f909c6d2952322096a9786908b6de1347279dfcf1e30ba15aa`.
+
+## Subsequent readiness attempt
+
+The next attempt used the restored service configuration and the current
+Gate 03 executables. It required four consecutive ten-second raw-clock samples
+whose complete measurement brackets put both monotonic and PulseAudio time
+within 0.1% of raw time. The readiness deadline was 300 raw seconds. No service
+or clock configuration changed during this attempt.
+
+| Observation | Result |
+| --- | --- |
+| Complete samples | 29 |
+| Individually qualifying samples | 3 |
+| Longest qualifying sequence | 1 sample; four required |
+| Monotonic/raw ratio range | 0.992465463 to 1.009633276 |
+| PulseAudio/raw ratio range | 0.992465855 to 1.009633923 |
+| Invalid measurement brackets or changed boot identity | None |
+| Gameplay cases launched | None; all four recorded as skipped |
+
+Windows arrival timestamps span 280.039676 performance-counter seconds between
+the first and last complete clock observations. The corresponding Linux raw
+interval is 280.039309 seconds, a diagnostic ratio of 1.000001310. This includes
+pipe delivery and scheduling; it supports the raw-clock observation without
+turning message arrival into an exact clock calibration.
+
+The Linux receipt records a readiness timeout, unchanged protected inputs and
+a stopped monitor. The six executable/core artifacts, 268 build inputs and
+private workload inputs retain their identities. No gameplay helper, Qt window
+or audio stream launched, so this attempt provides no sustained-playback result.
+
+After writing that failed receipt, the private Python observer aborted at
+interpreter shutdown with exit code 134. Its daemon cancellation thread was
+blocked in buffered stdin. The retained stderr identifies the buffered-reader
+lock failure. The exact helper and all failed-attempt outputs were preserved
+before a narrow repair changed the watcher to a stoppable raw-descriptor read
+and joined its thread during cleanup.
+
+Six isolated Linux process checks exercise the repaired watcher: an open stdin
+pipe through interpreter exit, EOF, a cancellation byte, an already-stopped
+watcher, an invalid descriptor and a descriptor-wait error. All exit with code
+zero, empty stderr and no timeout. These checks execute the actual watcher
+function without clock, audio, service or emulator work. They establish its
+tested shutdown behavior; they neither replace the failed readiness result
+nor qualify gameplay. The full clock gate was not repeated after this repair.
+
+The outer attempt receipt is SHA-256
+`eb75a53ae1ce29359904089a6a2131fade369597981871af97b109417548bc4d`;
+the Linux observations receipt is
+`f8e0b8ca95a63b314961deff6dbcfab0b3800fabc7ae65b3116fcb0b91c2ea2f`.
+The isolated watcher-check receipt is
+`8de7782ea6b9775a4792c4e9c6d7e17de93577bbc29512735da711effa14c857`.
 
 ## Throughput with unchanged guest work
 

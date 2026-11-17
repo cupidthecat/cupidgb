@@ -440,6 +440,8 @@ typedef struct CupidGb {
     bool huc3_ir_input; /* Live host signal, outside native snapshots. */
     CupidGbCamera camera;
     bool serial_master_clock;
+    /* SC writes select the divider tap. Mode changes do not repeat that write. */
+    bool serial_fast_clock;
     uint64_t cartridge_bus_expiry; /* Half-dot deadline on the shared main bus. */
     uint8_t cartridge_bus_data;
     uint64_t elapsed_cycles; /* Base-speed T-cycles, including LCD-off execution. */

@@ -928,16 +928,15 @@ static void cupid_gb_apu_trigger_ch3(CupidGb *gb) {
 }
 
 /**
- * @brief Emulates the DMG CH3 wave RAM corruption bug on retrigger.
+ * @brief Applies monochrome wave-memory corruption at an active CH3 retrigger.
  *
- * On original DMG hardware, retriggering CH3 while it is active and its
- * timer is about to expire can corrupt wave RAM. This function replicates
- * that behaviour by copying part of the wave RAM based on the current
- * wave position.
+ * The final two T-cycles before a fetch expose the upcoming byte's block.
+ * Corruption can change that source block as well as the first four bytes.
+ * Pocket retains block zero; the other monochrome models copy one byte there.
  *
  * @param gb Pointer to the Game Boy state.
  *
- * @note This function has no effect in CGB mode or when CH3 is inactive
+ * @note This function has no effect on CGB hardware or when CH3 is inactive
  *       or its timer is more than 2 T-cycles from expiry.
  */
 static void cupid_gb_apu_apply_dmg_ch3_retrigger_bug(CupidGb *gb) {
@@ -949,11 +948,20 @@ static void cupid_gb_apu_apply_dmg_ch3_retrigger_bug(CupidGb *gb) {
     }
 
     offset = (uint8_t)(((apu->ch3_wave_pos + 1u) >> 1u) & 0x0fu);
+    uint8_t *wave = &gb->io_registers[0x30u];
     if (offset < 4u) {
-        gb->io_registers[0x30u] = gb->io_registers[0x30u + offset];
-    } else {
-        memcpy(&gb->io_registers[0x30u], &gb->io_registers[0x30u + (offset & 0xfcu)], 4u);
+        /* This exception belongs to Pocket specifically, not SGB2. */
+        if (gb->model != CUPID_GB_MODEL_MGB)
+            wave[0] = wave[offset];
+        return;
     }
+
+    const uint8_t block = (uint8_t)(offset & 0xfcu);
+    /* A source bit flips only when both the first byte and the upcoming byte
+     * disagree with its old value. Read all operands before replacing it. */
+    const uint8_t flipped = (uint8_t)((wave[block] ^ wave[0]) & (wave[block] ^ wave[offset]));
+    wave[block] ^= flipped;
+    memcpy(wave, wave + block, 4u);
 }
 
 /**

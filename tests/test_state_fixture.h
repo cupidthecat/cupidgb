@@ -38,6 +38,8 @@ static void print_fixture(const char *path) {
     /* Preserve the original divider phase of this compatibility fixture. */
     gb->div_counter = 0;
     gb->double_speed = true;
+    /* This archived profile derived its idle fast tap from CGB mode and SC=7E. */
+    gb->serial_fast_clock = true;
     cupid_gb_write_u8(gb, 0xff40, 0);
     prepare_phase(gb, 2);
     /* Keep the historical in-flight OAM prefix of this compatibility fixture.

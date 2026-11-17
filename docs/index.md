@@ -29,5 +29,8 @@ CupidGB emulates Game Boy and Game Boy Color hardware with a C core and a Qt des
 | [Watchpoint validation](validation-watchpoints.md) | Guest access observation, debugger lifecycle checks, source conventions and current validation scope |
 | [Cartridge storage validation](validation-cartridge-storage.md) | Extended bank populations, failed-load preservation, mapper model coverage and allocation lifetime |
 | [Desktop clock validation](validation-host-clock.md) | Independent host-clock measurements, pacing deadlines and native audio readiness |
+| [Wave-memory validation](validation-wave-retrigger.md) | CH3 source and destination corruption, model controls, guest stores and native continuation |
+| [Serial selection validation](validation-serial-selection.md) | Retained divider selection, compatibility-mode readback and native version 18 migration |
+| [Hardware integration validation](validation-hardware-selection.md) | Combined hardware gates, state interchange, mapper limits, native workflows and Windows gameplay |
 
 Start with the build guide if you have a source checkout. For an executable that already runs, use the user guide. A result in the validation record applies to the stated revision, inputs, settings, and duration; it does not qualify every later build.

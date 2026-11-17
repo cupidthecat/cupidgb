@@ -990,8 +990,8 @@ bool cupid_gb_load_rom_with_allocator(CupidGb *gb, const uint8_t *rom_data, size
         return false;
     }
 
-    /* No preparation step after this point can fail. Derive all header-dependent
-     * state before a self-input copy can overlap the source or reset this GB. */
+    /* Read header-dependent state before an aliased copy or hardware reset.
+     * Allocation can still fail below without changing the live cartridge. */
     const bool mbc1_multicart = cupid_gb_detect_mbc1_multicart(rom_data, rom_size, &header);
     const size_t required_capacity =
         rom_size < CUPID_GB_MIN_ROM_CAPACITY ? CUPID_GB_MIN_ROM_CAPACITY : rom_size;

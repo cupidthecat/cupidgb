@@ -210,7 +210,7 @@ Run the focused native targets before broader suites:
 
 ```sh
 ctest --test-dir build --output-on-failure \
-    -R 'cupidgb_(cpu_timing|ppu|stat|apu|serial|state|core_interop|guest_clock_pacer)$'
+    -R 'cupidgb_(cpu_timing|ppu|stat|apu|wave_retrigger|serial|serial_selection|serial_state|state|core_interop|guest_clock_pacer)$'
 ```
 
 For a Visual Studio build, add `-C Release`. Also run the Qt workflow smoke for deadline, state, audio, and session integration. Sanitizers and Release IPO exercise different host-code paths; neither replaces the other.
@@ -219,6 +219,6 @@ Use equivalent explicit models, boot binaries, settings, and inputs for external
 
 ## Remaining hardware work
 
-The timing helpers cover tested observations rather than every register conflict or hardware revision. Ordinary instruction writes and interrupt stack writes need separate coverage. HBlank/OAM boundary STAT-write qualification, fine LCDC/palette conflicts, OAM corruption, DMA contention/stalls, STOP behavior, serial clock changes and external transport, and revision-specific startup remain incomplete. Grouped CGB and monochrome profiles do not qualify each physical revision. SGB PAL and full SGB host integration remain pending.
+The timing helpers cover particular register conflicts and hardware revisions. Ordinary instruction writes and interrupt stack writes need separate coverage. HBlank/OAM boundary STAT-write qualification, fine LCDC/palette conflicts, OAM corruption, DMA contention/stalls, STOP behavior, further serial edge combinations, external transport and revision-specific startup remain incomplete. The retained serial clock selector, SC-write ordering, tested KEY0 transitions and native-state continuation have [separate regression coverage](validation-serial-selection.md). Grouped CGB and monochrome profiles do not qualify each physical revision. SGB PAL and full SGB host integration remain pending.
 
 Preserve failing and inconclusive cases. A narrow phase fix must not be described as complete interrupt, graphics, or audio accuracy without corresponding evidence.

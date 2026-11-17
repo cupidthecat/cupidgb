@@ -34,7 +34,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum { INPUT_SAMPLE_BYTES = 1 };
+enum { IO_HISTORY_BYTES = 2 }; /* Sampled JOYP and retained serial selector. */
 
 enum {
     NATIVE_HEADER_BYTES = 128,
@@ -42,7 +42,7 @@ enum {
     INFRARED_HISTORY_BYTES = 6,
     RTC_HISTORY_BYTES = 6,
     MOTOR_HISTORY_OFFSET = 4,
-    BARE_STATE_BYTES = INPUT_SAMPLE_BYTES + 300600 + INFRARED_HISTORY_BYTES + RTC_HISTORY_BYTES +
+    BARE_STATE_BYTES = IO_HISTORY_BYTES + 300600 + INFRARED_HISTORY_BYTES + RTC_HISTORY_BYTES +
                        CUPID_GB_AUDIO_STATE_SIZE + CUPID_GB_DISPLAY_CLOCK_STATE_SIZE +
                        CUPID_GB_PIXEL_TIMING_STATE_SIZE + CUPID_GB_VRAM_BUS_STATE_SIZE +
                        DEVICE_DESCRIPTOR_BYTES,
@@ -836,13 +836,13 @@ static void test_malformed_devices(void) {
                 case 8:
                     /* Valid accessory data must not commit before a later
                      * hardware validation failure has been resolved. */
-                    bad.bytes[descriptor - INPUT_SAMPLE_BYTES - CUPID_GB_DISPLAY_CLOCK_STATE_SIZE -
+                    bad.bytes[descriptor - IO_HISTORY_BYTES - CUPID_GB_DISPLAY_CLOCK_STATE_SIZE -
                               CUPID_GB_PIXEL_TIMING_STATE_SIZE - CUPID_GB_VRAM_BUS_STATE_SIZE -
                               CUPID_GB_AUDIO_STATE_SIZE - RTC_HISTORY_BYTES - 1] = 16;
                     break;
                 case 9:
                     /* A non-TPP1 core must reject even an otherwise valid motor value. */
-                    bad.bytes[descriptor - INPUT_SAMPLE_BYTES - CUPID_GB_DISPLAY_CLOCK_STATE_SIZE -
+                    bad.bytes[descriptor - IO_HISTORY_BYTES - CUPID_GB_DISPLAY_CLOCK_STATE_SIZE -
                               CUPID_GB_PIXEL_TIMING_STATE_SIZE - CUPID_GB_VRAM_BUS_STATE_SIZE -
                               CUPID_GB_AUDIO_STATE_SIZE - RTC_HISTORY_BYTES +
                               MOTOR_HISTORY_OFFSET] = 1;
@@ -1075,7 +1075,7 @@ static void test_legacy_fresh_device(void) {
     source->gb->elapsed_cycles = 0x1234567;
     memset(source->gb->apu.pulse_timing, 0, sizeof(source->gb->apu.pulse_timing));
     Blob current = save_rig(source, false);
-    const size_t hardware_size = current.length - DEVICE_DESCRIPTOR_BYTES - INPUT_SAMPLE_BYTES -
+    const size_t hardware_size = current.length - DEVICE_DESCRIPTOR_BYTES - IO_HISTORY_BYTES -
                                  CUPID_GB_DISPLAY_CLOCK_STATE_SIZE -
                                  CUPID_GB_PIXEL_TIMING_STATE_SIZE - CUPID_GB_VRAM_BUS_STATE_SIZE -
                                  CUPID_GB_AUDIO_STATE_SIZE - RTC_HISTORY_BYTES -

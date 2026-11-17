@@ -100,6 +100,34 @@ bool MainWindow::motionSmokeTest(const QString &directory) {
     if (path.isEmpty() || !openRom(path) || emulator_->gb.header.mbc_type != CUPID_GB_MBC7)
         return smokeFailure(__FILE__, __LINE__);
     timer_.stop();
+    // Closing debugger windows and opening audio can deliver native focus
+    // changes after the previous test's synthetic active-widget selection.
+    // Visible pointer tests require actual application activation.
+    const auto hasActivation = [this] {
+        return QApplication::applicationState() == Qt::ApplicationActive &&
+               QApplication::activeWindow() == this;
+    };
+    if (isVisible() && !hasActivation()) {
+        raise();
+        activateWindow();
+        QEventLoop activation;
+        QTimer poll, deadline;
+        poll.setInterval(5);
+        deadline.setSingleShot(true);
+        connect(&poll, &QTimer::timeout, &activation, [&] {
+            if (hasActivation())
+                activation.quit();
+        });
+        connect(&deadline, &QTimer::timeout, &activation, &QEventLoop::quit);
+        poll.start();
+        deadline.start(2000);
+        if (!hasActivation())
+            activation.exec();
+        if (!hasActivation()) {
+            qCritical("Motion workflow could not activate the visible gameplay window");
+            return smokeFailure(__FILE__, __LINE__);
+        }
+    }
     motionFocusActive_ = true;
     refreshControllerGate();
     if (!motionInputAllowed(true)) {

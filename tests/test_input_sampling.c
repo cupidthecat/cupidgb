@@ -58,6 +58,7 @@ enum {
     HEADER_BYTES = 128,
     DESCRIPTOR_BYTES = 8,
     INPUT_SAMPLE_BYTES = 1,
+    SERIAL_CLOCK_BYTES = 1,
     V15_TIMING_BYTES = CUPID_GB_DISPLAY_CLOCK_STATE_SIZE + CUPID_GB_PIXEL_TIMING_STATE_SIZE +
                        CUPID_GB_VRAM_BUS_STATE_SIZE
 };
@@ -170,7 +171,7 @@ static void resign(Blob *blob) {
 }
 
 static size_t pending_offset(const Rig *rig, const Blob *blob) {
-    return blob->size - DESCRIPTOR_BYTES - INPUT_SAMPLE_BYTES -
+    return blob->size - DESCRIPTOR_BYTES - INPUT_SAMPLE_BYTES - SERIAL_CLOCK_BYTES -
            (rig->printer ? PRINTER_STATE_WIRE_SIZE : 0);
 }
 
@@ -416,8 +417,10 @@ static void native_continuation(void) {
 
 static Blob legacy_blob(const Rig *source, const Blob *current, unsigned version) {
     assert(version == 14 || version == 15);
-    const size_t removed = INPUT_SAMPLE_BYTES + (version == 14 ? V15_TIMING_BYTES : 0);
-    const size_t descriptor = pending_offset(source, current) + INPUT_SAMPLE_BYTES;
+    const size_t removed =
+        INPUT_SAMPLE_BYTES + SERIAL_CLOCK_BYTES + (version == 14 ? V15_TIMING_BYTES : 0);
+    const size_t descriptor =
+        pending_offset(source, current) + INPUT_SAMPLE_BYTES + SERIAL_CLOCK_BYTES;
     Blob legacy = {malloc(current->size - removed), current->size - removed};
     assert(legacy.bytes);
     memcpy(legacy.bytes, current->bytes, descriptor - removed);

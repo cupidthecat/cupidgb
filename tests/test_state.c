@@ -38,7 +38,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum { INPUT_SAMPLE_BYTES = 1 };
+enum { IO_HISTORY_BYTES = 2 }; /* Sampled JOYP and retained serial selector. */
 
 static void digest_hex(const void *bytes, size_t length, char hex[65]) {
     uint8_t digest[32];
@@ -145,7 +145,7 @@ static size_t v11_hardware_size(const CupidGb *gb, size_t length) {
     enum { ACCESSORY_DESCRIPTOR_BYTES = 8, INFRARED_HISTORY_BYTES = 6, RTC_HISTORY_BYTES = 6 };
 
     /* These fixtures have no attached device. HuC3 keeps its existing IR section. */
-    const size_t tail = INPUT_SAMPLE_BYTES + ACCESSORY_DESCRIPTOR_BYTES + RTC_HISTORY_BYTES +
+    const size_t tail = IO_HISTORY_BYTES + ACCESSORY_DESCRIPTOR_BYTES + RTC_HISTORY_BYTES +
                         CUPID_GB_AUDIO_STATE_SIZE + CUPID_GB_DISPLAY_CLOCK_STATE_SIZE +
                         CUPID_GB_PIXEL_TIMING_STATE_SIZE + CUPID_GB_VRAM_BUS_STATE_SIZE +
                         (gb->header.mbc_type == CUPID_GB_HUC3 ? 0 : INFRARED_HISTORY_BYTES);
@@ -188,7 +188,8 @@ static void assert_hardware_equal(const CupidGb *a, const CupidGb *b) {
     assert(a->dma_restart_pending == b->dma_restart_pending);
     assert(a->dma_restart_delay == b->dma_restart_delay);
     assert(a->serial_bits_remaining == b->serial_bits_remaining);
-    assert(a->serial_master_clock == b->serial_master_clock);
+    assert(a->serial_master_clock == b->serial_master_clock &&
+           a->serial_fast_clock == b->serial_fast_clock);
     assert(a->elapsed_cycles == b->elapsed_cycles && a->ppu_counter == b->ppu_counter);
     assert(a->double_speed == b->double_speed && a->speed_phase == b->speed_phase);
     assert(a->joypad == b->joypad && a->boot_rom_enabled == b->boot_rom_enabled);
@@ -629,6 +630,7 @@ static void test_v2_import(void) {
             put_u32(bytes + 12, (uint32_t)legacy_length);
             update_integrity(bytes, legacy_length);
             *expected = *source;
+            expected->serial_fast_clock = expected->cgb_mode && (expected->io_registers[2] & 2u);
             expected->hdma_pending = false;
             expected->hdma_hblank_delay = 0;
             expected->hdma_allow_on_wake = false;
@@ -1461,7 +1463,7 @@ static void test_sgb_sample_phase_and_legacy_filter(void) {
     source->apu.output.buf[0] = 1234;
     source->apu.output.buf[1] = -2345;
     state = encode(source, &length);
-    const size_t removed = INPUT_SAMPLE_BYTES + CUPID_GB_AUDIO_STATE_SIZE +
+    const size_t removed = IO_HISTORY_BYTES + CUPID_GB_AUDIO_STATE_SIZE +
                            CUPID_GB_DISPLAY_CLOCK_STATE_SIZE + CUPID_GB_PIXEL_TIMING_STATE_SIZE +
                            CUPID_GB_VRAM_BUS_STATE_SIZE;
     const size_t audio_offset = length - 8 - removed;

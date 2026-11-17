@@ -176,12 +176,12 @@ Legacy output import derives the filter and reconstruction coefficients from the
 
 ## Validation and remaining work
 
-The APU regression target covers DIV clock/reset behavior, power transitions, length control, DAC transfer and routing, duty phase, PCM taps, pitch, reconstruction, filters, rates, partial drains, STOP behavior and physical model clocks. Color-specific cases cover pulse reload windows, envelope edges, sweep latency, noise prescaler alignment, retriggers, selector writes and the held-counter carry. Separate synthesis, filter and audio-state tests cover output arithmetic and restoration. Frontend converter/recorder tests and Qt workflows exercise the host path.
+The APU regression target covers DIV clock/reset behavior, power transitions, length control, DAC transfer and routing, duty phase, PCM taps, pitch, reconstruction, filters, rates, partial drains, STOP behavior and physical model clocks. Color-specific cases cover pulse reload windows, envelope edges, sweep latency, noise prescaler alignment, retriggers, selector writes and the held-counter carry. The [wave-memory regression](validation-wave-retrigger.md) checks all sixteen source and destination bytes around CH3 retriggers, including the Pocket exception, SGB2 behavior, guest stores and native continuation. Separate synthesis, filter and audio-state tests cover output arithmetic and restoration. Frontend converter/recorder tests and Qt workflows exercise the host path.
 
 With the relevant targets built, run:
 
 ```sh
-ctest --test-dir build --output-on-failure -R 'cupidgb_(apu|audio_synthesis|audio_filter|audio_state|audio_clock|state|audio_converter|audio_buffer|turbo_audio_window|wave_recorder|qt_workflows)$'
+ctest --test-dir build --output-on-failure -R 'cupidgb_(apu|wave_retrigger|audio_synthesis|audio_filter|audio_state|audio_clock|state|audio_converter|audio_buffer|turbo_audio_window|wave_recorder|qt_workflows)$'
 ```
 
 Qt-dependent targets require a frontend-enabled build. The ordinary offscreen workflow test does not prove that a real audio device played sound. Native audio smoke checks, device changes and sustained gameplay belong in the platform validation described in [testing](testing.md).

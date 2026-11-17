@@ -37,7 +37,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum { INPUT_SAMPLE_BYTES = 1 };
+enum { IO_HISTORY_BYTES = 2 }; /* Sampled JOYP and retained serial selector. */
 
 typedef struct MemoryImage {
     uint8_t work[0x8000];
@@ -380,7 +380,7 @@ static uint8_t *encode_legacy_sgb_profile(const CupidGb *gb, size_t *length) {
     assert(memcmp(bytes + descriptor, empty, sizeof(empty)) == 0);
     /* Remove later clock and reconstruction history before the descriptor. The archived V12
      * receiver history and empty accessory descriptor remain byte-for-byte. */
-    const size_t removed = INPUT_SAMPLE_BYTES + RTC_HISTORY_BYTES + CUPID_GB_AUDIO_STATE_SIZE +
+    const size_t removed = IO_HISTORY_BYTES + RTC_HISTORY_BYTES + CUPID_GB_AUDIO_STATE_SIZE +
                            CUPID_GB_DISPLAY_CLOCK_STATE_SIZE + CUPID_GB_PIXEL_TIMING_STATE_SIZE +
                            CUPID_GB_VRAM_BUS_STATE_SIZE;
     memmove(bytes + descriptor - removed, bytes + descriptor, ACCESSORY_DESCRIPTOR_BYTES);
@@ -740,7 +740,7 @@ static void test_policy_and_state_lifetime(void) {
         };
 
         assert(bytes[8] == CUPID_GB_STATE_VERSION && length > NATIVE_HEADER_BYTES);
-        const size_t stop_offset = length - INPUT_SAMPLE_BYTES - ACCESSORY_DESCRIPTOR_BYTES -
+        const size_t stop_offset = length - IO_HISTORY_BYTES - ACCESSORY_DESCRIPTOR_BYTES -
                                    CUPID_GB_DISPLAY_CLOCK_STATE_SIZE -
                                    CUPID_GB_PIXEL_TIMING_STATE_SIZE - CUPID_GB_VRAM_BUS_STATE_SIZE -
                                    CUPID_GB_AUDIO_STATE_SIZE - RTC_HISTORY_BYTES -
@@ -810,7 +810,7 @@ static void test_printer_state_policy(void) {
                 const CupidGbPowerOn policy = b->power_on;
                 const size_t empty_size = cupid_gb_state_size(a);
                 const size_t stop_offset =
-                    empty_size - INPUT_SAMPLE_BYTES - ACCESSORY_DESCRIPTOR_BYTES -
+                    empty_size - IO_HISTORY_BYTES - ACCESSORY_DESCRIPTOR_BYTES -
                     CUPID_GB_DISPLAY_CLOCK_STATE_SIZE - CUPID_GB_PIXEL_TIMING_STATE_SIZE -
                     CUPID_GB_VRAM_BUS_STATE_SIZE - CUPID_GB_AUDIO_STATE_SIZE - RTC_HISTORY_BYTES -
                     INFRARED_HISTORY_BYTES - PULSE_DAC_BYTES - STOP_PORT_BYTES;

@@ -157,27 +157,32 @@ static void test_snapshot(bool compatibility, bool fast, bool changed) {
 #if CUPID_GB_STATE_VERSION >= 17
     /* The preceding formats require a zero reserved byte. Their missing row
      * latch is reconstructed from the saved registers, before commit. */
-    const size_t latch_offset = size - 8u - 1u - 10u - 1u;
+    const size_t latch_offset = size - 8u - 2u - 10u - 1u;
     const uint8_t new_latch = bytes[latch_offset];
     assert(new_latch == 7);
+    /* V16 keeps sampled input but has no serial selector before the descriptor. */
+    const size_t v16_size = size - 1u;
+    memmove(bytes + v16_size - 8u, bytes + size - 8u, 8u);
+    for (unsigned index = 0; index < 4; ++index)
+        bytes[12 + index] = (uint8_t)(v16_size >> (index * 8u));
     bytes[8] = 16;
     bytes[latch_offset] = 0;
-    resign_state(bytes, size);
-    assert(cupid_gb_load_state(restored->gb, bytes, size) == CUPID_GB_STATE_OK);
+    resign_state(bytes, v16_size);
+    assert(cupid_gb_load_state(restored->gb, bytes, v16_size) == CUPID_GB_STATE_OK);
     assert(restored->gb->pixel_timing.fetch_y == (changed ? 8 : 7));
     bytes[latch_offset] = 1;
-    resign_state(bytes, size);
+    resign_state(bytes, v16_size);
     CupidGb *before = malloc(sizeof(*before));
     assert(before);
     memcpy(before, restored->gb, sizeof(*before));
-    assert(cupid_gb_load_state(restored->gb, bytes, size) == CUPID_GB_STATE_INVALID);
+    assert(cupid_gb_load_state(restored->gb, bytes, v16_size) == CUPID_GB_STATE_INVALID);
     assert(memcmp(before, restored->gb, sizeof(*before)) == 0);
 
     /* V15 used the same pixel record but had no trailing input-sample byte. */
     bytes[8] = 15;
     bytes[latch_offset] = 0;
-    memmove(bytes + size - 9u, bytes + size - 8u, 8u);
-    const size_t old_size = size - 1u;
+    memmove(bytes + v16_size - 9u, bytes + v16_size - 8u, 8u);
+    const size_t old_size = v16_size - 1u;
     for (unsigned index = 0; index < 4; ++index)
         bytes[12 + index] = (uint8_t)(old_size >> (index * 8u));
     resign_state(bytes, old_size);

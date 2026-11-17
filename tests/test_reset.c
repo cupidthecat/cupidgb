@@ -41,7 +41,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum { INPUT_SAMPLE_BYTES = 1 };
+enum { IO_HISTORY_BYTES = 2 }; /* Sampled JOYP and retained serial selector. */
 
 typedef struct Cartridge {
     uint8_t type, ram;
@@ -572,9 +572,9 @@ static size_t legacy_tpp1(uint8_t *legacy, const uint8_t *saved, size_t size, un
     const size_t descriptor = size - ACCESSORY_DESCRIPTOR_BYTES;
     CHECK(filled(saved + descriptor, ACCESSORY_DESCRIPTOR_BYTES, 0));
     if (version == 15)
-        legacy[descriptor - INPUT_SAMPLE_BYTES - CUPID_GB_VRAM_BUS_STATE_SIZE - 1u] = 0;
-    /* Both versions precede sampled input; V14 also predates display timing. */
-    const size_t removed = INPUT_SAMPLE_BYTES + (version == 14 ? TIMING_BYTES : 0);
+        legacy[descriptor - IO_HISTORY_BYTES - CUPID_GB_VRAM_BUS_STATE_SIZE - 1u] = 0;
+    /* Both versions precede this I/O history; V14 also predates display timing. */
+    const size_t removed = IO_HISTORY_BYTES + (version == 14 ? TIMING_BYTES : 0);
     memmove(legacy + descriptor - removed, legacy + descriptor, ACCESSORY_DESCRIPTOR_BYTES);
     size -= removed;
     legacy[8] = (uint8_t)version;

@@ -110,6 +110,9 @@ void cupid_gb_serial_apply_control_write(CupidGb *gb, uint8_t value) {
 
     const uint8_t writable = gb->cgb_mode ? 0x83u : 0x81u;
     gb->io_registers[SERIAL_CONTROL] = (uint8_t)((value & writable) | (uint8_t)~writable);
+    /* Retain the selected tap even while idle or after a compatibility-mode
+     * change. The old high phase above still belongs to the previous control. */
+    gb->serial_fast_clock = gb->cgb_mode && (value & 2u);
     if (!(value & 0x80u)) {
         gb->serial_bits_remaining = 0u;
         return;
@@ -141,7 +144,7 @@ static void divider_change(CupidGb *gb, uint16_t phase) {
         timer_pulse(gb);
     }
 
-    const unsigned serial_shift = gb->cgb_mode && (gb->io_registers[SERIAL_CONTROL] & 2u) ? 0u : 5u;
+    const unsigned serial_shift = gb->serial_fast_clock ? 0u : 5u;
     if ((((unsigned)before >> serial_shift) & 1u) && !(((unsigned)phase >> serial_shift) & 1u)) {
         cupid_gb_serial_master_edge(gb);
     }

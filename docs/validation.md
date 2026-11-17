@@ -1,6 +1,6 @@
 # Validation record
 
-This record starts with the desktop and timing checks on 2026-11-04 and includes later work through 2026-11-16. Results apply to each stated build, input set, and scope. They do not establish complete hardware or frontend parity. The comparison source revision is `ea667ad79aa28409f034b1fd6da7304e1844750d`.
+This record starts with the desktop and timing checks on 2026-11-04 and includes later work through 2026-11-17. Results apply to each stated build, input set, and scope. They do not establish complete hardware or frontend parity. The comparison source revision is `ea667ad79aa28409f034b1fd6da7304e1844750d`.
 
 Earlier sections retain the results and assumptions of their original builds. A result without a recorded model clock does not qualify the corrected SGB clock. Use the current model-clock reports when comparing physical speed across profiles.
 
@@ -9,6 +9,10 @@ The [audio and native-state checkpoint](validation-audio.md) records reconstruct
 The [reset, input and native-state checkpoint](validation-reset.md) records the earlier Windows and Linux reset and recording workflows, version 16 continuation between both hosts, external suites, core throughput and bounded native runtime. It retains the application/raw-clock measurements and the CGB row-selection and rumble gaps identified at that checkpoint.
 
 The [fetch-row and controller feedback checkpoint](validation-fetch-feedback.md) records version 17 row retention, hardware-delivery motor sampling, Windows workflow checks, separately scoped Linux results, paired probes and the complete bounded local cartridge scan. It identifies the interrupted final Linux desktop validation and the evidence that remains valid for the current core.
+
+The [cartridge storage checkpoint](validation-cartridge-storage.md) records extended ROM banking and failure-preserving storage changes. [Host-clock measurements](validation-host-clock.md) distinguish Windows playback results from the Linux clock fault that blocks sustained-speed qualification. The later [wave-memory](validation-wave-retrigger.md) and [serial-selection](validation-serial-selection.md) records cover generated hardware comparisons, native continuation and the status of their integration checks.
+
+The [hardware selection integration checkpoint](validation-hardware-selection.md) combines the completed wave-memory and serial comparisons, version 18 file interchange, unchanged external-corpus results, native desktop checks and four Windows gameplay runs. It distinguishes fresh targeted checks from reused core evidence. The subsequent Linux clock-readiness gate timed out before any gameplay case launched; sustained Linux playback remains unqualified.
 
 ## Builds and automated checks
 

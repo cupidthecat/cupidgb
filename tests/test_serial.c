@@ -87,6 +87,7 @@ static void capture_byte(const CupidGb *gb, uint8_t transmitted, void *user_data
 
 static void prepare(CupidGb *gb, bool cgb, bool double_speed) {
     *gb = (CupidGb){0};
+    gb->model = cgb ? CUPID_GB_MODEL_CGB : CUPID_GB_MODEL_DMG_ABC;
     gb->cgb_mode = cgb;
     gb->double_speed = double_speed;
     gb->io_registers[0x02] = 0x7e;
