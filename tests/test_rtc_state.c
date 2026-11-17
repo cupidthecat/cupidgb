@@ -32,6 +32,7 @@
 #include "cupid/gb/rtc.h"
 #include "cupid/gb/state.h"
 #include "cupid/gb/timer.h"
+#include "test_state_layout.h"
 
 #include <assert.h>
 #include <limits.h>
@@ -287,8 +288,8 @@ static size_t expected_size(const Rig *rig) {
     const size_t border = (size_t)(is_sgb(gb) ? SGB_SECTION_BYTES : 0);
     const size_t infrared = (size_t)(gb->header.mbc_type == CUPID_GB_HUC3 ? 0 : INFRARED_BYTES);
     const size_t accessory = (size_t)(rig->printer ? PRINTER_BYTES : 0);
-    return SRAM_LENGTH_BYTES + IO_HISTORY_BYTES + V4_BYTES + border + mapper + V11_TAIL_BYTES +
-           infrared + RTC_HISTORY_BYTES + CUPID_GB_AUDIO_STATE_SIZE +
+    return test_state_startup_size(gb) + SRAM_LENGTH_BYTES + IO_HISTORY_BYTES + V4_BYTES + border +
+           mapper + V11_TAIL_BYTES + infrared + RTC_HISTORY_BYTES + CUPID_GB_AUDIO_STATE_SIZE +
            CUPID_GB_DISPLAY_CLOCK_STATE_SIZE + CUPID_GB_PIXEL_TIMING_STATE_SIZE +
            CUPID_GB_VRAM_BUS_STATE_SIZE + DESCRIPTOR_BYTES + accessory;
 }
@@ -306,7 +307,8 @@ static Blob legacy_blob(const Rig *rig, const Blob *current, unsigned version) {
     Blob legacy;
     if (version >= 12) {
         legacy = copy_blob(current, current->length);
-        const size_t removed = SRAM_LENGTH_BYTES + IO_HISTORY_BYTES + CUPID_GB_AUDIO_STATE_SIZE +
+        const size_t removed = test_state_startup_size(rig->gb) + SRAM_LENGTH_BYTES +
+                               IO_HISTORY_BYTES + CUPID_GB_AUDIO_STATE_SIZE +
                                CUPID_GB_DISPLAY_CLOCK_STATE_SIZE +
                                CUPID_GB_PIXEL_TIMING_STATE_SIZE + CUPID_GB_VRAM_BUS_STATE_SIZE +
                                (version == 12 ? RTC_HISTORY_BYTES : 0);
@@ -315,10 +317,10 @@ static Blob legacy_blob(const Rig *rig, const Blob *current, unsigned version) {
                 current->length - descriptor);
         legacy.length -= removed;
     } else {
-        const size_t v11 = descriptor - SRAM_LENGTH_BYTES - IO_HISTORY_BYTES -
-                           CUPID_GB_DISPLAY_CLOCK_STATE_SIZE - CUPID_GB_PIXEL_TIMING_STATE_SIZE -
-                           CUPID_GB_VRAM_BUS_STATE_SIZE - CUPID_GB_AUDIO_STATE_SIZE -
-                           RTC_HISTORY_BYTES -
+        const size_t v11 = descriptor - test_state_startup_size(rig->gb) - SRAM_LENGTH_BYTES -
+                           IO_HISTORY_BYTES - CUPID_GB_DISPLAY_CLOCK_STATE_SIZE -
+                           CUPID_GB_PIXEL_TIMING_STATE_SIZE - CUPID_GB_VRAM_BUS_STATE_SIZE -
+                           CUPID_GB_AUDIO_STATE_SIZE - RTC_HISTORY_BYTES -
                            (rig->gb->header.mbc_type == CUPID_GB_HUC3 ? 0 : INFRARED_BYTES);
         static const size_t tails[] = {0, 4, 5, 16, 22, 26, 28};
         const size_t length = version == 2   ? V2_BYTES
@@ -397,11 +399,11 @@ static void test_history_roundtrip(void) {
                     target->gb->mbc7.motion_y = 123;
                     Blob saved = save_rig(source, api != 0);
                     assert(saved.length == expected_size(source));
-                    const size_t rtc = descriptor_offset(source, &saved) - SRAM_LENGTH_BYTES -
-                                       IO_HISTORY_BYTES - CUPID_GB_DISPLAY_CLOCK_STATE_SIZE -
-                                       CUPID_GB_PIXEL_TIMING_STATE_SIZE -
-                                       CUPID_GB_VRAM_BUS_STATE_SIZE - CUPID_GB_AUDIO_STATE_SIZE -
-                                       RTC_HISTORY_BYTES;
+                    const size_t rtc =
+                        descriptor_offset(source, &saved) - test_state_startup_size(source->gb) -
+                        SRAM_LENGTH_BYTES - IO_HISTORY_BYTES - CUPID_GB_DISPLAY_CLOCK_STATE_SIZE -
+                        CUPID_GB_PIXEL_TIMING_STATE_SIZE - CUPID_GB_VRAM_BUS_STATE_SIZE -
+                        CUPID_GB_AUDIO_STATE_SIZE - RTC_HISTORY_BYTES;
                     assert(read_u32(saved.bytes + rtc) == phase);
                     const uint8_t motor = types[type] == 0xbc ? source->gb->tpp1.motor_strength : 0;
                     assert(saved.bytes[rtc + MOTOR_HISTORY_OFFSET] == motor);
@@ -477,9 +479,10 @@ static void test_legacy_defaults(void) {
                        target->gb->huc3.ir_detected == infrared);
                 Blob resaved = save_rig(target, true);
                 const size_t history =
-                    descriptor_offset(target, &resaved) - SRAM_LENGTH_BYTES - IO_HISTORY_BYTES -
-                    CUPID_GB_DISPLAY_CLOCK_STATE_SIZE - CUPID_GB_PIXEL_TIMING_STATE_SIZE -
-                    CUPID_GB_VRAM_BUS_STATE_SIZE - CUPID_GB_AUDIO_STATE_SIZE - RTC_HISTORY_BYTES;
+                    descriptor_offset(target, &resaved) - test_state_startup_size(target->gb) -
+                    SRAM_LENGTH_BYTES - IO_HISTORY_BYTES - CUPID_GB_DISPLAY_CLOCK_STATE_SIZE -
+                    CUPID_GB_PIXEL_TIMING_STATE_SIZE - CUPID_GB_VRAM_BUS_STATE_SIZE -
+                    CUPID_GB_AUDIO_STATE_SIZE - RTC_HISTORY_BYTES;
                 assert(resaved.bytes[history + MOTOR_HISTORY_OFFSET] ==
                        target->gb->tpp1.motor_strength);
                 assert(resaved.bytes[history + DIVIDER_HISTORY_OFFSET] == 0);

@@ -12,12 +12,14 @@ The debugger shows CPU registers, flags, interrupt-enable state, HALT/STOP state
 | --- | --- |
 | Break | Pause at the next host instruction boundary |
 | Continue | Resume normal playback and honor execution breakpoints and memory watchpoints |
-| Step | Execute one hardware step, entering calls or interrupt dispatch; a sleeping CPU may execute an idle cycle |
+| Step | Execute one guest hardware step, entering calls or interrupt dispatch; a sleeping CPU may execute an idle cycle |
 | Next | Step over calls and interrupt handlers, stopping at the next appropriate instruction boundary |
 | Finish | Run until the current function or interrupt handler returns |
 | Backstep | Restore the preceding retained instruction boundary |
 
-Next and Finish run in small event-loop slices so Break and the rest of the interface remain available. A command stops after one million hardware-step attempts if its target has not been reached. HALT, STOP, an endless loop, a missing return, or modified stack contents can prevent a target from being reached. The status message distinguishes a completed command, breakpoint, exhausted budget, illegal opcode, and execution error.
+Next and Finish run in small event-loop slices so Break and the rest of the interface remain available. A command stops after one million guest hardware steps if its target has not been reached. HALT, STOP, an endless loop, a missing return, or modified stack contents can prevent a target from being reached. The status message distinguishes a completed command, breakpoint, exhausted budget, illegal opcode, and execution error.
+
+During SGB or SGB2 startup, the adapter can advance its display while holding the CPU. Step, Next and Finish advance this hold in bounded slices without consuming the guest-step budget or creating instruction history. Execution breakpoints and watchpoints apply when guest execution becomes eligible. A breakpoint at address zero therefore waits for the hold to finish, and its one-use continue skip remains available for that instruction.
 
 An illegal primary opcode completes its fetch, clears IE, and halts the CPU. An explicit execution command stops with `Illegal opcode: CPU halted`, keeping its pre-step snapshot available for Backstep. Continue resumes peripheral clocks while the CPU remains halted; setting IF alone cannot wake it. A deliberate IE edit can enable wakeup. Ordinary gameplay also keeps clocks running after this hardware halt, without reporting it as a host execution failure. A frozen game still requires diagnosis and is not a successful compatibility result.
 
@@ -109,7 +111,7 @@ Explicit Step, Next, and Finish execution captures instruction snapshots. Backst
 
 Continuing normal playback or advancing a frame clears instruction history. Cartridge replacement, reset, successful state loading, frame rewind, and debugger edits also invalidate it. An execution failure can still have changed hardware state; its pre-step snapshot remains available for Backstep. No instruction snapshots are captured while the debugger is unused.
 
-Debugger stepping advances real guest hardware and can generate samples. Forward generated audio remains eligible for an active WAVE recording, while stepped execution is silent at the host output. Backstep clears queued host playback. It does not remove audio already written to a recording or undo a battery file already flushed to disk. In-memory battery changes can schedule a later save.
+Debugger stepping advances real guest hardware and can generate samples. Forward handheld audio remains eligible for an active WAVE recording, while stepped execution is silent at the host output. Adapter startup output, including its silent lead-in, is excluded from the recording. Backstep clears queued playback from both output owners. It does not remove audio already written to a recording or undo a battery file already flushed to disk. In-memory battery changes can schedule a later save.
 
 Opening tools releases physical key bindings while preserving the stopped guest input for inspection. Normal playback reconciles input to the currently released host state. Ordinary focus-loss handling outside paused tool inspection continues to release input.
 

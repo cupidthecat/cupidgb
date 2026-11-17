@@ -258,24 +258,26 @@ static void advance_host_frame(CupidGb *gb, bool complete) {
     }
 }
 
-void cupid_gb_sgb_clock(CupidGb *gb, uint32_t dots, bool lcd_idle) {
+void cupid_gb_sgb_clock(CupidGb *gb, uint32_t dots) {
     CupidGbSgbTransfer *transfer = &gb->sgb.transfer;
-    uint32_t total = transfer->frame_dots + dots;
-    if (lcd_idle) {
-        /* The adapter's frame cadence continues with the handheld LCD
-         * disabled or stopped. These frames retain the last complete screen. */
-        while (total >= CUPID_SGB_FRAME_DOTS) {
-            advance_host_frame(gb, false);
-            total -= CUPID_SGB_FRAME_DOTS;
-        }
-    }
-    transfer->frame_dots = total > CUPID_SGB_FRAME_DOTS ? CUPID_SGB_FRAME_DOTS : total;
+    const uint64_t total = (uint64_t)transfer->frame_dots + dots;
+    transfer->frame_dots = total > CUPID_SGB_FRAME_DOTS ? CUPID_SGB_FRAME_DOTS : (uint32_t)total;
 }
 
-void cupid_gb_sgb_vblank(CupidGb *gb, uint32_t dots_after_vblank) {
-    advance_host_frame(gb, true);
-    gb->sgb.transfer.frame_dots =
-        dots_after_vblank > CUPID_SGB_FRAME_DOTS ? CUPID_SGB_FRAME_DOTS : dots_after_vblank;
+void cupid_gb_sgb_present(CupidGb *gb, bool complete, uint32_t dots_after_frame) {
+    if (!cupid_gb_sgb_host_present(gb))
+        return;
+    cupid_gb_sgb_startup_present(gb);
+    advance_host_frame(gb, complete);
+    /* The retained transfer age is independent of the publication scheduler.
+     * Idle publications keep the last complete screen and consume its age;
+     * a real VBlank starts the next transfer interval at the delivered remainder. */
+    if (complete) {
+        gb->sgb.transfer.frame_dots =
+            dots_after_frame > CUPID_SGB_FRAME_DOTS ? CUPID_SGB_FRAME_DOTS : dots_after_frame;
+    } else if (gb->sgb.transfer.frame_dots >= CUPID_SGB_FRAME_DOTS) {
+        gb->sgb.transfer.frame_dots -= CUPID_SGB_FRAME_DOTS;
+    }
 }
 
 /* Decode six-byte rectangle records without relying on host structure layout. */
@@ -673,7 +675,11 @@ void cupid_gb_sgb_render_argb(const CupidGb *gb, uint32_t *pixels, size_t pixel_
     const uint32_t backdrop = cupid_gb_sgb_rgb15_to_argb(sgb->screen_palettes[0]);
     const uint8_t *screen = sgb->freeze_buffer;
     const unsigned transition = sgb->transfer.border_transition;
-    const unsigned fade = transition >= 64 ? 0 : (transition > 32 ? 64 - transition : transition);
+    const bool startup = cupid_gb_sgb_startup_active(gb);
+    const unsigned fade =
+        startup || transition >= 64 ? 0 : (transition > 32 ? 64 - transition : transition);
+    if (startup)
+        cupid_gb_sgb_startup_render(gb, pixels, pixel_count);
     uint32_t screen_colors[4][4];
     uint32_t border_colors[4][16];
     for (unsigned palette = 0; palette < 4; ++palette) {
@@ -736,7 +742,8 @@ void cupid_gb_sgb_render_argb(const CupidGb *gb, uint32_t *pixels, size_t pixel_
                     if (color) {
                         output_row[x] = palette[color];
                     } else if (lcd_row) {
-                        output_row[x] = lcd_palette[lcd_row[x] & 3u];
+                        if (!startup)
+                            output_row[x] = lcd_palette[lcd_row[x] & 3u];
                     } else {
                         output_row[x] = tile_available ? backdrop : 0xff000000u;
                     }

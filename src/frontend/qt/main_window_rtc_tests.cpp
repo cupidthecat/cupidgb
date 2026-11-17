@@ -335,7 +335,7 @@ bool MainWindow::rtcSmokeTest(const QString &directory) {
         session.resetRewind();
         session.rememberFrame();
         PlaybackResult forward;
-        if (!session.runFrame(Playback::Forward, &forward) || !forward.cycles)
+        if (!session.runFrame(Playback::Forward, &forward) || !forward.guestCycles)
             return smokeFailure(__FILE__, __LINE__);
         if (session.rewindStates_.size() == 1)
             session.rememberFrame();
@@ -343,8 +343,8 @@ bool MainWindow::rtcSmokeTest(const QString &directory) {
             return smokeFailure(__FILE__, __LINE__);
         const unsigned replayCalls = clock.calls;
         PlaybackResult replay;
-        if (!session.rewindFrame(&replay) || !replay.cycles ||
-            gb.rtc_cycles != 4096 + replay.cycles * 2 || gb.rtc.base_time != clock.now - 17 ||
+        if (!session.rewindFrame(&replay) || !replay.guestCycles ||
+            gb.rtc_cycles != 4096 + replay.guestCycles * 2 || gb.rtc.base_time != clock.now - 17 ||
             rtcRegisters(gb) != replayRegisters || !policyMatches(CUPID_GB_RTC_ACCURATE) ||
             clock.calls != replayCalls)
             return smokeFailure(__FILE__, __LINE__);

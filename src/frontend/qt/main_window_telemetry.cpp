@@ -29,9 +29,12 @@ void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
         bool captured = false;
         double elapsed = 0;
         uint64_t cycles = 0;
+        uint64_t presentationCycles = 0;
         uint64_t images = 0;
         uint64_t paints = 0;
         uint64_t audioFrames = 0;
+        uint64_t handheldAudioFrames = 0;
+        uint64_t startupAudioFrames = 0;
         uint64_t audioIdle = 0;
         uint64_t audioErrors = 0;
         size_t firstPaintInterval = 0;
@@ -44,8 +47,11 @@ void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
     const qint64 deadlineNanoseconds = qint64(std::ceil(seconds * 1e9));
     const auto warmup = std::make_shared<WarmupSample>();
     telemetryStartCycles_ = emulator_->gb.elapsed_cycles;
+    telemetryStartPresentationCycles_ = cupid_gb_presentation_cycles(&emulator_->gb);
     presentedImages_ = 0;
     generatedAudioFrames_ = 0;
+    handheldAudioFrames_ = 0;
+    startupAudioFrames_ = 0;
     replayedGuestCycles_ = 0;
     replayedFrames_ = 0;
     turboWindowDroppedFrames_ = 0;
@@ -69,7 +75,8 @@ void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
     const auto unchanged = [this, session, timeline, measurement, clockHz] {
         return emulator_ && sessionId_ == session && timelineId_ == timeline &&
                boundedRunId_ == measurement && cupid_gb_base_clock_hz(&emulator_->gb) == clockHz &&
-               emulator_->gb.elapsed_cycles >= telemetryStartCycles_;
+               emulator_->gb.elapsed_cycles >= telemetryStartCycles_ &&
+               cupid_gb_presentation_cycles(&emulator_->gb) >= telemetryStartPresentationCycles_;
     };
     auto *deadlineTimer = new QTimer(this);
     deadlineTimer->setTimerType(Qt::PreciseTimer);
@@ -100,9 +107,12 @@ void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
                 elapsedNanoseconds < deadlineNanoseconds) {
                 warmup->elapsed = double(elapsedNanoseconds) / 1e9;
                 warmup->cycles = emulator_->gb.elapsed_cycles;
+                warmup->presentationCycles = cupid_gb_presentation_cycles(&emulator_->gb);
                 warmup->images = presentedImages_;
                 warmup->paints = display_->paintCount;
                 warmup->audioFrames = generatedAudioFrames_;
+                warmup->handheldAudioFrames = handheldAudioFrames_;
+                warmup->startupAudioFrames = startupAudioFrames_;
                 warmup->audioIdle = audioIdleEvents_;
                 warmup->audioErrors = audioErrorEvents_;
                 // The next recorded interval starts before this sample. Exclude it
@@ -118,6 +128,8 @@ void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
             display_->collectPaintIntervals = false;
             const double elapsed = double(elapsedNanoseconds) / 1e9;
             const uint64_t cycles = emulator_->gb.elapsed_cycles - telemetryStartCycles_;
+            const uint64_t presentationCycles =
+                cupid_gb_presentation_cycles(&emulator_->gb) - telemetryStartPresentationCycles_;
             QJsonObject report{
                 {"host_clock", QString::fromLatin1(HostElapsedTimer::sourceName())},
                 {"requested_duration_seconds", seconds},
@@ -126,9 +138,15 @@ void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
                 {"base_clock_hz", int(clockHz)},
                 {"guest_cycles_per_second", double(cycles) / elapsed},
                 {"guest_speed_percent", double(cycles) / elapsed / clockHz * 100},
+                {"presentation_base_speed_t_cycles", double(presentationCycles)},
+                {"presentation_cycles_per_second", double(presentationCycles) / elapsed},
+                {"presentation_speed_percent",
+                 double(presentationCycles) / elapsed / clockHz * 100},
                 {"images_submitted_to_widget", double(presentedImages_)},
                 {"widget_paint_events", double(display_->paintCount)},
                 {"audio_frames_generated", double(generatedAudioFrames_)},
+                {"handheld_audio_frames_generated", double(handheldAudioFrames_)},
+                {"startup_audio_frames_generated", double(startupAudioFrames_)},
                 {"rewind_replay_guest_t_cycles", double(replayedGuestCycles_)},
                 {"rewind_replay_presentation_events", double(replayedFrames_)},
                 {"turbo_window_dropped_host_frames", double(turboWindowDroppedFrames_)},
@@ -165,8 +183,11 @@ void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
             } else if (!warmup->captured || elapsed <= warmup->elapsed) {
                 postWarmup.insert("reason", "warmup_sample_unavailable");
             } else if (emulator_->gb.elapsed_cycles < warmup->cycles ||
+                       cupid_gb_presentation_cycles(&emulator_->gb) < warmup->presentationCycles ||
                        presentedImages_ < warmup->images || display_->paintCount < warmup->paints ||
                        generatedAudioFrames_ < warmup->audioFrames ||
+                       handheldAudioFrames_ < warmup->handheldAudioFrames ||
+                       startupAudioFrames_ < warmup->startupAudioFrames ||
                        audioIdleEvents_ < warmup->audioIdle ||
                        audioErrorEvents_ < warmup->audioErrors) {
                 qCritical("Bounded frontend run cancelled because measurement counters changed");
@@ -175,6 +196,8 @@ void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
             } else {
                 const double windowElapsed = elapsed - warmup->elapsed;
                 const double windowCycles = double(emulator_->gb.elapsed_cycles - warmup->cycles);
+                const double windowPresentationCycles = double(
+                    cupid_gb_presentation_cycles(&emulator_->gb) - warmup->presentationCycles);
                 postWarmup.insert("available", true);
                 postWarmup.insert("sample_start_elapsed_seconds", warmup->elapsed);
                 postWarmup.insert("sample_end_elapsed_seconds", elapsed);
@@ -183,12 +206,21 @@ void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
                 postWarmup.insert("guest_cycles_per_second", windowCycles / windowElapsed);
                 postWarmup.insert("guest_speed_percent",
                                   windowCycles / windowElapsed / clockHz * 100);
+                postWarmup.insert("presentation_base_speed_t_cycles", windowPresentationCycles);
+                postWarmup.insert("presentation_cycles_per_second",
+                                  windowPresentationCycles / windowElapsed);
+                postWarmup.insert("presentation_speed_percent",
+                                  windowPresentationCycles / windowElapsed / clockHz * 100);
                 postWarmup.insert("images_submitted_to_widget",
                                   double(presentedImages_ - warmup->images));
                 postWarmup.insert("widget_paint_events",
                                   double(display_->paintCount - warmup->paints));
                 postWarmup.insert("audio_frames_generated",
                                   double(generatedAudioFrames_ - warmup->audioFrames));
+                postWarmup.insert("handheld_audio_frames_generated",
+                                  double(handheldAudioFrames_ - warmup->handheldAudioFrames));
+                postWarmup.insert("startup_audio_frames_generated",
+                                  double(startupAudioFrames_ - warmup->startupAudioFrames));
                 postWarmup.insert("audio_idle_events",
                                   double(audioIdleEvents_ - warmup->audioIdle));
                 postWarmup.insert("audio_error_events",
@@ -196,13 +228,18 @@ void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
                 postWarmup.insert("widget_paint_interval_ms",
                                   display_->paintTelemetry(warmup->firstPaintInterval));
                 postWarmup.insert(
-                    "baseline", QJsonObject{{"elapsed_seconds", warmup->elapsed},
-                                            {"guest_base_speed_t_cycles", double(warmup->cycles)},
-                                            {"images_submitted_to_widget", double(warmup->images)},
-                                            {"widget_paint_events", double(warmup->paints)},
-                                            {"audio_frames_generated", double(warmup->audioFrames)},
-                                            {"audio_idle_events", double(warmup->audioIdle)},
-                                            {"audio_error_events", double(warmup->audioErrors)}});
+                    "baseline",
+                    QJsonObject{
+                        {"elapsed_seconds", warmup->elapsed},
+                        {"guest_base_speed_t_cycles", double(warmup->cycles)},
+                        {"presentation_base_speed_t_cycles", double(warmup->presentationCycles)},
+                        {"images_submitted_to_widget", double(warmup->images)},
+                        {"widget_paint_events", double(warmup->paints)},
+                        {"audio_frames_generated", double(warmup->audioFrames)},
+                        {"handheld_audio_frames_generated", double(warmup->handheldAudioFrames)},
+                        {"startup_audio_frames_generated", double(warmup->startupAudioFrames)},
+                        {"audio_idle_events", double(warmup->audioIdle)},
+                        {"audio_error_events", double(warmup->audioErrors)}});
             }
             report.insert("post_warmup", postWarmup);
             report.insert("input_events_applied", double(inputTraceIndex_));

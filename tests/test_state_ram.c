@@ -420,7 +420,7 @@ static void transactions(void) {
     destroy(target);
 }
 
-typedef enum WireLayout { WIRE_V20, WIRE_V19_WAVE, WIRE_V19_SRAM } WireLayout;
+typedef enum WireLayout { WIRE_CURRENT, WIRE_V20, WIRE_V19_WAVE, WIRE_V19_SRAM } WireLayout;
 
 /* Frozen TPP1 placement through the public v18 serial selector, including its
  * 128-byte header. Keep this independent of the current size calculation. */
@@ -434,13 +434,17 @@ static size_t descriptor_offset(const CupidGb *gb, Blob blob) {
 static Blob format_blob(const CupidGb *gb, Blob current, WireLayout layout) {
     const size_t history = TPP1_V18_HARDWARE_BYTES;
     const size_t descriptor = descriptor_offset(gb, current);
-    assert(current.data[8] == 20);
+    assert(current.data[8] == CUPID_GB_STATE_VERSION);
     assert(descriptor == history + WAVE_HISTORY_BYTES + ram_extension(gb));
     assert(current.data[history] == gb->apu.ch3_sample_byte);
-    if (layout == WIRE_V20) {
+    if (layout == WIRE_CURRENT || layout == WIRE_V20) {
         Blob copy = {malloc(current.size), current.size};
         assert(copy.data);
         memcpy(copy.data, current.data, current.size);
+        if (layout == WIRE_V20) {
+            write_u32(copy.data + 8, 20);
+            seal(copy);
+        }
         return copy;
     }
     if (layout == WIRE_V19_WAVE) {
@@ -489,7 +493,7 @@ static void draft_roundtrip(CupidGbModel model, unsigned code, unsigned attachme
     assert(current.size == 305116u + extra + ((attachments & 1u) ? PRINTER_STATE_WIRE_SIZE : 0));
     CupidGbStateContext context;
     assert(cupid_gb_state_context_init(&context, target) == CUPID_GB_STATE_OK);
-    for (unsigned layout = WIRE_V20; layout <= WIRE_V19_SRAM; ++layout) {
+    for (unsigned layout = WIRE_CURRENT; layout <= WIRE_V19_SRAM; ++layout) {
         if (layout == WIRE_V19_WAVE && code > 5)
             continue;
         Blob snapshot = format_blob(source, current, (WireLayout)layout);
@@ -561,7 +565,7 @@ static void draft_rejections(unsigned code) {
     attach_printer(source, 2);
     attach_printer(target, 3);
     Blob current = save(source);
-    for (unsigned layout = WIRE_V20; layout <= WIRE_V19_SRAM; ++layout) {
+    for (unsigned layout = WIRE_CURRENT; layout <= WIRE_V19_SRAM; ++layout) {
         if (layout == WIRE_V19_WAVE && code > 5)
             continue;
         Blob valid = format_blob(source, current, (WireLayout)layout);
@@ -579,7 +583,7 @@ static void draft_rejections(unsigned code) {
             else if (scenario == 2)
                 bad.data[bad.size++] = 0;
             else if (scenario == 3) {
-                write_u32(bad.data + 8, 21);
+                write_u32(bad.data + 8, CUPID_GB_STATE_VERSION + 1u);
                 expected = CUPID_GB_STATE_UNSUPPORTED_VERSION;
             } else if (scenario == 4) {
                 write_u32(bad.data + 16, CUPID_GB_MODEL_DMG_ABC);
@@ -610,7 +614,7 @@ static void draft_rejections(unsigned code) {
         }
         if (layout != WIRE_V19_WAVE) {
             const size_t count_offset =
-                TPP1_V18_HARDWARE_BYTES + (layout == WIRE_V20 ? WAVE_HISTORY_BYTES : 0);
+                TPP1_V18_HARDWARE_BYTES + (layout <= WIRE_V20 ? WAVE_HISTORY_BYTES : 0);
             const uint32_t counts[] = {0, 1, CUPID_GB_MAX_RAM_SIZE - 1, UINT32_MAX};
             for (unsigned i = 0; i < sizeof(counts) / sizeof(*counts); ++i) {
                 memcpy(bad.data, valid.data, valid.size);

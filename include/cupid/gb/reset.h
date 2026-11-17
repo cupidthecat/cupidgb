@@ -39,7 +39,8 @@ typedef enum CupidGbResetKind {
 /* Reset a loaded cartridge without changing its ownership or host registrations.
  * Quick reset keeps physical WRAM, HRAM, OAM, palette RAM and cartridge storage.
  * Both forms restart controller latches and guest execution, retain battery RAM,
- * preserve the active audio stream, and rebase the active RTC host timestamp.
+ * preserve the handheld audio stream, and rebase the active RTC host timestamp.
+ * Executed SGB firmware restarts host introduction and clears its queued sound.
  * HuC3 clock/alarm registers reset with its controller; MBC3/TPP1 clocks survive.
  * Host input masks and pending samples survive; JOYP starts with released contacts
  * until a pending host sample or a selection-changing write updates its latch.

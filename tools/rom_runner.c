@@ -114,7 +114,7 @@ static int register_result(const CupidGb *gb, const CupidGbStepTrace *trace) {
 }
 
 static int write_image(const CupidGb *gb, const char *path, uint32_t *crc) {
-    bool sgb = cupid_gb_sgb_active(gb);
+    bool sgb = cupid_gb_sgb_host_present(gb);
     unsigned width = sgb ? CUPID_SGB_SCREEN_WIDTH : CUPID_GB_SCREEN_WIDTH;
     unsigned height = sgb ? CUPID_SGB_SCREEN_HEIGHT : CUPID_GB_SCREEN_HEIGHT;
     uint32_t sgb_pixels[CUPID_SGB_SCREEN_WIDTH * CUPID_SGB_SCREEN_HEIGHT];
@@ -433,17 +433,21 @@ int main(int argc, char **argv) {
         }
         /* The final fetch can produce PCM or a frame even when it locks the CPU. */
         int16_t samples[128];
-        uint32_t count = cupid_gb_apu_drain(gb, samples, 64);
-        audio_frames += count;
-        for (uint32_t i = 0; i < count * 2; ++i) {
-            uint16_t sample = (uint16_t)samples[i];
-            uint8_t bytes[] = {(uint8_t)sample, (uint8_t)(sample >> 8)};
-            audio_crc = crc_byte(crc_byte(audio_crc, bytes[0]), bytes[1]);
-            if (audio && fwrite(bytes, 1, 2, audio) != 2) {
-                status = "output_error";
-                result = 2;
-                break;
+        uint32_t count;
+        while ((count = cupid_gb_apu_drain(gb, samples, 64)) != 0) {
+            audio_frames += count;
+            for (uint32_t i = 0; i < count * 2; ++i) {
+                uint16_t sample = (uint16_t)samples[i];
+                uint8_t bytes[] = {(uint8_t)sample, (uint8_t)(sample >> 8)};
+                audio_crc = crc_byte(crc_byte(audio_crc, bytes[0]), bytes[1]);
+                if (audio && fwrite(bytes, 1, 2, audio) != 2) {
+                    status = "output_error";
+                    result = 2;
+                    break;
+                }
             }
+            if (result)
+                break;
         }
         if (result || test_finished) {
             break;

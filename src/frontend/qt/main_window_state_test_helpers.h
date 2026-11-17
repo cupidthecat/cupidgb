@@ -38,6 +38,9 @@ inline QByteArray hardwareSnapshotForTest(const CupidGb &gb) {
     // of when either output stream last needed a sample. Keep every guest field.
     cupid_gb_apu_run(snapshot.get(), true);
     snapshot->apu.output = {};
+    // Live restores retain both receiving output owners. Canonicalize only
+    // output history; hardware startup phase and presentation time stay exact.
+    cupid_gb_sgb_startup_audio_reset(&snapshot->sgb_startup.output, 1);
     if (!cupid_gb_apu_set_sample_rate(snapshot.get(), CUPID_GB_APU_SAMPLE_RATE))
         return {};
     QByteArray bytes(qsizetype(cupid_gb_state_size(snapshot.get())), Qt::Uninitialized);

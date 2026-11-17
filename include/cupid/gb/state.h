@@ -41,7 +41,7 @@ typedef enum CupidGbStateResult {
     CUPID_GB_STATE_NO_ROM
 } CupidGbStateResult;
 
-#define CUPID_GB_STATE_VERSION 20u
+#define CUPID_GB_STATE_VERSION 21u
 
 /* Trusted in-memory snapshots may cache the immutable cartridge identity. Initialize
  * once for the current instance and discard the context on cartridge replacement,
@@ -78,12 +78,22 @@ CupidGbStateResult cupid_gb_load_state_with_context(CupidGb *gb, const uint8_t *
  * validation, retains the receiving image and rejects older device completions.
  * Generated captures preserve their ordinary countdown when no provider is attached.
  * The camera wire section and its busy/countdown validation remain unchanged.
+ * Version 21 adds a physical-SGB startup extension after the complete version 20
+ * hardware/RAM prefix and before the accessory descriptor. It retains intro phase,
+ * host-only elapsed base cycles, independent fixed-point sound/noise history, two
+ * bounded mono batches and ordinary-prefix ordering. Existing presentation age
+ * remains in its old slot. Exact loads restore both output owners; live loads
+ * restore hardware phase/time while retaining both receiving output owners.
+ * Batch phase need not match restored hardware phase. Older versions import phase
+ * 200, zero extra time, empty startup output and deterministic noise seed 1; live
+ * imports then retain receiving output. No import generates an intro batch.
  * Version 20 appends the retained CH3 fetch byte, a little-endian uint32 SRAM size,
  * and SRAM bytes beyond the fixed 128 KiB prefix after the version 18 serial selector.
  * The receiving cartridge determines storage geometry; a file cannot resize its SRAM.
  * Two earlier version 19 layouts remain readable: fetch-byte-only for cartridges up to
  * 128 KiB, and SRAM-size/tail without the fetch byte. Exact lengths and validated accessory
- * descriptors distinguish them. Only version 20 is written. Public versions 2 through 18
+ * descriptors distinguish them. Version 20 remains readable; only version 21 is written.
+ * Public versions 2 through 18
  * retain their meanings and require cartridge SRAM no larger than 128 KiB.
  * The fetch byte belongs to guest hardware, separate from wave RAM and output reconstruction.
  * Files without it duplicate their decoded raw sample nibble into both halves. This preserves
@@ -163,7 +173,8 @@ CupidGbStateResult cupid_gb_save_state(const CupidGb *gb, uint8_t *data, size_t 
  */
 CupidGbStateResult cupid_gb_load_state(CupidGb *gb, const uint8_t *data, size_t length);
 /* Live desktop timeline changes restore guest state while retaining the receiving
- * output queue, reconstruction/DAC/filter history, sample rate and listening policy.
+ * ordinary and startup output queues, reconstruction/DAC/filter/synthesis history,
+ * sample rate and listening policy.
  * Only the reconstruction fraction is rebased. Clear queued host/core playback
  * before resuming. Rejected loads leave the entire receiving instance unchanged. */
 CupidGbStateResult cupid_gb_load_state_live(CupidGb *gb, const uint8_t *data, size_t length);

@@ -43,7 +43,8 @@ int main(int argc, char **argv) {
     parser.addHelpOption();
     parser.addVersionOption();
     parser.addOption({"smoke-test", "Run isolated frontend workflow checks and exit."});
-    parser.addOption({"smoke-workflow", "Select smoke checks: all, desktop, or storage.", "group"});
+    parser.addOption(
+        {"smoke-workflow", "Select smoke checks: all, desktop, storage, or sgb.", "group"});
     parser.addOption({"audio-check", "Require real audio during --smoke-test."});
     parser.addOption(
         {"boot-directory", "Use boot ROMs from this directory for this session.", "path"});
@@ -70,6 +71,8 @@ int main(int argc, char **argv) {
             smokeWorkflow = MainWindow::SmokeWorkflow::Desktop;
         else if (group == "storage")
             smokeWorkflow = MainWindow::SmokeWorkflow::Storage;
+        else if (group == "sgb")
+            smokeWorkflow = MainWindow::SmokeWorkflow::Sgb;
         else if (group != "all")
             parser.showHelp(1);
         if (!smoke || (audioCheck && smokeWorkflow == MainWindow::SmokeWorkflow::Storage))

@@ -24,6 +24,7 @@
 #include "audio_filter.h"
 #include "audio_synthesis.h"
 #include "cupid/gb/apu.h"
+#include "cupid/gb/sgb_startup.h"
 
 #include <assert.h>
 #include <math.h>
@@ -52,8 +53,13 @@ void cupid_gb_audio_configure(CupidGb *gb) {
 bool cupid_gb_apu_set_sample_rate(CupidGb *gb, uint32_t rate) {
     if (!gb || rate < 8000u || rate > 192000u)
         return false;
-    if (rate != cupid_gb_apu_get_sample_rate(gb))
+    if (rate != cupid_gb_apu_get_sample_rate(gb)) {
+        /* A materialized startup batch belongs to its generation rate. Reject
+         * before deferred clocks or either output owner can change. */
+        if (gb->sgb_startup.output.batch_count)
+            return false;
         cupid_gb_apu_run(gb, true);
+    }
     gb->apu.output.sample_rate = rate;
     configure_rate(gb, rate);
     return true;
@@ -213,6 +219,10 @@ void cupid_gb_audio_render(CupidGb *gb) {
     } else {
         output->sample_fraction -= 1u << 28;
     }
+    /* Reconstruction and DAC history continue behind adapter startup. Its own
+     * sound bypasses the handheld filter, interference, and ordinary queue. */
+    if (cupid_gb_sgb_startup_active(gb))
+        return;
     const CupidGbAudioConditions conditions = {color,
                                                gb->cpu.halted,
                                                (gb->io_registers[0x40] & 0x80) != 0,
@@ -242,15 +252,15 @@ void cupid_gb_audio_render(CupidGb *gb) {
 uint32_t cupid_gb_apu_drain(CupidGb *gb, int16_t *out, uint32_t max_frames) {
     if (!gb || !out)
         return 0;
-    CupidGbAudioOutput *output = &gb->apu.output;
-    const uint32_t count = output->buf_write < max_frames ? output->buf_write : max_frames;
-    if (count) {
-        memcpy(out, output->buf, (size_t)count * 2u * sizeof(*out));
-        output->buf_write -= count;
-        memmove(output->buf, output->buf + count * 2u,
-                (size_t)output->buf_write * 2u * sizeof(*out));
+    uint32_t written = 0;
+    while (written < max_frames) {
+        const uint32_t count =
+            cupid_gb_apu_drain_chunk(gb, out + (size_t)written * 2u, max_frames - written, NULL);
+        if (!count)
+            break;
+        written += count;
     }
-    return count;
+    return written;
 }
 
 void cupid_gb_audio_import_legacy(CupidGb *gb) {

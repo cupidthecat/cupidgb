@@ -62,6 +62,7 @@ void cupid_gb_display_clock_power(CupidGb *gb, bool enabled);
 void cupid_gb_display_clock_window_write(CupidGb *gb);
 void cupid_gb_display_clock_abort_object(CupidGb *gb);
 void cupid_gb_display_clock_advance(CupidGb *gb, unsigned half_dots);
+void cupid_gb_display_clock_advance_host(CupidGb *gb, unsigned half_dots);
 void cupid_gb_display_clock_sync(CupidGb *gb);
 bool cupid_gb_display_clock_sync_address(uint16_t address, bool write);
 

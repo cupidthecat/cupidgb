@@ -33,6 +33,8 @@
 static CupidGb *screen(void) {
     CupidGb *gb = calloc(1, sizeof(*gb));
     assert(gb);
+    gb->model = CUPID_GB_MODEL_SGB;
+    cupid_gb_sgb_startup_reset(gb, false);
     gb->sgb.enabled = true;
     gb->sgb.player_count = 1;
     return gb;
@@ -426,7 +428,7 @@ static void test_border_compositor(void) {
     gb->sgb.screen_palettes[10] = 0x7c00;
     gb->sgb.attribute_map[0] = gb->sgb.attribute_map[1] = 2;
     memset(gb->frame_buffer, 1, sizeof(gb->frame_buffer));
-    cupid_gb_sgb_vblank(gb, 0);
+    cupid_gb_sgb_present(gb, true, 0);
 
     gb->sgb.border_map[0] = (uint16_t)(0x1c00u | index);
     gb->sgb.border_map[1] = (uint16_t)(0x5400u | index);
@@ -465,7 +467,7 @@ static void test_border_compositor(void) {
     for (unsigned mask = CUPID_SGB_MASK_DISABLED; mask <= CUPID_SGB_MASK_COLOR0; ++mask) {
         if (mask == CUPID_SGB_MASK_FREEZE) {
             memset(gb->frame_buffer, 2, sizeof(gb->frame_buffer));
-            cupid_gb_sgb_vblank(gb, 0);
+            cupid_gb_sgb_present(gb, true, 0);
         }
         gb->sgb.mask_mode = (uint8_t)mask;
         cupid_gb_sgb_render_argb(gb, pixels, count);

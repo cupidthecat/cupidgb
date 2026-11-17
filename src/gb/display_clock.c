@@ -380,6 +380,11 @@ void cupid_gb_display_clock_advance(CupidGb *gb, unsigned half_dots) {
     deliver_clock(gb, half_dots, false);
 }
 
+void cupid_gb_display_clock_advance_host(CupidGb *gb, unsigned half_dots) {
+    if (cupid_gb_display_clock_capable(gb))
+        deliver_clock(gb, half_dots, true);
+}
+
 void cupid_gb_display_clock_sync(CupidGb *gb) {
     if (cupid_gb_display_clock_capable(gb))
         deliver_clock(gb, 0, true);

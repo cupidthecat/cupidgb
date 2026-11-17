@@ -35,7 +35,7 @@ Emulation > Controllers selects devices and configures buttons, axes, hats, play
 
 Battery data uses `.sav` beside the cartridge. State slots use `.s0` through `.s9`, with the zero key selecting slot 10. Archive storage names include the archive extension, such as `game.zip.sav`. Settings offers system-time or Accurate emulated-time policies for supported [cartridge clocks](docs/rtc.md).
 
-New states use CupidGB native version 20 and retain hardware, peripheral, audio reconstruction, display synchronization, pixel-fetch, VRAM read, serial clock-selection and wave fetch history, together with the cartridge's complete SRAM. Older formats remain loadable when they contain the storage required by the receiving cartridge. Desktop loads keep current listening settings. File > Recover Battery from Older State can export supported battery data from version 1. See [save states and rewind](docs/save-states.md) for compatibility and backup guidance.
+New states use CupidGB native version 21 and retain hardware, peripheral, audio reconstruction, display synchronization, pixel-fetch, VRAM read, serial clock-selection and wave fetch history, together with complete cartridge SRAM and SGB startup progress. Older formats remain loadable when they contain the storage required by the receiving cartridge. Desktop loads keep current listening settings. File > Recover Battery from Older State can export supported battery data from version 1. See [save states and rewind](docs/save-states.md) for compatibility and backup guidance.
 
 Audio settings include Accurate, waveform-preserving and disabled high-pass filtering, optional interference and individual channel toggles. [The audio guide](docs/audio.md) explains how these controls affect playback and recording.
 
@@ -81,6 +81,7 @@ See [build and installation](docs/building.md) for Ninja, core-only builds, sani
 - [User guide](docs/user-guide.md): controls, settings, display/audio, boot, capture, and save workflows.
 - [Controllers](docs/controllers.md): layouts, capture, devices, player routing, native menus, feedback and qualification limits.
 - [Hardware support](docs/hardware.md): current models/controllers and their limits.
+- [SGB startup](docs/sgb-startup.md): adapter introduction, guest and presentation clocks, ordered audio and state continuation.
 - [Debugger and inspectors](docs/debugging.md): execution controls, breakpoints, symbols, memory editing, and hardware views.
 - [Cheats and memory search](docs/cheats.md) covers codes, banked rules, persistence, RAM searches, and freeze controls.
 - [Battery saves](docs/battery-saves.md) and [save states/rewind](docs/save-states.md): locations, encodings, continuation, and recovery.
@@ -99,6 +100,6 @@ python3 scripts/run_rom_suite.py ./build/cupidgb_rom_runner /private/test-roms \
 ./build/cupidgb --run-seconds 60 --report .local-research/frontend.json /private/cartridge.gb
 ```
 
-The smoke check isolates settings and uses a generated cartridge. Add `--audio-check` to require a real output device. External suites require explicit success verdicts; bounded runs remain inconclusive. Runtime reports record the requested and selected model and its base clock. Guest-speed percentages use 4,295,454 Hz for the SGB NTSC profile and 4,194,304 Hz for the other current profiles; SGB PAL is not implemented. Reports separate guest base-clock progress, VBlank/image counts, widget paint events, and audio/backend measurements. Widget paint events do not establish physical display presentation FPS.
+The smoke check isolates settings and uses a generated cartridge. Add `--audio-check` to require a real output device. External suites require explicit success verdicts; bounded runs remain inconclusive. Runtime reports record the requested and selected model and its base clock. Guest-speed percentages use 4,295,454 Hz for the SGB NTSC profile and 4,194,304 Hz for the other current profiles; SGB PAL is not implemented. Reports distinguish guest cycles from presentation cycles, which also include the adapter's initial CPU hold. They also separate handheld and startup audio counts, VBlank/image counts, widget paint events and audio/backend measurements. Widget paint events do not establish physical display presentation FPS.
 
 Create private output directories before using capture/report paths. Keep ROMs, boot binaries, saves, captured game content, active builds, and comparison receipts out of public commits. [The validation record](docs/validation.md) lists the tested environments, results, and remaining limits. Use the supplied `.clang-format` for project C/C++ files. The project license is in [LICENSE](LICENSE).

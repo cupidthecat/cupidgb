@@ -371,6 +371,15 @@ static void check_boundary(const CupidGb *gb, const CupidGb *before, CupidGbRese
 }
 
 static void execute_firmware(CupidGb *gb) {
+    unsigned host_calls = 0;
+    while (cupid_gb_sgb_startup_held(gb) && host_calls < 66000u) {
+        CHECK(cupid_gb_step(gb));
+        ++host_calls;
+        int16_t samples[256];
+        while (cupid_gb_apu_drain(gb, samples, 128u)) {
+        }
+    }
+    CHECK(!cupid_gb_sgb_startup_held(gb));
     unsigned instructions = 0;
     while (gb->boot_rom_enabled && instructions < 32) {
         CHECK(cupid_gb_step(gb));

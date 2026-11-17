@@ -32,6 +32,45 @@ void MainWindow::applyAudioPolicy(CupidGb *gb) const {
                                        !audioChannelActions_[channel]->isChecked());
 }
 
+bool MainWindow::collectAudio(CoreAudioCollector &collected) {
+    if (!emulator_)
+        return false;
+    const auto frames = collected.frames();
+    const auto handheld = collected.frames(CUPID_GB_AUDIO_ORIGIN_HANDHELD);
+    const auto startup = collected.frames(CUPID_GB_AUDIO_ORIGIN_SGB_STARTUP);
+    const bool complete = collected.collect(emulator_->gb);
+    generatedAudioFrames_ += collected.frames() - frames;
+    handheldAudioFrames_ += collected.frames(CUPID_GB_AUDIO_ORIGIN_HANDHELD) - handheld;
+    startupAudioFrames_ += collected.frames(CUPID_GB_AUDIO_ORIGIN_SGB_STARTUP) - startup;
+    return complete;
+}
+
+bool MainWindow::discardCoreAudio() {
+    if (emulator_ && CoreAudioCollector::discard(emulator_->gb))
+        return true;
+    setPaused(true);
+    reportError("Audio output could not be preserved. Emulation is paused.");
+    return false;
+}
+
+void MainWindow::recordAudio(const CoreAudioCollector &collected) {
+    if (!recorder_ || !recorder_->active())
+        return;
+    // Adapter introduction and its silent lead-in are playback only. Skipping
+    // those spans must not write replacement silence into the handheld recording.
+    for (size_t i = 0; i < collected.spanCount(); ++i) {
+        const auto &span = collected.spans()[i];
+        if (span.origin != CUPID_GB_AUDIO_ORIGIN_HANDHELD)
+            continue;
+        if (!recorder_->append(collected.samples() + span.firstFrame * 2u, span.frames)) {
+            const QString error = recorder_->errorString();
+            if (stopRecording())
+                reportError("Audio recording stopped: " + error);
+            return;
+        }
+    }
+}
+
 void MainWindow::setupAudio() {
     // Some audio backends dispatch Qt events while opening or closing a stream.
     // Guest execution must not reenter a pause, load, or rewind transition.

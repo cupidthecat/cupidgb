@@ -36,10 +36,13 @@ bool MainWindow::smokeTest(SmokeWorkflow workflow) {
         return smokeFailure(__FILE__, __LINE__);
     if (workflow == SmokeWorkflow::Storage)
         return largeCartridgeRamSmokeTest(directory.path());
+    if (workflow == SmokeWorkflow::Sgb)
+        return sgbSmokeTest(directory.path());
     if (!playbackSmokeTest(directory.path()) || !startupSmokeTest(directory.path()) ||
         !rtcSmokeTest(directory.path()) || !audioPolicySmokeTest(directory.path()) ||
         !resetSmokeTest(directory.path()) || !cameraSmokeTest(directory.path()) ||
-        (workflow == SmokeWorkflow::All && !largeCartridgeRamSmokeTest(directory.path())))
+        (workflow == SmokeWorkflow::All &&
+         (!largeCartridgeRamSmokeTest(directory.path()) || !sgbSmokeTest(directory.path()))))
         return smokeFailure(__FILE__, __LINE__);
     QByteArray rom(32768, char(0));
     rom[0x100] = char(0x18);

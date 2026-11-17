@@ -1,6 +1,6 @@
 # Save states and rewind
 
-CupidGB native states preserve CPU, timer, DMA, serial, graphics, cartridge, SGB, and audio state at an instruction boundary. They include pending core PCM samples. They exclude ROM binaries, boot binaries, host paths, Qt resources, serial observer pointers, and queued host audio. Loading a state preserves the current serial observer registration and does not replay earlier host notifications.
+CupidGB native states preserve CPU, timer, DMA, serial, graphics, cartridge, SGB, and audio state after a completed hardware step. A held adapter-startup step is also a valid capture boundary. States include pending handheld PCM, startup synthesis history and unread startup batches. They exclude ROM binaries, boot binaries, host paths, Qt resources, serial observer pointers, and queued host-device audio. Loading a state preserves the current serial observer registration and does not replay earlier host notifications.
 
 ## Desktop workflows
 
@@ -10,13 +10,13 @@ Load a native state file through File > Load State File or drop a `.s0` through 
 
 Writes use an atomic file replacement. Loading checks the complete cartridge identity and hardware model. A state captured with an active boot overlay requires the matching local boot binary. Failed validation preserves the running session and its host audio queue. A successful load replaces the emulated state, reapplies current physical input, clears queued host audio, and realigns pacing.
 
-New files use CupidGB native version 20. Versions 2 through 18 and both supported version 19 development layouts remain loadable when they contain all SRAM required by the receiving cartridge. Desktop loads retain the current audio filter, interference level, channel choices, sample rate and receiving output history. Interoperable BESS state imports remain pending.
+New files use CupidGB native version 21. Versions 2 through 20, including both supported version 19 development layouts, remain loadable when they contain all SRAM required by the receiving cartridge. Desktop loads retain current audio choices and both receiving output owners: ordinary reconstruction/filter history and startup synthesis/queued batches. The saved hardware startup phase and host-only time still restore. Interoperable BESS state imports remain pending.
 
 Host camera images and pending device requests stay with the receiving session. Saving a pending host capture writes an idle camera to the file while the live request continues. After full validation, a load into host-camera mode cancels obsolete requests and clears imported busy state while retaining the current image. This also applies to a saved generated countdown. Without a provider, generated captures retain their countdown, while a host-origin snapshot starts idle. The existing 64-byte camera section and strict busy/countdown validator are unchanged. See [Camera cartridges](host-camera.md) for reset, rewind and embedding rules.
 
 The version identifies the wire encoding. Subsequent execution follows the current engine. Version 3 records pending CGB DMA work, CPU speed-switch sequencing, and audio clock, held-output, envelope, sweep, and noise latches. Version 2 has no values for these latches. Its loader initializes them deterministically after validating the old payload; it never takes missing hardware history from the target's running session. Pending DMA and speed-switch delays start cleared, while an old armed HBlank transfer retains its saved block count. On color hardware, pulse clock startup follows the saved channel enable, and held pulse output follows the saved duty position. Monochrome pulse history uses the import rules described under version 11 below. Noise gates and held output derive from the saved channel/DAC and LFSR state, with a canonical prescaler phase. The old LFSR, timer and queued PCM remain intact. Version 14 initializes missing reconstruction and filter history as described below. Keep the original state if you need to revisit its earlier build.
 
-SGB states continue under the selected model's corrected NTSC clock. Legacy audio import derives output coefficients from that clock and the saved sample rate while preserving queued samples. The wire format stores the model and guest cycle count. Exact continuation comparisons require the same qualified build and inputs.
+SGB states continue under the selected model's corrected NTSC clock. Legacy audio import derives output coefficients from that clock and the saved sample rate while preserving queued samples. Version 21 separately records host-only startup time alongside the existing model and guest cycle count. Older files restore startup as completed, with zero additional host time; they do not replay the introduction. Exact continuation comparisons require the same qualified build and inputs.
 
 Older builds could save the untouched SGB or SGB2 post-boot profile with LY at `FF` and an uninitialized pixel pipeline. Continuing that state produced an invalid internal scanline. The loader recognizes the initial CPU, divider-register, and display signature at guest cycle zero and restores the modeled VBlank entry on line 144 at dot 200. It changes only LY, STAT, and the display phase; the ROM-dependent DIV subphase, memory, host registrations, and battery bookkeeping remain intact. Other states retain their literal saved values. This recovery uses the existing version 12 layout.
 
@@ -26,15 +26,15 @@ Version 1 execution states cannot continue in the changed pixel and audio core. 
 
 Hold Tab to move backward through captured frames. Rewind restores and removes history entries, then executes the selected state forward for one replay interval. With sufficient history, normal rewind first returns to the current frame position and subsequently moves back one frame per interval. Holding Space consumes one additional history entry, moving back one frame initially and two thereafter. The selected Turbo cap and slow-motion rate also apply to replay pacing. Insufficient history ends replay and waits for release; it does not invent another complete frame.
 
-Replay uses current physical input and produces a new image and audio. Entering or leaving rewind clears stale host playback. Live restoration retains receiving reconstruction, DAC and filter history, rebases its fractional phase, then discards stale queued PCM. Only newly generated replay samples enter playback. Disk loading and debugger Backstep use the same audio ownership rules. Releasing rewind resumes forward execution with current input. Replay samples do not enter the forward-only WAVE recording.
+Replay uses current physical input and produces a new image and audio. Entering or leaving rewind clears stale host playback. Live restoration retains ordinary and startup output history together, rebases the ordinary fractional phase, then discards the complete stale PCM stream. Only newly generated replay samples enter playback. Disk loading and debugger Backstep use the same audio ownership rules. Releasing rewind resumes forward execution with current input. Replay samples do not enter the forward-only WAVE recording; startup-origin samples are excluded even during forward execution.
 
-Settings control the requested history duration and memory budget. The default requests up to 120 seconds within a 256 MiB budget. The buffer evicts its oldest snapshots when either limit is reached. History age uses the model's base T-cycle frequency, so the duration limit represents guest seconds on SGB as well as the other profiles. Enabled rewind captures each completed frame before applying the history limits. Actual retained duration depends on how well the cartridge's state compresses; the interface reports shorter history when the memory limit is reached. Set the duration to zero to disable capture.
+Settings control the requested history duration and memory budget. The default requests up to 120 seconds within a 256 MiB budget. The buffer evicts its oldest snapshots when either limit is reached. History age uses positive presentation-time progress at the selected model's base-clock frequency. This includes a held startup interval even though its guest counter does not advance. Automatic frame capture skips intervals made entirely of held startup calls; explicit state capture remains valid there. Once guest execution resumes, enabled rewind captures each completed frame before applying the history limits. Actual retained duration depends on how well the cartridge's state compresses; the interface reports shorter history when the memory limit is reached. Set the duration to zero to disable capture.
 
 Ordinary Reset, incompatible cartridge or firmware replacement, successful disk-state loading, and relevant configuration changes clear frame history. Quick Reset and Reload retain history when cartridge bytes, model and firmware match. Native console resets keep the loaded assets and their frame history. Failed resets and loads preserve it. Clock-policy changes keep snapshots; replay restores guest clocks while retaining the current policy. Rewind stays in memory.
 
-Rewind age advances independently of the guest cycle counter. A retained-history reset takes guest time back to zero without making existing snapshots appear older by an unsigned wraparound. Restoring a snapshot restores its history age and guest-clock baseline together. Identical replacement cartridge bytes can retain snapshots, but their trusted codec context must be rebound to the new allocation.
+Rewind age advances independently of the guest cycle counter. A retained-history reset restarts the core timeline without making existing snapshots appear older by an unsigned wraparound. Restoring a snapshot restores its history age and presentation-time baseline together. Identical replacement cartridge bytes can retain snapshots, but their trusted codec context must be rebound to the new allocation.
 
-The debugger has a separate, smaller instruction snapshot history. It captures only explicit debugger stepping and is invalidated when ordinary playback or session-changing operations resume. Breakpoints, symbols, tool windows, and pending host commands are excluded from native state files. See [debugger history](debugging.md#instruction-history-and-playback).
+The debugger has a separate, smaller instruction snapshot history. It captures only explicit guest debugger stepping and is invalidated when ordinary playback or session-changing operations resume. Held startup calls advance presentation without adding instruction snapshots. Breakpoints, symbols, tool windows, and pending host commands are excluded from native state files. See [debugger history](debugging.md#instruction-history-and-playback).
 
 The rewind path caches the identity of the frontend's immutable cartridge. The core context is bound to the instance, ROM pointer, ROM size, successful-load generation, and hardware model. Loading cartridge bytes invalidates an earlier context even when the same allocation and length are reused. Failed loads and native resets preserve the binding. A caller that patches ROM bytes directly must still discard and recreate the context. Disk-state APIs always recompute the full cartridge hash. Future cheat, patch, or debugger features must honor that cache invalidation rule.
 
@@ -58,6 +58,8 @@ The 128-byte header contains:
 | 96 | 32 | SHA-256 of header bytes 0 through 95 followed by the payload |
 
 Word arrays check their complete byte range once, then read or write individual little-endian elements. This accepts unaligned buffers and preserves all array values without relying on host byte order. Encoding and loading still require the exact final schema offset, and loading retains every integrity and hardware-domain check.
+
+The fixed ordinary PCM array includes consumed storage beyond its queued-frame count. Draining moves the unread frames and leaves retired slots intact, so different drain capacities can produce different native bytes after delivering identical samples. Exact continuation comparisons therefore use the same drain history. The version 21 startup extension has a separate encoding that stores only unread mono samples.
 
 The payload follows the explicit field order in `src/gb/state.c`. Version 2 occupies 300,518 bytes including the header. Its payload layout remains the version 3 prefix. It contains audio sample integration, filter state, pixel fetch queues, pending object/window work, the latched CGB object-priority selection, and the CPU's first HALT polling phase. Version 3 occupies 300,568 bytes and appends the following explicit fields without inserting bytes into that prefix:
 
@@ -265,7 +267,46 @@ Versions 2 through 18 cannot restore cartridges above 128 KiB. A version 19 stor
 
 Qt samples eight independent 32 KiB regions before compressing snapshots of at least 512 KiB. If the samples predict little space saving, it uses a stored compression stream; otherwise it compresses the full snapshot at level one. Both paths decode to the exact input bytes and use the same rewind envelope. Larger encoded states can shorten history within the configured memory budget. Ordinary smaller snapshots keep their existing compression path.
 
+### Adapter startup in version 21
+
+Version 21 preserves every version 20 hardware/RAM field and appends a startup extension before the accessory descriptor on physical SGB and SGB2. Cartridge enhancement support does not select this extension. Other models append zero startup bytes and require completed phase 200, zero host-only elapsed time, and canonical empty startup output. The file header still records the new version and complete digest.
+
+The extension begins with this 65-byte header. Offsets are relative to the extension, not the file:
+
+| Offset | Bytes | Value |
+| --- | --- | --- |
+| 0 | 2 | Signed introduction phase, -10 through 200 |
+| 2 | 8 | Unsigned host-only elapsed base clocks |
+| 10 | 28 | Seven unsigned Q0.32 voice phases |
+| 38 | 4 | Unsigned Q0.32 sweep phase |
+| 42 | 4 | Signed Q16 sweep-filter history, -1048576 through 1048576 |
+| 46 | 8 | Nonzero private noise state |
+| 54 | 8 | Saturating count of dropped startup frames |
+| 62 | 2 | Ordinary queued frames that precede the startup batches |
+| 64 | 1 | Startup batch count, zero through two |
+
+All declared batch descriptors follow the header before any sample payload. Each ten-byte descriptor contains a signed two-byte generation phase, four-byte generation rate, two-byte original length, and two-byte cursor. Generation phases range from -10 through 199. Rates must be supported and equal the decoded effective ordinary output rate. Length must equal `floor(rate * 70224 / physical_model_clock)` and cannot exceed 3,214. Each cursor is independently less than its batch length.
+
+The unread mono samples then follow in queue order, two signed little-endian bytes per sample. Only `length - cursor` samples are stored for each batch. A negative-phase batch contains only zero samples. Decoding clears consumed and unused storage while preserving every unread value and descriptor, so re-encoding an untouched state reproduces its bytes. The complete extension ranges from 65 to 12,941 bytes. Query `cupid_gb_state_size` for every capture because partial drains change its size.
+
+The ordinary prefix count cannot exceed the ordinary queue's occupied frames and must be zero when no startup batch remains. A complete hardware phase may coexist with a queued phase-199 batch. More generally, queued generation phases and synthesis history are independent of current hardware phase after a live import. Validation does not force them to agree. The existing `display_cycles_since_frame` remains presentation age; version 21 adds no duplicate age counter or pending-presentation flag. The older adapter-transfer age remains a separate retained field.
+
+Before allocating, the loader bounds startup metadata and locates the accessory at the exact computed end. It never infers payload length from the receiver's phase, rate, queue or guest time. Full validation checks the decoded output relationship and requires host-only time plus saved guest time to fit in 64 bits. Invalid extension data rejects the console/accessory transaction without changing live bytes, allocations, camera ownership or callbacks.
+
+| Load path | Hardware startup state | Startup output history |
+| --- | --- | --- |
+| Version 21 exact, ordinary or trusted | Restore saved phase and host-only time | Restore saved synthesis, diagnostics, descriptors and unread samples |
+| Version 21 live, ordinary or trusted | Restore saved phase and host-only time | Retain receiving ordinary and startup owners together |
+| Version 2 through 20 exact | Completed phase 200 and zero host-only time | Empty queues and synthesis history with canonical noise seed one |
+| Version 2 through 20 live | Completed phase 200 and zero host-only time | Retain receiving ordinary and startup owners together |
+
+Live loading decodes the saved startup state before finishing the candidate's pending APU clocks. Those clocks use saved credit and suppression state; they generate no new presentation event or intro batch. Only afterward does the loader replace both output owners with receiving history and rebase the ordinary reconstruction fraction. A host then discards all stale output and resets conversion/pacing. Exact loading does not execute pending clocks. Neither path restarts startup merely because a state is loaded.
+
+The writer keeps the version 20 CH3/SRAM ordering, and the reader retains the two strict version 19 layout decisions. Older fixture lengths and digests remain historical contracts. The [startup guide](sgb-startup.md) covers execution, reset and playback behavior. The [startup validation record](validation-sgb-startup.md) distinguishes portable-format regression checks from actual state exchange between Windows and Linux.
+
 ## Validation scope
+
+The established regression and fixture results below retain their earlier checkpoint scope. Version 21 state, startup and audio checks passed in the complete Windows, Linux and sanitizer gates. Native exchange, frontend restoration and runtime results have their own scope in the [startup checkpoint](validation-sgb-startup.md); passing a codec regression alone does not qualify those workflows or the underlying hardware behavior.
 
 Generated-ROM tests exercise deterministic continuation across the current six hardware profiles, active boot overlays, LCD modes, CGB double speed, pending timer reloads, DMA starts/restarts, and serial phases. Another 64 continuation scenarios capture pending background/object fetches and window work, then apply scroll and palette writes after restoration. Checks compare CPU and memory state, framebuffers, emitted PCM, and the encoded continuation. Additional tests reject every truncation boundary, damaged or invalid fields, wrong inputs, and stale cache bindings while preserving the live instance. Word-array tests construct expected bytes at every v2 array boundary, cover values crossing byte and sign-bit boundaries, and check unaligned input/output with guard bytes. They compare complete encoded files rather than relying only on encode/decode symmetry.
 

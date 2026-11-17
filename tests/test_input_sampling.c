@@ -32,6 +32,7 @@
 #include "cupid/gb/startup.h"
 #include "cupid/gb/state.h"
 #include "cupid/gb/timer.h"
+#include "test_state_layout.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -173,8 +174,9 @@ static void resign(Blob *blob) {
 }
 
 static size_t pending_offset(const Rig *rig, const Blob *blob) {
-    return blob->size - DESCRIPTOR_BYTES - SRAM_LENGTH_BYTES - WAVE_HISTORY_BYTES -
-           SERIAL_CLOCK_BYTES - INPUT_SAMPLE_BYTES - (rig->printer ? PRINTER_STATE_WIRE_SIZE : 0);
+    return blob->size - DESCRIPTOR_BYTES - test_state_startup_size(rig->gb) - SRAM_LENGTH_BYTES -
+           WAVE_HISTORY_BYTES - SERIAL_CLOCK_BYTES - INPUT_SAMPLE_BYTES -
+           (rig->printer ? PRINTER_STATE_WIRE_SIZE : 0);
 }
 
 static void host_updates_wait_for_delivery(void) {
@@ -419,10 +421,11 @@ static void native_continuation(void) {
 
 static Blob legacy_blob(const Rig *source, const Blob *current, unsigned version) {
     assert(version == 14 || version == 15);
-    const size_t removed = SRAM_LENGTH_BYTES + WAVE_HISTORY_BYTES + INPUT_SAMPLE_BYTES +
+    const size_t startup = test_state_startup_size(source->gb);
+    const size_t removed = startup + SRAM_LENGTH_BYTES + WAVE_HISTORY_BYTES + INPUT_SAMPLE_BYTES +
                            SERIAL_CLOCK_BYTES + (version == 14 ? V15_TIMING_BYTES : 0);
     const size_t descriptor = pending_offset(source, current) + INPUT_SAMPLE_BYTES +
-                              SERIAL_CLOCK_BYTES + WAVE_HISTORY_BYTES + SRAM_LENGTH_BYTES;
+                              SERIAL_CLOCK_BYTES + WAVE_HISTORY_BYTES + SRAM_LENGTH_BYTES + startup;
     Blob legacy = {malloc(current->size - removed), current->size - removed};
     assert(legacy.bytes);
     memcpy(legacy.bytes, current->bytes, descriptor - removed);

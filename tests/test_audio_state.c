@@ -29,6 +29,7 @@
 #include "cupid/gb/ppu.h"
 #include "cupid/gb/state.h"
 #include "cupid/gb/timer.h"
+#include "test_state_layout.h"
 
 #include <assert.h>
 #include <math.h>
@@ -179,6 +180,7 @@ static void assert_same_live_guest(const CupidGb *source, const CupidGb *target)
      * before comparing every serialized guest field, retaining only host output. */
     cupid_gb_apu_run(settled, true);
     settled->apu.output = target->apu.output;
+    settled->sgb_startup.output = target->sgb_startup.output;
     assert_same(settled, target);
     free(settled);
 }
@@ -347,10 +349,10 @@ static void test_live_rate_changes(void) {
     assert(deferred_low_rate == 24);
 }
 
-static Blob legacy_v13(const Blob *current) {
-    const size_t removed = SRAM_LENGTH_BYTES + IO_HISTORY_BYTES + CUPID_GB_AUDIO_STATE_SIZE +
-                           CUPID_GB_DISPLAY_CLOCK_STATE_SIZE + CUPID_GB_PIXEL_TIMING_STATE_SIZE +
-                           CUPID_GB_VRAM_BUS_STATE_SIZE;
+static Blob legacy_v13(const CupidGb *gb, const Blob *current) {
+    const size_t removed = test_state_startup_size(gb) + SRAM_LENGTH_BYTES + IO_HISTORY_BYTES +
+                           CUPID_GB_AUDIO_STATE_SIZE + CUPID_GB_DISPLAY_CLOCK_STATE_SIZE +
+                           CUPID_GB_PIXEL_TIMING_STATE_SIZE + CUPID_GB_VRAM_BUS_STATE_SIZE;
     Blob old = {malloc(current->length), current->length - removed};
     assert(old.bytes);
     const size_t audio = current->length - ACCESSORY_BYTES - removed;
@@ -372,7 +374,7 @@ static void test_v13_import(void) {
             assert(cupid_gb_apu_set_channel_muted(source, 2, true));
             cupid_gb_tick(source, 431);
             cupid_gb_apu_run(source, true);
-            Blob current = encode(source), old = legacy_v13(&current);
+            Blob current = encode(source), old = legacy_v13(source, &current);
             const uint32_t credit = source->apu.output.sample_acc;
             const uint32_t frames = source->apu.output.buf_write;
             cupid_gb_tick(target, 971);

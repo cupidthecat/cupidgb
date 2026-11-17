@@ -11,7 +11,9 @@ This guide describes the current timing contracts and the invariants needed when
 | CPU T-cycle | One CPU clock; four CPU T-cycles form one CPU machine cycle |
 | CPU M-cycle | The unit accepted by `cupid_gb_tick`; advances four base T-cycles at normal speed or two at CGB double speed |
 | Base T-cycle / LCD dot | One tick in the physical base-clock domain; the PPU and APU advance in this domain |
-| `elapsed_cycles` | Cumulative base T-cycles, including execution with the LCD disabled |
+| `elapsed_cycles` | Cumulative guest base T-cycles, including execution with the LCD disabled |
+| `sgb_startup.elapsed_cycles` | Adapter presentation cycles accumulated while startup holds guest execution |
+| `cupid_gb_presentation_cycles` | Guest cycles plus the separate adapter startup cycles |
 | RTC phase | Half-base-clock units delivered at logical CPU or bus boundaries, separately from divider phase |
 | PCM frame | One left/right output sample pair at the configured sample rate |
 | Host deadline | Monotonic host nanoseconds used by Qt to schedule more guest work |
@@ -23,6 +25,8 @@ CGB double speed doubles CPU-domain progress relative to the base clock. It does
 A regular scanline occupies 456 base T-cycles, and a regular 154-line LCD interval occupies 70,224. Startup, LCD enable/disable, and an interval beginning partway through a frame need not produce an image after another full 70,224 cycles. Geometry, presentation events, VBlank interrupts, and elapsed guest time are different observations. `frame_ready` latches a presentation event, classified by `display_frame_type`. Synthetic LCD-off and STOP events do not request VBlank. The host observation counter `vblank_events` records actual VBlank boundaries and stays outside guest snapshots.
 
 The headless runner's `--frames` limit and both input-trace formats use 70,224 base T-cycles per numbered interval. They do not count displayed images. The same cycle interval has a different physical duration on SGB NTSC.
+
+With executed firmware on physical SGB or SGB2, startup begins at phase -10 and holds guest execution until phase 96. Each held call advances 114 presentation dots without advancing CPU, divider, timer, serial, RTC, DMA or handheld audio clocks. Actual presentations advance the startup phase; a redraw does not. Approximate post-boot initialization starts at phase 200. The physical adapter owns this behavior even for a cartridge without SGB enhancements. See [adapter startup](sgb-startup.md) for output ordering, reset and state contracts.
 
 ## Execution and subsystem ordering
 
@@ -154,9 +158,9 @@ The [audio subsystem guide](audio.md) describes channel power, DAC gating, held 
 
 For an output rate R and physical base clock H, each delivered base dot contributes R units of rational sample credit. Delivering one stereo frame consumes H units. `apu.output.sample_acc` retains that credit independently of pending digital clocks and the rounded reconstruction fraction. Channel transitions enter per-channel rings at their fractional position; a register edge must preserve the contributions on both sides of an output boundary.
 
-The filter retains binary64 capacitor history separately from channel power and uses a coefficient derived from the model clock and output rate. The default output is 44,100 stereo frames per physical second, including SGB NTSC. A double-speed CPU does not produce twice as much audio. A rate change finishes pending hardware work at the old rate, then updates output coefficients while retaining queued PCM, reconstruction and capacitor history. Ordinary timing splits preserve the same history.
+The filter retains binary64 capacitor history separately from channel power and uses a coefficient derived from the model clock and output rate. The default output is 44,100 stereo frames per physical second, including SGB NTSC. A double-speed CPU does not produce twice as much audio. A rate change finishes pending hardware work at the old rate, then updates output coefficients while retaining queued PCM, reconstruction and capacitor history. A different rate is rejected before that work if adapter startup batches remain unread; drain them first. Ordinary timing splits preserve the same history.
 
-Drain the finite PCM buffer during LCD-off execution as well as ordinary images. A host that waits indefinitely for VBlank can lose samples even when the emulated channel timing is correct. Core PCM, host conversion, the audio-device queue, and a recording are separate stages. Exact state restoration preserves the snapshot's pending core PCM. Qt live restoration keeps receiving output history, then discards stale playback before generating sound on the restored guest timeline.
+Drain the finite PCM buffers during LCD-off execution as well as ordinary images. A host that waits indefinitely for VBlank can lose samples even when the emulated channel timing is correct. Drain pending adapter startup batches before the next hardware call, ordinary PCM at its watermark, and all remaining output before returning from an execution interval. Core PCM, host conversion, the audio-device queue, and a recording are separate stages. Exact state restoration preserves both output owners from the snapshot. Qt live restoration keeps both receiving output owners, then discards stale playback before generating sound on the restored guest timeline. Startup output has its own origin and does not enter handheld WAVE recordings.
 
 ## DMA and serial consequences
 
@@ -190,7 +194,7 @@ Every MBC3 write in 6000–7FFF refreshes the clock snapshot, including repeated
 
 ## Qt deadlines and measurements
 
-Qt calculates playback time from the base T-cycles consumed by its bounded work interval. `GuestClockPacer` divides by the selected physical model clock and playback rate, carrying the fractional nanoseconds across ordinary intervals. A clock/rate change or timeline rebase resets the applicable fraction. Partial LCD intervals are charged only for their consumed cycles.
+Qt calculates playback time from the presentation cycles consumed by its bounded work interval, including adapter startup holds. `GuestClockPacer` divides by the selected physical model clock and playback rate, carrying the fractional nanoseconds across ordinary intervals. A clock/rate change or timeline rebase resets the applicable fraction. Partial LCD intervals are charged only for their consumed cycles. Guest execution counters, scripted inputs and replayed guest-cycle totals retain their separate guest clock.
 
 Guest deadlines, bounded reports, paint intervals and rewind capture measurements share `HostElapsedTimer`. Linux uses `CLOCK_MONOTONIC_RAW`; Windows uses Qt's elapsed timer. Qt timer notifications wake the work loop, while elapsed host time determines its deadlines. A bounded run also checks its final deadline and five-second warmup on that host clock. The [desktop clock record](validation-host-clock.md) explains the independently measured discrepancy that motivated the Linux change.
 
@@ -198,7 +202,7 @@ The work loop stops at a completed image or a bounded base-cycle interval, with 
 
 State loads and rewind replace the guest timeline. Reset deadlines and host audio/conversion history, reconcile physical input, and reject stale session measurements. A negative net cycle delta after a restore is not forward throughput. Rewind's duration limit converts stored cycle differences through the model clock.
 
-Runtime reports record `requested_model`, actual `hardware_model`, and `base_clock_hz`. Compute guest speed from base-cycle progress divided by H and measured host seconds. Report widget paints, completed images, audio samples, and physical presentation separately. Neither 60 widget paints per second nor a near-100% bounded guest rate establishes complete gameplay or audible accuracy.
+Runtime reports record `requested_model`, actual `hardware_model`, and `base_clock_hz`. Compute guest speed from guest base-cycle progress divided by H and measured host seconds. Presentation speed includes the adapter startup clock, so it can remain active while guest speed is zero. Audio counts identify handheld and startup output separately. Report widget paints, completed images, audio samples, and physical presentation separately. Neither 60 widget paints per second nor a near-100% bounded guest rate establishes complete gameplay or audible accuracy.
 
 ## Validating a timing change
 

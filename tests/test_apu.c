@@ -30,6 +30,7 @@
 static void prepare(CupidGb *gb, bool cgb, bool double_speed) {
     *gb = (CupidGb){0};
     gb->model = cgb ? CUPID_GB_MODEL_CGB : CUPID_GB_MODEL_DMG_ABC;
+    cupid_gb_sgb_startup_reset(gb, false);
     gb->cgb_mode = cgb;
     gb->double_speed = double_speed;
     cupid_gb_write_u8(gb, 0xff26, 0x80);
@@ -224,6 +225,7 @@ static void test_pulse_trigger_length_enable(void) {
                 for (unsigned phase = 0; phase < 4; ++phase) {
                     *subject = (CupidGb){0};
                     subject->model = models[model];
+                    cupid_gb_sgb_startup_reset(subject, false);
                     subject->cgb_mode = models[model] == CUPID_GB_MODEL_CGB;
                     subject->double_speed = speed != 0;
                     const uint16_t base = channel ? 0xff16 : 0xff11;
@@ -292,6 +294,7 @@ static void test_monochrome_pulse_clock_lifetime(void) {
         for (unsigned channel = 0; channel < 2; ++channel) {
             CupidGb gb = {0};
             gb.model = models[model];
+            cupid_gb_sgb_startup_reset(&gb, false);
             const uint16_t base = channel ? 0xff16 : 0xff11;
             uint16_t *timer = channel ? &gb.apu.ch2_timer : &gb.apu.ch1_timer;
             uint8_t *position = channel ? &gb.apu.ch2_duty_pos : &gb.apu.ch1_duty_pos;
@@ -528,6 +531,7 @@ static void test_stop_oscillator(bool color) {
 
 static void prepare_dc(CupidGb *gb) {
     *gb = (CupidGb){0};
+    cupid_gb_sgb_startup_reset(gb, false);
     cupid_gb_write_u8(gb, 0xff26, 0x80);
     cupid_gb_write_u8(gb, 0xff12, 0xf0); /* DAC connected, channel not triggered: code zero. */
     cupid_gb_write_u8(gb, 0xff24, 0x70);
@@ -679,6 +683,7 @@ static void test_physical_model_clocks(void) {
     for (unsigned model = CUPID_GB_MODEL_DMG_ABC; model <= CUPID_GB_MODEL_SGB2; ++model) {
         CupidGb gb = {0};
         gb.model = (CupidGbModel)model;
+        cupid_gb_sgb_startup_reset(&gb, false);
         uint32_t clock_hz = model == CUPID_GB_MODEL_SGB ? 4295454u : 4194304u;
         assert(cupid_gb_base_clock_hz(&gb) == clock_hz);
         gb.double_speed = true;
@@ -1293,6 +1298,7 @@ static void test_audio_chunk_splitting(void) {
             for (unsigned scenario = 0; scenario < 6; ++scenario) {
                 CupidGb batch = {0};
                 batch.model = models[model];
+                cupid_gb_sgb_startup_reset(&batch, false);
                 assert(cupid_gb_apu_set_sample_rate(&batch, rates[rate]));
                 cupid_gb_write_u8(&batch, 0xff26, 0x80);
                 cupid_gb_write_u8(&batch, 0xff10, scenario == 2 ? 0x17 : 0);
@@ -1450,6 +1456,8 @@ static void test_frozen_audio_backlog(void) {
         for (unsigned rate = 0; rate < sizeof(rates) / sizeof(rates[0]); ++rate) {
             CupidGb gb = {0};
             gb.model = models[model];
+            /* This fixture measures handheld backlog after host startup. */
+            cupid_gb_sgb_startup_reset(&gb, false);
             assert(cupid_gb_apu_set_sample_rate(&gb, rates[rate]));
             cupid_gb_tick_apu_divider(&gb, 2048);
             const uint32_t clock = cupid_gb_base_clock_hz(&gb);

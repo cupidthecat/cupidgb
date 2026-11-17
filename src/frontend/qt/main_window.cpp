@@ -722,7 +722,8 @@ bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflo
     const bool retainHistory =
         sameCartridge && sameFirmware &&
         (workflow == ResetWorkflow::Quick || workflow == ResetWorkflow::Reload);
-    const uint64_t previousGuestCycles = emulator_ ? emulator_->gb.elapsed_cycles : 0;
+    const uint64_t previousPresentationCycles =
+        emulator_ ? cupid_gb_presentation_cycles(&emulator_->gb) : 0;
     const bool resetChangedBattery =
         workflow != ResetWorkflow::Open && sameBattery && emulator_ &&
         candidate->gb.battery_write_generation != emulator_->gb.battery_write_generation;
@@ -786,7 +787,7 @@ bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflo
     if (workflow == ResetWorkflow::Open)
         resetMotionInput();
     if (retainHistory)
-        rebaseRewindAfterReset(previousGuestCycles);
+        rebaseRewindAfterReset(previousPresentationCycles);
     else
         resetRewind();
     ++sessionId_;

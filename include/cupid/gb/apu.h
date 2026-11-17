@@ -44,6 +44,8 @@ void cupid_gb_apu_div_secondary_event(CupidGb *gb);
 
 /* Output defaults to 44100 Hz. Rates from 8000 through 192000 Hz are accepted.
  * Changing the rate retains reconstruction, queued samples, and filter history.
+ * A different rate is rejected without mutation while startup audio is pending;
+ * drain that output and retry. Selecting the current rate remains allowed.
  */
 bool cupid_gb_apu_set_sample_rate(CupidGb *gb, uint32_t sample_rate);
 uint32_t cupid_gb_apu_get_sample_rate(const CupidGb *gb);

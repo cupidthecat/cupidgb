@@ -168,7 +168,7 @@ bool MainWindow::screenMessagesSmokeTest(const QString &, const QString &directo
         const QScopedValueRollback<uint8_t> frame(gb.display_frame_type, CUPID_GB_FRAME_NORMAL);
         const QScopedValueRollback<bool> polarity(gb.lcd_frame_odd, odd);
         const QByteArray before = window.captureState();
-        const bool sgb = cupid_gb_sgb_active(&gb);
+        const bool sgb = cupid_gb_sgb_host_present(&gb);
         constexpr std::array<const char *, 9> preferenceKeys = {"video/osd",
                                                                 "video/palette",
                                                                 "video/blendingMode",
@@ -257,8 +257,8 @@ bool MainWindow::screenMessagesSmokeTest(const QString &, const QString &directo
         if (window.display_->image != clean || !window.currentMessageFrame_.isNull() ||
             !window.previousMessageFrame_.isNull())
             return false;
-        // A host-only toggle retains submitted pixels until a new guest frame.
-        // Repeated events retain that same raster, even while text is disabled.
+        // A host-only toggle retains submitted pixels until a new presentation.
+        // A handheld repeat keeps that raster; an adapter surface is independent.
         window.notifyOnScreen("State saved");
         window.present(Presentation::Frame);
         window.present(Presentation::Frame);
@@ -302,13 +302,32 @@ bool MainWindow::screenMessagesSmokeTest(const QString &, const QString &directo
         {
             const QScopedValueRollback<uint8_t> repeat(gb.display_frame_type,
                                                        CUPID_GB_FRAME_REPEAT);
+            const QByteArray beforeRepeat = window.captureState();
+            const uint64_t submittedBeforeRepeat = window.presentedImages_;
             window.advanceScreenMessages();
             window.present(Presentation::Frame);
-            if (window.display_->image != submitted)
+            if (window.captureState() != beforeRepeat || !window.paused_)
                 return false;
+            if (sgb) {
+                // An adapter publication refreshes its own surface and expires
+                // this overlay, even if a restored handheld latch says repeat.
+                if (!checkPixels(false) || !window.currentMessageFrame_.isNull() ||
+                    window.previousMessageFrame_.cacheKey() != currentMessage.cacheKey() ||
+                    window.presentedImages_ != submittedBeforeRepeat + 1)
+                    return false;
+            } else if (window.display_->image != submitted ||
+                       window.currentMessageFrame_.cacheKey() != currentMessage.cacheKey() ||
+                       window.previousMessageFrame_.cacheKey() != previousMessage.cacheKey() ||
+                       window.currentDisplayFrame_.cacheKey() != currentFrame.cacheKey() ||
+                       window.previousDisplayFrame_.cacheKey() != previousFrame.cacheKey() ||
+                       window.presentedImages_ != submittedBeforeRepeat) {
+                return false;
+            }
         }
         window.present(Presentation::Frame);
-        if (!checkPixels(false))
+        if (sgb ? window.display_->image != clean || !window.currentMessageFrame_.isNull() ||
+                      !window.previousMessageFrame_.isNull()
+                : !checkPixels(false))
             return false;
         window.present(Presentation::Frame);
         messageToggle->trigger();

@@ -203,7 +203,9 @@ CupidGbDebugStop cupid_gb_debugger_check(CupidGbDebugger *debugger, const CupidG
  * result pauses the session, except BUDGET, which leaves its command active.
  * ILLEGAL_OPCODE follows a completed fetch and retains the resulting halt;
  * continuing advances peripheral clocks until an explicit IE edit releases it.
- * Run budgets count calls to the hardware step, not guest clocks. */
+ * Adapter startup calls advance host presentation without consuming a guest
+ * attempt, breakpoint exemption, or Step command. Run budgets still count all
+ * calls to the hardware step, so held startup cannot make a run unbounded. */
 CupidGbDebugStop cupid_gb_debugger_step(CupidGbDebugger *debugger, CupidGb *gb);
 CupidGbDebugStop cupid_gb_debugger_run(CupidGbDebugger *debugger, CupidGb *gb, uint64_t budget);
 const char *cupid_gb_debugger_stop_name(CupidGbDebugStop stop);

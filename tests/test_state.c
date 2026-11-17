@@ -22,6 +22,7 @@
 
 #include "../src/gb/audio_state.h"
 #include "../src/gb/display_clock.h"
+#include "../src/gb/state_startup.h"
 #include "../src/gb/vram_bus.h"
 #include "cupid/common/sha256.h"
 #include "cupid/gb/apu.h"
@@ -42,6 +43,7 @@
 enum { IO_HISTORY_BYTES = 3, SRAM_LENGTH_BYTES = 4 };
 
 #include "test_state_hash.h"
+#include "test_state_layout.h"
 
 static void prepare(CupidGb *gb, CupidGbModel model, bool boot) {
     uint8_t rom[32768] = {0};
@@ -111,8 +113,8 @@ static size_t v11_hardware_size(const CupidGb *gb, size_t length) {
     enum { ACCESSORY_DESCRIPTOR_BYTES = 8, INFRARED_HISTORY_BYTES = 6, RTC_HISTORY_BYTES = 6 };
 
     /* These fixtures have no attached device. HuC3 keeps its existing IR section. */
-    const size_t tail = SRAM_LENGTH_BYTES + IO_HISTORY_BYTES + ACCESSORY_DESCRIPTOR_BYTES +
-                        RTC_HISTORY_BYTES + CUPID_GB_AUDIO_STATE_SIZE +
+    const size_t tail = test_state_startup_size(gb) + SRAM_LENGTH_BYTES + IO_HISTORY_BYTES +
+                        ACCESSORY_DESCRIPTOR_BYTES + RTC_HISTORY_BYTES + CUPID_GB_AUDIO_STATE_SIZE +
                         CUPID_GB_DISPLAY_CLOCK_STATE_SIZE + CUPID_GB_PIXEL_TIMING_STATE_SIZE +
                         CUPID_GB_VRAM_BUS_STATE_SIZE +
                         (gb->header.mbc_type == CUPID_GB_HUC3 ? 0 : INFRARED_HISTORY_BYTES);
@@ -632,6 +634,7 @@ static void test_v2_import(void) {
             cupid_gb_display_clock_import_legacy(expected);
             cupid_gb_vram_bus_import_legacy(expected);
             cupid_gb_input_import_legacy(expected);
+            cupid_gb_sgb_startup_state_import_legacy(expected);
             if (expected->model == CUPID_GB_MODEL_SGB) {
                 expected->sgb.transfer.frame_dots = 0;
                 memcpy(expected->sgb.transfer.tiles, expected->sgb.border_tiles,
@@ -1175,6 +1178,8 @@ static void test_sgb_transfer_resume(void) {
     source->sgb.transfer.destination = CUPID_SGB_TRANSFER_PALETTES;
     source->sgb.transfer.frames_remaining = 1;
     source->sgb.transfer.frame_dots = CUPID_SGB_FRAME_DOTS - 1;
+    /* The pending transfer completes at the actual publication boundary. */
+    source->display_cycles_since_frame = CUPID_SGB_FRAME_DOTS - 1;
     source->sgb.transfer.border_transition = 33;
     source->sgb.transfer.tiles[4096] = 0xa5;
     source->sgb.transfer.map[0] = 0x0c80;
@@ -1430,9 +1435,9 @@ static void test_sgb_sample_phase_and_legacy_filter(void) {
     source->apu.output.buf[0] = 1234;
     source->apu.output.buf[1] = -2345;
     state = encode(source, &length);
-    const size_t removed = SRAM_LENGTH_BYTES + IO_HISTORY_BYTES + CUPID_GB_AUDIO_STATE_SIZE +
-                           CUPID_GB_DISPLAY_CLOCK_STATE_SIZE + CUPID_GB_PIXEL_TIMING_STATE_SIZE +
-                           CUPID_GB_VRAM_BUS_STATE_SIZE;
+    const size_t removed = test_state_startup_size(source) + SRAM_LENGTH_BYTES + IO_HISTORY_BYTES +
+                           CUPID_GB_AUDIO_STATE_SIZE + CUPID_GB_DISPLAY_CLOCK_STATE_SIZE +
+                           CUPID_GB_PIXEL_TIMING_STATE_SIZE + CUPID_GB_VRAM_BUS_STATE_SIZE;
     const size_t audio_offset = length - 8 - removed;
     memmove(state + audio_offset, state + audio_offset + removed, 8);
     length -= removed;

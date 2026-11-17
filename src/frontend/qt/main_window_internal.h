@@ -29,6 +29,7 @@
 #include "audio_sink_lifetime.h"
 #include "cartridge_file.h"
 #include "controller_dialog.h"
+#include "core_audio_collector.h"
 #include "cupid/compat/native_v1.h"
 #include "cupid/gb/battery.h"
 #include "debugger_window.h"

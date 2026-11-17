@@ -30,6 +30,7 @@
 #include "cupid/gb/audio_output.h"
 #include "cupid/gb/rtc.h"
 #include "cupid/gb/sgb.h"
+#include "cupid/gb/sgb_startup.h"
 #include "cupid/gb/startup.h"
 
 /* Full 16-bit TPP1 bank span: 65536 physical banks of 16 KiB each.
@@ -534,6 +535,7 @@ typedef struct CupidGb {
     uint64_t battery_write_generation; /* Host dirty tracking; excluded from guest snapshots. */
     char save_path[260];
     CupidGbSgb sgb;
+    CupidGbSgbStartup sgb_startup;
     CupidGbApu apu;
     CupidGbPixels pixels;
     /* Boot ROM overlay */
@@ -662,7 +664,8 @@ bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size);
  * and halt. It does not imply instruction progress or successful gameplay.
  * False reports an invalid instance, absent cartridge, or decoder failure.
  * Observed stepping reports an illegal primary opcode once, at its actual fetch
- * address. Later halted steps report IDLE and continue peripheral clocks. */
+ * address. Later halted steps report IDLE and continue peripheral clocks.
+ * Adapter startup holds also report IDLE, advancing presentation time only. */
 bool cupid_gb_step(CupidGb *gb);
 bool cupid_gb_step_observed(CupidGb *gb, CupidGbStepTrace *trace);
 uint8_t cupid_gb_read_u8(const CupidGb *gb, uint16_t address);
@@ -679,7 +682,9 @@ const char *cupid_gb_mbc_name(CupidGbMbcType mbc_type);
 /*
  * Drain generated audio samples into `out` (int16_t stereo, L then R).
  * Returns the number of stereo frames written (max `max_frames`).
- * Call once per video frame after cupid_gb_step returns frame_ready.
+ * The stream includes handheld and adapter-startup output in delivery order.
+ * Drain until zero whenever startup output is pending, at the ordinary queue
+ * watermark, and before stopping. Use tagged chunks for handheld-only recording.
  */
 uint32_t cupid_gb_apu_drain(CupidGb *gb, int16_t *out, uint32_t max_frames);
 

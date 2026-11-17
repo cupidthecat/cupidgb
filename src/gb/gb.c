@@ -407,6 +407,7 @@ void cupid_gb_init(CupidGb *gb) {
     gb->window_line_counter = 0u;
     cupid_gb_sgb_init(gb);
     cupid_gb_startup_memory(gb);
+    cupid_gb_sgb_startup_reset(gb, false);
     cupid_gb_apu_import_legacy(gb);
     cupid_gb_audio_import_legacy(gb);
     cupid_gb_display_clock_import_legacy(gb);
@@ -601,6 +602,7 @@ void cupid_gb_enter_boot_rom(CupidGb *gb) {
     gb->stat_irq_line = false;
     gb->window_line_counter = 0u;
     cupid_gb_display_clock_reset(gb);
+    cupid_gb_sgb_startup_reset(gb, true);
     CupidGbPrinter *printer = cupid_gb_printer_attached(gb);
     if (printer)
         cupid_gb_printer_state_clear(&printer->state, gb->elapsed_cycles);
@@ -1474,7 +1476,7 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
             if ((value & 0x80u) == 0u) {
                 if (lcd_was_enabled) {
                     cupid_cgb_hdma_lcd_off(gb, previous_mode);
-                    if (!gb->sgb.enabled)
+                    if (!cupid_gb_sgb_host_present(gb))
                         gb->lcd_frame_odd = !gb->lcd_frame_odd;
                 }
                 gb->ppu_counter = 0u;
@@ -1580,6 +1582,9 @@ static bool cupid_gb_step_internal(CupidGb *gb, CupidGbStepTrace *trace) {
     if (gb == 0 || !gb->loaded) {
         return false;
     }
+
+    if (cupid_gb_sgb_startup_held(gb))
+        return cupid_gb_sgb_startup_step(gb);
 
     if (gb->cpu.stopped) {
         cupid_gb_deliver_cpu_cycles(gb, CUPID_GB_HALT_CYCLES);

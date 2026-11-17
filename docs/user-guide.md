@@ -18,6 +18,8 @@ For a hardware choice that lasts only until the application exits, pass `--model
 
 The SGB profile uses its NTSC base clock of 4,295,454 Hz. SGB2 and the other current profiles use 4,194,304 Hz. Normal-speed playback and rewind duration follow the selected clock. A higher SGB image rate is part of that profile; SGB PAL is not available.
 
+SGB and SGB2 show a CupidGB introduction when executing a configured boot ROM, including with ordinary monochrome cartridges. The adapter holds the guest CPU for the first 106 presentations, then lets firmware execute while the introduction finishes. Approximate post-boot startup skips the introduction. Hiding the SGB border keeps the introduction inside the game viewport.
+
 Emulation > Reset saves the current battery and clock history, refreshes the cartridge, firmware and companion symbols, and applies the selected hardware settings. It starts execution again and clears rewind history. File > Close ROM saves the current battery and closes the session. A failed battery write prevents reset, reload, closing or replacement and keeps the session and any recording available for retry.
 
 Emulation > Quick Reset, or Ctrl+Alt+R, keeps the active hardware model and physical work RAM, high RAM, object memory and color palette memory while restarting the console. It refreshes the cartridge, firmware and companion symbols. VRAM and execution state restart. Quick Reset resumes play and retains rewind when the cartridge bytes, model and firmware are unchanged. Installed firmware executes again and can overwrite retained memory. Without firmware, the approximate color handoff clears WRAM bank 2 and object memory.
@@ -126,7 +128,7 @@ Settings > Highpass Filter offers None (Keep DC Offset), Accurate and Preserve W
 
 Audio > Audio Channels enables or mutes Square Channel 1, Square Channel 2, Wave Channel and Noise Channel. Alt+1 through Alt+4 are the default shortcuts; Settings can reassign them. Channel choices last for the current application session and also affect recordings. They do not change the game's sound registers. Global listening mute and volume remain separate.
 
-Audio > Start Audio Recording writes stereo 16-bit PCM into a WAVE file. Choose the action again to stop. Recording captures forward core output before host volume, mute, and resampling. Pause and rewind add no samples. Reset, Quick Reset, Reload and native console resets keep the recording and its sample rate. Cartridge replacement, closing, or an explicit core sample-rate change ends the file. Loading a state continues the recording with the restored forward timeline.
+Audio > Start Audio Recording writes stereo 16-bit PCM into a WAVE file. Choose the action again to stop. Recording captures forward handheld output before host volume, mute, and resampling. Pause and rewind add no samples. The adapter introduction and its silent lead-in play through the selected audio device but add no samples to the recording. Reset, Quick Reset, Reload and native console resets keep the recording and its sample rate. Cartridge replacement, closing, or an explicit core sample-rate change ends the file. Loading a state continues the recording with the restored forward timeline.
 
 ## Game Boy Printer
 
@@ -157,6 +159,8 @@ Native save states preserve execution at a point in time. Use Emulation > Save S
 State loading, rewind and debugger Backstep restore saved clock history while keeping your current clock policy. Changing that policy keeps rewind history. Battery imports have separate timestamp rules and can account for elapsed host time even when Accurate is selected.
 
 Hold Tab to rewind. With enough history, the first interval returns to the current frame position, then later intervals move back one frame at a time. Hold Space as well to move back one frame initially, then two per interval. The Turbo cap and slow-motion controls also set replay pacing. Rewind runs each restored interval forward to produce its image and sound using current input. At the end of the available history it waits for you to release rewind. Releasing resumes forward play with current physical input. Replay audio is excluded from WAVE recordings.
+
+Automatic rewind snapshots begin once guest execution resumes after an adapter startup hold. Manual save states can capture the introduction itself and restore its progress.
 
 Settings let you request 10, 30, 60, 120, 300, or 600 seconds of history within a 16, 32, 64, 128, or 256 MiB budget. The default requests 120 seconds within 256 MiB. Select Disabled to stop capture. The oldest snapshots are evicted when either limit is reached; available duration depends on compression.
 

@@ -140,7 +140,7 @@ bool MainWindow::resetConsole(CupidGbResetKind kind) {
     if (!emulator_)
         return false;
     QScopedValueRollback<bool> operation(stateOperation_, true);
-    const uint64_t previousCycles = emulator_->gb.elapsed_cycles;
+    const uint64_t previousCycles = cupid_gb_presentation_cycles(&emulator_->gb);
     if (!cupid_gb_reset(&emulator_->gb, kind)) {
         reportError("The console could not be reset.");
         return false;

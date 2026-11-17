@@ -14,6 +14,8 @@ The [cartridge storage checkpoint](validation-cartridge-storage.md) records exte
 
 The [hardware selection integration checkpoint](validation-hardware-selection.md) combines the completed wave-memory and serial comparisons, version 18 file interchange, unchanged external-corpus results, native desktop checks and four Windows gameplay runs. It distinguishes fresh targeted checks from reused core evidence. The subsequent Linux clock-readiness gate timed out before any gameplay case launched; sustained Linux playback remains unqualified.
 
+The [storage, wave and camera checkpoint](validation-storage-wave.md) records full SRAM ownership, native version 20 and queued camera lifetimes. The subsequent [SGB startup checkpoint](validation-sgb-startup.md) records independent host-only clocks, ordered startup output, version 21 states, paired startup observations and fresh Windows runtime checks. Each checkpoint retains its own source and artifact identities, failed attempts and qualification limits.
+
 ## Builds and automated checks
 
 | Environment | Configuration | Result |

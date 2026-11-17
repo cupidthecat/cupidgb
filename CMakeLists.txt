@@ -60,6 +60,7 @@ add_library(cupidgb_core STATIC
     src/compat/native_v1.c src/gb/battery.c
     src/gb/gb.c src/gb/startup.c src/gb/reset.c src/gb/rtc.c src/gb/state.c src/gb/cpu.c src/gb/ppu.c src/gb/pixels.c src/gb/apu.c
     src/gb/timer.c src/gb/cartridge.c src/gb/camera.c src/gb/mbc7.c src/gb/input.c src/gb/debugger.c src/gb/sgb.c
+    src/gb/sgb_startup.c src/gb/sgb_startup_audio.c src/gb/sgb_startup_render.c src/gb/state_startup.c
     src/gbc/cgb.c src/gbc/cgb_palette.c src/gbc/cgb_dma.c src/gbc/cgb_render.c
     src/gb/printer.c src/gb/printer_state.c
     src/gb/cheats.c
@@ -139,6 +140,7 @@ if(CUPIDGB_BUILD_QT)
         src/frontend/qt/cheat_search.cpp
         src/frontend/qt/cheats_window.cpp
         src/frontend/qt/color_pipeline.cpp
+        src/frontend/qt/core_audio_collector.cpp
         src/frontend/qt/host_camera.cpp
         src/frontend/qt/main_window.cpp
         src/frontend/qt/main_window.h
@@ -169,6 +171,7 @@ if(CUPIDGB_BUILD_QT)
         src/frontend/qt/main_window_watchpoint_tests.cpp
         src/frontend/qt/main_window_workflow_tests.cpp
         src/frontend/qt/main_window_startup_tests.cpp
+        src/frontend/qt/main_window_sgb_tests.cpp
         src/frontend/qt/main_window_rtc_tests.cpp
         src/frontend/qt/main_window_controller_tests.cpp
         src/frontend/qt/main_window_debugger_tests.cpp
@@ -232,7 +235,8 @@ if(CUPIDGB_ENABLE_TESTS)
         pixel_timing_state scy_latch stat apu wave_retrigger wave_history wave_history_state
         audio_synthesis audio_filter audio_state audio_clock cpu_timing cpu_lockup
         dma video_bus vram_bus vram_quiet bus state state_ram battery native_v1_recovery
-        sgb input input_sampling cartridge mbc3_bus camera camera_host camera_state mbc7
+        sgb sgb_startup sgb_startup_audio sgb_startup_state
+        input input_sampling cartridge mbc3_bus camera camera_host camera_state mbc7
         tpp1 rumble rumble_sampling presentation_observer huc3 infrared infrared_state
         infrared_guest cheats debugger debugger_watchpoints sha256)
         add_executable(cupidgb_${test_name} tests/test_${test_name}.c)
@@ -511,7 +515,10 @@ if(CUPIDGB_ENABLE_TESTS)
         add_test(NAME cupidgb_qt_workflows COMMAND cupidgb --smoke-test --smoke-workflow desktop)
         add_test(NAME cupidgb_qt_storage_workflows
             COMMAND cupidgb --smoke-test --smoke-workflow storage)
-        set_tests_properties(cupidgb_qt_workflows cupidgb_qt_storage_workflows PROPERTIES
+        add_test(NAME cupidgb_qt_sgb_workflows
+            COMMAND cupidgb --smoke-test --smoke-workflow sgb)
+        set_tests_properties(cupidgb_qt_workflows cupidgb_qt_storage_workflows
+            cupidgb_qt_sgb_workflows PROPERTIES
             ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
     endif()
 endif()

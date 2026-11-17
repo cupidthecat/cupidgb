@@ -130,11 +130,11 @@ void MainWindow::applyDisplaySettings() {
     const QSignalBlocker blockTemperature(colorTemperatureSlider_);
     colorTemperatureSlider_->setValue(colorSettings.temperature);
     const bool showBorder = settings_.value("video/sgbBorder", true).toBool();
-    const bool borderChanged = emulator_ && cupid_gb_sgb_active(&emulator_->gb) &&
+    const bool borderChanged = emulator_ && cupid_gb_sgb_host_present(&emulator_->gb) &&
                                !image_.isNull() &&
                                (image_.width() == CUPID_SGB_SCREEN_WIDTH) != showBorder;
     const bool colorHardware = emulator_ && (emulator_->gb.model == CUPID_GB_MODEL_CGB ||
-                                             cupid_gb_sgb_active(&emulator_->gb));
+                                             cupid_gb_sgb_host_present(&emulator_->gb));
     const bool resetHistory = displayPalette_ != colors || displayOffColor_ != offColor ||
                               borderChanged || (colorChanged && colorHardware);
     displayPalette_ = colors;
@@ -205,10 +205,11 @@ void MainWindow::present(Presentation presentation) {
     if (!emulator_)
         return;
     const auto &gb = emulator_->gb;
-    // A repeated hardware frame leaves both the visible image and blend history intact.
-    if (presentation == Presentation::Frame && gb.display_frame_type == CUPID_GB_FRAME_REPEAT)
+    const bool sgb = cupid_gb_sgb_host_present(&gb);
+    // A loaded adapter surface can change independently of its handheld image.
+    if (!sgb && presentation == Presentation::Frame &&
+        gb.display_frame_type == CUPID_GB_FRAME_REPEAT)
         return;
-    const bool sgb = cupid_gb_sgb_active(&gb);
     const QSize nativeSize = sgb && borderAction_->isChecked()
                                  ? QSize(CUPID_SGB_SCREEN_WIDTH, CUPID_SGB_SCREEN_HEIGHT)
                                  : QSize(160, 144);

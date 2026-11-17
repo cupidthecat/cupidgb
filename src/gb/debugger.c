@@ -458,6 +458,10 @@ CupidGbDebugStop cupid_gb_debugger_check(CupidGbDebugger *debugger, const CupidG
         return CUPID_GB_DEBUG_STOP_ERROR;
     if (!gb || !gb->loaded)
         return stopped(debugger, CUPID_GB_DEBUG_STOP_NO_ROM);
+    /* A held adapter has no fetch address yet. Preserve a one-fetch breakpoint
+     * exemption until guest execution can actually consume it. */
+    if (cupid_gb_sgb_startup_held(gb))
+        return CUPID_GB_DEBUG_STOP_NONE;
     const bool skip = debugger->skip_breakpoint && debugger->skip_address == gb->cpu.pc &&
                       debugger->skip_bank == cupid_gb_debugger_bank(gb, gb->cpu.pc);
     debugger->skip_breakpoint = false;
@@ -490,6 +494,13 @@ CupidGbDebugStop cupid_gb_debugger_step(CupidGbDebugger *debugger, CupidGb *gb) 
     const CupidGbDebugStop before = cupid_gb_debugger_check(debugger, gb);
     if (before != CUPID_GB_DEBUG_STOP_NONE)
         return before;
+    if (cupid_gb_sgb_startup_held(gb)) {
+        /* Bulk run still spends its bounded hardware-call budget. Step/Next
+         * and instruction history wait for a real guest attempt. */
+        if (!cupid_gb_step(gb))
+            return stopped(debugger, CUPID_GB_DEBUG_STOP_ERROR);
+        return CUPID_GB_DEBUG_STOP_NONE;
+    }
     const uint16_t stack = gb->cpu.sp;
     CupidGbStepTrace trace;
     ++debugger->steps;

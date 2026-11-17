@@ -70,6 +70,7 @@ class CheatsWindow;
 struct CupidGbPrinter;
 class PaletteLibrary;
 class HostCamera;
+class CoreAudioCollector;
 
 class MainWindow final : public QMainWindow {
   public:
@@ -79,7 +80,7 @@ class MainWindow final : public QMainWindow {
                         std::optional<uint64_t> powerOnSeedOverride = std::nullopt);
     ~MainWindow() override;
     bool openRom(const QString &path);
-    enum class SmokeWorkflow { All, Desktop, Storage };
+    enum class SmokeWorkflow { All, Desktop, Storage, Sgb };
     bool smokeTest(SmokeWorkflow workflow = SmokeWorkflow::All);
     void beginBoundedRun(double seconds, const QString &reportPath);
     bool loadInputTrace(const QString &path);
@@ -163,7 +164,8 @@ class MainWindow final : public QMainWindow {
     enum class Playback { Forward, Rewind, RewindEnd };
 
     struct PlaybackResult {
-        uint64_t cycles = 0;
+        uint64_t presentationCycles = 0;
+        uint64_t guestCycles = 0;
         uint64_t timeline = 0;
     };
 
@@ -178,6 +180,9 @@ class MainWindow final : public QMainWindow {
     void stopAudio();
     void clearAudio();
     void pumpAudio();
+    bool collectAudio(CoreAudioCollector &collected);
+    bool discardCoreAudio();
+    void recordAudio(const CoreAudioCollector &collected);
     QByteArray convertPlaybackAudio(const int16_t *samples, size_t frames,
                                     const QAudioFormat &format);
     bool audioLifecycleSmokeTest(const QString &path);
@@ -197,8 +202,8 @@ class MainWindow final : public QMainWindow {
     bool loadStateFile(const QString &path);
     bool recoverBattery(const QString &statePath, const QString &outputPath);
     void resetRewind();
-    void rebaseRewindAfterReset(uint64_t previousGuestCycles);
-    void trackRewindTime(uint64_t guestCycles);
+    void rebaseRewindAfterReset(uint64_t previousPresentationCycles);
+    void trackRewindTime(uint64_t presentationCycles);
     void rememberFrame();
     bool rewindFrame(PlaybackResult *result = nullptr);
     void reportError(const QString &message);
@@ -223,7 +228,7 @@ class MainWindow final : public QMainWindow {
     bool rememberDebuggerStep();
     bool debuggerBackstep();
     bool debuggerWrite(uint16_t address, uint8_t value);
-    void drainDebuggerAudio();
+    bool drainDebuggerAudio();
     bool debuggerSmokeTest(const QString &directory);
     bool watchpointSmokeTest(const QString &directory);
     bool pacingSmokeTest(const QString &path);
@@ -233,6 +238,7 @@ class MainWindow final : public QMainWindow {
     bool playbackSmokeTest(const QString &directory);
     bool modelSmokeTest(const QString &directory);
     bool startupSmokeTest(const QString &directory);
+    bool sgbSmokeTest(const QString &directory);
     bool rtcSmokeTest(const QString &directory);
     bool rtcBatterySmokeTest(const QString &directory);
     void openCheats(bool search = false);
@@ -378,13 +384,13 @@ class MainWindow final : public QMainWindow {
 
     struct RewindSnapshot {
         QByteArray compressed;
-        uint64_t cycles; /* Ordered history age; independent of reset guest clocks. */
+        uint64_t cycles; /* Ordered presentation age; independent of reset epochs. */
     };
 
     std::deque<RewindSnapshot> rewindStates_;
     std::unique_ptr<CupidGbStateContext> rewindContext_;
     uint64_t rewindAgeCycles_ = 0;
-    uint64_t rewindGuestCycles_ = 0;
+    uint64_t rewindPresentationCycles_ = 0;
     qsizetype rewindBytes_ = 0;
     qint64 lastRewindBudgetNotice_ = 0;
     uint64_t rewindSnapshotsCaptured_ = 0;
@@ -396,8 +402,11 @@ class MainWindow final : public QMainWindow {
     bool audioCheck_ = false;
     HostElapsedTimer telemetryClock_;
     uint64_t telemetryStartCycles_ = 0;
+    uint64_t telemetryStartPresentationCycles_ = 0;
     uint64_t presentedImages_ = 0;
     uint64_t generatedAudioFrames_ = 0;
+    uint64_t handheldAudioFrames_ = 0;
+    uint64_t startupAudioFrames_ = 0;
     uint64_t replayedGuestCycles_ = 0;
     uint64_t replayedFrames_ = 0;
     uint64_t turboWindowDroppedFrames_ = 0;

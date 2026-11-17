@@ -99,8 +99,8 @@ struct CupidGb;
 void cupid_gb_sgb_init(struct CupidGb *gb);
 void cupid_gb_sgb_apply_compatibility_palette(struct CupidGb *gb);
 void cupid_gb_sgb_write_joyp(struct CupidGb *gb, uint8_t value);
-void cupid_gb_sgb_clock(struct CupidGb *gb, uint32_t dots, bool lcd_idle);
-void cupid_gb_sgb_vblank(struct CupidGb *gb, uint32_t dots_after_vblank);
+void cupid_gb_sgb_clock(struct CupidGb *gb, uint32_t dots);
+void cupid_gb_sgb_present(struct CupidGb *gb, bool complete, uint32_t dots_after_frame);
 void cupid_gb_sgb_render_argb(const struct CupidGb *gb, uint32_t *pixels, size_t pixel_count);
 bool cupid_gb_sgb_active(const struct CupidGb *gb);
 

@@ -134,11 +134,12 @@ bool MainWindow::playbackSmokeTest(const QString &directory) {
                 session.rewindStates_.size() != (frame ? count - consumed + 1 : 0) ||
                 session.rewindExhausted_ == frame ||
                 session.replayedFrames_ != framesBefore + frame ||
-                result.timeline != timeline + bool(count) || !result.cycles ||
-                (frame && (result.cycles < 70000 || result.cycles > 70248 ||
+                result.timeline != timeline + bool(count) || !result.presentationCycles ||
+                result.guestCycles != result.presentationCycles ||
+                (frame && (result.presentationCycles < 70000 || result.presentationCycles > 70248 ||
                            session.generatedAudioFrames_ <= audioBefore ||
                            session.previousDisplayFrame_ != priorImage)) ||
-                (!frame && (result.cycles > 24 ||
+                (!frame && (result.presentationCycles > 24 ||
                             session.display_->messages.remainingFrames() != messageAge)))
                 return smokeFailure(__FILE__, __LINE__);
             qsizetype bytes = 0;
@@ -299,8 +300,9 @@ bool MainWindow::playbackSmokeTest(const QString &directory) {
             return smokeFailure(__FILE__, __LINE__);
     const uint64_t stoppedFrames = session.replayedFrames_;
     PlaybackResult stopped;
-    if (!session.rewindFrame(&stopped) || !session.paused_ || stopped.cycles ||
-        session.replayedFrames_ != stoppedFrames || session.rewindStates_.size() != 3)
+    if (!session.rewindFrame(&stopped) || !session.paused_ || stopped.guestCycles ||
+        stopped.presentationCycles || session.replayedFrames_ != stoppedFrames ||
+        session.rewindStates_.size() != 3)
         return smokeFailure(__FILE__, __LINE__);
     cupid_gb_debugger_cleanup(session.debugger_.get());
     session.debugger_.reset();

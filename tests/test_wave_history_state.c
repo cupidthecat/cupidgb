@@ -49,8 +49,9 @@ static Blob capture(const CupidGb *gb) {
     assert(cupid_gb_save_state(gb, blob.bytes, blob.size, &written) == CUPID_GB_STATE_OK);
     const size_t extension = gb->header.mbc_type == CUPID_GB_MBC7 ? MBC7_EXTENSION_BYTES : 0;
     assert(written == blob.size && blob.size == CURRENT_BYTES + extension);
-    assert(blob.bytes[8] == 20 && blob.bytes[blob.size - ACCESSORY_BYTES - SRAM_LENGTH_BYTES - 1] ==
-                                      gb->apu.ch3_sample_byte);
+    assert(blob.bytes[8] == CUPID_GB_STATE_VERSION &&
+           blob.bytes[blob.size - ACCESSORY_BYTES - SRAM_LENGTH_BYTES - 1] ==
+               gb->apu.ch3_sample_byte);
     return blob;
 }
 
@@ -68,7 +69,7 @@ static void resign(Blob *blob) {
 /* Both read-only v19 drafts retain the public v18 prefix. These fixtures have
  * inline SRAM and no accessory payload, so only the one- or four-byte tail differs. */
 static Blob draft_blob(const Blob *current, bool wave_history) {
-    assert(current->bytes[8] == 20);
+    assert(current->bytes[8] == CUPID_GB_STATE_VERSION);
     const size_t wave = current->size - ACCESSORY_BYTES - SRAM_LENGTH_BYTES - 1;
     const size_t removed = wave_history ? SRAM_LENGTH_BYTES : 1;
     Blob draft = {malloc(current->size - removed), current->size - removed};
@@ -176,7 +177,8 @@ static void test_draft_continuation(void) {
                 }
 }
 
-static void test_native_continuation(void) {
+static void test_native_continuation(unsigned version) {
+    assert(version == 20 || version == CUPID_GB_STATE_VERSION);
     for (unsigned color = 0; color < 2; ++color)
         for (unsigned fast = 0; fast < 2; ++fast)
             for (unsigned after = 0; after < 2; ++after)
@@ -189,6 +191,8 @@ static void test_native_continuation(void) {
                     assert(source->apu.ch3_sample_byte == 0x69);
                     assert(source->apu.ch3_sample == (after ? 6 : 9));
                     Blob saved = capture(source);
+                    put_u32(saved.bytes + 8, version);
+                    resign(&saved);
                     for (unsigned api = 0; api < 4; ++api)
                         for (unsigned poison = 0; poison < 2; ++poison) {
                             CupidGb *target = different_receiver(color != 0, fast != 0, poison);
@@ -416,7 +420,7 @@ static void test_transactional_rejection(void) {
     put_u32(bad.bytes + 8, 18);
     resign(&bad);
     reject_unchanged(target, &bad, CUPID_GB_STATE_INVALID);
-    put_u32(bad.bytes + 8, 21);
+    put_u32(bad.bytes + 8, CUPID_GB_STATE_VERSION + 1u);
     resign(&bad);
     reject_unchanged(target, &bad, CUPID_GB_STATE_UNSUPPORTED_VERSION);
     free(bad.bytes);
@@ -451,7 +455,8 @@ static void test_transactional_rejection(void) {
 }
 
 int main(void) {
-    test_native_continuation();
+    test_native_continuation(20);
+    test_native_continuation(CUPID_GB_STATE_VERSION);
     test_draft_continuation();
     test_pending_fetch_before_live_output();
     test_full_byte_roundtrip();

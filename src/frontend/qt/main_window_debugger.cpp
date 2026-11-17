@@ -270,17 +270,21 @@ bool MainWindow::rememberDebuggerStep() {
     return true;
 }
 
-void MainWindow::drainDebuggerAudio() {
+bool MainWindow::drainDebuggerAudio() {
     if (!emulator_)
-        return;
-    int16_t samples[CUPID_GB_APU_BUF_FRAMES * 2];
-    const auto frames = cupid_gb_apu_drain(&emulator_->gb, samples, CUPID_GB_APU_BUF_FRAMES);
-    generatedAudioFrames_ += frames;
-    if (recorder_ && recorder_->active() && !recorder_->append(samples, frames)) {
-        const QString error = recorder_->errorString();
-        stopRecording();
-        reportError("Audio recording stopped: " + error);
+        return false;
+    const uint64_t session = sessionId_;
+    const uint64_t timeline = timelineId_;
+    CoreAudioCollector collected;
+    const bool complete = collectAudio(collected);
+    recordAudio(collected);
+    if (!emulator_ || sessionId_ != session || timelineId_ != timeline)
+        return false;
+    if (!complete) {
+        setPaused(true);
+        reportError("Audio output could not be preserved. Emulation is paused.");
     }
+    return complete;
 }
 
 void MainWindow::stopDebugger(const QString &message) {
@@ -313,33 +317,39 @@ void MainWindow::debuggerSlice() {
     // Every exit, including a breakpoint or failed step, discards that host
     // feedback before another debugger slice or forward playback can use it.
     const auto clearDebuggerRumble = qScopeGuard([this] { resetControllerRumble(); });
+    // An exact restore can begin with both output owners populated. Empty them
+    // before the first hardware call, including a held startup call.
+    if (!drainDebuggerAudio())
+        return;
     QElapsedTimer slice;
     slice.start();
     for (unsigned count = 0; count < 128 && slice.elapsed() < 4; ++count) {
-        if (!rememberDebuggerStep()) {
+        const bool remembered = !cupid_gb_sgb_startup_held(&emulator_->gb);
+        if (remembered && !rememberDebuggerStep()) {
             stopDebugger("Debugger stopped: instruction history could not be captured.");
             return;
         }
         const uint64_t previousSteps = debugger_->steps;
         const auto result = cupid_gb_debugger_step(debugger_.get(), &emulator_->gb);
         const bool conditionError =
-            result == CUPID_GB_DEBUG_STOP_ERROR && debugger_->steps == previousSteps;
+            remembered && result == CUPID_GB_DEBUG_STOP_ERROR && debugger_->steps == previousSteps;
         if (emulator_->gb.sgb.player_count != controllerPlayerCount_)
             refreshControllerPlayerCount();
-        if (result == CUPID_GB_DEBUG_STOP_BREAKPOINT || result == CUPID_GB_DEBUG_STOP_NO_ROM ||
-            conditionError) {
+        if (remembered && (result == CUPID_GB_DEBUG_STOP_BREAKPOINT ||
+                           result == CUPID_GB_DEBUG_STOP_NO_ROM || conditionError)) {
             // These stops precede execution. Keep a failed hardware-step
             // attempt, but do not offer a fictitious instruction Backstep.
             debuggerHistoryBytes_ -=
                 debuggerHistory_.back().capacity() + qsizetype(sizeof(QByteArray));
             debuggerHistory_.pop_back();
         }
-        ++debuggerCommandSteps_;
-        drainDebuggerAudio();
+        debuggerCommandSteps_ += debugger_->steps - previousSteps;
+        if (!drainDebuggerAudio())
+            return;
         updatePrinter();
         if (result != CUPID_GB_DEBUG_STOP_NONE) {
             if (result == CUPID_GB_DEBUG_STOP_WATCHPOINT ||
-                (result == CUPID_GB_DEBUG_STOP_ERROR && !conditionError &&
+                (remembered && result == CUPID_GB_DEBUG_STOP_ERROR && !conditionError &&
                  debugger_->last_watch_hit.id))
                 stopDebugger(debuggerWatchMessage(result == CUPID_GB_DEBUG_STOP_ERROR));
             else
@@ -379,6 +389,10 @@ bool MainWindow::debuggerBackstep() {
         cupid_gb_sgb_active(&emulator_->gb) ? emulator_->gb.sgb.player_count : 1;
     debuggerHistoryBytes_ -= debuggerHistory_.back().capacity() + qsizetype(sizeof(QByteArray));
     debuggerHistory_.pop_back();
+    // Live Backstep retains receiving stream history, just like disk load and
+    // rewind. Its queued prefix and intro must not leak into the new timeline.
+    if (!discardCoreAudio())
+        return false;
     if (inspectorsWindow_)
         inspectorsWindow_->sessionChanged();
     batteryDirty_ = true;

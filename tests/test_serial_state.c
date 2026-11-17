@@ -190,10 +190,10 @@ static void test_native_continuation(void) {
  * header and, from version 12, its empty accessory descriptor. They deliberately
  * stay independent of the current writer's size calculation. */
 static Blob legacy_blob(const Blob *current, unsigned version) {
-    static const size_t lengths[] = {300518, 300568, 300572, 300580, 300584, 300585,
-                                     300596, 300602, 300606, 300608, 300622, 300628,
-                                     305062, 305096, 305097, 305097, 305098, 305102};
-    assert(version >= 2 && version <= 19 && current->size == 305103);
+    static const size_t lengths[] = {300518, 300568, 300572, 300580, 300584, 300585, 300596,
+                                     300602, 300606, 300608, 300622, 300628, 305062, 305096,
+                                     305097, 305097, 305098, 305102, 305103};
+    assert(version >= 2 && version <= 20 && current->size == 305103);
     Blob legacy = {NULL, lengths[version - 2]};
     legacy.bytes = malloc(legacy.size);
     assert(legacy.bytes);
@@ -308,7 +308,7 @@ static void test_invalid_selector(void) {
         CupidGb *target = new_machine(models[model]);
         for (unsigned version = 18; version <= CUPID_GB_STATE_VERSION; ++version) {
             Blob current = capture(source);
-            Blob blob = version < 20 ? legacy_blob(&current, version) : current;
+            Blob blob = version <= 20 ? legacy_blob(&current, version) : current;
             const size_t selector = selector_offset(&blob);
             const uint8_t invalid[] = {2, 0x80, 0xff};
             for (unsigned index = 0; index < sizeof(invalid); ++index) {
@@ -327,7 +327,7 @@ static void test_invalid_selector(void) {
             blob.size -= SELECTOR_BYTES;
             resign(&blob);
             reject_unchanged(target, &blob);
-            if (version < 20)
+            if (version <= 20)
                 free(blob.bytes);
             free(current.bytes);
         }

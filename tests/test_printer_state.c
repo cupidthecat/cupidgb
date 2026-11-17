@@ -28,6 +28,7 @@
 #include "cupid/gb/printer.h"
 #include "cupid/gb/state.h"
 #include "cupid/gb/timer.h"
+#include "test_state_layout.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -1077,11 +1078,11 @@ static void test_legacy_fresh_device(void) {
     source->gb->elapsed_cycles = 0x1234567;
     memset(source->gb->apu.pulse_timing, 0, sizeof(source->gb->apu.pulse_timing));
     Blob current = save_rig(source, false);
-    const size_t hardware_size = current.length - DEVICE_DESCRIPTOR_BYTES - SRAM_LENGTH_BYTES -
-                                 IO_HISTORY_BYTES - CUPID_GB_DISPLAY_CLOCK_STATE_SIZE -
-                                 CUPID_GB_PIXEL_TIMING_STATE_SIZE - CUPID_GB_VRAM_BUS_STATE_SIZE -
-                                 CUPID_GB_AUDIO_STATE_SIZE - RTC_HISTORY_BYTES -
-                                 INFRARED_HISTORY_BYTES;
+    const size_t hardware_size =
+        current.length - test_state_startup_size(source->gb) - DEVICE_DESCRIPTOR_BYTES -
+        SRAM_LENGTH_BYTES - IO_HISTORY_BYTES - CUPID_GB_DISPLAY_CLOCK_STATE_SIZE -
+        CUPID_GB_PIXEL_TIMING_STATE_SIZE - CUPID_GB_VRAM_BUS_STATE_SIZE -
+        CUPID_GB_AUDIO_STATE_SIZE - RTC_HISTORY_BYTES - INFRARED_HISTORY_BYTES;
     const size_t lengths[] = {300518,
                               300568,
                               300572,

@@ -116,8 +116,11 @@ void cupid_gb_ppu_leave_stop(CupidGb *gb) {
 static void publish_frame(CupidGb *gb, uint8_t type, uint32_t remaining_dots) {
     gb->display_cycles_since_frame = remaining_dots;
     gb->display_frame_type = type;
+    if (cupid_gb_sgb_host_present(gb))
+        cupid_gb_sgb_present(gb, type == CUPID_GB_FRAME_NORMAL, remaining_dots);
     gb->frame_ready = true;
-    if (!gb->sgb.enabled && type != CUPID_GB_FRAME_NORMAL && type != CUPID_GB_FRAME_REPEAT) {
+    if (!cupid_gb_sgb_host_present(gb) && type != CUPID_GB_FRAME_NORMAL &&
+        type != CUPID_GB_FRAME_REPEAT) {
         // Blank presentation changes the output surface, not the fetch pipeline.
         memset(gb->frame_buffer, 0, sizeof(gb->frame_buffer));
         for (size_t pixel = 0; pixel < CUPID_GB_SCREEN_WIDTH * CUPID_GB_SCREEN_HEIGHT; ++pixel)
@@ -316,7 +319,7 @@ void cupid_gb_reset_ppu(CupidGb *gb) {
     cupid_gb_pixels_begin_line(gb);
     gb->ppu_counter = 0u;
     gb->stat_irq_delay = 0u;
-    gb->lcd_first_frame = !gb->sgb.enabled;
+    gb->lcd_first_frame = !cupid_gb_sgb_host_present(gb);
     gb->ppu_lcd_warmup_lines = 2u;
     gb->ppu_lcd_startup = true;
     gb->ppu_line_boundary_hold = false;
@@ -415,13 +418,13 @@ static void tick_ppu(CupidGb *gb, uint32_t dots) {
     CupidGbPixels *p = &gb->pixels;
     const bool lcd_enabled = cupid_gb_lcd_enabled(gb);
     const bool stopped = gb->cpu.stopped && gb->model != CUPID_GB_MODEL_CGB;
-    const bool sgb = gb->sgb.enabled;
+    const bool sgb = cupid_gb_sgb_host_present(gb);
     const uint32_t initial_dots = dots;
     const uint32_t initial_repeat = gb->lcd_repeat_countdown;
     gb->display_cycles_since_frame += dots;
     gb->lcd_repeat_countdown = initial_repeat > dots ? initial_repeat - dots : 0;
     if (sgb) {
-        cupid_gb_sgb_clock(gb, dots, !lcd_enabled || stopped);
+        cupid_gb_sgb_clock(gb, dots);
     }
     if (!lcd_enabled) {
         const bool previous_lyc_irq = p->lyc_irq;
@@ -526,9 +529,6 @@ static void tick_ppu(CupidGb *gb, uint32_t dots) {
                     gb->lcd_frame_odd = !gb->lcd_frame_odd;
                 gb->lcd_first_frame = false;
                 publish_frame(gb, type, dots - 1u);
-                if (sgb) {
-                    cupid_gb_sgb_vblank(gb, dots - 1);
-                }
                 cupid_gb_set_ppu_mode(gb, CUPID_GB_PPU_MODE_VBLANK);
                 cupid_gb_request_interrupt(gb, CUPID_GB_INTERRUPT_VBLANK);
                 if (!gb->stat_irq_line && (gb->io_registers[CUPID_GB_IO_STAT] & 0x20))
