@@ -891,10 +891,10 @@ static void cupid_gb_apu_trigger_ch2(CupidGb *gb, uint16_t previous_frequency, b
 /**
  * @brief Triggers (restarts) CH3 (wave).
  *
- * Reloads the frequency timer and resets the wave position and sample
- * state from the current NR30–NR34 register values. If the length counter
- * is zero it is reloaded to 256. The initial timer includes a 6 T-cycle
- * startup delay.
+ * Reloads the frequency timer and resets the wave position. An enabled DAC
+ * selects the high nibble of the retained fetch byte, independently of live
+ * wave RAM. An exhausted length reloads to 256. The initial timer includes
+ * a 6 T-cycle startup delay.
  *
  * @param gb Pointer to the Game Boy state.
  */
@@ -923,6 +923,7 @@ static void cupid_gb_apu_trigger_ch3(CupidGb *gb) {
     apu->ch3_freq_pending = false;
 
     if (apu->ch3_dac) {
+        apu->ch3_sample = (uint8_t)(apu->ch3_sample_byte >> 4u);
         apu->ch3_on = true;
     }
 }
@@ -1245,6 +1246,17 @@ void cupid_gb_apu_on_write(CupidGb *gb, uint8_t off, uint8_t val) {
         case 0x1au: // NR30 DAC power
             apu->ch3_dac = (val & 0x80u) != 0u;
             if (!apu->ch3_dac) {
+                if (apu->ch3_on) {
+                    /* Disconnect can replace the fetch byte before silencing
+                     * CH3. At the upcoming fetch boundary, the executing PC
+                     * selects the byte. A completed monochrome fetch instead
+                     * exposes NR30's low address bits. Keep RAM and the old
+                     * output nibble intact. */
+                    if (apu->ch3_timer <= 2u)
+                        apu->ch3_sample_byte = gb->io_registers[0x30u + (gb->cpu.pc & 0x0fu)];
+                    else if (gb->model != CUPID_GB_MODEL_CGB && apu->ch3_wave_access_ticks)
+                        apu->ch3_sample_byte = gb->io_registers[0x3au];
+                }
                 apu->ch3_on = false;
             }
             break;
@@ -1278,13 +1290,22 @@ void cupid_gb_apu_on_write(CupidGb *gb, uint8_t off, uint8_t val) {
             apu->ch3_len_en = (val & 0x40u) != 0u;
             trigger = (val & 0x80u) != 0u;
 
+            /* Retrigger sees the active channel before length enabling can
+             * expire it. Keep the subsequent length reload accounting intact. */
+            if (trigger) {
+                cupid_gb_apu_apply_dmg_ch3_retrigger_bug(gb);
+                /* A fetch-boundary trigger reloads the byte after any RAM
+                 * corruption, while the pre-write channel is still active. */
+                if (apu->ch3_on && apu->ch3_timer <= 2u)
+                    apu->ch3_sample_byte = gb->io_registers[0x30u];
+            }
+
             if (!cupid_gb_apu_next_step_clocks_length(apu) && !old_len_en && apu->ch3_len_en) {
                 cupid_gb_apu_clock_length_once_u16(&apu->ch3_len, &apu->ch3_on);
             }
 
             length_reloaded = apu->ch3_len == 0u;
             if (trigger) {
-                cupid_gb_apu_apply_dmg_ch3_retrigger_bug(gb);
                 cupid_gb_apu_trigger_ch3(gb);
                 if (!cupid_gb_apu_next_step_clocks_length(apu) && apu->ch3_len_en &&
                     length_reloaded) {
@@ -1410,11 +1431,13 @@ static void execute_audio_cycles(CupidGb *gb, uint16_t cycles) {
                     }
                     apu->ch3_current_byte = (uint8_t)(apu->ch3_wave_pos >> 1u);
                     {
-                        uint8_t wbyte = gb->io_registers[0x30u + apu->ch3_current_byte];
+                        /* Each nibble clock fetches a complete byte. CPU wave
+                         * writes change RAM without replacing this held value. */
+                        apu->ch3_sample_byte = gb->io_registers[0x30u + apu->ch3_current_byte];
                         if ((apu->ch3_wave_pos & 1u) == 0u) {
-                            apu->ch3_sample = (uint8_t)((wbyte >> 4u) & 0x0fu);
+                            apu->ch3_sample = (uint8_t)(apu->ch3_sample_byte >> 4u);
                         } else {
-                            apu->ch3_sample = (uint8_t)(wbyte & 0x0fu);
+                            apu->ch3_sample = (uint8_t)(apu->ch3_sample_byte & 0x0fu);
                         }
                     }
                     apu->ch3_wave_access_ticks = 1u;

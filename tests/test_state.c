@@ -38,44 +38,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum { IO_HISTORY_BYTES = 2 }; /* Sampled JOYP and retained serial selector. */
+/* Sampled JOYP, serial selection and the CH3 fetch byte precede the SRAM length. */
+enum { IO_HISTORY_BYTES = 3, SRAM_LENGTH_BYTES = 4 };
 
-static void digest_hex(const void *bytes, size_t length, char hex[65]) {
-    uint8_t digest[32];
-    cupid_sha256(bytes, length, digest);
-    for (unsigned i = 0; i < sizeof(digest); ++i) {
-        snprintf(hex + i * 2, 3, "%02x", digest[i]);
-    }
-}
-
-static void test_sha256(void) {
-    const char *messages[] = {"", "abc",
-                              "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"};
-    const char *digests[] = {"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-                             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
-                             "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"};
-    char actual[65];
-    for (unsigned i = 0; i < sizeof(messages) / sizeof(messages[0]); ++i) {
-        digest_hex(messages[i], strlen(messages[i]), actual);
-        assert(strcmp(actual, digests[i]) == 0);
-    }
-    char *million = malloc(1000000);
-    assert(million);
-    memset(million, 'a', 1000000);
-    digest_hex(million, 1000000, actual);
-    assert(strcmp(actual, "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0") == 0);
-    CupidSha256 stream;
-    uint8_t streamed[32], whole[32];
-    cupid_sha256_init(&stream);
-    for (size_t offset = 0; offset < 1000000; offset += 67) {
-        size_t count = 1000000 - offset;
-        cupid_sha256_update(&stream, million + offset, count < 67 ? count : 67);
-    }
-    cupid_sha256_final(&stream, streamed);
-    cupid_sha256(million, 1000000, whole);
-    assert(memcmp(streamed, whole, sizeof(whole)) == 0);
-    free(million);
-}
+#include "test_state_hash.h"
 
 static void prepare(CupidGb *gb, CupidGbModel model, bool boot) {
     uint8_t rom[32768] = {0};
@@ -145,9 +111,10 @@ static size_t v11_hardware_size(const CupidGb *gb, size_t length) {
     enum { ACCESSORY_DESCRIPTOR_BYTES = 8, INFRARED_HISTORY_BYTES = 6, RTC_HISTORY_BYTES = 6 };
 
     /* These fixtures have no attached device. HuC3 keeps its existing IR section. */
-    const size_t tail = IO_HISTORY_BYTES + ACCESSORY_DESCRIPTOR_BYTES + RTC_HISTORY_BYTES +
-                        CUPID_GB_AUDIO_STATE_SIZE + CUPID_GB_DISPLAY_CLOCK_STATE_SIZE +
-                        CUPID_GB_PIXEL_TIMING_STATE_SIZE + CUPID_GB_VRAM_BUS_STATE_SIZE +
+    const size_t tail = SRAM_LENGTH_BYTES + IO_HISTORY_BYTES + ACCESSORY_DESCRIPTOR_BYTES +
+                        RTC_HISTORY_BYTES + CUPID_GB_AUDIO_STATE_SIZE +
+                        CUPID_GB_DISPLAY_CLOCK_STATE_SIZE + CUPID_GB_PIXEL_TIMING_STATE_SIZE +
+                        CUPID_GB_VRAM_BUS_STATE_SIZE +
                         (gb->header.mbc_type == CUPID_GB_HUC3 ? 0 : INFRARED_HISTORY_BYTES);
     assert(length >= tail);
     return length - tail;
@@ -573,7 +540,7 @@ static void test_controller_state_versions(void) {
         assert(!cupid_gb_rumble_enabled(target) && callbacks == 0);
         /* The bank field is an explicit little-endian u64 in the frozen prefix.
          * A legacy writer could never encode bit 3 on this cartridge. */
-        const size_t bank_offset = 128 + 17 + 0x4000 + CUPID_GB_MAX_RAM_SIZE + 0x8000 + 0xa0 +
+        const size_t bank_offset = 128 + 17 + 0x4000 + CUPID_GB_INLINE_RAM_SIZE + 0x8000 + 0xa0 +
                                    0x80 + 0x7f + 160 * 144 * 3 + 2 + 8;
         assert(bytes[bank_offset] == 5);
         bytes[bank_offset] = 13;
@@ -1463,7 +1430,7 @@ static void test_sgb_sample_phase_and_legacy_filter(void) {
     source->apu.output.buf[0] = 1234;
     source->apu.output.buf[1] = -2345;
     state = encode(source, &length);
-    const size_t removed = IO_HISTORY_BYTES + CUPID_GB_AUDIO_STATE_SIZE +
+    const size_t removed = SRAM_LENGTH_BYTES + IO_HISTORY_BYTES + CUPID_GB_AUDIO_STATE_SIZE +
                            CUPID_GB_DISPLAY_CLOCK_STATE_SIZE + CUPID_GB_PIXEL_TIMING_STATE_SIZE +
                            CUPID_GB_VRAM_BUS_STATE_SIZE;
     const size_t audio_offset = length - 8 - removed;

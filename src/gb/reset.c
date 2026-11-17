@@ -23,6 +23,8 @@
 #include "cupid/gb/reset.h"
 
 #include "cartridge_internal.h"
+#include "cupid/gb/camera.h"
+#include "cupid/gb/cartridge.h"
 #include "cupid/gb/gb.h"
 #include "cupid/gb/printer.h"
 #include "cupid/gb/startup.h"
@@ -34,7 +36,7 @@
 
 static bool valid_request(const CupidGb *gb, CupidGbResetKind kind) {
     if (!gb || !gb->loaded || !gb->rom || !gb->rom_size || gb->rom_size > CUPID_GB_MAX_ROM_SIZE ||
-        gb->rom_size > gb->rom_capacity || gb->cartridge_ram_size > CUPID_GB_MAX_RAM_SIZE ||
+        gb->rom_size > gb->rom_capacity || !cupid_gb_cartridge_storage_valid(gb) ||
         gb->model < CUPID_GB_MODEL_DMG_ABC || gb->model > CUPID_GB_MODEL_SGB2 ||
         (kind != CUPID_GB_RESET_HARD && kind != CUPID_GB_RESET_QUICK))
         return false;
@@ -82,12 +84,21 @@ static void restore_clocks(CupidGb *next, const CupidGb *previous) {
      * only the host timestamp is established again after all fallible preparation. */
 }
 
-bool cupid_gb_reset(CupidGb *gb, CupidGbResetKind kind) {
-    if (!valid_request(gb, kind))
+bool cupid_gb_reset_with_allocator(CupidGb *gb, CupidGbResetKind kind, void *(*allocate)(size_t)) {
+    if (!allocate || !valid_request(gb, kind))
         return false;
-    CupidGb *next = calloc(1, sizeof(*next));
+    CupidGb *next = allocate(sizeof(*next));
     if (!next)
         return false;
+    memset(next, 0, sizeof(*next));
+    if (gb->cartridge_ram_heap) {
+        next->cartridge_ram_heap = allocate(gb->cartridge_ram_capacity);
+        if (!next->cartridge_ram_heap) {
+            free(next);
+            return false;
+        }
+        next->cartridge_ram_capacity = gb->cartridge_ram_capacity;
+    }
 
     next->model = gb->model;
     next->rom = gb->rom;
@@ -108,10 +119,13 @@ bool cupid_gb_reset(CupidGb *gb, CupidGbResetKind kind) {
     cupid_gb_cartridge_post_boot(next);
     cupid_gb_cartridge_reset_controls(next);
     restore_clocks(next, gb);
-    if (kind == CUPID_GB_RESET_QUICK || gb->header.has_battery)
+    if (kind == CUPID_GB_RESET_QUICK || gb->header.has_battery) {
         memcpy(next->cartridge_ram, gb->cartridge_ram, sizeof(next->cartridge_ram));
-    else
-        memset(next->cartridge_ram, 0xff, next->cartridge_ram_size);
+        if (next->cartridge_ram_heap)
+            memcpy(next->cartridge_ram_heap, gb->cartridge_ram_heap, gb->cartridge_ram_size);
+    } else {
+        memset(cupid_gb_cartridge_ram(next), 0xff, next->cartridge_ram_size);
+    }
 
     if (next->boot_rom_size)
         cupid_gb_start_boot_rom(next);
@@ -161,10 +175,18 @@ bool cupid_gb_reset(CupidGb *gb, CupidGbResetKind kind) {
     /* Nothing after the time observation can fail. Clock providers must obey the
      * documented non-reentrant observer contract. Rebase without advancing digits. */
     cupid_gb_rtc_bind_cartridge(next);
+    next->camera_host = gb->camera_host;
+    cupid_gb_camera_cancel_request(next);
+    uint8_t *const previous_ram = gb->cartridge_ram_heap;
     *gb = *next;
+    free(previous_ram);
     free(next);
     CupidGbPrinter *printer = cupid_gb_printer_attached(gb);
     if (printer)
         cupid_gb_printer_state_clear(&printer->state, gb->elapsed_cycles);
     return true;
+}
+
+bool cupid_gb_reset(CupidGb *gb, CupidGbResetKind kind) {
+    return cupid_gb_reset_with_allocator(gb, kind, malloc);
 }

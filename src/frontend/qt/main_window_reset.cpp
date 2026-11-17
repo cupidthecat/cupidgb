@@ -45,6 +45,10 @@ bool MainWindow::prepareResetCandidate(CupidEmulator *candidate, ResetWorkflow w
     next.mbc7.motion_x = previous.mbc7.motion_x;
     next.mbc7.motion_y = previous.mbc7.motion_y;
     if (sameStorage) {
+        if (next.cartridge_ram_size != previous.cartridge_ram_size) {
+            reportError("The cartridge RAM population changed during reset.");
+            return false;
+        }
         next.rtc = previous.rtc;
         next.tpp1.status = previous.tpp1.status;
         std::memcpy(next.tpp1.live, previous.tpp1.live, sizeof(next.tpp1.live));
@@ -52,7 +56,12 @@ bool MainWindow::prepareResetCandidate(CupidEmulator *candidate, ResetWorkflow w
         next.tpp1.rtc_base_time = previous.tpp1.rtc_base_time;
         next.huc3 = previous.huc3;
         next.rtc_cycles = configuredMode == previous.rtc_policy.mode ? previous.rtc_cycles : 0;
+        // The native prefix retains the complete inline span, including bytes
+        // beyond a smaller cartridge's connected RAM population.
         std::memcpy(next.cartridge_ram, previous.cartridge_ram, sizeof(next.cartridge_ram));
+        if (next.cartridge_ram_heap)
+            std::memcpy(cupid_gb_cartridge_ram(&next), cupid_gb_cartridge_ram_const(&previous),
+                        next.cartridge_ram_size);
     }
     if (workflow == ResetWorkflow::Quick) {
         // Physical console RAM survives a quick reset even when cartridge assets
@@ -136,6 +145,7 @@ bool MainWindow::resetConsole(CupidGbResetKind kind) {
         reportError("The console could not be reset.");
         return false;
     }
+    cancelCameraCapture();
     resetControllerRumble();
     ++sessionId_;
     rebaseRewindAfterReset(previousCycles);

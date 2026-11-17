@@ -32,7 +32,7 @@
 #include "cupid/gbc/cgb.h"
 
 static bool ordinary_cartridge_ram(const CupidGb *gb) {
-    if (!gb->cartridge_ram_size || gb->cartridge_ram_size > CUPID_GB_MAX_RAM_SIZE)
+    if (!gb->cartridge_ram_size || gb->cartridge_ram_size > CUPID_GB_INLINE_RAM_SIZE)
         return false;
     /* These cartridge windows can expose device registers or generated data. */
     if (gb->header.mbc_type == CUPID_GB_MBC7 || gb->header.mbc_type == CUPID_GB_HUC3 ||

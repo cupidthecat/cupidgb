@@ -36,14 +36,15 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum { IO_HISTORY_BYTES = 2 }; /* Sampled JOYP and retained serial selector. */
+/* Sampled JOYP, serial selection and the CH3 fetch byte precede the SRAM length. */
+enum { IO_HISTORY_BYTES = 3, SRAM_LENGTH_BYTES = 4 };
 
 enum {
     HEADER_BYTES = 128,
     DESCRIPTOR_BYTES = 8,
     V11_BYTES = 300600,
     RTC_BYTES = 6,
-    CURRENT_BYTES = 305088 + IO_HISTORY_BYTES,
+    CURRENT_BYTES = 305088 + IO_HISTORY_BYTES + SRAM_LENGTH_BYTES,
     SGB_BYTES = 10119,
     PIXEL_LINE = 300392,
     PIXEL_X = 300393,
@@ -390,8 +391,8 @@ static size_t descriptor_offset(const Rig *rig, const Blob *blob) {
 }
 
 static size_t pixel_offset(const Rig *rig, const Blob *blob) {
-    return descriptor_offset(rig, blob) - IO_HISTORY_BYTES - CUPID_GB_VRAM_BUS_STATE_SIZE -
-           CUPID_GB_PIXEL_TIMING_STATE_SIZE;
+    return descriptor_offset(rig, blob) - SRAM_LENGTH_BYTES - IO_HISTORY_BYTES -
+           CUPID_GB_VRAM_BUS_STATE_SIZE - CUPID_GB_PIXEL_TIMING_STATE_SIZE;
 }
 
 static CupidGbStateResult load_rig(Rig *rig, const Blob *blob, unsigned api) {
@@ -532,7 +533,7 @@ static Blob legacy_blob(const Rig *rig, const Blob *source, unsigned version) {
     Blob old = copy_blob(source);
     if (version >= 12) {
         const size_t descriptor = descriptor_offset(rig, source);
-        const size_t removed = IO_HISTORY_BYTES + TIMING_BYTES +
+        const size_t removed = SRAM_LENGTH_BYTES + IO_HISTORY_BYTES + TIMING_BYTES +
                                (version < 14 ? CUPID_GB_AUDIO_STATE_SIZE : 0) +
                                (version < 13 ? RTC_BYTES : 0);
         memmove(old.bytes + descriptor - removed, old.bytes + descriptor,

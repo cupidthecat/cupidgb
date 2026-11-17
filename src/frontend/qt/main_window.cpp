@@ -23,6 +23,8 @@
 #include "cheats_window.h"
 #include "main_window_internal.h"
 
+#include "host_camera.h"
+
 MainWindow::MainWindow(bool isolated, bool automated, bool audioCheck,
                        const QString &bootDirectoryOverride, std::optional<int> modelOverride,
                        std::optional<uint64_t> powerOnSeedOverride)
@@ -157,6 +159,8 @@ MainWindow::~MainWindow() {
         controllers_->backend().stop();
     }
     timer_.stop();
+    cancelCameraCapture();
+    hostCamera_.reset();
     saveTimer_.stop();
     audioRefreshTimer_.stop();
     debuggerTimer_.stop();
@@ -625,9 +629,15 @@ bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflo
     const bool liveBattery = sameBattery && romData_ == data;
     const auto loadBattery = [&] {
         QFile battery(save);
-        if (!cupid_gb_battery_size(&candidate->gb) || !battery.exists())
+        size_t maximumSize = cupid_gb_battery_size(&candidate->gb);
+        if (!maximumSize || !battery.exists())
             return true;
-        if (!battery.open(QIODevice::ReadOnly) || battery.size() > 128 * 1024 + 48) {
+        // MBC7 also accepts older saves padded to the header's RAM population.
+        // Other controllers fit their selected SRAM and largest supported clock trailer.
+        if (candidate->gb.header.mbc_type == CUPID_GB_MBC7)
+            maximumSize = std::max(maximumSize,
+                                   cupid_gb_ram_size_from_code(candidate->gb.header.ram_size_code));
+        if (!battery.open(QIODevice::ReadOnly) || battery.size() > qint64(maximumSize)) {
             reportError("Cannot load battery save or its size does not match cartridge RAM: " +
                         save);
             return false;
@@ -718,6 +728,7 @@ bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflo
         candidate->gb.battery_write_generation != emulator_->gb.battery_write_generation;
     if (!sameCartridge && workflow == ResetWorkflow::Open)
         setPrinterConnected(false);
+    commitCameraSession(&candidate->gb, workflow);
     if (emulator_)
         cupid_emulator_shutdown(emulator_.get());
     emulator_ = std::move(candidate);
@@ -876,6 +887,9 @@ void MainWindow::watchBattery() {
 bool MainWindow::closeRom() {
     if (!flushBattery(true) || !stopRecording())
         return false;
+    cancelCameraCapture();
+    hostCamera_.reset();
+    cameraError_.clear();
     resetMotionInput();
     setPrinterConnected(false);
     ++sessionId_;

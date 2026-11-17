@@ -43,6 +43,7 @@ int main(int argc, char **argv) {
     parser.addHelpOption();
     parser.addVersionOption();
     parser.addOption({"smoke-test", "Run isolated frontend workflow checks and exit."});
+    parser.addOption({"smoke-workflow", "Select smoke checks: all, desktop, or storage.", "group"});
     parser.addOption({"audio-check", "Require real audio during --smoke-test."});
     parser.addOption(
         {"boot-directory", "Use boot ROMs from this directory for this session.", "path"});
@@ -62,6 +63,18 @@ int main(int argc, char **argv) {
     parser.process(app);
     const bool smoke = parser.isSet("smoke-test");
     const bool audioCheck = parser.isSet("audio-check");
+    MainWindow::SmokeWorkflow smokeWorkflow = MainWindow::SmokeWorkflow::All;
+    if (parser.isSet("smoke-workflow")) {
+        const QString group = parser.value("smoke-workflow");
+        if (group == "desktop")
+            smokeWorkflow = MainWindow::SmokeWorkflow::Desktop;
+        else if (group == "storage")
+            smokeWorkflow = MainWindow::SmokeWorkflow::Storage;
+        else if (group != "all")
+            parser.showHelp(1);
+        if (!smoke || (audioCheck && smokeWorkflow == MainWindow::SmokeWorkflow::Storage))
+            parser.showHelp(1);
+    }
     const bool bootOverride = parser.isSet("boot-directory");
     const bool seedOverride = parser.isSet("power-on-seed");
     std::optional<uint64_t> powerOnSeedOverride;
@@ -110,6 +123,14 @@ int main(int argc, char **argv) {
     if ((audioCheck && !smoke) || (smoke && (bootOverride || modelOverride || seedOverride)))
         parser.showHelp(1);
     const bool bounded = parser.isSet("run-seconds");
+    double seconds = 0;
+    if (bounded && !smoke) {
+        bool valid = false;
+        seconds = parser.value("run-seconds").toDouble(&valid);
+        if (!valid || !std::isfinite(seconds) || seconds <= 0 || seconds > 86400 ||
+            parser.value("report").isEmpty() || parser.positionalArguments().isEmpty())
+            parser.showHelp(1);
+    }
     QTemporaryDir temporary;
     if (smoke || bounded) {
         if (!temporary.isValid())
@@ -129,18 +150,13 @@ int main(int argc, char **argv) {
                       powerOnSeedOverride);
     window.show();
     if (smoke)
-        return window.smokeTest() ? 0 : 1;
+        return window.smokeTest(smokeWorkflow) ? 0 : 1;
     if (parser.positionalArguments().size() > 1)
         parser.showHelp(1);
     if (!parser.positionalArguments().isEmpty() &&
         !window.openRom(parser.positionalArguments().first()))
         return 1;
     if (bounded) {
-        bool valid = false;
-        const double seconds = parser.value("run-seconds").toDouble(&valid);
-        if (!valid || !std::isfinite(seconds) || seconds <= 0 || seconds > 86400 ||
-            parser.value("report").isEmpty() || parser.positionalArguments().isEmpty())
-            parser.showHelp(1);
         if (parser.isSet("input-trace") && !window.loadInputTrace(parser.value("input-trace")))
             return 1;
         window.beginBoundedRun(seconds, parser.value("report"));

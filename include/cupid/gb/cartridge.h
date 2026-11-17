@@ -32,6 +32,10 @@
 enum { CUPID_GB_ENTRY_POINT = 0x0100 };
 
 size_t cupid_gb_ram_size_from_code(uint8_t code);
+/* Contiguous physical SRAM. NULL is returned only for a NULL instance.
+ * The pointer is borrowed and may change after cartridge loading, reset or state import. */
+uint8_t *cupid_gb_cartridge_ram(CupidGb *gb);
+const uint8_t *cupid_gb_cartridge_ram_const(const CupidGb *gb);
 /* Original-file storage bank for the currently mapped ROM region. */
 size_t cupid_gb_effective_rom_bank(const CupidGb *gb, bool lower_region);
 /* Controller-selected bank before physical ROM address-line aliasing. */

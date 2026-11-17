@@ -41,7 +41,7 @@ typedef enum CupidGbStateResult {
     CUPID_GB_STATE_NO_ROM
 } CupidGbStateResult;
 
-#define CUPID_GB_STATE_VERSION 18u
+#define CUPID_GB_STATE_VERSION 20u
 
 /* Trusted in-memory snapshots may cache the immutable cartridge identity. Initialize
  * once for the current instance and discard the context on cartridge replacement,
@@ -72,6 +72,23 @@ CupidGbStateResult cupid_gb_load_state_with_context(CupidGb *gb, const uint8_t *
  * ROMs, boot ROMs, and save paths are session resources and are never included in state data.
  * Restoring an active boot overlay requires the same boot ROM to be available in the target.
  * The target's current boot-overlay enabled flag need not match the saved flag.
+ * Host camera images and request identities also remain session resources. Saving
+ * a pending device capture writes an idle camera without changing the live request.
+ * A successful import into host-camera mode clears saved busy/countdown state after
+ * validation, retains the receiving image and rejects older device completions.
+ * Generated captures preserve their ordinary countdown when no provider is attached.
+ * The camera wire section and its busy/countdown validation remain unchanged.
+ * Version 20 appends the retained CH3 fetch byte, a little-endian uint32 SRAM size,
+ * and SRAM bytes beyond the fixed 128 KiB prefix after the version 18 serial selector.
+ * The receiving cartridge determines storage geometry; a file cannot resize its SRAM.
+ * Two earlier version 19 layouts remain readable: fetch-byte-only for cartridges up to
+ * 128 KiB, and SRAM-size/tail without the fetch byte. Exact lengths and validated accessory
+ * descriptors distinguish them. Only version 20 is written. Public versions 2 through 18
+ * retain their meanings and require cartridge SRAM no larger than 128 KiB.
+ * The fetch byte belongs to guest hardware, separate from wave RAM and output reconstruction.
+ * Files without it duplicate their decoded raw sample nibble into both halves. This preserves
+ * the known sample without borrowing the receiver's history or guessing a missing fetch.
+ * Live loads establish that projection before executing the saved pending audio clocks.
  * Version 18 appends the retained serial-clock selector after the version 17 hardware tail.
  * Reset selects the slow clock independently of SC readback. An SC write selects a new tap;
  * later compatibility-mode changes leave it intact. Older files project the absent selector
@@ -79,6 +96,7 @@ CupidGbStateResult cupid_gb_load_state_with_context(CupidGb *gb, const uint8_t *
  * A legacy CGB state with SC bit 1 clear can now read that retained bit after a mode change;
  * the older engine recomputed it on reads. Import does not alter the recorded byte or issue
  * a control write. Missing selector history cannot reproduce an earlier firmware write.
+ * Version 17 retains the fetched tile-map row across mid-scanline scroll writes.
  * Version 16 gives TPP1 an independent mapped ROM-bank cache. Control readback is
  * zero immediately after native reset while bank 1 remains mapped until a control
  * write. Older imports reconstruct the mapping from their TPP1 control register.
@@ -118,7 +136,7 @@ CupidGbStateResult cupid_gb_load_state_with_context(CupidGb *gb, const uint8_t *
  * STOP access gates, the palette-port release edge, object fetch stage, pending
  * JOYP row release, and presentation events. Applicable SGB, MMM01, MBC7, Camera,
  * TPP1, and HuC3 sections are included.
- * Versions 2 through 17 remain readable. Versions 2 through 13 receive deterministic
+ * Versions 2 through 13 receive deterministic
  * settled-channel defaults for missing reconstruction history; queued PCM, output rate, rational
  * credit and the disabled-filter flag survive import. Retired integer mixer/filter history is
  * validated but cannot reproduce the new reconstruction waveform exactly. Versions 2 through 12 use
@@ -135,7 +153,7 @@ CupidGbStateResult cupid_gb_load_state_with_context(CupidGb *gb, const uint8_t *
  */
 size_t cupid_gb_state_size(const CupidGb *gb);
 /* Output and written-result storage must be separate from each other, the core,
- * ROM, recognized printer allocation and any supplied trusted context. Capture
+ * ROM, cartridge SRAM, recognized printer allocation and any supplied trusted context. Capture
  * does not advance the printer or consume its pending elapsed-clock interval. */
 CupidGbStateResult cupid_gb_save_state(const CupidGb *gb, uint8_t *data, size_t capacity,
                                        size_t *written);

@@ -30,13 +30,16 @@ extern "C" {
 #include "cupid/gb/timer.h"
 }
 
-bool MainWindow::smokeTest() {
+bool MainWindow::smokeTest(SmokeWorkflow workflow) {
     QTemporaryDir directory;
     if (!directory.isValid())
         return smokeFailure(__FILE__, __LINE__);
+    if (workflow == SmokeWorkflow::Storage)
+        return largeCartridgeRamSmokeTest(directory.path());
     if (!playbackSmokeTest(directory.path()) || !startupSmokeTest(directory.path()) ||
         !rtcSmokeTest(directory.path()) || !audioPolicySmokeTest(directory.path()) ||
-        !resetSmokeTest(directory.path()))
+        !resetSmokeTest(directory.path()) || !cameraSmokeTest(directory.path()) ||
+        (workflow == SmokeWorkflow::All && !largeCartridgeRamSmokeTest(directory.path())))
         return smokeFailure(__FILE__, __LINE__);
     QByteArray rom(32768, char(0));
     rom[0x100] = char(0x18);
@@ -75,11 +78,20 @@ bool MainWindow::smokeTest() {
         QApplication::sendEvent(this, &drop);
         return drop.isAccepted();
     };
+    // The counter includes earlier workflows. A new cartridge's first interval
+    // must queue its samples without starting another native audio stream.
+    const uint64_t primesBeforeOpen = audioPrimeEvents_;
     if (!openRom(path) || !runFrame() || image_.size() != QSize(160, 144))
         return smokeFailure(__FILE__, __LINE__);
     if (audioCheck_ && (!audio_ || !audioPriming_ || audioBuffer_->bytesAvailable() <= 0 ||
-                        audioPrimeEvents_ != 0))
+                        audioPrimeEvents_ != primesBeforeOpen)) {
+        qCritical("Initial audio check failed: sink=%d priming=%d queued=%lld primes=%llu "
+                  "previous=%llu",
+                  bool(audio_), audioPriming_,
+                  audioBuffer_ ? qlonglong(audioBuffer_->bytesAvailable()) : -1,
+                  qulonglong(audioPrimeEvents_), qulonglong(primesBeforeOpen));
         return smokeFailure(__FILE__, __LINE__);
+    }
     const auto beforeInvalidBoot = captureState();
     settings_.setValue("emulation/bootDirectory", directory.filePath("missing-boot-directory"));
     if (openRom(path) || captureState() != beforeInvalidBoot)

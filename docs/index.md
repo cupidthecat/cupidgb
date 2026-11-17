@@ -7,6 +7,7 @@ CupidGB emulates Game Boy and Game Boy Color hardware with a C core and a Qt des
 | [Build and installation](building.md) | Dependencies, Windows and Linux builds, Release IPO, deployment, core-only builds, and sanitizers |
 | [User guide](user-guide.md) | Opening cartridges, controls, settings, display, audio, capture, and save workflows |
 | [Controllers](controllers.md) | Device selection, capture, mappings, dead zones, player routing, focus, native menus and cartridge feedback |
+| [Camera cartridges](host-camera.md) | Default-camera capture, image conversion, request lifetime, generated input and save-state behavior |
 | [Hardware support](hardware.md) | Models, startup, cartridge controllers, hardware subsystems, and known limits |
 | [Debugger and inspectors](debugging.md) | CPU execution controls, breakpoints, memory watchpoints, symbols, memory editing, and graphics views |
 | [Cheats and memory search](cheats.md) | Codes, banked rules, persistence, physical memory searches, and host integration |
@@ -30,7 +31,9 @@ CupidGB emulates Game Boy and Game Boy Color hardware with a C core and a Qt des
 | [Cartridge storage validation](validation-cartridge-storage.md) | Extended bank populations, failed-load preservation, mapper model coverage and allocation lifetime |
 | [Desktop clock validation](validation-host-clock.md) | Independent host-clock measurements, pacing deadlines and native audio readiness |
 | [Wave-memory validation](validation-wave-retrigger.md) | CH3 source and destination corruption, model controls, guest stores and native continuation |
+| [Wave fetch-history validation](validation-wave-history.md) | Isolated CH3 fetch and length-expiry comparisons, guest PCM reads and the earlier version 19 layout |
 | [Serial selection validation](validation-serial-selection.md) | Retained divider selection, compatibility-mode readback and native version 18 migration |
 | [Hardware integration validation](validation-hardware-selection.md) | Combined hardware gates, state interchange, mapper limits, native workflows and Windows gameplay |
+| [Storage, wave and camera validation](validation-storage-wave.md) | Combined SRAM ownership, native version 20, NR30 disconnect behavior and camera timeline checks |
 
 Start with the build guide if you have a source checkout. For an executable that already runs, use the user guide. A result in the validation record applies to the stated revision, inputs, settings, and duration; it does not qualify every later build.

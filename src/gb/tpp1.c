@@ -21,6 +21,7 @@
  */
 
 #include "cupid/gb/tpp1.h"
+#include "cupid/gb/cartridge.h"
 #include "rtc_internal.h"
 
 #include <string.h>
@@ -63,16 +64,18 @@ uint8_t cupid_gb_tpp1_read(const CupidGb *gb, uint16_t address) {
     }
     if (device->mode == RTC_REGISTERS)
         return device->latched[port];
-    return gb->cartridge_ram_size ? gb->cartridge_ram[ram_offset(gb, address)] : 0xffu;
+    return gb->cartridge_ram_size ? cupid_gb_cartridge_ram_const(gb)[ram_offset(gb, address)]
+                                  : 0xffu;
 }
 
 void cupid_gb_tpp1_write_window(CupidGb *gb, uint16_t address, uint8_t value) {
     CupidGbTpp1 *device = &gb->tpp1;
     if (device->mode == WRITE_SRAM && gb->cartridge_ram_size) {
         const size_t offset = ram_offset(gb, address);
-        if (gb->header.has_battery && gb->cartridge_ram[offset] != value)
+        uint8_t *const ram = cupid_gb_cartridge_ram(gb);
+        if (gb->header.has_battery && ram[offset] != value)
             ++gb->battery_write_generation;
-        gb->cartridge_ram[offset] = value;
+        ram[offset] = value;
     } else if (device->mode == RTC_REGISTERS) {
         device->latched[address & 3u] = value;
     }

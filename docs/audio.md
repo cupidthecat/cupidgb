@@ -94,11 +94,15 @@ CH4 and the monochrome pulse paths still use simpler envelope counters. Their im
 
 CH3 reads 16 bytes of wave RAM as 32 four-bit samples. NR32 selects mute, full level, half level or quarter level. Each ordinary sample interval is `2 * (2048 - frequency)` base T-cycles.
 
-A trigger starts a fetch sequence with startup delay. `ch3_sample` is the held output nibble, not an immediate read of wave RAM. The implementation tracks the fetched byte, sample position, startup state, access window and pending frequency change. On the color path, an active frequency change can wait for the next fetch before replacing the active period source.
+A trigger starts a fetch sequence with startup delay. `ch3_sample_byte` retains the full byte read by each active sample fetch, including the second nibble of a byte. `ch3_sample` retains the selected four-bit sample. A trigger with an enabled DAC selects the retained byte's high nibble. Writing wave RAM between a fetch and a trigger does not replace that held byte. On the color path, an active frequency change can wait for the next fetch before replacing the active period source.
+
+An active trigger in the final two clocks before a fetch refreshes the retained byte from wave RAM byte zero after any retrigger corruption, before newly enabled length can expire the channel. The following length reload and startup delay keep their existing order. Version 20 stores the fetched byte separately from RAM and output reconstruction. The version 19 wave-history layout also retains it. Versions 2 through 18 and the version 19 SRAM layout duplicate the saved sample nibble because the missing half of the fetch is unknown. See [wave fetch history validation](validation-wave-history.md).
 
 While CH3 is active, CPU wave RAM accesses alias the current fetched byte. Monochrome hardware additionally restricts access to the modeled fetch window; a blocked read returns `0xff` and a blocked write does nothing. Color hardware uses its own access path without that monochrome window restriction. When the channel is inactive, the addressed wave RAM byte is available normally.
 
-Monochrome retriggering near a fetch can corrupt wave RAM. The current implementation has a bounded corruption model, but wave-bus timing and model/revision differences remain incomplete. Do not generalize a passing waveform test to every retrigger or access-conflict case.
+An active NR30 disconnect in the final two base clocks before a fetch refreshes the retained byte from wave RAM using the executing PC's low four bits. On monochrome hardware, a disconnect just after a fetch instead uses NR30's low address bits. These changes preserve wave RAM and the already selected raw sample. Repeating the disconnect after the channel becomes inactive does not replace the byte again.
+
+Monochrome retriggering near a fetch can corrupt wave RAM. The current implementation has a bounded corruption model, but broader wave-bus timing and model/revision differences remain incomplete. The [combined validation record](validation-storage-wave.md) covers the qualified NR30 boundaries. Inactive-channel fetch behavior and other possible latch writers remain open; these checks do not establish every retrigger or access-conflict case.
 
 ## Noise channel
 
@@ -181,7 +185,7 @@ The APU regression target covers DIV clock/reset behavior, power transitions, le
 With the relevant targets built, run:
 
 ```sh
-ctest --test-dir build --output-on-failure -R 'cupidgb_(apu|wave_retrigger|audio_synthesis|audio_filter|audio_state|audio_clock|state|audio_converter|audio_buffer|turbo_audio_window|wave_recorder|qt_workflows)$'
+ctest --test-dir build --output-on-failure -R 'cupidgb_(apu|wave_retrigger|wave_history|wave_history_state|audio_synthesis|audio_filter|audio_state|audio_clock|state|audio_converter|audio_buffer|turbo_audio_window|wave_recorder|qt_workflows)$'
 ```
 
 Qt-dependent targets require a frontend-enabled build. The ordinary offscreen workflow test does not prove that a real audio device played sound. Native audio smoke checks, device changes and sustained gameplay belong in the platform validation described in [testing](testing.md).

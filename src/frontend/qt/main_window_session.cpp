@@ -21,6 +21,7 @@
  */
 
 #include "main_window_internal.h"
+#include "rewind_compression.h"
 
 #include <QScopeGuard>
 
@@ -293,6 +294,7 @@ bool MainWindow::restoreState(const QByteArray &bytes, bool reportFailure, bool 
         return false;
     }
     ++timelineId_;
+    cancelCameraCapture();
     resetControllerRumble();
     controllerPlayerCount_ =
         cupid_gb_sgb_active(&emulator_->gb) ? emulator_->gb.sgb.player_count : 1;
@@ -506,7 +508,7 @@ void MainWindow::rememberFrame() {
     HostElapsedTimer captureTimer;
     captureTimer.start();
     const QByteArray state = captureState(false, true);
-    QByteArray compressed = state.isEmpty() ? QByteArray{} : qCompress(state, 1);
+    QByteArray compressed = CupidRewind::compressSnapshot(state);
     if (compressed.isEmpty()) {
         rewindFailed_ = true;
         statusBar()->showMessage("Rewind disabled: cannot capture emulator state");

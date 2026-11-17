@@ -44,6 +44,7 @@
 
 extern "C" {
 #include "cupid/core/emulator.h"
+#include "cupid/gb/cartridge.h"
 #include "cupid/gb/cheats.h"
 #include "cupid/gb/debugger.h"
 #include "cupid/gb/reset.h"
@@ -68,6 +69,7 @@ class PrinterWindow;
 class CheatsWindow;
 struct CupidGbPrinter;
 class PaletteLibrary;
+class HostCamera;
 
 class MainWindow final : public QMainWindow {
   public:
@@ -77,7 +79,8 @@ class MainWindow final : public QMainWindow {
                         std::optional<uint64_t> powerOnSeedOverride = std::nullopt);
     ~MainWindow() override;
     bool openRom(const QString &path);
-    bool smokeTest();
+    enum class SmokeWorkflow { All, Desktop, Storage };
+    bool smokeTest(SmokeWorkflow workflow = SmokeWorkflow::All);
     void beginBoundedRun(double seconds, const QString &reportPath);
     bool loadInputTrace(const QString &path);
 
@@ -135,6 +138,10 @@ class MainWindow final : public QMainWindow {
     bool flushBattery(bool forceWrite = false);
     bool closeRom();
     enum class ResetWorkflow { Open, Normal, Quick, Reload };
+    void queueCameraCapture(CupidGb *gb, uint64_t request);
+    void cancelCameraCapture();
+    void commitCameraSession(CupidGb *candidate, ResetWorkflow workflow);
+    bool cameraSmokeTest(const QString &directory);
     bool restart();
     bool quickReset();
     bool resetCartridge(ResetWorkflow workflow);
@@ -142,6 +149,7 @@ class MainWindow final : public QMainWindow {
     bool prepareResetCandidate(CupidEmulator *candidate, ResetWorkflow workflow, bool sameStorage);
     bool prepareResetSymbols(std::unique_ptr<CupidGbDebugger> &symbols);
     bool resetSmokeTest(const QString &directory);
+    bool largeCartridgeRamSmokeTest(const QString &directory);
     bool resetInputSmokeTest(const QString &directory);
     bool resetMenuInputSmokeTest(const QString &directory);
     bool resetAudioSmokeTest(const QString &directory);
@@ -242,6 +250,8 @@ class MainWindow final : public QMainWindow {
     const std::optional<int> modelOverride_;
     const std::optional<uint64_t> powerOnSeedOverride_;
     std::unique_ptr<CupidEmulator> emulator_;
+    std::unique_ptr<HostCamera> hostCamera_;
+    QString cameraError_;
     using CheatCollection = std::unique_ptr<CupidGbCheats, decltype(&cupid_gb_cheats_destroy)>;
     CheatCollection cheats_{nullptr, cupid_gb_cheats_destroy};
     CheatsWindow *cheatsWindow_ = nullptr;

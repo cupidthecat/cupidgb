@@ -307,8 +307,11 @@ static void test_absent_sram_bus(CupidGb *gb) {
 }
 
 static void test_supported_sram_populations(CupidGb *gb, uint8_t *rom, size_t length) {
-    static const unsigned populations[] = {0, 1, 2, 4, 8, 16};
-    static const uint16_t addresses[] = {0xa000, 0xa123, 0xbfff};
+    static const unsigned populations[] = {0, 1, 2, 4, 8, 16, 32, 64, 128, 256};
+    static const uint16_t addresses[] = {0xa000, 0xa001, 0xa123, 0xafff, 0xb000, 0xbfff};
+
+    enum { SLOTS = sizeof(addresses) / sizeof(addresses[0]) };
+
     for (unsigned code = 0; code < sizeof(populations) / sizeof(populations[0]); ++code) {
         const unsigned banks = populations[code];
         rom[0x152] = (uint8_t)code;
@@ -319,18 +322,24 @@ static void test_supported_sram_populations(CupidGb *gb, uint8_t *rom, size_t le
         assert(gb->ram_bank_count == banks);
         assert(gb->cartridge_ram_size == (size_t)banks * RAM_BANK_SIZE);
         assert(cupid_gb_battery_size(gb) == (size_t)banks * RAM_BANK_SIZE + 20);
+        const bool large = gb->cartridge_ram_size > CUPID_GB_INLINE_RAM_SIZE;
+        assert((gb->cartridge_ram_heap != NULL) == large);
+        assert(gb->cartridge_ram_capacity == (large ? gb->cartridge_ram_size : 0));
+        assert(cupid_gb_cartridge_ram(gb) == (large ? gb->cartridge_ram_heap : gb->cartridge_ram));
+        for (size_t offset = 0; offset < gb->cartridge_ram_size; ++offset)
+            assert(cupid_gb_cartridge_ram_const(gb)[offset] == 0xff);
         if (!banks) {
             test_absent_sram_bus(gb);
             continue;
         }
 
-        uint8_t expected[16][3] = {{0}};
+        uint8_t expected[256][SLOTS] = {{0}};
         command(gb, 3);
         for (unsigned bank = 0; bank < banks; ++bank) {
             cupid_gb_write_u8(gb, 0x2002, (uint8_t)bank);
-            for (unsigned slot = 0; slot < 3; ++slot) {
+            for (unsigned slot = 0; slot < SLOTS; ++slot) {
                 assert(cupid_gb_read_bus_u8(gb, addresses[slot]) == 0xff);
-                expected[bank][slot] = (uint8_t)(0x80u | slot << 5u | bank);
+                expected[bank][slot] = (uint8_t)(bank * 73u + slot * 11u + 0x23u);
                 cupid_gb_write_u8(gb, addresses[slot], expected[bank][slot]);
             }
         }
@@ -341,7 +350,7 @@ static void test_supported_sram_populations(CupidGb *gb, uint8_t *rom, size_t le
             command(gb, 0);
             assert(cupid_gb_read_u8(gb, 0xbffe) == bank);
             command(gb, 2);
-            for (unsigned slot = 0; slot < 3; ++slot) {
+            for (unsigned slot = 0; slot < SLOTS; ++slot) {
                 const uint8_t value = expected[bank % banks][slot];
                 assert(cupid_gb_read_bus_u8(gb, addresses[slot]) == value);
                 cupid_gb_write_u8(gb, addresses[slot], (uint8_t)~value);
@@ -352,11 +361,15 @@ static void test_supported_sram_populations(CupidGb *gb, uint8_t *rom, size_t le
 
         /* Writes through every raw latch value must change only its physical bank. */
         for (unsigned bank = 0; bank < 256; ++bank) {
-            const unsigned slot = bank % 3;
+            const unsigned slot = bank % SLOTS;
             const uint8_t value = (uint8_t)(0x5au ^ bank);
             command(gb, 3);
             cupid_gb_write_u8(gb, 0x7002, (uint8_t)bank);
+            const uint64_t generation = gb->battery_write_generation;
+            const bool changed = expected[bank % banks][slot] != value;
             cupid_gb_write_u8(gb, addresses[slot], value);
+            cupid_gb_write_u8(gb, addresses[slot], value);
+            assert(gb->battery_write_generation == generation + changed);
             expected[bank % banks][slot] = value;
             assert(cupid_gb_read_bus_u8(gb, addresses[slot]) == value);
             command(gb, 0);
@@ -364,10 +377,17 @@ static void test_supported_sram_populations(CupidGb *gb, uint8_t *rom, size_t le
             command(gb, 2);
             for (unsigned physical = 0; physical < banks; ++physical) {
                 cupid_gb_write_u8(gb, 0x0002, (uint8_t)physical);
-                for (unsigned check = 0; check < 3; ++check)
+                for (unsigned check = 0; check < SLOTS; ++check)
                     assert(cupid_gb_read_bus_u8(gb, addresses[check]) == expected[physical][check]);
             }
         }
+    }
+    static const uint8_t absent_codes[] = {10, 255};
+    for (unsigned entry = 0; entry < sizeof(absent_codes); ++entry) {
+        rom[0x152] = absent_codes[entry];
+        assert(cupid_gb_load_rom(gb, rom, length));
+        assert(!gb->cartridge_ram_heap && !gb->cartridge_ram_capacity);
+        test_absent_sram_bus(gb);
     }
 }
 
@@ -442,9 +462,6 @@ int main(void) {
         test_clock_and_battery(gb);
         test_state_restore(gb);
         test_clock_commands_and_motor_storage(gb);
-        rom[0x152] = 6; /* 256 KiB exceeds the current core SRAM capacity. */
-        assert(!cupid_gb_load_rom(gb, rom, length));
-        assert(cupid_gb_read_u8(gb, 0x4000) == 7 && gb->tpp1.mode == 5);
         rom[0x152] = 0;
         rom[0x153] = 0;
         assert(cupid_gb_load_rom(gb, rom, length));

@@ -25,6 +25,10 @@
 #include <cstring>
 #include <stdexcept>
 
+extern "C" {
+#include "cupid/gb/cartridge.h"
+}
+
 void CheatSearch::reset() {
     previous_.clear();
     candidates_.clear();
@@ -57,7 +61,8 @@ void CheatSearch::filter(const CupidGb &gb, CheatSearchType type, CheatSearchCon
     candidates_.resize(retained);
     std::memcpy(previous_.data(), gb.work_ram, workRamSize_);
     if (cartridgeRamSize_)
-        std::memcpy(previous_.data() + workRamSize_, gb.cartridge_ram, cartridgeRamSize_);
+        std::memcpy(previous_.data() + workRamSize_, cupid_gb_cartridge_ram_const(&gb),
+                    cartridgeRamSize_);
     std::memcpy(previous_.data() + workRamSize_ + cartridgeRamSize_, gb.high_ram,
                 sizeof(gb.high_ram));
 }
@@ -98,7 +103,7 @@ const uint8_t *CheatSearch::address(const CupidGb &gb, size_t offset) const {
         return gb.work_ram + offset;
     offset -= workRamSize_;
     if (offset < cartridgeRamSize_)
-        return gb.cartridge_ram + offset;
+        return cupid_gb_cartridge_ram_const(&gb) + offset;
     return gb.high_ram + offset - cartridgeRamSize_;
 }
 

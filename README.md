@@ -35,9 +35,11 @@ Emulation > Controllers selects devices and configures buttons, axes, hats, play
 
 Battery data uses `.sav` beside the cartridge. State slots use `.s0` through `.s9`, with the zero key selecting slot 10. Archive storage names include the archive extension, such as `game.zip.sav`. Settings offers system-time or Accurate emulated-time policies for supported [cartridge clocks](docs/rtc.md).
 
-New states use CupidGB native version 18 and retain hardware, peripheral, audio reconstruction, display synchronization, pixel-fetch, VRAM read and serial clock-selection history. Versions 2 through 17 remain loadable with explicit defaults for missing history. Desktop loads keep current listening settings. File > Recover Battery from Older State can export supported battery data from version 1. See [save states and rewind](docs/save-states.md) for compatibility and backup guidance.
+New states use CupidGB native version 20 and retain hardware, peripheral, audio reconstruction, display synchronization, pixel-fetch, VRAM read, serial clock-selection and wave fetch history, together with the cartridge's complete SRAM. Older formats remain loadable when they contain the storage required by the receiving cartridge. Desktop loads keep current listening settings. File > Recover Battery from Older State can export supported battery data from version 1. See [save states and rewind](docs/save-states.md) for compatibility and backup guidance.
 
 Audio settings include Accurate, waveform-preserving and disabled high-pass filtering, optional interference and individual channel toggles. [The audio guide](docs/audio.md) explains how these controls affect playback and recording.
+
+Camera cartridges can request an in-memory capture from the system default camera. Capture starts at the guest's first shutter request, and a failed request retains the previous image. Host images stay outside save files and rewind history. See [Camera cartridges](docs/host-camera.md) for conversion, device lifetime and validation limits.
 
 Physical controller/motion qualification, advanced debugger commands, paired cable sessions and other accessories, custom cheat expressions, state interchange, individual hardware revisions, uncommon cartridge behavior, and advanced display/audio features remain incomplete. [The parity checklist](docs/parity.md) records the full scope.
 

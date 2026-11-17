@@ -171,6 +171,7 @@ bool MainWindow::writeSearchMemory(const std::function<bool(CupidGb &)> &operati
     if (!operation(emulator_->gb))
         return false;
     ++timelineId_;
+    cancelCameraCapture();
     resetDebuggerTimeline();
     resetRewind();
     rememberFrame();

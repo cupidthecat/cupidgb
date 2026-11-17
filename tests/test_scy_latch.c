@@ -21,6 +21,7 @@
  */
 
 #include "../src/gb/display_clock.h"
+#include "../src/gb/vram_bus.h"
 
 #include "cupid/common/sha256.h"
 #include "cupid/gb/ppu.h"
@@ -30,6 +31,15 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
+
+enum {
+    HEADER_BYTES = 128,
+    ACCESSORY_DESCRIPTOR_BYTES = 8,
+    INPUT_SAMPLE_BYTES = 1,
+    SERIAL_CLOCK_BYTES = 1,
+    WAVE_HISTORY_BYTES = 1,
+    SRAM_LENGTH_BYTES = 4
+};
 
 typedef struct Fixture {
     CupidGb *gb;
@@ -122,7 +132,9 @@ static void test_split_fetch(bool color, bool compatibility, bool fast, bool win
 }
 
 static void resign_state(uint8_t *bytes, size_t length) {
-    cupid_sha256_parts(bytes, 96, bytes + 128, length - 128, bytes + 96);
+    for (unsigned index = 0; index < 4; ++index)
+        bytes[12 + index] = (uint8_t)(length >> (index * 8u));
+    cupid_sha256_parts(bytes, 96, bytes + HEADER_BYTES, length - HEADER_BYTES, bytes + 96);
 }
 
 static void test_snapshot(bool compatibility, bool fast, bool changed) {
@@ -157,14 +169,18 @@ static void test_snapshot(bool compatibility, bool fast, bool changed) {
 #if CUPID_GB_STATE_VERSION >= 17
     /* The preceding formats require a zero reserved byte. Their missing row
      * latch is reconstructed from the saved registers, before commit. */
-    const size_t latch_offset = size - 8u - 2u - 10u - 1u;
+    assert(source->gb->cartridge_ram_size <= CUPID_GB_INLINE_RAM_SIZE);
+    const size_t descriptor_offset = size - ACCESSORY_DESCRIPTOR_BYTES;
+    const size_t latch_offset = descriptor_offset - SRAM_LENGTH_BYTES - WAVE_HISTORY_BYTES -
+                                SERIAL_CLOCK_BYTES - INPUT_SAMPLE_BYTES -
+                                CUPID_GB_VRAM_BUS_STATE_SIZE - 1u;
     const uint8_t new_latch = bytes[latch_offset];
     assert(new_latch == 7);
-    /* V16 keeps sampled input but has no serial selector before the descriptor. */
-    const size_t v16_size = size - 1u;
-    memmove(bytes + v16_size - 8u, bytes + size - 8u, 8u);
-    for (unsigned index = 0; index < 4; ++index)
-        bytes[12 + index] = (uint8_t)(v16_size >> (index * 8u));
+    /* V16 retains sampled input but predates serial selection, fetch history and SRAM length. */
+    const size_t removed = SERIAL_CLOCK_BYTES + WAVE_HISTORY_BYTES + SRAM_LENGTH_BYTES;
+    memmove(bytes + descriptor_offset - removed, bytes + descriptor_offset,
+            ACCESSORY_DESCRIPTOR_BYTES);
+    const size_t v16_size = size - removed;
     bytes[8] = 16;
     bytes[latch_offset] = 0;
     resign_state(bytes, v16_size);
@@ -181,17 +197,17 @@ static void test_snapshot(bool compatibility, bool fast, bool changed) {
     /* V15 used the same pixel record but had no trailing input-sample byte. */
     bytes[8] = 15;
     bytes[latch_offset] = 0;
-    memmove(bytes + v16_size - 9u, bytes + v16_size - 8u, 8u);
-    const size_t old_size = v16_size - 1u;
-    for (unsigned index = 0; index < 4; ++index)
-        bytes[12 + index] = (uint8_t)(old_size >> (index * 8u));
-    resign_state(bytes, old_size);
-    assert(cupid_gb_load_state(restored->gb, bytes, old_size) == CUPID_GB_STATE_OK);
+    const size_t v16_descriptor = v16_size - ACCESSORY_DESCRIPTOR_BYTES;
+    memmove(bytes + v16_descriptor - INPUT_SAMPLE_BYTES, bytes + v16_descriptor,
+            ACCESSORY_DESCRIPTOR_BYTES);
+    const size_t v15_size = v16_size - INPUT_SAMPLE_BYTES;
+    resign_state(bytes, v15_size);
+    assert(cupid_gb_load_state(restored->gb, bytes, v15_size) == CUPID_GB_STATE_OK);
     assert(restored->gb->pixel_timing.fetch_y == (changed ? 8 : 7));
     bytes[latch_offset] = 255;
-    resign_state(bytes, old_size);
+    resign_state(bytes, v15_size);
     memcpy(before, restored->gb, sizeof(*before));
-    assert(cupid_gb_load_state(restored->gb, bytes, old_size) == CUPID_GB_STATE_INVALID);
+    assert(cupid_gb_load_state(restored->gb, bytes, v15_size) == CUPID_GB_STATE_INVALID);
     assert(memcmp(before, restored->gb, sizeof(*before)) == 0);
     free(before);
 #endif

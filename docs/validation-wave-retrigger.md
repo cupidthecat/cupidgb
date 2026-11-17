@@ -20,11 +20,11 @@ The profiles are DMG, the existing DMG0 compatibility profile, Pocket, SGB, SGB2
 
 The fixture frequency is 0x7f9. The initial fetch occurs after twenty base clocks and later fetches are fourteen clocks apart. SGB uses 4,295,454 base clocks per second; the other profiles use 4,194,304. The digital fetch schedule is expressed in those clocks. Guest instruction durations also account for CGB double speed.
 
-The native tests capture at safe instruction boundaries. A restore made before the store must reproduce the mutation once. A restore made after the store must retain the changed source and destination bytes. Ordinary restores compare serialized state and queued PCM. Live restores retain the receiving audio queue and settings while checking the restored guest state. The wave-memory correction adds no serialized fields. The integrated build uses version 18 for the separate [serial-selector correction](validation-serial-selection.md).
+The native tests capture at safe instruction boundaries. A restore made before the store must reproduce the mutation once. A restore made after the store must retain the changed source and destination bytes. Ordinary restores compare serialized state and queued PCM. Live restores retain the receiving audio queue and settings while checking the restored guest state. The wave-memory correction added no serialized fields. Its verified checkpoint used version 18 for the separate [serial-selector correction](validation-serial-selection.md). The later [retained fetch-byte correction](validation-wave-history.md) introduced the version 19 wave-history development layout. The [combined storage, wave and camera integration](validation-storage-wave.md) uses version 20 and has its own validation record.
 
 ## Validation status
 
-The integrated Release builds passed on 2026-11-17 with IPO, native state hashing, and one compile job. Windows passed 78/78 CTest targets, Linux passed 76/76, and the Linux AddressSanitizer/UndefinedBehaviorSanitizer build passed 56/56. The wave-memory target completed every case listed above on all three configurations.
+The version 18 checkpoint's integrated Release builds passed on 2026-11-17 with IPO, native state hashing, and one compile job. Windows passed 78/78 CTest targets, Linux passed 76/76, and the Linux AddressSanitizer/UndefinedBehaviorSanitizer build passed 56/56. The wave-memory target completed every case listed above on all three configurations.
 
 | Check | Status |
 | --- | --- |

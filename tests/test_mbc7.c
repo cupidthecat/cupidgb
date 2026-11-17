@@ -33,7 +33,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum { IO_HISTORY_BYTES = 2 }; /* Sampled JOYP and retained serial selector. */
+/* Sampled JOYP, serial selection and the CH3 fetch byte precede the SRAM length. */
+enum { IO_HISTORY_BYTES = 3, SRAM_LENGTH_BYTES = 4 };
 
 enum {
     PORT = 0xa487, /* Address aliases omit bits 8–11 and 0–3. */
@@ -183,7 +184,7 @@ static void test_resume(CupidGb *first, CupidGb *second) {
     shift(first, 0x6e, 8);
     const size_t size = cupid_gb_state_size(first);
     /* Controller, receiver, clock and audio history precede the empty device descriptor. */
-    assert(size == IO_HISTORY_BYTES + V4_SIZE + 8 + 28 + 6 + RTC_HISTORY_BYTES +
+    assert(size == SRAM_LENGTH_BYTES + IO_HISTORY_BYTES + V4_SIZE + 8 + 28 + 6 + RTC_HISTORY_BYTES +
                        CUPID_GB_AUDIO_STATE_SIZE + CUPID_GB_DISPLAY_CLOCK_STATE_SIZE +
                        CUPID_GB_PIXEL_TIMING_STATE_SIZE + CUPID_GB_VRAM_BUS_STATE_SIZE + 8);
     uint8_t *saved = malloc(size), *restored = malloc(size);

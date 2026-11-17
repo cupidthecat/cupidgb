@@ -23,6 +23,7 @@
 #include "cupid/gb/reset.h"
 
 #include "../src/gb/audio_state.h"
+#include "../src/gb/cartridge_internal.h"
 #include "../src/gb/display_clock.h"
 #include "../src/gb/printer_internal.h"
 #include "../src/gb/vram_bus.h"
@@ -41,7 +42,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum { IO_HISTORY_BYTES = 2 }; /* Sampled JOYP and retained serial selector. */
+/* Sampled JOYP, serial selection and the CH3 fetch byte precede the SRAM length. */
+enum { IO_HISTORY_BYTES = 3, SRAM_LENGTH_BYTES = 4 };
 
 typedef struct Cartridge {
     uint8_t type, ram;
@@ -326,7 +328,7 @@ static void check_boundary(const CupidGb *gb, const CupidGb *before, CupidGbRese
     if (quick || gb->header.has_battery)
         CHECK(!memcmp(gb->cartridge_ram, before->cartridge_ram, sizeof(gb->cartridge_ram)));
     else
-        CHECK(filled(gb->cartridge_ram, gb->cartridge_ram_size, 0xff));
+        CHECK(filled(cupid_gb_cartridge_ram_const(gb), gb->cartridge_ram_size, 0xff));
     if (quick) {
         CHECK(!memcmp(gb->high_ram, before->high_ram, sizeof(gb->high_ram)));
         CHECK(!memcmp(gb->cgb_bg_palette_ram, before->cgb_bg_palette_ram,
@@ -572,9 +574,11 @@ static size_t legacy_tpp1(uint8_t *legacy, const uint8_t *saved, size_t size, un
     const size_t descriptor = size - ACCESSORY_DESCRIPTOR_BYTES;
     CHECK(filled(saved + descriptor, ACCESSORY_DESCRIPTOR_BYTES, 0));
     if (version == 15)
-        legacy[descriptor - IO_HISTORY_BYTES - CUPID_GB_VRAM_BUS_STATE_SIZE - 1u] = 0;
-    /* Both versions precede this I/O history; V14 also predates display timing. */
-    const size_t removed = IO_HISTORY_BYTES + (version == 14 ? TIMING_BYTES : 0);
+        legacy[descriptor - SRAM_LENGTH_BYTES - IO_HISTORY_BYTES - CUPID_GB_VRAM_BUS_STATE_SIZE -
+               1u] = 0;
+    /* Both versions precede this I/O history and SRAM length; V14 predates display timing. */
+    const size_t removed =
+        SRAM_LENGTH_BYTES + IO_HISTORY_BYTES + (version == 14 ? TIMING_BYTES : 0);
     memmove(legacy + descriptor - removed, legacy + descriptor, ACCESSORY_DESCRIPTOR_BYTES);
     size -= removed;
     legacy[8] = (uint8_t)version;
@@ -659,6 +663,92 @@ static void test_tpp1_legacy_states(void) {
         }
 }
 
+static unsigned reset_allocation_calls, reset_fail_at;
+
+static void *reset_allocator(size_t bytes) {
+    ++reset_allocation_calls;
+    return reset_allocation_calls == reset_fail_at ? NULL : malloc(bytes);
+}
+
+static void test_extended_sram_reset_case(CupidGbModel model, unsigned code, bool battery,
+                                          CupidGbResetKind kind, bool firmware) {
+    current_model = model;
+    current_type = 0xbc;
+    current_kind = kind;
+    current_firmware = firmware;
+    Host host = {.now = 1800000000};
+    CupidGb *gb = create_machine(model, (Cartridge){0xbc, 0xc1}, &host);
+    gb->rom[0x152] = (uint8_t)code;
+    gb->rom[0x153] = battery ? 8 : 0;
+    CHECK(cupid_gb_load_rom(gb, gb->rom, gb->rom_size));
+    CHECK(gb->cartridge_ram_heap && cupid_gb_cartridge_storage_valid(gb));
+    if (firmware)
+        install_firmware(gb);
+    install_history(gb, 48000);
+    for (size_t offset = 0; offset < gb->cartridge_ram_size; ++offset)
+        gb->cartridge_ram_heap[offset] = (uint8_t)(offset * 37u + (offset >> 13u) * 73u + 0x19u);
+    CupidGbPrinter *printer = cupid_gb_printer_create(printer_image, printer_done, &host);
+    CHECK(printer);
+    cupid_gb_set_serial_link(gb, cupid_gb_printer_link(printer));
+    printer->state.phase = PRINTER_HEADER;
+    printer->state.index = 2;
+    printer->state.header[0] = PRINTER_DATA;
+    CupidGb *before = malloc(sizeof(*before));
+    uint8_t *ram_before = malloc(gb->cartridge_ram_capacity);
+    uint8_t *rom_before = malloc(gb->rom_capacity);
+    CHECK(before && ram_before && rom_before);
+    memcpy(before, gb, sizeof(*gb));
+    memcpy(ram_before, gb->cartridge_ram_heap, gb->cartridge_ram_capacity);
+    memcpy(rom_before, gb->rom, gb->rom_capacity);
+    const Host host_before = host;
+    const CupidGbPrinter printer_before = *printer;
+
+    for (unsigned fail_at = 1; fail_at <= 2; ++fail_at) {
+        reset_allocation_calls = 0;
+        reset_fail_at = fail_at;
+        CHECK(!cupid_gb_reset_with_allocator(gb, kind, reset_allocator));
+        CHECK(reset_allocation_calls == fail_at);
+        CHECK(!memcmp(gb, before, sizeof(*gb)));
+        CHECK(!memcmp(gb->cartridge_ram_heap, ram_before, gb->cartridge_ram_capacity));
+        CHECK(!memcmp(gb->rom, rom_before, gb->rom_capacity));
+        CHECK(!memcmp(&host, &host_before, sizeof(host)));
+        CHECK(!memcmp(printer, &printer_before, sizeof(*printer)));
+    }
+
+    const unsigned calls = host.clock_calls;
+    CHECK(cupid_gb_reset(gb, kind));
+    CHECK(gb->cartridge_ram_heap != before->cartridge_ram_heap);
+    CHECK(cupid_gb_cartridge_storage_valid(gb));
+    CHECK(gb->cartridge_ram_capacity == before->cartridge_ram_capacity);
+    if (kind == CUPID_GB_RESET_QUICK || battery)
+        CHECK(!memcmp(gb->cartridge_ram_heap, ram_before, gb->cartridge_ram_size));
+    else
+        CHECK(filled(gb->cartridge_ram_heap, gb->cartridge_ram_size, 0xff));
+    check_boundary(gb, before, kind, firmware, &host, calls);
+    CHECK(gb->rom_generation == before->rom_generation &&
+          !memcmp(gb->rom, rom_before, gb->rom_capacity));
+    if (firmware)
+        execute_firmware(gb);
+    free(before); /* This snapshot borrowed the released pre-reset SRAM pointer. */
+    free(ram_before);
+    free(rom_before);
+    cupid_gb_set_serial_link(gb, (CupidGbSerialLink){0});
+    cupid_gb_printer_destroy(printer);
+    cupid_gb_cleanup(gb);
+    free(gb);
+}
+
+static void test_extended_sram_reset(void) {
+    const CupidGbModel models[] = {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_CGB};
+    for (unsigned model = 0; model < sizeof(models) / sizeof(models[0]); ++model)
+        for (unsigned code = 6; code <= 9; ++code)
+            for (unsigned battery = 0; battery < 2; ++battery)
+                for (unsigned kind = 0; kind < 2; ++kind)
+                    for (unsigned firmware = 0; firmware < 2; ++firmware)
+                        test_extended_sram_reset_case(models[model], code, battery != 0,
+                                                      (CupidGbResetKind)kind, firmware != 0);
+}
+
 int main(void) {
     static const Cartridge cartridges[] = {
         {0, 0},    {8, 2},    {9, 2},    {3, 3},    {2, 3},    {6, 0},    {5, 0},      {0x10, 3},
@@ -698,6 +788,7 @@ int main(void) {
                     free(gb);
                 }
     test_rejection_and_printer();
+    test_extended_sram_reset();
     test_tpp1_mapping_states();
     test_tpp1_legacy_states();
     printf("Reset checks: %u model/controller/reset/firmware cases; rejection and printer checks "

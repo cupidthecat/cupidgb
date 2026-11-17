@@ -4,7 +4,9 @@
 
 ## Instance lifetime
 
-Use a zero-initialized instance. `CupidGb` is large, so heap allocation avoids small platform stack limits. Its ROM pointer and allocation capacity belong to the core. Initialization preserves those fields and the selected model, so an uninitialized stack object is not a valid input. Cleanup releases the owned ROM allocation.
+Use a zero-initialized instance. `CupidGb` is large, so heap allocation avoids small platform stack limits. Its ROM allocation and optional cartridge-SRAM allocation belong to the core. Initialization retains their capacity and the selected model while clearing guest state; an uninitialized stack object is not a valid input. Cleanup releases both allocations. A shallow structure copy shares their pointers and is not an independent owner.
+
+Rebuild the library and its hosts against matching headers when public ownership fields change. Native-state compatibility follows the explicit wire format rather than `sizeof(CupidGb)`.
 
 `CupidEmulator` provides a thin GB/GBC lifecycle wrapper:
 
@@ -56,9 +58,22 @@ extern "C" {
 }
 ```
 
-Loading a cartridge resets hardware on success. The loader validates size, header and supported storage before replacing the current ROM, and a failed allocation leaves the live core unchanged. Input may alias the current ROM allocation when the complete source range is valid. Storage follows the actual input length, with a 32 KiB minimum and a 1 GiB image limit. ROM size and allocation capacity are separate: missing bytes in the physical bank population read as `0xff`, and hashes cover only the supplied bytes.
+## Cartridge storage
 
-A complete frontend replacement also validates battery and boot inputs. Build a separate candidate and swap it in only after all those inputs succeed. The Qt frontend uses that pattern. Native resets retain the ROM pointer and capacity; native states retain the receiving allocation and do not serialize its capacity.
+Loading a cartridge resets hardware on success. The loader validates size, header and supported storage, then prepares every required ROM and SRAM allocation before changing the live core. Failure preserves the current session. Input may alias owned ROM or cartridge RAM when the complete source range is valid; the loader copies it before erasing reused storage or releasing an old allocation. ROM storage follows the actual input length, with a 32 KiB minimum and a 1 GiB image limit. ROM size and allocation capacity are separate: missing bytes in the physical bank population read as `0xff`, and hashes cover only the supplied bytes.
+
+A complete frontend replacement also validates battery and boot inputs. Build a separate candidate and swap it in only after all those inputs succeed. The Qt frontend uses that pattern. Native resets and state imports retain the receiving ROM pointer, capacity and load generation. They can replace the SRAM allocation; neither allocation's pointer or capacity is serialized.
+
+`CUPID_GB_INLINE_RAM_SIZE` describes the fixed 128 KiB array and historical state prefix. `CUPID_GB_MAX_RAM_SIZE` is the 2 MiB active-storage ceiling. Loaded TPP1 cartridges above 128 KiB use `cartridge_ram_heap` with an exact `cartridge_ram_capacity`; smaller populations use the inline array with zero heap capacity. Other controllers retain their existing physical limits. Use the inline constant when working with the fixed array, and `cartridge_ram_size` for the active span.
+
+The accessors in `cupid/gb/cartridge.h` select contiguous active storage:
+
+```c
+uint8_t *cupid_gb_cartridge_ram(CupidGb *gb);
+const uint8_t *cupid_gb_cartridge_ram_const(const CupidGb *gb);
+```
+
+Their pointers are borrowed. Stay within `cartridge_ram_size`, never free the returned pointer, and reacquire it after loading a cartridge, resetting or importing a state. Only a null instance returns null; a non-null pointer does not establish that a cartridge has any SRAM.
 
 ## Cold memory and firmware startup
 
@@ -91,7 +106,7 @@ Installed firmware starts at PC `0000`; no instructions execute inside the reset
 
 MBC3 and TPP1 clock data and common fractional history survive. HuC3 clock and alarm digits belong to its controller reset domain and clear. Reset refreshes the host observation baseline without advancing the retained clock digits. A change to persistent HuC3 digits increments the battery generation for autosave tracking. The host time callback follows the existing non-reentrant observer contract.
 
-The operation prepares a detached candidate. An invalid request, invalid firmware size or allocation failure leaves the complete live core and attached printer unchanged. On success it commits the candidate, then clears the attached printer's protocol and pending job while retaining printer callbacks and emitted paper. Reset does not emit sound, serial, rumble, infrared or printer notifications. Hosts must reset presentation pacing and resynchronize feedback after success.
+The operation prepares a detached candidate with independent heap SRAM. An invalid request, invalid firmware size or allocation failure leaves the complete live core and attached printer unchanged. On success it commits the candidate, releases the previous SRAM allocation, then clears the attached printer's protocol and pending job while retaining printer callbacks and emitted paper. Reacquire borrowed SRAM pointers after success. Reset does not emit sound, serial, rumble, infrared or printer notifications. Hosts must reset presentation pacing and resynchronize feedback after success.
 
 ## Execution and clocks
 
@@ -168,7 +183,7 @@ Registration survives initialization, cartridge loading, boot reset, and native-
 
 `cupid_gb_battery_size` returns zero when the loaded cartridge has no supported battery payload. Allocate sufficient independent storage and check both the result and returned length. Rejected loads preserve the instance. The caller handles file I/O and atomic replacement; the codec does not choose paths. Prefer this explicit result-bearing API for new hosts over the older convenience file-save helpers.
 
-The optional byte-count pointer must not overlap the live core, any part of its owned ROM allocation, or the supplied output capacity. Both save variants reject those aliases before clearing the count; the ordinary variant also rejects them before polling its time provider. A rejected count alias leaves the core, ROM and destination unchanged.
+The optional byte-count pointer must not overlap the live core, any part of its owned ROM or heap-SRAM allocation, or the supplied output capacity. Both save variants reject those aliases before clearing the count; the ordinary variant also rejects them before polling its time provider. A rejected count alias leaves the core, ROM, SRAM and destination unchanged.
 
 Battery data differs from execution state. See [battery saves](battery-saves.md) for encodings and clock semantics.
 
@@ -180,9 +195,15 @@ Normal disk-state APIs recompute cartridge identity. A rejected load leaves the 
 
 `CupidGbStateContext` caches cartridge identity for trusted in-memory rewind. It binds to one owner, ROM pointer, ROM size, load generation, and model. Every successful cartridge load advances the generation, so a context becomes stale even when the allocation and length stay the same. Failed loads and native resets preserve the generation. Discard and recreate the context after cartridge/model changes or any in-place ROM patch. Direct external writes cannot be detected by the binding checks. Never use the cached context to validate an untrusted disk file.
 
-The codec checks a complete word-array range before reading or writing its little-endian elements and accepts unaligned buffers. New snapshots use version 18, which adds the serial divider tap selected by an SC write. Reset selects the slow tap independently of SC readback. Later compatibility-mode changes retain that selection. Older imports derive the missing selector from the loaded operating mode and SC bit 1, preserving the raw register byte and recorded clock phase. They never borrow the receiving session's selector or issue a control write. See [serial state migration](save-states.md#serial-clock-selection-in-version-18) for the resulting readback and continuation rules.
+The codec checks a complete word-array range before reading or writing its little-endian elements and accepts unaligned buffers. New snapshots use version 20. After the version 18 serial selector, they store the full byte last fetched by CH3, the active SRAM length, and bytes beyond the fixed 128 KiB SRAM prefix. The length must match the receiving cartridge; a state cannot resize it. Loading prepares independent heap SRAM and commits it only after the complete console and accessory record validate. Failed loads preserve bytes and ownership.
 
-Version 17's retained CGB tile row, pending input sampling and TPP1 mapping remain independent of later control writes. The codec preserves version 15's display wait and bus-synchronization history used by infrared sensing, interrupted pixel-fetch work and the VRAM read circuit's retained addresses and byte. Version 14's reconstruction rings, DAC delays, filter and policy history, deterministic interference and pending synthesis clocks remain intact. Versions 2 through 17 remain loadable with explicit defaults for missing history; an old file cannot recreate input events, waveform edges, scroll latches, serial selections or display synchronization it never stored. Version 13's RTC phase, motor strength and divider remainder remain independent of host clock policy. Query the size for every capture because model, cartridge and printer sections change the length. Identity, integrity, final-offset and hardware-domain checks apply to every accepted version.
+The two accepted version 19 development layouts separately stored wave history and extended SRAM. The loader distinguishes them by receiving geometry, exact length and accessory framing. Versions without a wave byte duplicate their validated saved nibble into both halves of the missing byte. Live loads establish imported hardware history before executing saved pending audio clocks, then restore the receiving output history. See [the version 20 layout](save-states.md#complete-cartridge-sram-in-version-20) for compatibility and migration limits.
+
+Version 18 added the serial divider tap selected by an SC write. Reset selects the slow tap independently of SC readback. Later compatibility-mode changes retain that selection. Versions 2 through 17 derive the missing selector from the loaded operating mode and SC bit 1, preserving the raw register byte and recorded clock phase. They never borrow the receiving session's selector or issue a control write. See [serial state migration](save-states.md#serial-clock-selection-in-version-18) for the resulting readback and continuation rules.
+
+Version 17's retained CGB tile row, pending input sampling and TPP1 mapping remain independent of later control writes. The codec preserves version 15's display wait and bus-synchronization history used by infrared sensing, interrupted pixel-fetch work and the VRAM read circuit's retained addresses and byte. Version 14's reconstruction rings, DAC delays, filter and policy history, deterministic interference and pending synthesis clocks remain intact. Versions 2 through 18 remain loadable within their 128 KiB SRAM limit, with explicit defaults for missing history. An old file cannot recreate input events, waveform edges, fetched wave bytes, scroll latches, serial selections or display synchronization it never stored. Version 13's RTC phase, motor strength and divider remainder remain independent of host clock policy.
+
+Query the size for every capture because model, cartridge geometry and printer sections change the length. Identity, integrity, final-offset and hardware-domain checks apply to every accepted version.
 
 `cupid_gb_set_serial_link` registers bit-launch and sample callbacks for an internal-clock transfer. A host can read an external-clock peer with `cupid_gb_serial_external_bit`, then deliver the sender's bit with `cupid_gb_serial_external_clock`. Both cores need a shared host schedule. Serial registrations survive reset and state loading. External cable state remains the host's responsibility.
 

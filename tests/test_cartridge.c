@@ -63,6 +63,69 @@ static uint8_t *make_model_rom(CupidGbModel model, size_t size, uint8_t type, ui
     return rom;
 }
 
+static void test_adjacent_caller_sources(CupidGbModel model) {
+    typedef struct AdjacentSource {
+        CupidGb core;
+        uint8_t input[];
+    } AdjacentSource;
+
+    const size_t rom_size = 0x8000u;
+    uint8_t *rom = make_model_rom(model, rom_size, 0x03, 0, 2);
+    CupidGb *original = calloc(1, sizeof(*original));
+    assert(original);
+    cupid_gb_set_model(original, model);
+    assert(cupid_gb_load_rom(original, rom, rom_size));
+    original->cpu.a = 0x53;
+    original->work_ram[0x123] = 0x97;
+    for (size_t offset = 0; offset < original->cartridge_ram_size; ++offset)
+        original->cartridge_ram[offset] = (uint8_t)(offset * 37u + (offset >> 8u) + 0x23u);
+
+    const size_t state_size = cupid_gb_state_size(original);
+    const size_t capacity = state_size > rom_size ? state_size : rom_size;
+    uint8_t *state = malloc(state_size);
+    AdjacentSource *fixture = calloc(1, sizeof(*fixture) + capacity);
+    assert(state_size && state && fixture);
+    assert(cupid_gb_save_state(original, state, state_size, NULL) == CUPID_GB_STATE_OK);
+    CupidGb *gb = &fixture->core;
+    /* Force the layout that optimized stack allocation can produce. This
+     * input is a separate member, even though its first address is core's end. */
+    assert((uintptr_t)fixture->input - (uintptr_t)gb == sizeof(*gb));
+    cupid_gb_set_model(gb, model);
+    memcpy(fixture->input, rom, rom_size);
+    assert(cupid_gb_load_rom(gb, fixture->input, rom_size));
+    assert(gb->model == model && gb->rom_size == rom_size);
+    assert(!memcmp(gb->rom, rom, rom_size) && !memcmp(fixture->input, rom, rom_size));
+
+    /* Battery and native-state imports share the same owned-source guard. */
+    const size_t battery_size = cupid_gb_battery_size(original);
+    size_t written = 0;
+    assert(battery_size == original->cartridge_ram_size && battery_size <= capacity);
+    assert(cupid_gb_save_battery_at(original, fixture->input, capacity, &written, 0) ==
+           CUPID_GB_BATTERY_OK);
+    assert(written == battery_size);
+    uint8_t *const owned_rom = gb->rom;
+    assert(cupid_gb_load_battery_at(gb, fixture->input, battery_size, 0) == CUPID_GB_BATTERY_OK);
+    assert(gb->rom == owned_rom && !gb->battery_write_generation);
+    assert(!memcmp(gb->cartridge_ram, original->cartridge_ram, battery_size));
+    assert(!memcmp(fixture->input, original->cartridge_ram, battery_size));
+
+    gb->cpu.a = 0x11;
+    gb->work_ram[0x123] = 0x22;
+    memset(gb->cartridge_ram, 0, battery_size);
+    memcpy(fixture->input, state, state_size);
+    assert(cupid_gb_load_state(gb, fixture->input, state_size) == CUPID_GB_STATE_OK);
+    assert(gb->rom == owned_rom && gb->cpu.a == 0x53 && gb->work_ram[0x123] == 0x97);
+    assert(!memcmp(gb->cartridge_ram, original->cartridge_ram, battery_size));
+    assert(!memcmp(fixture->input, state, state_size));
+
+    cupid_gb_cleanup(gb);
+    cupid_gb_cleanup(original);
+    free(fixture);
+    free(original);
+    free(state);
+    free(rom);
+}
+
 static size_t expected_header_storage(unsigned type, unsigned ram_code) {
     static const bool external_ram[256] = {
         [0x01] = true, [0x02] = true, [0x03] = true, [0x08] = true, [0x09] = true, [0x0b] = true,
@@ -273,8 +336,8 @@ static void test_address_line_aliases(CupidGbModel model) {
 static void assert_fresh_storage(const CupidGb *gb, size_t expected_size) {
     assert(gb->cartridge_ram_size == expected_size && gb->battery_write_generation == 0);
     for (size_t offset = 0; offset < expected_size; ++offset)
-        assert(gb->cartridge_ram[offset] == 0xff);
-    if (expected_size < CUPID_GB_MAX_RAM_SIZE)
+        assert(cupid_gb_cartridge_ram_const(gb)[offset] == 0xff);
+    if (expected_size < CUPID_GB_INLINE_RAM_SIZE)
         assert(gb->cartridge_ram[expected_size] == 0);
 }
 
@@ -575,6 +638,188 @@ static void test_extended_rom_capacity(CupidGbModel model) {
     cupid_gb_cleanup(gb);
     assert(!gb->rom && !gb->rom_capacity);
     free(gb);
+}
+
+static unsigned storage_allocation_calls, storage_fail_at;
+
+static void *storage_allocator(size_t bytes) {
+    ++storage_allocation_calls;
+    return storage_allocation_calls == storage_fail_at ? NULL : malloc(bytes);
+}
+
+typedef struct StorageSnapshot {
+    CupidGb machine;
+    uint8_t *rom_bytes;
+    uint8_t *ram_bytes;
+} StorageSnapshot;
+
+static StorageSnapshot *storage_snapshot(const CupidGb *gb) {
+    StorageSnapshot *snapshot = malloc(sizeof(*snapshot));
+    assert(snapshot);
+    snapshot->machine = *gb;
+    snapshot->rom_bytes = malloc(gb->rom_capacity);
+    snapshot->ram_bytes = gb->cartridge_ram_heap ? malloc(gb->cartridge_ram_capacity) : NULL;
+    assert(snapshot->rom_bytes && (!gb->cartridge_ram_heap || snapshot->ram_bytes));
+    memcpy(snapshot->rom_bytes, gb->rom, gb->rom_capacity);
+    if (snapshot->ram_bytes)
+        memcpy(snapshot->ram_bytes, gb->cartridge_ram_heap, gb->cartridge_ram_capacity);
+    return snapshot;
+}
+
+static void assert_storage_unchanged(const StorageSnapshot *snapshot, const CupidGb *gb) {
+    assert(!memcmp(&snapshot->machine, gb, sizeof(*gb)));
+    assert(!memcmp(snapshot->rom_bytes, gb->rom, gb->rom_capacity));
+    if (snapshot->ram_bytes)
+        assert(!memcmp(snapshot->ram_bytes, gb->cartridge_ram_heap, gb->cartridge_ram_capacity));
+}
+
+static void destroy_storage_snapshot(StorageSnapshot *snapshot) {
+    /* The structure copy borrows the live owner's allocations. */
+    free(snapshot->rom_bytes);
+    free(snapshot->ram_bytes);
+    free(snapshot);
+}
+
+static uint8_t *make_tpp1_storage_rom(CupidGbModel model, size_t length, uint8_t code) {
+    uint8_t *rom = make_model_rom(model, length, 0xbc, length == 0x8000 ? 0 : 1, 0xc1);
+    rom[0x14a] = 0x65;
+    rom[0x150] = 0;
+    rom[0x151] = 0;
+    rom[0x152] = code;
+    rom[0x153] = 8;
+    update_header_checksum(rom);
+    return rom;
+}
+
+static void assert_failed_storage_load(CupidGb *gb, const uint8_t *rom, size_t length,
+                                       unsigned fail_at) {
+    StorageSnapshot *snapshot = storage_snapshot(gb);
+    CupidGbStateContext context = {0};
+    assert(cupid_gb_state_context_init(&context, gb) == CUPID_GB_STATE_OK);
+    const CupidGbStateContext saved_context = context;
+    const size_t state_size = cupid_gb_state_size(gb);
+    uint8_t *before = malloc(state_size);
+    uint8_t *after = malloc(state_size);
+    assert(before && after);
+    assert(cupid_gb_save_state_with_context(gb, before, state_size, NULL, &context) ==
+           CUPID_GB_STATE_OK);
+    storage_allocation_calls = 0;
+    storage_fail_at = fail_at;
+    assert(!cupid_gb_load_rom_with_allocator(gb, rom, length, storage_allocator));
+    assert(storage_allocation_calls == fail_at);
+    assert_storage_unchanged(snapshot, gb);
+    assert(!memcmp(&context, &saved_context, sizeof(context)));
+    assert(cupid_gb_save_state_with_context(gb, after, state_size, NULL, &context) ==
+           CUPID_GB_STATE_OK);
+    assert(!memcmp(before, after, state_size));
+    free(before);
+    free(after);
+    destroy_storage_snapshot(snapshot);
+}
+
+static void test_extended_ram_ownership(CupidGbModel model) {
+    CupidGb *gb = calloc(1, sizeof(*gb));
+    CupidGb *other = calloc(1, sizeof(*other));
+    assert(gb && other && sizeof(gb->cartridge_ram) == CUPID_GB_INLINE_RAM_SIZE);
+    assert(!cupid_gb_cartridge_ram(NULL) && !cupid_gb_cartridge_ram_const(NULL));
+    assert(!cupid_gb_cartridge_storage_valid(NULL));
+    cupid_gb_set_model(gb, model);
+    cupid_gb_set_model(other, model);
+    cupid_gb_set_power_on_seed(gb, 0);
+    cupid_gb_set_power_on_seed(other, 0);
+    uint8_t *small = make_tpp1_storage_rom(model, 0x8000, 5);
+    uint8_t *large = make_tpp1_storage_rom(model, 0x8000, 9);
+    uint8_t *replacement = make_tpp1_storage_rom(model, 0x10000, 8);
+    assert(cupid_gb_load_rom(gb, small, 0x8000));
+    memset(gb->cartridge_ram, 0x39, sizeof(gb->cartridge_ram));
+    assert(cupid_gb_cartridge_storage_valid(gb));
+
+    /* First ROM allocation and second SRAM allocation are separate failure gates.
+     * The same-size ROM case must also remain untouched when only SRAM fails. */
+    assert_failed_storage_load(gb, replacement, 0x10000, 1);
+    assert_failed_storage_load(gb, replacement, 0x10000, 2);
+    assert_failed_storage_load(gb, large, 0x8000, 1);
+    uint8_t *const old_rom = gb->rom;
+    const uint64_t generation = gb->rom_generation;
+    assert(cupid_gb_load_rom(gb, large, 0x8000));
+    assert(gb->rom == old_rom && gb->rom_generation == generation + 1);
+    assert(gb->cartridge_ram_heap && gb->cartridge_ram_capacity == CUPID_GB_MAX_RAM_SIZE);
+    assert(cupid_gb_cartridge_storage_valid(gb));
+    assert_fresh_storage(gb, CUPID_GB_MAX_RAM_SIZE);
+    for (size_t offset = 0; offset < gb->cartridge_ram_size; ++offset)
+        gb->cartridge_ram_heap[offset] = (uint8_t)(offset * 29u + (offset >> 13u) * 73u);
+
+    /* A deep snapshot must catch writes to old heap bytes after either failure. */
+    assert_failed_storage_load(gb, replacement, 0x10000, 1);
+    assert_failed_storage_load(gb, replacement, 0x10000, 2);
+    StorageSnapshot *snapshot = storage_snapshot(gb);
+    assert(!cupid_gb_load_rom(gb, gb->cartridge_ram_heap + gb->cartridge_ram_capacity - 8, 0x150));
+    assert(!cupid_gb_load_rom(gb, gb->cartridge_ram + sizeof(gb->cartridge_ram) - 8, 0x150));
+    assert_storage_unchanged(snapshot, gb);
+    destroy_storage_snapshot(snapshot);
+
+    const size_t capacity = gb->cartridge_ram_capacity;
+    gb->cartridge_ram_capacity = capacity - 1;
+    assert(!cupid_gb_cartridge_storage_valid(gb));
+    gb->cartridge_ram_capacity = capacity;
+    gb->header.mbc_type = CUPID_GB_MBC5;
+    assert(!cupid_gb_cartridge_storage_valid(gb));
+    gb->header.mbc_type = CUPID_GB_TPP1;
+
+    /* Reuse both allocations while the complete input lives in the SRAM that
+     * initialization is about to erase. The source must be copied first. */
+    uint8_t *const reused_heap = gb->cartridge_ram_heap;
+    memcpy(reused_heap + 0x20000, large, 0x8000);
+    storage_allocation_calls = 0;
+    storage_fail_at = 1;
+    assert(cupid_gb_load_rom_with_allocator(gb, reused_heap + 0x20000, 0x8000, storage_allocator));
+    assert(!storage_allocation_calls && gb->cartridge_ram_heap == reused_heap);
+    assert(!memcmp(gb->rom, large, 0x8000));
+    assert_fresh_storage(gb, CUPID_GB_MAX_RAM_SIZE);
+
+    assert(cupid_gb_load_rom(other, large, 0x8000));
+    assert(other->rom != gb->rom && other->cartridge_ram_heap != gb->cartridge_ram_heap);
+    cupid_gb_write_u8(gb, 0x7fff, 3);
+    cupid_gb_write_u8(gb, 0x0002, 255);
+    cupid_gb_write_u8(gb, 0xbfff, 0x58);
+    assert(gb->cartridge_ram_heap[CUPID_GB_MAX_RAM_SIZE - 1] == 0x58);
+    assert(other->cartridge_ram_heap[CUPID_GB_MAX_RAM_SIZE - 1] == 0xff);
+
+    /* Shrinking releases the heap only after a source inside its last bank has
+     * reached ROM. Growing from the inline SRAM has the same source lifetime. */
+    memcpy(gb->cartridge_ram_heap + capacity - 0x8000, small, 0x8000);
+    assert(cupid_gb_load_rom(gb, gb->cartridge_ram_heap + capacity - 0x8000, 0x8000));
+    assert(!gb->cartridge_ram_heap && !gb->cartridge_ram_capacity);
+    assert(!memcmp(gb->rom, small, 0x8000));
+    assert_fresh_storage(gb, CUPID_GB_INLINE_RAM_SIZE);
+    large[0x152] = 6;
+    memcpy(gb->cartridge_ram + 0x10000, large, 0x8000);
+    assert(cupid_gb_load_rom(gb, gb->cartridge_ram + 0x10000, 0x8000));
+    assert(!memcmp(gb->rom, large, 0x8000));
+    assert_fresh_storage(gb, 0x40000);
+
+    /* Init resets guest bytes but keeps host ownership, even without a loaded
+     * cartridge. A later cleanup must release both retained buffers exactly once. */
+    uint8_t *const retained_heap = gb->cartridge_ram_heap;
+    const size_t retained_capacity = gb->cartridge_ram_capacity;
+    memset(retained_heap, 0x7b, retained_capacity);
+    cupid_gb_init(gb);
+    assert(gb->cartridge_ram_heap == retained_heap &&
+           gb->cartridge_ram_capacity == retained_capacity && !gb->loaded);
+    for (size_t offset = 0; offset < retained_capacity; ++offset)
+        assert(retained_heap[offset] == 0);
+    assert(cupid_gb_load_rom(gb, replacement, 0x10000));
+    assert_fresh_storage(gb, 0x100000);
+    assert(cupid_gb_cartridge_storage_valid(gb));
+    cupid_gb_cleanup(gb);
+    cupid_gb_cleanup(gb);
+    assert(!gb->rom && !gb->rom_capacity && !gb->cartridge_ram_heap && !gb->cartridge_ram_capacity);
+    cupid_gb_cleanup(other);
+    free(other);
+    free(gb);
+    free(replacement);
+    free(large);
+    free(small);
 }
 
 static void test_rom_capacity_output_overlap(void) {
@@ -1077,6 +1322,8 @@ int main(void) {
     test_reject_advance_cartridge();
     const CupidGbModel models[] = {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_CGB};
     for (size_t model = 0; model < sizeof(models) / sizeof(*models); ++model) {
+        test_adjacent_caller_sources(models[model]);
+        test_extended_ram_ownership(models[model]);
         test_address_line_aliases(models[model]);
         test_fresh_storage_and_restore(models[model]);
         test_physical_rom_address_lines(models[model]);

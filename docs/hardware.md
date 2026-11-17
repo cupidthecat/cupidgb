@@ -58,18 +58,33 @@ The core decodes ROM-only, MBC1, MBC2, MBC3, MBC5, MMM01, MBC6, MBC7, HuC1, HuC3
 | MBC7 | Dual access gates, motion latches, 256-byte serial EEPROM, battery files, and mid-command continuation. Physical motion input remains pending |
 | HuC1 | Independent six-bit ROM and three-bit RAM selection, RAM access outside infrared mode, and a shared timed infrared receiver with host input and output callbacks. Physical transport and startup mapping qualification remain pending |
 | HuC3 | ROM bank zero after selection, 16 SRAM banks, read-only and read/write modes, nibble commands, clock and alarm persistence, and the shared timed infrared receiver. Physical infrared transport and alarm notification remain pending |
-| Camera | ROM/SRAM banking, shutter timing, generated sensor pixels, calibrated gain, exposure and edge processing, tile conversion, and capture continuation. Paired digital-image checks cover all gain and edge selections. Host camera input and physical sensor qualification remain pending |
-| TPP1 | Extended header, mirrored bank registers, read-only and writable SRAM, RTC commands and persistence, and four guest rumble levels. Motor feedback averages hardware deliveries at presentation boundaries; the frontend applies the configured strength response |
+| Camera | ROM/SRAM banking, shutter timing, generated sensor pixels, calibrated gain, exposure and edge processing, tile conversion, and capture continuation. Paired digital-image checks cover all gain and edge selections. Qt captures from the default camera and keeps host images and requests outside native files. Generated-frame checks cover Windows Qt 6.8.3 and Linux Qt 6.4.2; the combined build and physical-device workflows remain to be qualified. See [Camera cartridges](host-camera.md) |
+| TPP1 | Extended header, mirrored bank registers, up to 2 MiB of read-only or writable SRAM, RTC commands and persistence, and four guest rumble levels. Motor feedback averages hardware deliveries at presentation boundaries; the frontend applies the configured strength response |
 
-MBC6 exposes partial mapping without flash support. The cartridge image limit is 1 GiB, covering the 65,536 bank addresses available through TPP1's two ROM registers. Allocation follows the actual input length with a 32 KiB minimum. Individual controllers retain their own bank-selection wiring. The core supports up to 128 KiB of cartridge storage, including TPP1; larger SRAM configurations are rejected before cartridge replacement. The image-size limit does not establish tested compatibility at every physical capacity.
+MBC6 exposes partial mapping without flash support. The cartridge image limit is 1 GiB, covering the 65,536 bank addresses available through TPP1's two ROM registers. Allocation follows the actual input length with a 32 KiB minimum. Individual controllers retain their own bank-selection wiring. Cartridge RAM uses the 128 KiB inline array for ordinary populations; larger TPP1 populations allocate their declared SRAM length, through 2 MiB. These limits do not establish tested gameplay at every capacity. See [storage validation](validation-cartridge-storage.md) for the measured scope.
 
 Physical ROM bank population follows the actual file length, rounded to the next power of two with a minimum of two 16 KiB banks. Bytes in an unpopulated tail read as `0xff`. Header ROM-size metadata does not override the loaded bank population, and an unknown size code does not reject an otherwise loadable image. Cartridge identity and native-state hashes retain the original, unpadded input bytes. A ROM-only type-0 header on an image larger than 32 KiB selects an MBC3 banking fallback. An invalid header checksum is reported without necessarily rejecting the image.
 
 RAM capacity follows the resolved cartridge hardware. A nonzero RAM-size byte alone does not add storage to an ordinary ROM-only or unsupported cartridge. Recognized bank controllers can still expose RAM described by that byte even when their type byte says no RAM. MBC2 and MBC7 use their fixed internal storage; TPP1 uses its extended header. ROM and RAM address aliases use the power-of-two chip geometry established by the loader.
 
+| TPP1 SRAM code | Banks of 8 KiB | Active bytes |
+| ---: | ---: | ---: |
+| 0 | 0 | 0 |
+| 1 | 1 | 8,192 |
+| 2 | 2 | 16,384 |
+| 3 | 4 | 32,768 |
+| 4 | 8 | 65,536 |
+| 5 | 16 | 131,072 |
+| 6 | 32 | 262,144 |
+| 7 | 64 | 524,288 |
+| 8 | 128 | 1,048,576 |
+| 9 | 256 | 2,097,152 |
+
+Other TPP1 SRAM codes declare no storage. Its eight-bit latch selects all 256 banks, with physical aliases for smaller populations. Mode 2 permits reads and mode 3 permits reads and writes. This geometry does not widen other controllers' RAM wiring.
+
 MMM01 menu detection uses the final 32 KiB of the padded physical ROM geometry, not the last 32 KiB of an incomplete file. Both menu-first and menu-last dumps retain their original bytes. The menu supplies RAM capacity and battery capability; a no-RAM menu's promotion also depends on the first game's RAM declaration. Menus declaring type `11` do not inherit a game's battery, timer or motor flags. Paired generated cases cover conflicting headers, both layouts, erased tails and truncated menu metadata.
 
-Two-KiB SRAM mirrors across the eight-KiB RAM window. Ordinary timer-equipped MBC3 RAM banks 4 through 7 are disconnected; the wider RAM wiring applies to extended inputs larger than 2 MiB ROM or 32 KiB RAM. These rules have targeted regression coverage, but do not qualify every undocumented board or decaying open-bus behavior.
+Two-KiB SRAM mirrors across the eight-KiB RAM window. On ordinary timer-equipped MBC3 cartridges, banks 4 through 7 return a driven `FF` only when SRAM is physically present; without SRAM, the bus retains its undriven behavior. Wider RAM wiring applies to extended inputs larger than 2 MiB ROM or 32 KiB RAM. These rules have targeted regression coverage, but do not qualify every undocumented board or decaying open-bus behavior.
 
 The frontend saves battery SRAM, MBC3, TPP1 and HuC3 clock data, and MBC7 EEPROM to `.sav` files. Clock cartridges support host-time synchronization or Accurate emulated-time scheduling. Counter and latch rules remain controller-specific, including HuC3 minute behavior and separate TPP1 clock status and motor strength. See [cartridge clocks](rtc.md) and [battery saves](battery-saves.md) for the policy, counter and persistence contracts.
 

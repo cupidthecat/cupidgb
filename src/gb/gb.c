@@ -266,6 +266,8 @@ void cupid_gb_init(CupidGb *gb) {
     rom = gb->rom;
     rom_capacity = gb->rom_capacity;
     rom_generation = gb->rom_generation;
+    uint8_t *const cartridge_ram_heap = gb->cartridge_ram_heap;
+    const size_t cartridge_ram_capacity = gb->cartridge_ram_capacity;
     serial_output_callback = gb->serial_output_callback;
     serial_output_user_data = gb->serial_output_user_data;
     serial_link = gb->serial_link;
@@ -287,6 +289,7 @@ void cupid_gb_init(CupidGb *gb) {
     const CupidGbCheats *cheats = gb->cheats;
     const CupidGbPowerOn power_on = gb->power_on;
     const CupidGbRtcPolicy rtc_policy = gb->rtc_policy;
+    const CupidGbCameraHost camera_host = gb->camera_host;
     memset(gb, 0, sizeof(*gb));
     gb->oam_vram_row = UINT16_MAX;
     gb->oam_search_word = 0;
@@ -296,6 +299,10 @@ void cupid_gb_init(CupidGb *gb) {
     gb->rom = rom;
     gb->rom_capacity = rom_capacity;
     gb->rom_generation = rom_generation;
+    gb->cartridge_ram_heap = cartridge_ram_heap;
+    gb->cartridge_ram_capacity = cartridge_ram_capacity;
+    if (cartridge_ram_heap)
+        memset(cartridge_ram_heap, 0, cartridge_ram_capacity);
     gb->serial_output_callback = serial_output_callback;
     gb->serial_output_user_data = serial_output_user_data;
     gb->serial_link = serial_link;
@@ -316,6 +323,8 @@ void cupid_gb_init(CupidGb *gb) {
     gb->cheats = cheats;
     gb->power_on = power_on;
     gb->rtc_policy = rtc_policy;
+    gb->camera_host = camera_host;
+    cupid_gb_camera_cancel_request(gb);
 
     if (gb->rom == 0) {
         gb->rom = malloc(CUPID_GB_MIN_ROM_CAPACITY);
@@ -600,7 +609,7 @@ void cupid_gb_enter_boot_rom(CupidGb *gb) {
 /**
  * @brief Frees all dynamically allocated Game Boy resources.
  *
- * Releases the ROM buffer. Safe to call on a partially initialized
+ * Releases the ROM and optional SRAM buffers. Safe to call on a partially initialized
  * or already-cleaned-up instance.
  *
  * @param gb Pointer to the Game Boy state.
@@ -615,6 +624,9 @@ void cupid_gb_cleanup(CupidGb *gb) {
     free(gb->rom);
     gb->rom = 0;
     gb->rom_capacity = 0;
+    free(gb->cartridge_ram_heap);
+    gb->cartridge_ram_heap = NULL;
+    gb->cartridge_ram_capacity = 0;
     gb->serial_output_callback = NULL;
     gb->serial_output_user_data = NULL;
     gb->serial_link = (CupidGbSerialLink){0};
@@ -633,6 +645,7 @@ void cupid_gb_cleanup(CupidGb *gb) {
     gb->cheats = NULL;
     gb->power_on = (CupidGbPowerOn){0};
     gb->rtc_policy = (CupidGbRtcPolicy){0};
+    memset(&gb->camera_host, 0, sizeof(gb->camera_host));
     gb->mbc5_rumble_on = false;
 }
 
@@ -732,11 +745,13 @@ static uint16_t read_cartridge_window(const CupidGb *gb, uint16_t address) {
     if (gb->header.mbc_type == CUPID_GB_CAMERA) {
         if (gb->camera.mapped)
             return cupid_gb_camera_read_register(&gb->camera, address);
-        if (gb->cartridge_ram_size && gb->camera.busy_tcycles)
+        if (gb->cartridge_ram_size && (gb->camera.registers[0] & 1u))
             return 0;
         if (gb->cartridge_ram_size && !gb->current_ram_bank && address >= 0xa100u &&
             address < 0xaf00u)
-            return cupid_gb_camera_read_tile(&gb->camera, address - 0xa100u);
+            return cupid_gb_camera_read_tile(
+                &gb->camera, gb->camera_host.request_callback ? gb->camera_host.image : NULL,
+                address - 0xa100u);
     } else if (gb->header.mbc_type == CUPID_GB_HUC3) {
         if (gb->huc3_mode != CUPID_GB_HUC3_SRAM_READ_ONLY && gb->huc3_mode != CUPID_GB_HUC3_SRAM)
             return cupid_gb_huc3_read_window(gb);
@@ -757,9 +772,10 @@ static uint16_t read_cartridge_window(const CupidGb *gb, uint16_t address) {
         unsigned selected = gb->rtc_register - 0x08u;
         return latched[selected] & masks[selected];
     }
-    /* Ordinary timer-equipped MBC3 wiring leaves banks 4-7 disconnected;
-     * the extended controller connects them to additional SRAM. */
-    if (gb->header.mbc_type == CUPID_GB_MBC3 && gb->header.has_timer &&
+    /* With physical SRAM present, ordinary timer-equipped MBC3 banks 4-7 drive FF.
+     * An absent chip leaves the bus floating; extended wiring connects those banks
+     * to SRAM. */
+    if (gb->header.mbc_type == CUPID_GB_MBC3 && gb->header.has_timer && gb->cartridge_ram_size &&
         !cupid_gb_has_extended_mbc3(gb) && gb->current_ram_bank > 3u) {
         return 0xffu;
     }
@@ -1327,10 +1343,10 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
         }
         if (gb->header.mbc_type == CUPID_GB_CAMERA) {
             if (gb->camera.mapped) {
-                cupid_gb_camera_write_register(&gb->camera, address, value);
+                cupid_gb_camera_write_register(gb, address, value);
                 return;
             }
-            if (gb->camera.busy_tcycles)
+            if (gb->camera.registers[0] & 1u)
                 return;
         }
         if (!gb->ram_enabled && gb->header.mbc_type != CUPID_GB_HUC1) {

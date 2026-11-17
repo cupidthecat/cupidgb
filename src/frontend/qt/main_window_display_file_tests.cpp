@@ -26,6 +26,8 @@
 
 #include <QClipboard>
 #include <QDoubleSpinBox>
+#include <QElapsedTimer>
+#include <QPointer>
 
 bool MainWindow::displayFilesSmokeTest(const QString &directory) {
     MainWindow session(true, true);
@@ -66,31 +68,88 @@ bool MainWindow::displayFilesSmokeTest(const QString &directory) {
     const QString selectedCapture = QDir(directory).filePath("selected-capture.png");
     if (!session.saveScreenshot(selectedCapture) || QImage(selectedCapture) != image)
         return smokeFailure(__FILE__, __LINE__);
-    auto fileDialog = [&session](QAction *action, const QString &path) {
+    const auto rejectOwnedDialog = [](QDialog *dialog) {
+        if (!dialog)
+            return;
+        QPointer<QDialog> owner(dialog);
+        auto *prompt = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+        if (prompt && prompt != dialog && dialog->isAncestorOf(prompt))
+            prompt->reject();
+        if (owner)
+            owner->reject();
+    };
+    auto fileDialog = [&session, &rejectOwnedDialog](QAction *action, const QString &path) {
         bool checked = false;
-        QTimer driver;
+        bool timedOut = false;
+        QPointer<QFileDialog> ownedDialog;
+        QElapsedTimer elapsed;
+        elapsed.start();
+        qInfo("Display file dialog begin: action=%s target=%s", qPrintable(action->objectName()),
+              qPrintable(path));
+        const auto reportDialog = [&](const char *phase) {
+            qInfo("Display file dialog %s: action=%s elapsed_ms=%lld visible=%d result=%d "
+                  "directory=%s selected=%s",
+                  phase, qPrintable(action->objectName()),
+                  static_cast<long long>(elapsed.elapsed()),
+                  ownedDialog && ownedDialog->isVisible(), ownedDialog ? ownedDialog->result() : -1,
+                  ownedDialog ? qPrintable(ownedDialog->directory().absolutePath()) : "<none>",
+                  ownedDialog ? qPrintable(ownedDialog->selectedFiles().join('|')) : "<none>");
+        };
+        QTimer driver, watchdog;
         driver.setInterval(1);
         QObject::connect(&driver, &QTimer::timeout, &session, [&] {
             auto *dialog = qobject_cast<QFileDialog *>(QApplication::activeModalWidget());
-            if (!dialog)
+            if (!dialog || dialog->parentWidget() != &session)
                 return;
+            ownedDialog = dialog;
             driver.stop();
             checked = session.paused_;
             if (path.isEmpty()) {
+                reportDialog("before reject");
                 dialog->reject();
+                reportDialog("after reject");
             } else {
                 dialog->selectFile(path);
+                reportDialog("before accept");
                 QMetaObject::invokeMethod(dialog, "accept", Qt::DirectConnection);
+                reportDialog("after accept");
             }
         });
+        watchdog.setSingleShot(true);
+        QObject::connect(&watchdog, &QTimer::timeout, &session, [&] {
+            timedOut = true;
+            driver.stop();
+            if (!ownedDialog) {
+                for (auto *dialog : session.findChildren<QFileDialog *>())
+                    if (dialog->parentWidget() == &session && dialog->isVisible()) {
+                        ownedDialog = dialog;
+                        break;
+                    }
+            }
+            reportDialog("watchdog failure");
+            const auto *modal = QApplication::activeModalWidget();
+            qCritical("Display file dialog timed out: action=%s target=%s elapsed_ms=%lld "
+                      "modal=%s title=%s",
+                      qPrintable(action->objectName()), qPrintable(path),
+                      static_cast<long long>(elapsed.elapsed()),
+                      modal ? modal->metaObject()->className() : "<none>",
+                      modal ? qPrintable(modal->windowTitle()) : "<none>");
+            rejectOwnedDialog(ownedDialog);
+        });
         driver.start();
+        watchdog.start(3000);
         // This driver edits QFileDialog widgets after showing them. OS-native
         // pickers do not support that operation consistently; qualify those separately.
         const bool widgetDialogs = QApplication::testAttribute(Qt::AA_DontUseNativeDialogs);
         QApplication::setAttribute(Qt::AA_DontUseNativeDialogs, true);
         action->trigger();
+        driver.stop();
+        watchdog.stop();
         QApplication::setAttribute(Qt::AA_DontUseNativeDialogs, widgetDialogs);
-        return checked;
+        qInfo("Display file dialog end: action=%s elapsed_ms=%lld checked=%d timeout=%d",
+              qPrintable(action->objectName()), static_cast<long long>(elapsed.elapsed()), checked,
+              timedOut);
+        return checked && !timedOut;
     };
     session.setPaused(false);
     const QString dialogCapture = QDir(directory).filePath("dialog-capture.png");
@@ -151,12 +210,18 @@ bool MainWindow::displayFilesSmokeTest(const QString &directory) {
         return smokeFailure(__FILE__, __LINE__);
     session.failed_ = false;
     bool edited = false;
-    QTimer editorDriver;
+    bool editorTimedOut = false;
+    QPointer<PaletteEditor> ownedEditor;
+    QElapsedTimer editorElapsed;
+    editorElapsed.start();
+    qInfo("Display palette editor begin");
+    QTimer editorDriver, editorWatchdog;
     editorDriver.setInterval(1);
     QObject::connect(&editorDriver, &QTimer::timeout, &session, [&] {
         auto *editor = dynamic_cast<PaletteEditor *>(QApplication::activeModalWidget());
-        if (!editor)
+        if (!editor || editor->parentWidget() != &session)
             return;
+        ownedEditor = editor;
         editorDriver.stop();
         edited = session.paused_;
         editor->findChild<QPushButton *>("palette/add")->click();
@@ -167,16 +232,46 @@ bool MainWindow::displayFilesSmokeTest(const QString &directory) {
         editor->findChild<QDoubleSpinBox *>("palette/parameter/0")->setValue(0.5);
         editor->findChild<QDoubleSpinBox *>("palette/parameter/1")->setValue(120);
         editor->findChild<QDoubleSpinBox *>("palette/parameter/2")->setValue(0.25);
+        qInfo("Display palette editor before accept: elapsed_ms=%lld visible=%d result=%d",
+              static_cast<long long>(editorElapsed.elapsed()), editor->isVisible(),
+              editor->result());
         editor->accept();
+        qInfo("Display palette editor after accept: elapsed_ms=%lld visible=%d result=%d",
+              static_cast<long long>(editorElapsed.elapsed()),
+              ownedEditor && ownedEditor->isVisible(), ownedEditor ? ownedEditor->result() : -1);
+    });
+    editorWatchdog.setSingleShot(true);
+    QObject::connect(&editorWatchdog, &QTimer::timeout, &session, [&] {
+        editorTimedOut = true;
+        editorDriver.stop();
+        if (!ownedEditor) {
+            for (auto *dialog : session.findChildren<QDialog *>())
+                if (auto *editor = dynamic_cast<PaletteEditor *>(dialog);
+                    editor && editor->parentWidget() == &session && editor->isVisible()) {
+                    ownedEditor = editor;
+                    break;
+                }
+        }
+        const auto *modal = QApplication::activeModalWidget();
+        qCritical("Display palette editor timed out: elapsed_ms=%lld modal=%s title=%s",
+                  static_cast<long long>(editorElapsed.elapsed()),
+                  modal ? modal->metaObject()->className() : "<none>",
+                  modal ? qPrintable(modal->windowTitle()) : "<none>");
+        rejectOwnedDialog(ownedEditor);
     });
     editorDriver.start();
+    editorWatchdog.start(3000);
     session.findChild<QAction *>("video/editPalettes")->trigger();
+    editorDriver.stop();
+    editorWatchdog.stop();
+    qInfo("Display palette editor end: elapsed_ms=%lld edited=%d timeout=%d",
+          static_cast<long long>(editorElapsed.elapsed()), edited, editorTimedOut);
     bool validLibrary = false;
     const auto storedLibrary = PaletteLibrary::decode(
         settings_.value("video/paletteLibrary").toByteArray(), {}, &validLibrary);
-    if (!edited || !validLibrary || !session.paused_ || session.captureState() != state ||
-        storedLibrary.current().name != "Workflow Palette" || storedLibrary.current().manual ||
-        storedLibrary.current().brightness != 0.5 ||
+    if (editorTimedOut || !edited || !validLibrary || !session.paused_ ||
+        session.captureState() != state || storedLibrary.current().name != "Workflow Palette" ||
+        storedLibrary.current().manual || storedLibrary.current().brightness != 0.5 ||
         session.displayPalette_ != storedLibrary.current().colors.shades)
         return smokeFailure(__FILE__, __LINE__);
     auto *savedPalettes = session.findChild<QMenu *>("video/savedPalettes");

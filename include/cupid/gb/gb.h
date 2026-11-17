@@ -36,7 +36,9 @@
  * This bounds input size, not the memory reserved for an unloaded machine. */
 #define CUPID_GB_MAX_ROM_SIZE 0x40000000u
 #define CUPID_GB_MIN_ROM_CAPACITY 0x8000u
-#define CUPID_GB_MAX_RAM_SIZE (128u * 1024u)
+/* Ordinary cartridges and the legacy native-state prefix retain this fixed span. */
+#define CUPID_GB_INLINE_RAM_SIZE (128u * 1024u)
+#define CUPID_GB_MAX_RAM_SIZE (2u * 1024u * 1024u)
 #define CUPID_GB_MAX_BOOT_ROM_SIZE 0x0900u /* CGB boot ROM is 2304 bytes */
 #define CUPID_GB_SCREEN_WIDTH 160u
 #define CUPID_GB_SCREEN_HEIGHT 144u
@@ -143,6 +145,7 @@ typedef struct CupidGbApu {
     uint8_t ch3_wave_access_ticks; /* DMG-only access window after a wave fetch */
     bool ch3_freq_pending;         /* apply ch3_freq after the next wave RAM fetch */
     uint8_t ch3_sample;            /* current 4-bit output */
+    uint8_t ch3_sample_byte;       /* Retained fetch data, independent of wave RAM writes. */
 
     /* CH4 – noise (LFSR) */
     bool ch4_dac;
@@ -336,6 +339,24 @@ typedef void (*CupidGbPresentationCallback)(const struct CupidGb *gb, uint8_t fr
 typedef void (*CupidGbInfraredCallback)(const struct CupidGb *gb, bool enabled,
                                         uint64_t base_cycles, void *user_data);
 
+enum {
+    CUPID_GB_CAMERA_SENSOR_WIDTH = 128,
+    CUPID_GB_CAMERA_SENSOR_HEIGHT = 112,
+    CUPID_GB_CAMERA_SENSOR_SIZE = CUPID_GB_CAMERA_SENSOR_WIDTH * CUPID_GB_CAMERA_SENSOR_HEIGHT
+};
+
+typedef void (*CupidGbCameraRequestCallback)(struct CupidGb *gb, uint64_t request, void *user_data);
+
+/* Device ownership and the last accepted sensor image belong to the receiving
+ * session. Native states contain neither these pixels nor asynchronous requests. */
+typedef struct CupidGbCameraHost {
+    CupidGbCameraRequestCallback request_callback;
+    void *user_data;
+    uint64_t request_sequence;
+    uint64_t pending_request;
+    uint8_t image[CUPID_GB_CAMERA_SENSOR_SIZE];
+} CupidGbCameraHost;
+
 /* Alignment and word sampling are independent of the data-byte countdown. */
 typedef enum CupidGbObjectFetchStage {
     CUPID_GB_OBJECT_IDLE,
@@ -395,8 +416,12 @@ typedef struct CupidGb {
     size_t rom_capacity;     /* Owned host allocation size; excluded from native save states. */
     uint64_t rom_generation; /* Successful cartridge loads invalidate cached host state identity. */
     uint8_t video_ram[0x4000];
-    uint8_t cartridge_ram[CUPID_GB_MAX_RAM_SIZE];
+    uint8_t cartridge_ram[CUPID_GB_INLINE_RAM_SIZE];
     size_t cartridge_ram_size;
+    uint8_t
+        *cartridge_ram_heap; /* Optional complete TPP1 SRAM allocation, never an inline alias. */
+    size_t
+        cartridge_ram_capacity; /* Zero for inline storage; host ownership, outside save states. */
     uint8_t work_ram[0x8000];
     uint8_t object_attribute_memory[0x00a0];
     uint8_t io_registers[0x0080];
@@ -546,6 +571,7 @@ typedef struct CupidGb {
     CupidGbVramBus vram_bus;
     /* Host masks await the next delivered input sample, including after reset. */
     bool joyp_sample_pending;
+    CupidGbCameraHost camera_host;
 } CupidGb;
 
 /* Optional host observation for one hardware step. This output is not stored

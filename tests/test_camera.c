@@ -171,7 +171,7 @@ static void set_sensor_case(CupidGbCamera *camera, unsigned gain, unsigned edge,
 }
 
 static uint32_t digest_tile(uint32_t digest, const CupidGbCamera *camera, unsigned offset) {
-    return (digest ^ cupid_gb_camera_read_tile(camera, offset)) * 16777619u;
+    return (digest ^ cupid_gb_camera_read_tile(camera, NULL, offset)) * 16777619u;
 }
 
 static void test_sensor_processing(void) {

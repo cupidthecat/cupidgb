@@ -29,6 +29,10 @@
 #include <stdexcept>
 #include <vector>
 
+extern "C" {
+#include "cupid/gb/cartridge.h"
+}
+
 namespace {
 std::unique_ptr<CupidGb> machine(bool color, size_t cartridgeSize = 0) {
     auto gb = std::make_unique<CupidGb>();
@@ -302,6 +306,83 @@ void testPhysicalWrites() {
     assert(gb->cartridge_ram[0x1fff] == 0xcd && gb->cartridge_ram[0x2000] == 0xab);
     assert(gb->battery_write_generation == 1);
 }
+
+void testLargeCartridgeRam() {
+    for (const bool color : {false, true}) {
+        auto gb = machine(color);
+        std::vector<uint8_t> rom(0x8000);
+        rom[0x100] = 0x18;
+        rom[0x101] = 0xfe;
+        rom[0x143] = color ? 0x80 : 0;
+        rom[0x147] = 0xbc;
+        rom[0x149] = 0xc1;
+        rom[0x14a] = 0x65;
+        rom[0x152] = 9;
+        rom[0x153] = 8;
+        uint8_t checksum = 0;
+        for (unsigned address = 0x134; address < 0x14d; ++address)
+            checksum = uint8_t(checksum - rom[address] - 1);
+        rom[0x14d] = checksum;
+        cupid_gb_set_power_on_seed(gb.get(), 0);
+        assert(cupid_gb_load_rom(gb.get(), rom.data(), rom.size()));
+        assert(gb->cartridge_ram_size == 0x200000);
+        auto *ram = cupid_gb_cartridge_ram(gb.get());
+        const size_t workSize = color ? 0x8000 : 0x2000;
+        std::memset(gb->work_ram, 0, sizeof(gb->work_ram));
+        std::memset(gb->high_ram, 0, sizeof(gb->high_ram));
+        cupid_gb_write_u8(gb.get(), 2, 1);
+        cupid_gb_write_u8(gb.get(), 3, 3);
+        for (const auto type : {CheatSearchType::Byte, CheatSearchType::WordLittleEndian,
+                                CheatSearchType::WordBigEndian}) {
+            std::memset(ram, 0, gb->cartridge_ram_size);
+            const size_t width = word(type) ? 2 : 1;
+            const std::array<size_t, 3> offsets = {0x1ffff, 0x20020,
+                                                   gb->cartridge_ram_size - width};
+            const uint16_t original = word(type) ? 0x5a5a : 0x5a;
+            for (const size_t offset : offsets)
+                store(ram + offset, type, original);
+            CheatSearch search;
+            search.filter(*gb, type, CheatSearchCondition::Equal, original);
+            assert(search.count() == offsets.size());
+            for (size_t index = 0; index < offsets.size(); ++index) {
+                const auto found = search.result(index);
+                assert(found.offset == workSize + offsets[index]);
+                assert(found.bank == offsets[index] / 0x2000);
+                assert(found.address == 0xa000 + (offsets[index] & 0x1fff));
+            }
+            assert(search.result(0).bank == 15 && search.result(1).bank == 16 &&
+                   search.result(2).bank == 255);
+            if (word(type)) {
+                const auto next = search.byteResult(0, 1);
+                assert(next.offset == workSize + 0x20000 && next.bank == 16 &&
+                       next.address == 0xa000 && next.value == 0x5a);
+            }
+            const uint16_t replacement = word(type) ? 0xabcd : 0xcd;
+            const uint64_t generation = gb->battery_write_generation;
+            assert(search.writeValue(*gb, 0, replacement));
+            assert(gb->battery_write_generation == generation + 1);
+            assert(search.currentValue(*gb, 0) == replacement &&
+                   search.result(0).value == original);
+            assert(gb->tpp1.ram_bank == 1 && ram[0x2000] == 0);
+            assert(ram[0x1ffff] == (type == CheatSearchType::WordBigEndian ? 0xab : 0xcd));
+            if (word(type))
+                assert(ram[0x20000] == (type == CheatSearchType::WordBigEndian ? 0xcd : 0xab));
+            assert(search.writeValue(*gb, 2, replacement));
+            assert(search.currentValue(*gb, 2) == replacement &&
+                   gb->battery_write_generation == generation + 2);
+            if (word(type)) {
+                // The end of SRAM must not form a word with the start of HRAM.
+                ram[gb->cartridge_ram_size - 1] = 0xff;
+                gb->high_ram[0] = 0xff;
+                search.reset();
+                search.filter(*gb, type, CheatSearchCondition::Equal, 0xffff);
+                assert(search.count() == 0);
+                gb->high_ram[0] = 0;
+            }
+        }
+        cupid_gb_cleanup(gb.get());
+    }
+}
 } // namespace
 
 int main() {
@@ -311,4 +392,5 @@ int main() {
     testInitialZeroAndEmptyRestart();
     testTypeChangeKeepsCandidates();
     testPhysicalWrites();
+    testLargeCartridgeRam();
 }

@@ -26,14 +26,20 @@
 
 #include <stdio.h>
 
-enum { HEADER_BYTES = 128, ACCESSORY_BYTES = 8, SELECTOR_BYTES = 1 };
+enum {
+    HEADER_BYTES = 128,
+    ACCESSORY_BYTES = 8,
+    SELECTOR_BYTES = 1,
+    WAVE_HISTORY_BYTES = 1,
+    SRAM_LENGTH_BYTES = 4
+};
 
 typedef struct Blob {
     uint8_t *bytes;
     size_t size;
 } Blob;
 
-static unsigned native_cases, legacy_cases, rejected_cases;
+static unsigned native_cases, legacy_cases, published_cases, rejected_cases;
 
 static CupidGb *new_machine(CupidGbModel model) {
     CupidGb *gb = serial_test_new(model, model == CUPID_GB_MODEL_CGB, true, 0x22);
@@ -53,8 +59,16 @@ static Blob capture(const CupidGb *gb) {
     assert(blob.bytes);
     size_t written = 0;
     assert(cupid_gb_save_state(gb, blob.bytes, blob.size, &written) == CUPID_GB_STATE_OK);
-    assert(written == blob.size && blob.bytes[8] == 18);
+    assert(written == blob.size && blob.bytes[8] == CUPID_GB_STATE_VERSION);
     return blob;
+}
+
+/* This fixture has inline SRAM and no attached accessory payload. */
+static size_t selector_offset(const Blob *blob) {
+    assert(blob->bytes[8] >= 18 && blob->bytes[8] <= CUPID_GB_STATE_VERSION);
+    return blob->size - ACCESSORY_BYTES - SELECTOR_BYTES -
+           (blob->bytes[8] >= 19 ? SRAM_LENGTH_BYTES : 0) -
+           (blob->bytes[8] >= 20 ? WAVE_HISTORY_BYTES : 0);
 }
 
 static void put_u32(uint8_t *data, uint32_t value) {
@@ -101,13 +115,13 @@ static void test_reset_selection_is_independent(void) {
     Blob slow = capture(gb);
     cupid_gb_write_u8(gb, 0xff02, 2);
     Blob fast = capture(gb);
-    const size_t selector = slow.size - ACCESSORY_BYTES - SELECTOR_BYTES;
-    assert(slow.size == 305098 && fast.size == slow.size);
+    const size_t selector = selector_offset(&slow);
+    assert(slow.size == 305103 && fast.size == slow.size);
     assert(!slow.bytes[selector] && fast.bytes[selector] == 1);
     /* Identical SC, phase and hardware prefix do not identify the selected tap. */
     assert(!memcmp(slow.bytes + HEADER_BYTES, fast.bytes + HEADER_BYTES, selector - HEADER_BYTES));
     assert(!memcmp(slow.bytes + selector + SELECTOR_BYTES, fast.bytes + selector + SELECTOR_BYTES,
-                   ACCESSORY_BYTES));
+                   WAVE_HISTORY_BYTES + SRAM_LENGTH_BYTES + ACCESSORY_BYTES));
     free(slow.bytes);
     free(fast.bytes);
     serial_test_free(gb);
@@ -178,13 +192,19 @@ static void test_native_continuation(void) {
 static Blob legacy_blob(const Blob *current, unsigned version) {
     static const size_t lengths[] = {300518, 300568, 300572, 300580, 300584, 300585,
                                      300596, 300602, 300606, 300608, 300622, 300628,
-                                     305062, 305096, 305097, 305097};
-    assert(version >= 2 && version <= 17 && current->size == 305098);
+                                     305062, 305096, 305097, 305097, 305098, 305102};
+    assert(version >= 2 && version <= 19 && current->size == 305103);
     Blob legacy = {NULL, lengths[version - 2]};
     legacy.bytes = malloc(legacy.size);
     assert(legacy.bytes);
     const size_t hardware = legacy.size - (version >= 12 ? ACCESSORY_BYTES : 0);
     memcpy(legacy.bytes, current->bytes, hardware);
+    if (version == 19) {
+        /* This fixture selects the SRAM-only draft, whose size is fixed above. */
+        const size_t wave =
+            current->size - ACCESSORY_BYTES - SRAM_LENGTH_BYTES - WAVE_HISTORY_BYTES;
+        memcpy(legacy.bytes + wave, current->bytes + wave + WAVE_HISTORY_BYTES, SRAM_LENGTH_BYTES);
+    }
     if (version >= 12)
         memcpy(legacy.bytes + hardware, current->bytes + current->size - ACCESSORY_BYTES,
                ACCESSORY_BYTES);
@@ -216,8 +236,10 @@ static void test_legacy_projection(void) {
         source->serial_tx_latch = 0xa5;
         const bool projected_fast = source->cgb_mode && (source->io_registers[2] & 2u);
         Blob current = capture(source);
-        for (unsigned version = 2; version <= 17; ++version) {
+        for (unsigned version = 2; version <= 18; ++version) {
             Blob legacy = legacy_blob(&current, version);
+            const bool expected_fast =
+                version == 18 ? cases[scenario].original_fast : projected_fast;
             for (unsigned api = 0; api < 4; ++api) {
                 CupidGb *targets[2] = {new_machine(CUPID_GB_MODEL_CGB),
                                        new_machine(CUPID_GB_MODEL_CGB)};
@@ -227,7 +249,7 @@ static void test_legacy_projection(void) {
                     target->serial_fast_clock = poison != 0;
                     serial_test_observe(target, &witnesses[poison]);
                     assert(restore(target, &legacy, api) == CUPID_GB_STATE_OK);
-                    assert(target->serial_fast_clock == projected_fast);
+                    assert(target->serial_fast_clock == expected_fast);
                     assert(target->cgb_mode == source->cgb_mode);
                     assert(target->io_registers[2] == cases[scenario].raw_control);
                     assert(cupid_gb_read_u8(target, 0xff02) ==
@@ -236,7 +258,12 @@ static void test_legacy_projection(void) {
                     assert(target->serial_master_clock && target->serial_tx_latch == 0xa5);
                     assert(target->serial_bits_remaining == source->serial_bits_remaining);
                     assert(target->serial_link.user_data == &witnesses[poison]);
+                    assert(target->serial_output_user_data == &witnesses[poison]);
                     assert_quiet(&witnesses[poison]);
+                    /* Published V18 preserves the saved selector even when legacy
+                     * projection would choose a different clock. */
+                    if (version == 18 && api < 2)
+                        assert_encoded_equal(source, target);
                 }
                 assert_encoded_equal(targets[0], targets[1]);
                 for (unsigned step = 0; step < 54; ++step) {
@@ -247,7 +274,10 @@ static void test_legacy_projection(void) {
                 assert(!memcmp(targets[0]->high_ram, targets[1]->high_ram, 3));
                 for (unsigned index = 0; index < 2; ++index)
                     serial_test_free(targets[index]);
-                ++legacy_cases;
+                if (version == 18)
+                    ++published_cases;
+                else
+                    ++legacy_cases;
             }
             free(legacy.bytes);
         }
@@ -272,34 +302,38 @@ static void reject_unchanged(CupidGb *target, const Blob *blob) {
 }
 
 static void test_invalid_selector(void) {
-    CupidGb *source = new_machine(CUPID_GB_MODEL_CGB);
-    CupidGb *target = new_machine(CUPID_GB_MODEL_CGB);
-    Blob blob = capture(source);
-    const size_t selector = blob.size - ACCESSORY_BYTES - SELECTOR_BYTES;
-    const uint8_t invalid[] = {2, 0x80, 0xff};
-    for (unsigned index = 0; index < sizeof(invalid); ++index) {
-        blob.bytes[selector] = invalid[index];
-        resign(&blob);
-        reject_unchanged(target, &blob);
+    const CupidGbModel models[] = {CUPID_GB_MODEL_CGB, CUPID_GB_MODEL_DMG_ABC};
+    for (unsigned model = 0; model < sizeof(models) / sizeof(models[0]); ++model) {
+        CupidGb *source = new_machine(models[model]);
+        CupidGb *target = new_machine(models[model]);
+        for (unsigned version = 18; version <= CUPID_GB_STATE_VERSION; ++version) {
+            Blob current = capture(source);
+            Blob blob = version < 20 ? legacy_blob(&current, version) : current;
+            const size_t selector = selector_offset(&blob);
+            const uint8_t invalid[] = {2, 0x80, 0xff};
+            for (unsigned index = 0; index < sizeof(invalid); ++index) {
+                blob.bytes[selector] = invalid[index];
+                resign(&blob);
+                reject_unchanged(target, &blob);
+            }
+            if (models[model] != CUPID_GB_MODEL_CGB) {
+                blob.bytes[selector] = 1;
+                resign(&blob);
+                reject_unchanged(target, &blob);
+            }
+            blob.bytes[selector] = 0;
+            memmove(blob.bytes + selector, blob.bytes + selector + SELECTOR_BYTES,
+                    blob.size - selector - SELECTOR_BYTES);
+            blob.size -= SELECTOR_BYTES;
+            resign(&blob);
+            reject_unchanged(target, &blob);
+            if (version < 20)
+                free(blob.bytes);
+            free(current.bytes);
+        }
+        serial_test_free(source);
+        serial_test_free(target);
     }
-    blob.bytes[selector] = 0;
-    memmove(blob.bytes + selector, blob.bytes + selector + 1, ACCESSORY_BYTES);
-    --blob.size;
-    resign(&blob);
-    reject_unchanged(target, &blob);
-    free(blob.bytes);
-    serial_test_free(source);
-    serial_test_free(target);
-
-    source = new_machine(CUPID_GB_MODEL_DMG_ABC);
-    target = new_machine(CUPID_GB_MODEL_DMG_ABC);
-    blob = capture(source);
-    blob.bytes[blob.size - ACCESSORY_BYTES - SELECTOR_BYTES] = 1;
-    resign(&blob);
-    reject_unchanged(target, &blob);
-    free(blob.bytes);
-    serial_test_free(source);
-    serial_test_free(target);
 }
 
 int main(void) {
@@ -307,7 +341,8 @@ int main(void) {
     test_native_continuation();
     test_legacy_projection();
     test_invalid_selector();
-    printf("Serial state checks passed: %u native, %u legacy, %u rejected loads.\n", native_cases,
-           legacy_cases, rejected_cases);
+    printf("Serial state checks passed: %u native, %u legacy projections, %u published V18, "
+           "%u rejected loads.\n",
+           native_cases, legacy_cases, published_cases, rejected_cases);
     return 0;
 }

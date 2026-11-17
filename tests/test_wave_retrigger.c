@@ -134,6 +134,7 @@ static const char *const bit_readbacks[3][8] = {
      "ffffe11e69a65cf03cc38778ffffe11e", "ffffe11e69a65cf03cc38778ffffe11e"}};
 
 static unsigned readback_cases, bit_cases, control_cases, guest_cases, continuation_cases;
+static unsigned length_order_cases;
 
 static void input_bytes(const Spec *spec, uint8_t bytes[WAVE_BYTES]) {
     for (unsigned index = 0; index < WAVE_BYTES; ++index)
@@ -531,16 +532,103 @@ static void test_native_continuation(void) {
                     }
 }
 
+typedef struct LengthCase {
+    unsigned length, phase, expected_length;
+    bool enabled, expected_active;
+    uint8_t control;
+} LengthCase;
+
+static Guest prepare_length_guest(const Spec *spec, const LengthCase *length) {
+    Guest guest = {.gb = create_machine(spec->profile, true), .event_t = event_time(spec)};
+    CupidGb *gb = guest.gb;
+    prepare_wave(gb, spec);
+    gb->cpu.pc = 0x200;
+    unsigned phase_steps = 0;
+    /* Reach the divider phase through complete NOPs. No test assigns a hidden
+     * sequencer flag, and the measured store stays before its following edge. */
+    while ((gb->apu.fs_step & 1u) != length->phase) {
+        assert(++phase_steps <= 5000);
+        step(gb);
+    }
+    cupid_gb_write_u8(gb, 0xff1a, 0);
+    cupid_gb_write_u8(gb, 0xff1e, length->enabled ? 0x47 : 7);
+    cupid_gb_write_u8(gb, 0xff1b, (uint8_t)(256u - length->length));
+    uint8_t input[WAVE_BYTES];
+    input_bytes(spec, input);
+    for (unsigned index = 0; index < WAVE_BYTES; ++index)
+        cupid_gb_write_u8(gb, (uint16_t)(0xff30u + index), input[index]);
+    cupid_gb_write_u8(gb, 0xff1a, 0x80);
+    cupid_gb_write_u8(gb, 0xff1e, length->enabled ? 0xc7 : 0x87);
+    assert(gb->apu.ch3_on && gb->apu.ch3_dac && gb->apu.ch3_timer == FIRST_FETCH_T);
+    assert(gb->apu.ch3_len == length->length && gb->apu.ch3_len_en == length->enabled);
+    assert((gb->apu.fs_step & 1u) == length->phase);
+
+    guest.origin = gb->elapsed_cycles;
+    const unsigned nop_t = spec->profile->fast ? 2u : 4u;
+    guest.preclock = guest.event_t % nop_t;
+    cupid_gb_tick_apu(gb, (uint16_t)guest.preclock);
+    gb->cpu.pc = 0x200;
+    const unsigned warmup = (guest.event_t - guest.preclock) / nop_t - 3u;
+    for (unsigned index = 0; index < warmup; ++index)
+        step(gb);
+    gb->cpu.pc = 0x100;
+    gb->cpu.a = length->control;
+    return guest;
+}
+
+static void test_length_enable_retrigger_order(void) {
+    static const LengthCase lengths[] = {
+        {1, 1, 255, false, true, 0xc7}, /* Newly enabled length expires during retrigger. */
+        {2, 1, 1, false, true, 0xc7},   {1, 0, 1, false, true, 0xc7},  {1, 1, 1, true, true, 0xc7},
+        {1, 1, 1, false, true, 0x87},   {1, 1, 0, false, false, 0x47},
+    };
+    const unsigned offsets[] = {1, 5};
+    const int windows[] = {-4, -2, 0};
+    for (unsigned model = 0; model < COUNT_OF(profiles); ++model)
+        for (unsigned scenario = 0; scenario < COUNT_OF(lengths); ++scenario)
+            for (unsigned offset = 0; offset < COUNT_OF(offsets); ++offset)
+                for (unsigned nibble = 0; nibble < 2; ++nibble)
+                    for (unsigned window = 0; window < COUNT_OF(windows); ++window) {
+                        const LengthCase *length = &lengths[scenario];
+                        const Spec spec = {
+                            &profiles[model], offsets[offset],
+                            nibble,           8,
+                            windows[window],  length->control & 0x80 ? RETRIGGER : NO_TRIGGER};
+                        Guest guest = prepare_length_guest(&spec, length);
+                        CupidGb *gb = guest.gb;
+                        assert(gb->apu.ch3_len == length->length && gb->apu.ch3_on);
+                        assert(gb->apu.ch3_len_en == length->enabled);
+                        assert((gb->apu.fs_step & 1u) == length->phase);
+                        run_guest_instruction(&guest, &spec);
+                        assert(gb->apu.ch3_len == length->expected_length);
+                        assert(gb->apu.ch3_on == length->expected_active && gb->apu.ch3_dac);
+                        assert(gb->apu.ch3_len_en == ((length->control & 0x40u) != 0));
+                        assert((gb->apu.fs_step & 1u) == length->phase);
+                        step(gb);
+                        step(gb);
+                        uint8_t expected[WAVE_BYTES];
+                        expected_bytes(&spec, expected);
+                        assert_wave(gb, &spec, expected);
+                        assert(gb->apu.ch3_len == length->expected_length);
+                        assert(gb->apu.ch3_on == length->expected_active);
+                        destroy_machine(gb);
+                        ++length_order_cases;
+                    }
+}
+
 int main(void) {
     test_complete_readbacks();
     test_bit_inputs();
     test_controls();
     test_guest_stores();
     test_native_continuation();
+    test_length_enable_retrigger_order();
     assert(readback_cases == 3072 && bit_cases == 768 && control_cases == 640);
     assert(guest_cases == 3072 && continuation_cases == 256);
+    assert(length_order_cases == 576);
     printf("Wave-memory checks: %u complete readbacks, %u bit inputs, %u controls, "
-           "%u guest stores and %u native continuations.\n",
-           readback_cases, bit_cases, control_cases, guest_cases, continuation_cases);
+           "%u guest stores, %u native continuations and %u length-order checks.\n",
+           readback_cases, bit_cases, control_cases, guest_cases, continuation_cases,
+           length_order_cases);
     return 0;
 }

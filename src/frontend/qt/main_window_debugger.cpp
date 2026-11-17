@@ -373,6 +373,7 @@ bool MainWindow::debuggerBackstep() {
         return false;
     }
     ++timelineId_;
+    cancelCameraCapture();
     resetControllerRumble();
     controllerPlayerCount_ =
         cupid_gb_sgb_active(&emulator_->gb) ? emulator_->gb.sgb.player_count : 1;
@@ -397,6 +398,7 @@ bool MainWindow::debuggerWrite(uint16_t address, uint8_t value) {
     if (!cupid_gb_debug_poke(&emulator_->gb, address, value))
         return false;
     ++timelineId_;
+    cancelCameraCapture();
     resetDebuggerTimeline();
     resetRewind();
     rememberFrame();
@@ -667,6 +669,7 @@ void MainWindow::debuggerCommand(const QString &input) {
         else if (name == "L")
             cpu.l = uint8_t(value);
         ++timelineId_;
+        cancelCameraCapture();
         resetDebuggerTimeline();
         if (inspectorsWindow_)
             inspectorsWindow_->sessionChanged();

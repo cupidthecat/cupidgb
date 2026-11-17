@@ -139,13 +139,17 @@ if(CUPIDGB_BUILD_QT)
         src/frontend/qt/cheat_search.cpp
         src/frontend/qt/cheats_window.cpp
         src/frontend/qt/color_pipeline.cpp
+        src/frontend/qt/host_camera.cpp
         src/frontend/qt/main_window.cpp
         src/frontend/qt/main_window.h
         src/frontend/qt/main_window_cheats.cpp
         src/frontend/qt/main_window_cheat_tests.cpp
         src/frontend/qt/main_window_audio.cpp
+        src/frontend/qt/main_window_camera.cpp
+        src/frontend/qt/main_window_camera_tests.cpp
         src/frontend/qt/main_window_reset.cpp
         src/frontend/qt/main_window_reset_tests.cpp
+        src/frontend/qt/main_window_ram_tests.cpp
         src/frontend/qt/main_window_reset_audio_tests.cpp
         src/frontend/qt/main_window_audio_policy_tests.cpp
         src/frontend/qt/main_window_input.cpp
@@ -176,6 +180,7 @@ if(CUPIDGB_BUILD_QT)
         src/frontend/qt/printer_window.cpp
         src/frontend/qt/guest_clock_pacer.cpp
         src/frontend/qt/host_elapsed_timer.cpp
+        src/frontend/qt/rewind_compression.cpp
         src/frontend/qt/audio_converter.cpp
         src/frontend/qt/turbo_audio_window.cpp
         src/frontend/qt/wave_recorder.cpp
@@ -221,7 +226,15 @@ if(CUPIDGB_BUILD_QT)
 endif()
 if(CUPIDGB_ENABLE_TESTS)
     enable_testing()
-    foreach(test_name IN ITEMS smoke gb startup reset rtc rtc_timing rtc_dma rtc_state divider_phase serial serial_selection serial_state printer printer_state ppu pixel_timing pixel_timing_state scy_latch stat apu wave_retrigger audio_synthesis audio_filter audio_state audio_clock cpu_timing cpu_lockup dma video_bus vram_bus vram_quiet bus state battery native_v1_recovery sgb input input_sampling cartridge camera mbc7 tpp1 rumble rumble_sampling presentation_observer huc3 infrared infrared_state infrared_guest cheats debugger debugger_watchpoints sha256)
+    foreach(test_name IN ITEMS
+        smoke gb startup reset rtc rtc_timing rtc_dma rtc_state divider_phase
+        serial serial_selection serial_state printer printer_state ppu pixel_timing
+        pixel_timing_state scy_latch stat apu wave_retrigger wave_history wave_history_state
+        audio_synthesis audio_filter audio_state audio_clock cpu_timing cpu_lockup
+        dma video_bus vram_bus vram_quiet bus state state_ram battery native_v1_recovery
+        sgb input input_sampling cartridge mbc3_bus camera camera_host camera_state mbc7
+        tpp1 rumble rumble_sampling presentation_observer huc3 infrared infrared_state
+        infrared_guest cheats debugger debugger_watchpoints sha256)
         add_executable(cupidgb_${test_name} tests/test_${test_name}.c)
         target_link_libraries(cupidgb_${test_name} PRIVATE cupidgb_core)
         # Tests use assert for setup and checks, including in Release builds.
@@ -314,6 +327,17 @@ if(CUPIDGB_ENABLE_TESTS)
         endif()
         add_test(NAME cupidgb_host_elapsed_timer COMMAND cupidgb_host_elapsed_timer)
         set_tests_properties(cupidgb_host_elapsed_timer PROPERTIES TIMEOUT 10)
+        add_executable(cupidgb_rewind_compression
+            tests/frontend/test_rewind_compression.cpp src/frontend/qt/rewind_compression.cpp)
+        target_include_directories(cupidgb_rewind_compression PRIVATE src/frontend/qt)
+        target_link_libraries(cupidgb_rewind_compression PRIVATE Qt6::Core)
+        if(MSVC)
+            target_compile_options(cupidgb_rewind_compression PRIVATE /UNDEBUG)
+        else()
+            target_compile_options(cupidgb_rewind_compression PRIVATE -UNDEBUG)
+        endif()
+        add_test(NAME cupidgb_rewind_compression COMMAND cupidgb_rewind_compression)
+        set_tests_properties(cupidgb_rewind_compression PROPERTIES TIMEOUT 30)
         add_executable(cupidgb_debugger_window
             tests/frontend/test_debugger_window.cpp src/frontend/qt/debugger_window.cpp)
         target_include_directories(cupidgb_debugger_window PRIVATE src/frontend/qt)
@@ -439,6 +463,18 @@ if(CUPIDGB_ENABLE_TESTS)
             target_compile_options(cupidgb_audio_converter PRIVATE -UNDEBUG)
         endif()
         add_test(NAME cupidgb_audio_converter COMMAND cupidgb_audio_converter)
+        add_executable(cupidgb_host_camera
+            tests/frontend/test_host_camera.cpp src/frontend/qt/host_camera.cpp)
+        target_include_directories(cupidgb_host_camera PRIVATE include src/frontend/qt)
+        target_link_libraries(cupidgb_host_camera PRIVATE Qt6::Gui Qt6::Multimedia)
+        if(MSVC)
+            target_compile_options(cupidgb_host_camera PRIVATE /UNDEBUG)
+        else()
+            target_compile_options(cupidgb_host_camera PRIVATE -UNDEBUG)
+        endif()
+        add_test(NAME cupidgb_host_camera COMMAND cupidgb_host_camera)
+        set_tests_properties(cupidgb_host_camera PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 10)
         add_executable(cupidgb_turbo_audio_window
             tests/frontend/test_turbo_audio_window.cpp src/frontend/qt/turbo_audio_window.cpp)
         target_include_directories(cupidgb_turbo_audio_window PRIVATE src/frontend/qt)
@@ -464,12 +500,18 @@ if(CUPIDGB_ENABLE_TESTS)
             target_compile_options(cupidgb_wave_recorder PRIVATE -UNDEBUG)
         endif()
         add_test(NAME cupidgb_wave_recorder COMMAND cupidgb_wave_recorder)
-        add_test(NAME cupidgb_qt_cli
+        add_test(NAME cupidgb_qt_cli_selection
             COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/test_qt_cli.py
-                    $<TARGET_FILE:cupidgb>)
-        set_tests_properties(cupidgb_qt_cli PROPERTIES TIMEOUT 90)
-        add_test(NAME cupidgb_qt_workflows COMMAND cupidgb --smoke-test)
-        set_tests_properties(cupidgb_qt_workflows PROPERTIES
+                    $<TARGET_FILE:cupidgb> --group selection)
+        add_test(NAME cupidgb_qt_cli_cartridge
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/test_qt_cli.py
+                    $<TARGET_FILE:cupidgb> --group cartridge)
+        set_tests_properties(cupidgb_qt_cli_selection cupidgb_qt_cli_cartridge
+            PROPERTIES TIMEOUT 90)
+        add_test(NAME cupidgb_qt_workflows COMMAND cupidgb --smoke-test --smoke-workflow desktop)
+        add_test(NAME cupidgb_qt_storage_workflows
+            COMMAND cupidgb --smoke-test --smoke-workflow storage)
+        set_tests_properties(cupidgb_qt_workflows cupidgb_qt_storage_workflows PROPERTIES
             ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
     endif()
 endif()

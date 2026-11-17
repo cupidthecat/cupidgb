@@ -113,6 +113,26 @@ size_t cupid_gb_ram_size_from_code(uint8_t code) {
     }
 }
 
+uint8_t *cupid_gb_cartridge_ram(CupidGb *gb) {
+    return gb ? (gb->cartridge_ram_heap ? gb->cartridge_ram_heap : gb->cartridge_ram) : NULL;
+}
+
+const uint8_t *cupid_gb_cartridge_ram_const(const CupidGb *gb) {
+    return gb ? (gb->cartridge_ram_heap ? gb->cartridge_ram_heap : gb->cartridge_ram) : NULL;
+}
+
+bool cupid_gb_cartridge_storage_valid(const CupidGb *gb) {
+    if (!gb)
+        return false;
+    const size_t size = gb->cartridge_ram_size;
+    if (size <= CUPID_GB_INLINE_RAM_SIZE)
+        return !gb->cartridge_ram_heap && !gb->cartridge_ram_capacity;
+    return gb->header.mbc_type == CUPID_GB_TPP1 && size <= CUPID_GB_MAX_RAM_SIZE &&
+           !(size & (size - 1u)) && gb->cartridge_ram_heap && gb->cartridge_ram_capacity == size &&
+           gb->header.ram_bank_count == size / 0x2000u &&
+           gb->ram_bank_count == gb->header.ram_bank_count;
+}
+
 static size_t cartridge_storage_size(const CupidGbCartridgeHeader *header, size_t rom_size) {
     switch (header->mbc_type) {
         case CUPID_GB_MBC_UNKNOWN:
@@ -872,17 +892,27 @@ void cupid_gb_cartridge_reset_controls(CupidGb *gb) {
     }
 }
 
-/* A source inside this instance's ROM buffer must fit before any header read,
- * including when the source starts at an interior offset. Compare integer
- * addresses so unrelated allocations never undergo ordered pointer comparison. */
-static bool rom_source_fits(const CupidGb *gb, const uint8_t *source, size_t length) {
-    if (!gb->rom || !gb->rom_capacity)
+/* A source strictly inside this instance's owned storage must fit before any
+ * header read. The end address can also begin a distinct caller-owned object;
+ * integer addresses cannot distinguish it from an invalid one-past pointer.
+ * Callers must provide readable input outside the half-open owned ranges.
+ * Compare integers so unrelated pointers never undergo ordered comparison. */
+static bool source_fits_buffer(const void *source, size_t length, const void *buffer,
+                               size_t capacity) {
+    if (!buffer || !capacity)
         return true;
-    const uintptr_t base = (uintptr_t)gb->rom;
+    const uintptr_t base = (uintptr_t)buffer;
     const uintptr_t address = (uintptr_t)source;
-    if (address < base || address - base > gb->rom_capacity)
+    if (address < base || address - base >= capacity)
         return true;
-    return length <= gb->rom_capacity - (size_t)(address - base);
+    return length <= capacity - (size_t)(address - base);
+}
+
+bool cupid_gb_cartridge_source_fits(const CupidGb *gb, const void *source, size_t length) {
+    return gb && (source || !length) && source_fits_buffer(source, length, gb, sizeof(*gb)) &&
+           source_fits_buffer(source, length, gb->rom, gb->rom_capacity) &&
+           source_fits_buffer(source, length, gb->cartridge_ram, sizeof(gb->cartridge_ram)) &&
+           source_fits_buffer(source, length, gb->cartridge_ram_heap, gb->cartridge_ram_capacity);
 }
 
 /**
@@ -915,8 +945,8 @@ bool cupid_gb_load_rom_with_allocator(CupidGb *gb, const uint8_t *rom_data, size
         cupid_log_error("Game Boy ROM size is out of supported range.");
         return false;
     }
-    if (!rom_source_fits(gb, rom_data, rom_size)) {
-        cupid_log_error("ROM input extends beyond the current cartridge buffer.");
+    if (!cupid_gb_cartridge_source_fits(gb, rom_data, rom_size)) {
+        cupid_log_error("ROM input extends beyond owned storage.");
         return false;
     }
 
@@ -985,17 +1015,20 @@ bool cupid_gb_load_rom_with_allocator(CupidGb *gb, const uint8_t *rom_data, size
     if (header.mbc_type == CUPID_GB_MMM01 && mmm01_menu_type != 0x0cu && mmm01_menu_type != 0x0du &&
         mmm01_game_ram_code == 0)
         ram_size = 0;
-    if (ram_size > CUPID_GB_MAX_RAM_SIZE) {
+    if (ram_size > CUPID_GB_MAX_RAM_SIZE ||
+        (ram_size > CUPID_GB_INLINE_RAM_SIZE && header.mbc_type != CUPID_GB_TPP1)) {
         cupid_log_error("Game Boy cartridge RAM size exceeds emulator limits.");
         return false;
     }
 
-    /* Read header-dependent state before an aliased copy or hardware reset.
-     * Allocation can still fail below without changing the live cartridge. */
+    /* Read header-dependent state and prepare owned buffers before an aliased
+     * copy or hardware reset. Input may point into the previous ROM or SRAM;
+     * allocation can still fail below without changing the live cartridge. */
     const bool mbc1_multicart = cupid_gb_detect_mbc1_multicart(rom_data, rom_size, &header);
     const size_t required_capacity =
         rom_size < CUPID_GB_MIN_ROM_CAPACITY ? CUPID_GB_MIN_ROM_CAPACITY : rom_size;
     uint8_t *const previous_rom = gb->rom;
+    uint8_t *const previous_ram = gb->cartridge_ram_heap;
     uint8_t *candidate_rom = previous_rom;
     if (!previous_rom || gb->rom_capacity != required_capacity) {
         candidate_rom = allocate(required_capacity);
@@ -1003,15 +1036,26 @@ bool cupid_gb_load_rom_with_allocator(CupidGb *gb, const uint8_t *rom_data, size
             cupid_log_error("Failed to allocate Game Boy ROM buffer.");
             return false;
         }
-        /* The old buffer is still owned and readable, including aliased input. */
-        memcpy(candidate_rom, rom_data, rom_size);
-        gb->rom = candidate_rom;
-        gb->rom_capacity = required_capacity;
-    } else {
-        /* Self-input and interior slices are valid when fully in capacity.
-         * memmove also permits an ordinary external input with no overlap. */
-        memmove(candidate_rom, rom_data, rom_size);
     }
+    const size_t ram_capacity = ram_size > CUPID_GB_INLINE_RAM_SIZE ? ram_size : 0;
+    uint8_t *candidate_ram = ram_capacity ? previous_ram : NULL;
+    if (ram_capacity && (!candidate_ram || gb->cartridge_ram_capacity != ram_capacity)) {
+        candidate_ram = allocate(ram_capacity);
+        if (!candidate_ram) {
+            if (candidate_rom != previous_rom)
+                free(candidate_rom);
+            cupid_log_error("Failed to allocate Game Boy cartridge RAM.");
+            return false;
+        }
+    }
+
+    /* Both allocations are ready. Finish an aliased source copy before init can
+     * clear either the inline SRAM or a reused heap, then transfer ownership. */
+    memmove(candidate_rom, rom_data, rom_size);
+    gb->rom = candidate_rom;
+    gb->rom_capacity = required_capacity;
+    gb->cartridge_ram_heap = candidate_ram;
+    gb->cartridge_ram_capacity = ram_capacity;
 
     cupid_gb_init(gb);
     gb->rom_size = rom_size;
@@ -1047,13 +1091,15 @@ bool cupid_gb_load_rom_with_allocator(CupidGb *gb, const uint8_t *rom_data, size
         gb->tpp1.rom_bank = 1;
     /* A fresh cartridge exposes erased storage until the host restores its
      * battery image. Resolve built-in RAM sizes before filling the array. */
-    memset(gb->cartridge_ram, 0xff, gb->cartridge_ram_size);
+    memset(cupid_gb_cartridge_ram(gb), 0xff, gb->cartridge_ram_size);
 
     gb->loaded = true;
     ++gb->rom_generation;
     cupid_gb_rtc_bind_cartridge(gb);
     if (candidate_rom != previous_rom)
         free(previous_rom);
+    if (candidate_ram != previous_ram)
+        free(previous_ram);
 
     cupid_log_infof("Loaded Game Boy ROM: %s",
                     gb->header.title[0] != '\0' ? gb->header.title : "<untitled>");

@@ -12,6 +12,10 @@ The behavioral comparison revision is
 Results apply to the stated models, fixtures and artifact identities. They do
 not establish complete hardware parity or compatibility with every cartridge.
 
+This page retains the earlier checkpoint's results. The later
+[storage, wave and camera integration](validation-storage-wave.md) records
+native version 20, SRAM through 2 MiB and the fresh validation for that build.
+
 ## Build gates and evidence continuity
 
 | Gate | Windows Release | Linux Release | Linux ASan/UBSan |
@@ -38,7 +42,7 @@ artifacts and all 29 public headers remain identical, so the bound 78/76/56
 full-suite results remain applicable to the unchanged core. Gate 03 does not
 claim a fresh full-suite or sanitizer run.
 
-The current build inventory contains 268 inputs, with manifest SHA-256
+This checkpoint's build inventory contains 268 inputs, with manifest SHA-256
 `ffd9e13ae235c9e14272c3ba9950aa25a99f8310e956e849c971be833bb1047c`.
 Its before/after guards pass. Repository documentation is outside that build
 inventory.
@@ -166,8 +170,9 @@ does not establish support for its hardware.
 The earlier [storage checkpoint](validation-cartridge-storage.md) records
 1,048,576 matching generated bank reads across DMG and CGB and four populations
 through 16 MiB. The configured 1 GiB image ceiling is broader than that paired
-qualification. Cartridge RAM, including TPP1 SRAM, remains limited to 128 KiB;
-larger declarations are rejected before replacing the active cartridge.
+qualification. At this checkpoint, cartridge RAM, including TPP1 SRAM, was
+limited to 128 KiB; larger declarations were rejected before replacing the
+active cartridge. The later integration extends that storage through 2 MiB.
 
 Physical MBC7 input, motor feedback, infrared transport, host camera input and
 physical sensor behavior remain unqualified. HuC3 alarm delivery, physical

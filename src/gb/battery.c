@@ -21,6 +21,7 @@
  */
 
 #include "cupid/gb/battery.h"
+#include "cartridge_internal.h"
 #include "cupid/gb/cartridge.h"
 #include "cupid/gb/huc3.h"
 #include "cupid/gb/tpp1.h"
@@ -40,7 +41,7 @@ static bool clock_present(const CupidGb *gb) {
 static bool valid_cartridge(const CupidGb *gb) {
     return gb && gb->loaded && gb->rom && gb->rom_size >= 0x150u &&
            gb->rom_size <= CUPID_GB_MAX_ROM_SIZE && gb->rom_size <= gb->rom_capacity &&
-           gb->cartridge_ram_size <= CUPID_GB_MAX_RAM_SIZE;
+           cupid_gb_cartridge_storage_valid(gb);
 }
 
 size_t cupid_gb_battery_size(const CupidGb *gb) {
@@ -62,11 +63,15 @@ static bool overlaps(const void *left, size_t left_size, const void *right, size
 
 static bool valid_written_pointer(const CupidGb *gb, const uint8_t *data, size_t capacity,
                                   const size_t *written) {
-    return !written ||
-           ((!gb ||
-             (!overlaps(written, sizeof(*written), gb, sizeof(*gb)) &&
-              (!gb->rom || !overlaps(written, sizeof(*written), gb->rom, gb->rom_capacity)))) &&
-            (!data || !overlaps(written, sizeof(*written), data, capacity)));
+    if (!written)
+        return true;
+    if (gb &&
+        (overlaps(written, sizeof(*written), gb, sizeof(*gb)) ||
+         (gb->rom && overlaps(written, sizeof(*written), gb->rom, gb->rom_capacity)) ||
+         (gb->cartridge_ram_heap &&
+          overlaps(written, sizeof(*written), gb->cartridge_ram_heap, gb->cartridge_ram_capacity))))
+        return false;
+    return !data || !overlaps(written, sizeof(*written), data, capacity);
 }
 
 static void write_integer(uint8_t *destination, uint64_t value, unsigned bytes) {
@@ -123,7 +128,7 @@ static CupidGbBatteryResult load_huc3_battery(CupidGb *gb, const uint8_t *data, 
         clock.alarm_enabled = false;
     }
     if (ram_size)
-        memmove(gb->cartridge_ram, data, ram_size);
+        memmove(cupid_gb_cartridge_ram(gb), data, ram_size);
     gb->huc3 = clock;
     if (reset_clock)
         gb->rtc.dh |= 0x80u;
@@ -161,7 +166,7 @@ static CupidGbBatteryResult load_tpp1_battery(CupidGb *gb, const uint8_t *data, 
         return CUPID_GB_BATTERY_INVALID_SIZE;
     }
     if (ram_size)
-        memmove(gb->cartridge_ram, data, ram_size);
+        memmove(cupid_gb_cartridge_ram(gb), data, ram_size);
     gb->tpp1 = clock;
     if (reset_clock)
         gb->rtc.dh |= 0x80u;
@@ -170,8 +175,8 @@ static CupidGbBatteryResult load_tpp1_battery(CupidGb *gb, const uint8_t *data, 
 
 CupidGbBatteryResult cupid_gb_save_battery_at(const CupidGb *gb, uint8_t *data, size_t capacity,
                                               size_t *written, int64_t host_seconds) {
-    /* The count is an output too. Reject aliases before even clearing it, so a
-     * failed save cannot alter cartridge ownership or the destination bytes. */
+    /* Even clearing the result count would corrupt an aliased cartridge or
+     * output buffer. Reject that pointer before any caller-owned bytes change. */
     if (!valid_written_pointer(gb, data, capacity, written))
         return CUPID_GB_BATTERY_INVALID_ARGUMENT;
     if (written)
@@ -184,10 +189,12 @@ CupidGbBatteryResult cupid_gb_save_battery_at(const CupidGb *gb, uint8_t *data, 
     if (capacity < size)
         return CUPID_GB_BATTERY_BUFFER_TOO_SMALL;
     if (!data || overlaps(data, size, gb, sizeof(*gb)) ||
-        overlaps(data, size, gb->rom, gb->rom_capacity))
+        overlaps(data, size, gb->rom, gb->rom_capacity) ||
+        (gb->cartridge_ram_heap &&
+         overlaps(data, size, gb->cartridge_ram_heap, gb->cartridge_ram_capacity)))
         return CUPID_GB_BATTERY_INVALID_ARGUMENT;
     const CupidGbRtc rtc = gb->rtc;
-    memcpy(data, gb->cartridge_ram, gb->cartridge_ram_size);
+    memcpy(data, cupid_gb_cartridge_ram_const(gb), gb->cartridge_ram_size);
     if (clock_present(gb)) {
         const uint8_t registers[] = {rtc.s,  rtc.m,  rtc.h,  rtc.dl,  rtc.dh,
                                      rtc.ls, rtc.lm, rtc.lh, rtc.ldl, rtc.ldh};
@@ -217,7 +224,7 @@ CupidGbBatteryResult cupid_gb_save_battery(const CupidGb *gb, uint8_t *data, siz
 
 CupidGbBatteryResult cupid_gb_load_battery_at(CupidGb *gb, const uint8_t *data, size_t size,
                                               int64_t host_seconds) {
-    if (!valid_cartridge(gb) || (!data && size))
+    if (!valid_cartridge(gb) || !cupid_gb_cartridge_source_fits(gb, data, size))
         return CUPID_GB_BATTERY_INVALID_ARGUMENT;
     const size_t expected = cupid_gb_battery_size(gb);
     if (!expected)
@@ -275,7 +282,7 @@ CupidGbBatteryResult cupid_gb_load_battery_at(CupidGb *gb, const uint8_t *data, 
      * changes. memmove permits a caller-owned input window inside cartridge RAM.
      */
     if (ram_size)
-        memmove(gb->cartridge_ram, data, ram_size);
+        memmove(cupid_gb_cartridge_ram(gb), data, ram_size);
     if (has_clock)
         gb->rtc = rtc;
     return CUPID_GB_BATTERY_OK;

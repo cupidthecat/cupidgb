@@ -20,6 +20,10 @@ Hash regressions cover known vectors, span partitions, large inputs, unaligned b
 
 Core tests exercise lifecycle, CPU/memory behavior, serial, timer/bus phases, graphics, audio, cartridge persistence, native snapshots, older-state battery recovery, and SGB behavior. Frontend checks cover sample conversion, WAVE file output, display processing, and integrated desktop workflows as those targets are present in the current build. Query the exact list with `ctest --test-dir build -N`; avoid carrying test counts from an older revision into a new result.
 
+CTest runs desktop workflows and the larger-SRAM workflow as separate offscreen checks, each with a 30-second deadline. Run either with `--smoke-test --smoke-workflow desktop` or `--smoke-test --smoke-workflow storage`. Plain `--smoke-test` runs both. Add `--audio-check` to the full or desktop workflow to require a real audio sink; the storage-only workflow does not qualify audio devices. Command-line selection and cartridge/archive persistence have separate test groups, each retaining its own 90-second deadline.
+
+The `state_ram` target covers every supported TPP1 SRAM code on DMG and CGB, full-span persistence and continuation, allocation failures, and transactional rejection. Its format cases exercise v20 and both supported v19 development layouts through all four load APIs, with different receiver histories and printer attachments. The `mbc3_bus` target distinguishes driven disabled-bank reads from absent SRAM and checks subsequent bus decay. The Qt storage workflow covers battery reopen, state slots, reset/reload, rewind budgets, debugger Backstep and physical memory search on both sides of the old 128 KiB boundary. These generated checks do not establish compatibility with every commercial cartridge.
+
 The CPU lockup target covers all eleven illegal primary bytes, model/speed/IME combinations, fetch timing, IE clearing, pending requests, explicit debugger release, and state continuation. It also checks CB operands, the actual fetched address during the HALT bug, peripheral progress, and OAM DMA suspension and release. Runner regressions require an explicit illegal-opcode result even when a protocol success or duration limit occurs on the same fetch. Qt workflows cover debugger inspection and Backstep as well as continued graphics/audio generation during ordinary halted playback.
 
 The cartridge-clock targets separate policy and counter arithmetic (`rtc`), logical CPU and bus delivery (`rtc_timing`, `rtc_dma`), and native continuation (`rtc_state`). Exercise both host policies with a controlled time provider; changing the operating-system clock is unnecessary. Include stopped and invalid writable digits, rollback, phase wrap and debt, battery imports, and mode changes before cartridge binding. The state target checks all divider remainders, legacy defaults and invalid history through ordinary and trusted APIs. Qt workflow checks cover Settings cancellation and validation, cartridge replacement, state loading, rewind and debugger Backstep with the receiving policy retained.
@@ -32,7 +36,7 @@ Run the generated mapper, persistence, and SGB continuation checks together:
 
 ```sh
 ctest --test-dir build --output-on-failure \
-    -R 'cupidgb_(gb|cartridge|rtc|rtc_timing|rtc_dma|rtc_state|divider_phase|battery|camera|mbc7|huc3|infrared|tpp1|sgb|state|printer_state)$'
+    -R 'cupidgb_(gb|cartridge|rtc|rtc_timing|rtc_dma|rtc_state|divider_phase|battery|camera|mbc3_bus|mbc7|huc3|infrared|tpp1|sgb|state|state_ram|printer_state)$'
 ```
 
 For a library scan, inventory cartridge type bytes separately from the selected hardware model. Give each ROM a fixed guest-clock budget and retain its exact result, including an execution error or incomplete boot. Run banking and peripheral probes for hardware absent from the library. Use separate gameplay and persistence checks before claiming compatibility for a title.
@@ -75,7 +79,7 @@ Release tests explicitly keep their assertions enabled. Run the GCC/Clang saniti
 ./build/cupidgb --smoke-test --audio-check
 ```
 
-The first command uses isolated temporary settings and a generated disposable cartridge. It checks application integration without opening a real audio device. CTest runs it using the offscreen platform plugin.
+The first command runs both generated workflow groups with isolated temporary settings and no real audio device. CTest runs the desktop and storage groups as separate offscreen checks, each with a 30-second deadline.
 
 The second command requires an actual output device and exercises playback around state loading and rewind. It also dispatches focus loss, state loading and cartridge close from backend writes, checking deferred mode resets and the absence of stale guest execution. Also run native visible checks on each target platform. Offscreen checks do not establish dialogs, font/layout behavior, input focus, actual device playback, or physical display presentation under the native backend.
 
