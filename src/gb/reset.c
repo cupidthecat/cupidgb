@@ -120,6 +120,10 @@ bool cupid_gb_reset_with_allocator(CupidGb *gb, CupidGbResetKind kind, void *(*a
      * mutate the live printer or publish an intermediate machine through callbacks. */
     cupid_gb_init(next);
     restore_cartridge(next, gb);
+    /* Reset clears command latches, while nonvolatile flash retains its bytes
+     * and software protection. The candidate never writes the borrowed array. */
+    next->mbc6_flash = gb->mbc6_flash;
+    next->mbc6.sector_protected = gb->mbc6.sector_protected;
     cupid_gb_cartridge_post_boot(next);
     cupid_gb_cartridge_reset_controls(next);
     restore_clocks(next, gb);
@@ -191,8 +195,11 @@ void cupid_gb_reset_commit(CupidGb *gb, CupidGb *next) {
     next->camera_host = gb->camera_host;
     cupid_gb_camera_cancel_request(next);
     uint8_t *const previous_ram = gb->cartridge_ram_heap;
+    uint8_t *const previous_flash = gb->mbc6_flash;
     *gb = *next;
     free(previous_ram);
+    if (previous_flash != gb->mbc6_flash)
+        free(previous_flash);
     free(next);
     CupidGbPrinter *printer = cupid_gb_printer_attached(gb);
     if (printer)

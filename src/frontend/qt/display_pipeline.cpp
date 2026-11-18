@@ -27,6 +27,84 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <vector>
+
+QImage filterDisplayImage(const QImage &source, QSize output, ScalingFilter filter) {
+    if (source.isNull() || output.isEmpty())
+        return {};
+    if (source.size() == output)
+        return source;
+    if (filter == ScalingFilter::Nearest)
+        return source.scaled(output, Qt::IgnoreAspectRatio, Qt::FastTransformation);
+
+    struct Coordinate {
+        int first;
+        int second;
+        double weight;
+    };
+
+    const auto coordinates = [filter](int input, int count) {
+        std::vector<Coordinate> result;
+        result.reserve(size_t(count));
+        for (int pixel = 0; pixel < count; ++pixel) {
+            // Samples are centered in physical output pixels. Clamp both taps
+            // independently so the image edge extends across the outer half texel.
+            const double position = (pixel + 0.5) * input / count - 0.5;
+            const int first = int(std::floor(position));
+            double weight = position - first;
+            if (filter == ScalingFilter::SmoothBilinear)
+                weight = weight * weight * (3.0 - 2.0 * weight);
+            result.push_back(
+                {std::clamp(first, 0, input - 1), std::clamp(first + 1, 0, input - 1), weight});
+        }
+        return result;
+    };
+    static const auto linear = [] {
+        std::array<double, 256> table{};
+        for (size_t value = 0; value < table.size(); ++value)
+            table[value] = std::pow(double(value) / 255.0, 2.2);
+        return table;
+    }();
+    static const auto encoded = [] {
+        std::array<uint8_t, 65536> table{};
+        for (size_t value = 0; value < table.size(); ++value)
+            table[value] = uint8_t(std::lround(std::pow(double(value) / 65535.0, 1.0 / 2.2) * 255));
+        return table;
+    }();
+    const auto horizontal = coordinates(source.width(), output.width());
+    const auto vertical = coordinates(source.height(), output.height());
+    const QImage pixels = source.convertToFormat(QImage::Format_RGB32);
+    QImage result(output, QImage::Format_RGB32);
+    if (result.isNull())
+        return {};
+    for (int y = 0; y < output.height(); ++y) {
+        const auto &v = vertical[size_t(y)];
+        const auto *upper = reinterpret_cast<const QRgb *>(pixels.constScanLine(v.first));
+        const auto *lower = reinterpret_cast<const QRgb *>(pixels.constScanLine(v.second));
+        auto *row = reinterpret_cast<QRgb *>(result.scanLine(y));
+        for (int x = 0; x < output.width(); ++x) {
+            const auto &h = horizontal[size_t(x)];
+            const QRgb first = upper[h.first];
+            if (first == upper[h.second] && first == lower[h.first] && first == lower[h.second]) {
+                // Preserve flat fields exactly, including the darkest encoded
+                // shades that occupy less than one linear-light table step.
+                row[x] = first;
+                continue;
+            }
+            const auto channel = [&](int shift) {
+                const auto sample = [&](QRgb color) { return linear[(color >> shift) & 255]; };
+                const double top =
+                    (1.0 - h.weight) * sample(upper[h.first]) + h.weight * sample(upper[h.second]);
+                const double bottom =
+                    (1.0 - h.weight) * sample(lower[h.first]) + h.weight * sample(lower[h.second]);
+                const double light = (1.0 - v.weight) * top + v.weight * bottom;
+                return encoded[size_t(light * 65535.0 + 0.5)];
+            };
+            row[x] = qRgb(channel(16), channel(8), channel(0));
+        }
+    }
+    return result;
+}
 
 QRectF displayViewport(QSize source, QSizeF available, DisplayScaling scaling,
                        qreal devicePixelRatio) {

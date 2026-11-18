@@ -35,7 +35,8 @@ typedef enum CupidGbBatteryResult {
     CUPID_GB_BATTERY_INVALID_ARGUMENT,
     CUPID_GB_BATTERY_INVALID_SIZE,
     CUPID_GB_BATTERY_INVALID_RTC,
-    CUPID_GB_BATTERY_BUFFER_TOO_SMALL
+    CUPID_GB_BATTERY_BUFFER_TOO_SMALL,
+    CUPID_GB_BATTERY_INVALID_FORMAT
 } CupidGbBatteryResult;
 
 /* RAM is stored verbatim. Timer-equipped MBC3 cartridges append 48 bytes: ten
@@ -43,6 +44,7 @@ typedef enum CupidGbBatteryResult {
  * The first five register values are live; the following five are latched.
  * Saving copies current registers without advancing them. MBC3 and TPP1
  * trailers use the configured host time; HuC3 keeps its internal baseline.
+ * MBC6 appends a tagged flash image, hidden bytes and the protection latch.
  */
 size_t cupid_gb_battery_size(const CupidGb *gb);
 CupidGbBatteryResult cupid_gb_save_battery(const CupidGb *gb, uint8_t *data, size_t capacity,

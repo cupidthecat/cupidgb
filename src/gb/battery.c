@@ -30,9 +30,10 @@
 #include <limits.h>
 #include <string.h>
 
-enum { TPP1_TRAILER_SIZE = 20, HUC3_TRAILER_SIZE = 17 };
+enum { TPP1_TRAILER_SIZE = 20, HUC3_TRAILER_SIZE = 17, MBC6_HEADER_SIZE = 8 };
 
 static const uint8_t tpp1_trailer_header[] = {'T', 'P', 'P', '1', 1, 0};
+static const uint8_t mbc6_trailer_tag[] = {'M', 'B', 'C', '6', 1};
 
 static bool clock_present(const CupidGb *gb) {
     return gb->header.has_timer && gb->header.mbc_type == CUPID_GB_MBC3;
@@ -51,6 +52,8 @@ size_t cupid_gb_battery_size(const CupidGb *gb) {
         return gb->cartridge_ram_size + TPP1_TRAILER_SIZE;
     if (gb->header.mbc_type == CUPID_GB_HUC3)
         return gb->cartridge_ram_size + HUC3_TRAILER_SIZE;
+    if (gb->header.mbc_type == CUPID_GB_MBC6)
+        return gb->cartridge_ram_size + MBC6_HEADER_SIZE + CUPID_GB_MBC6_STORAGE_SIZE;
     return gb->cartridge_ram_size + (clock_present(gb) ? 48u : 0u);
 }
 
@@ -68,8 +71,10 @@ static bool valid_written_pointer(const CupidGb *gb, const uint8_t *data, size_t
     if (gb &&
         (overlaps(written, sizeof(*written), gb, sizeof(*gb)) ||
          (gb->rom && overlaps(written, sizeof(*written), gb->rom, gb->rom_capacity)) ||
-         (gb->cartridge_ram_heap &&
-          overlaps(written, sizeof(*written), gb->cartridge_ram_heap, gb->cartridge_ram_capacity))))
+         (gb->cartridge_ram_heap && overlaps(written, sizeof(*written), gb->cartridge_ram_heap,
+                                             gb->cartridge_ram_capacity)) ||
+         (gb->mbc6_flash &&
+          overlaps(written, sizeof(*written), gb->mbc6_flash, CUPID_GB_MBC6_STORAGE_SIZE))))
         return false;
     return !data || !overlaps(written, sizeof(*written), data, capacity);
 }
@@ -84,6 +89,33 @@ static uint64_t read_integer(const uint8_t *source, unsigned bytes) {
     for (unsigned i = 0; i < bytes; ++i)
         value |= (uint64_t)source[i] << (i * 8);
     return value;
+}
+
+static void save_mbc6_flash(const CupidGb *gb, uint8_t *trailer) {
+    memcpy(trailer, mbc6_trailer_tag, sizeof(mbc6_trailer_tag));
+    trailer[5] = gb->mbc6.sector_protected;
+    trailer[6] = 0;
+    trailer[7] = 0;
+    memcpy(trailer + MBC6_HEADER_SIZE, gb->mbc6_flash, CUPID_GB_MBC6_STORAGE_SIZE);
+}
+
+static CupidGbBatteryResult load_mbc6_battery(CupidGb *gb, const uint8_t *data, size_t size) {
+    const size_t ram_size = gb->cartridge_ram_size;
+    if (size == ram_size) {
+        /* Raw SRAM import is useful for external dumps. Flash remains intact. */
+        memmove(gb->cartridge_ram, data, ram_size);
+        return CUPID_GB_BATTERY_OK;
+    }
+    if (size != ram_size + MBC6_HEADER_SIZE + CUPID_GB_MBC6_STORAGE_SIZE)
+        return CUPID_GB_BATTERY_INVALID_SIZE;
+    const uint8_t *trailer = data + ram_size;
+    if (memcmp(trailer, mbc6_trailer_tag, sizeof(mbc6_trailer_tag)) || trailer[5] > 1 ||
+        trailer[6] || trailer[7])
+        return CUPID_GB_BATTERY_INVALID_FORMAT;
+    memmove(gb->cartridge_ram, data, ram_size);
+    memcpy(gb->mbc6_flash, trailer + MBC6_HEADER_SIZE, CUPID_GB_MBC6_STORAGE_SIZE);
+    gb->mbc6.sector_protected = trailer[5] != 0;
+    return CUPID_GB_BATTERY_OK;
 }
 
 static void save_huc3_clock(const CupidGb *gb, uint8_t *trailer) {
@@ -191,7 +223,8 @@ CupidGbBatteryResult cupid_gb_save_battery_at(const CupidGb *gb, uint8_t *data, 
     if (!data || overlaps(data, size, gb, sizeof(*gb)) ||
         overlaps(data, size, gb->rom, gb->rom_capacity) ||
         (gb->cartridge_ram_heap &&
-         overlaps(data, size, gb->cartridge_ram_heap, gb->cartridge_ram_capacity)))
+         overlaps(data, size, gb->cartridge_ram_heap, gb->cartridge_ram_capacity)) ||
+        (gb->mbc6_flash && overlaps(data, size, gb->mbc6_flash, CUPID_GB_MBC6_STORAGE_SIZE)))
         return CUPID_GB_BATTERY_INVALID_ARGUMENT;
     const CupidGbRtc rtc = gb->rtc;
     memcpy(data, cupid_gb_cartridge_ram_const(gb), gb->cartridge_ram_size);
@@ -206,6 +239,8 @@ CupidGbBatteryResult cupid_gb_save_battery_at(const CupidGb *gb, uint8_t *data, 
         save_tpp1_clock(gb, data + gb->cartridge_ram_size, host_seconds);
     } else if (gb->header.mbc_type == CUPID_GB_HUC3) {
         save_huc3_clock(gb, data + gb->cartridge_ram_size);
+    } else if (gb->header.mbc_type == CUPID_GB_MBC6) {
+        save_mbc6_flash(gb, data + gb->cartridge_ram_size);
     }
     if (written)
         *written = size;
@@ -233,6 +268,8 @@ CupidGbBatteryResult cupid_gb_load_battery_at(CupidGb *gb, const uint8_t *data, 
         return load_tpp1_battery(gb, data, size, host_seconds);
     if (gb->header.mbc_type == CUPID_GB_HUC3)
         return load_huc3_battery(gb, data, size, host_seconds);
+    if (gb->header.mbc_type == CUPID_GB_MBC6)
+        return load_mbc6_battery(gb, data, size);
     const size_t ram_size = gb->cartridge_ram_size;
     const bool has_clock = clock_present(gb);
     const bool legacy_mbc7 = gb->header.mbc_type == CUPID_GB_MBC7 && size > ram_size &&
@@ -309,6 +346,8 @@ const char *cupid_gb_battery_result_name(CupidGbBatteryResult result) {
             return "Battery clock register encoding is invalid";
         case CUPID_GB_BATTERY_BUFFER_TOO_SMALL:
             return "Battery output buffer is too small";
+        case CUPID_GB_BATTERY_INVALID_FORMAT:
+            return "Battery file format is invalid";
         default:
             return "Unknown battery result";
     }

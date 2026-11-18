@@ -92,6 +92,14 @@ void MainWindow::applyDisplaySettings() {
         action->setChecked(messages);
     const int scaling = std::clamp(settings_.value("video/scaling", 0).toInt(), 0, 2);
     display_->scaling = DisplayScaling(scaling);
+    bool validFilter = false;
+    int filter = settings_.value("video/filter", 0).toInt(&validFilter);
+    if (!validFilter || filter < 0 || filter >= int(scalingFilterActions_.size()))
+        filter = 0;
+    display_->filter = ScalingFilter(filter);
+    for (size_t i = 0; i < scalingFilterActions_.size(); ++i)
+        scalingFilterActions_[i]->setChecked(int(i) == filter);
+    display_->update();
     const int palette = std::clamp(settings_.value("video/palette", 0).toInt(), 0, 4);
     for (size_t i = 0; i < scalingActions_.size(); ++i)
         scalingActions_[i]->setChecked(int(i) == scaling);
@@ -373,6 +381,11 @@ void MainWindow::configure() {
     scaling->addItems({"Integer Scale", "Retain Aspect Ratio", "Fill Window"});
     scaling->setCurrentIndex(int(display_->scaling));
     form->addRow("Display scaling", scaling);
+    auto *filter = new QComboBox;
+    filter->setObjectName("scalingFilter");
+    filter->addItems({"Nearest Neighbor", "Bilinear", "Smooth Bilinear"});
+    filter->setCurrentIndex(int(display_->filter));
+    form->addRow("Scaling filter", filter);
     auto *windowScale = new QComboBox;
     windowScale->setObjectName("windowScale");
     for (int factor = 1; factor <= 8; ++factor)
@@ -646,6 +659,7 @@ void MainWindow::configure() {
         settings_.setValue("emulation/bootDirectory", boot->text());
         bootDirectoryOverride_ = QString();
         settings_.setValue("video/scaling", scaling->currentIndex());
+        settings_.setValue("video/filter", filter->currentIndex());
         const int oldScale = settings_.value("video/defaultScale", 2).toInt();
         settings_.setValue("video/defaultScale", windowScale->currentData());
         settings_.setValue("video/palette", palette->currentIndex());

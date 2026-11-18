@@ -62,6 +62,10 @@ bool MainWindow::prepareResetCandidate(CupidEmulator *candidate, ResetWorkflow w
         if (next.cartridge_ram_heap)
             std::memcpy(cupid_gb_cartridge_ram(&next), cupid_gb_cartridge_ram_const(&previous),
                         next.cartridge_ram_size);
+        if (next.mbc6_flash) {
+            std::memcpy(next.mbc6_flash, previous.mbc6_flash, CUPID_GB_MBC6_STORAGE_SIZE);
+            next.mbc6.sector_protected = previous.mbc6.sector_protected;
+        }
     }
     if (workflow == ResetWorkflow::Quick) {
         // Physical console RAM survives a quick reset even when cartridge assets

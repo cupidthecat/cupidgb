@@ -38,6 +38,7 @@
 #include "cupid/gb/battery.h"
 #include "cupid/gb/infrared.h"
 #include "display_clock.h"
+#include "mbc6_internal.h"
 #include "oam_bus.h"
 #include "printer_internal.h"
 #include "rtc_internal.h"
@@ -279,6 +280,7 @@ void cupid_gb_init(CupidGb *gb) {
     const bool mbc3_extended_history = gb->mbc3_extended_history;
     uint8_t *const cartridge_ram_heap = gb->cartridge_ram_heap;
     const size_t cartridge_ram_capacity = gb->cartridge_ram_capacity;
+    uint8_t *const mbc6_flash = gb->mbc6_flash;
     serial_output_callback = gb->serial_output_callback;
     serial_output_user_data = gb->serial_output_user_data;
     serial_link = gb->serial_link;
@@ -315,6 +317,7 @@ void cupid_gb_init(CupidGb *gb) {
     gb->mbc3_extended_history = mbc3_extended_history;
     gb->cartridge_ram_heap = cartridge_ram_heap;
     gb->cartridge_ram_capacity = cartridge_ram_capacity;
+    gb->mbc6_flash = mbc6_flash;
     if (cartridge_ram_heap)
         memset(cartridge_ram_heap, 0, cartridge_ram_capacity);
     gb->serial_output_callback = serial_output_callback;
@@ -649,6 +652,8 @@ void cupid_gb_cleanup(CupidGb *gb) {
     free(gb->cartridge_ram_heap);
     gb->cartridge_ram_heap = NULL;
     gb->cartridge_ram_capacity = 0;
+    free(gb->mbc6_flash);
+    gb->mbc6_flash = NULL;
     gb->serial_output_callback = NULL;
     gb->serial_output_user_data = NULL;
     gb->serial_link = (CupidGbSerialLink){0};
@@ -803,6 +808,8 @@ static uint16_t read_cartridge_window(const CupidGb *gb, uint16_t address) {
     }
     if (gb->header.mbc_type == CUPID_GB_MBC7)
         return cupid_gb_mbc7_read(gb, address);
+    if (gb->header.mbc_type == CUPID_GB_MBC6)
+        return gb->cartridge_ram[cupid_gb_mbc6_ram_offset(gb, address)];
     /* The cartridge window shares the receiver with the color hardware port. */
     if (gb->header.mbc_type == CUPID_GB_HUC1 && gb->huc1_ir_mode) {
         return (uint8_t)(0xc0u | cupid_gb_infrared_detected(gb));
@@ -1094,8 +1101,15 @@ static uint8_t read_data_bus(const CupidGb *gb, uint16_t address, CupidGb *bus, 
 }
 
 uint8_t cupid_gb_read_u8(const CupidGb *gb, uint16_t address) {
-    const uint8_t value = gb && address < 0x8000u ? read_program(gb, address)
-                                                  : read_data_bus(gb, address, NULL, NULL);
+    uint8_t value = 0xffu;
+    if (gb && address < 0x8000u) {
+        if (gb->header.mbc_type == CUPID_GB_MBC6 && address >= 0x4000u)
+            cupid_gb_mbc6_read_program(gb, address, &value);
+        else
+            value = read_program(gb, address);
+    } else {
+        value = read_data_bus(gb, address, NULL, NULL);
+    }
     return gb && gb->cheats ? cupid_gb_cheats_apply(gb, address, value) : value;
 }
 
@@ -1116,7 +1130,15 @@ uint8_t cupid_gb_read_bus_u8(CupidGb *gb, uint16_t address) {
         return 0xffu;
     /* Keep the common instruction fetch out of the slower I/O and RAM map. */
     if (gb && address < 0x8000u) {
-        uint8_t value = read_program(gb, address);
+        uint8_t value;
+        if (gb->header.mbc_type == CUPID_GB_MBC6 && address >= 0x4000u) {
+            if (!cupid_gb_mbc6_read_program(gb, address, &value)) {
+                value = cupid_gb_sample_cartridge_bus(gb);
+                return gb->cheats ? cupid_gb_cheats_apply(gb, address, value) : value;
+            }
+        } else {
+            value = read_program(gb, address);
+        }
         if (gb->cheats)
             value = cupid_gb_cheats_apply(gb, address, value);
         drive_cartridge_bus(gb, value, false);
@@ -1217,6 +1239,10 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
         cupid_gb_tpp1_write_register(gb, address, value);
         return;
     }
+    if (address < 0x8000u && gb->header.mbc_type == CUPID_GB_MBC6) {
+        cupid_gb_mbc6_write(gb, address, value);
+        return;
+    }
 
     if (address <= 0x3fffu && gb->header.mbc_type == CUPID_GB_MBC2) {
         if ((address & 0x0100u) == 0u) {
@@ -1234,7 +1260,6 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
         switch (gb->header.mbc_type) {
             case CUPID_GB_MBC1:
             case CUPID_GB_MBC3:
-            case CUPID_GB_MBC6:
                 gb->ram_enabled = (value & 0x0fu) == 0x0au;
                 break;
             case CUPID_GB_MBC5:
@@ -1274,7 +1299,6 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
             case CUPID_GB_MBC7:
                 gb->current_rom_bank = value;
                 break;
-            case CUPID_GB_MBC6:
                 gb->current_rom_bank = (size_t)(value & 0x7fu);
                 if (gb->current_rom_bank == 0u) {
                     gb->current_rom_bank = 1u;
@@ -1322,7 +1346,6 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
             case CUPID_GB_MBC7:
                 gb->mbc7.registers_enabled = value == 0x40u;
                 break;
-            case CUPID_GB_MBC6:
                 gb->current_ram_bank = (size_t)(value & 0x03u);
                 break;
             default:
@@ -1416,6 +1439,13 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
         }
         if (gb->header.mbc_type == CUPID_GB_MBC7) {
             cupid_gb_mbc7_write(gb, address, value);
+            return;
+        }
+        if (gb->header.mbc_type == CUPID_GB_MBC6) {
+            uint8_t *byte = gb->cartridge_ram + cupid_gb_mbc6_ram_offset(gb, address);
+            if (*byte != value)
+                ++gb->battery_write_generation;
+            *byte = value;
             return;
         }
         {

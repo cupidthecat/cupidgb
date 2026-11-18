@@ -60,7 +60,7 @@ add_library(cupidgb_core STATIC
     src/compat/native_v1.c src/gb/battery.c
     src/gb/gb.c src/gb/startup.c src/gb/reset.c src/gb/rtc.c src/gb/state.c src/gb/cpu.c
     src/gb/oam_bus.c src/gb/ppu.c src/gb/pixels.c src/gb/apu.c src/gb/timer.c
-    src/gb/cartridge.c src/gb/gbs.c src/gb/camera.c src/gb/mbc7.c src/gb/input.c
+    src/gb/cartridge.c src/gb/gbs.c src/gb/camera.c src/gb/mbc6.c src/gb/mbc7.c src/gb/input.c
     src/gb/debugger.c src/gb/sgb.c
     src/gb/sgb_startup.c src/gb/sgb_startup_audio.c src/gb/sgb_startup_render.c src/gb/state_startup.c
     src/gb/state_sgb_protocol.c
@@ -245,7 +245,7 @@ if(CUPIDGB_ENABLE_TESTS)
         audio_synthesis audio_filter audio_state audio_publication audio_clock cpu_timing cpu_lockup
         dma oam_bus video_bus vram_bus vram_quiet bus state state_ram battery native_v1_recovery
         sgb sgb_protocol sgb_protocol_state sgb_startup sgb_startup_audio sgb_startup_state
-        input input_sampling cartridge mapper_guest mmm01 mbc3_bus camera camera_host camera_state mbc7
+        input input_sampling cartridge mapper_guest mmm01 mbc3_bus camera camera_host camera_state mbc6 mbc7
         tpp1 rumble rumble_sampling presentation_observer huc3 infrared infrared_state
         infrared_guest cheats debugger debugger_watchpoints sha256)
         add_executable(cupidgb_${test_name} tests/test_${test_name}.c)

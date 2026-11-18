@@ -23,10 +23,66 @@
 #include "display_pipeline.h"
 
 #include <QColor>
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 
 int main() {
+    QImage corners(2, 2, QImage::Format_RGB32);
+    corners.setPixel(0, 0, qRgb(0, 0, 0));
+    corners.setPixel(1, 0, qRgb(255, 0, 0));
+    corners.setPixel(0, 1, qRgb(0, 255, 0));
+    corners.setPixel(1, 1, qRgb(0, 0, 255));
+    assert(filterDisplayImage({}, {4, 4}, ScalingFilter::Bilinear).isNull());
+    assert(filterDisplayImage(corners, {}, ScalingFilter::SmoothBilinear).isNull());
+    for (auto filter :
+         {ScalingFilter::Nearest, ScalingFilter::Bilinear, ScalingFilter::SmoothBilinear}) {
+        assert(filterDisplayImage(corners, corners.size(), filter) == corners);
+        QImage solid(1, 1, QImage::Format_RGB32);
+        solid.fill(qRgb(37, 154, 226));
+        const auto scaledSolid = filterDisplayImage(solid, {7, 9}, filter);
+        assert(scaledSolid.size() == QSize(7, 9));
+        assert(scaledSolid.pixel(0, 0) == solid.pixel(0, 0));
+        assert(scaledSolid.pixel(6, 8) == solid.pixel(0, 0));
+        const auto scaled = filterDisplayImage(corners, {6, 6}, filter);
+        assert(scaled.pixel(0, 0) == corners.pixel(0, 0));
+        assert(scaled.pixel(5, 5) == corners.pixel(1, 1));
+    }
+    for (int value = 0; value < 256; ++value) {
+        QImage solid(2, 2, QImage::Format_RGB32);
+        solid.fill(qRgb(value, 255 - value, value));
+        for (auto filter : {ScalingFilter::Bilinear, ScalingFilter::SmoothBilinear}) {
+            const auto scaled = filterDisplayImage(solid, {5, 7}, filter);
+            assert(scaled.pixel(2, 3) == solid.pixel(0, 0));
+            assert(scaled.pixel(0, 0) == solid.pixel(0, 0));
+        }
+    }
+    const auto nearest = filterDisplayImage(corners, {6, 6}, ScalingFilter::Nearest);
+    assert(nearest.pixel(2, 2) == corners.pixel(0, 0));
+    assert(nearest.pixel(3, 3) == corners.pixel(1, 1));
+    for (auto filter : {ScalingFilter::Bilinear, ScalingFilter::SmoothBilinear}) {
+        const auto scaled = filterDisplayImage(corners, {7, 5}, filter);
+        for (int y = 0; y < scaled.height(); ++y) {
+            for (int x = 0; x < scaled.width(); ++x) {
+                double wx = std::clamp((x + 0.5) * 2.0 / scaled.width() - 0.5, 0.0, 1.0);
+                double wy = std::clamp((y + 0.5) * 2.0 / scaled.height() - 0.5, 0.0, 1.0);
+                if (filter == ScalingFilter::SmoothBilinear) {
+                    wx = wx * wx * (3 - 2 * wx);
+                    wy = wy * wy * (3 - 2 * wy);
+                }
+                const std::array<double, 3> light = {wx * (1 - wy), (1 - wx) * wy, wx * wy};
+                const QRgb color = scaled.pixel(x, y);
+                const std::array<int, 3> observed = {qRed(color), qGreen(color), qBlue(color)};
+                for (size_t channel = 0; channel < light.size(); ++channel) {
+                    const int expected =
+                        int(std::lround(std::pow(light[channel], 1.0 / 2.2) * 255));
+                    assert(std::abs(observed[channel] - expected) <= 1);
+                }
+            }
+        }
+        assert(scaled.pixel(3, 2) == qRgb(136, 136, 136));
+    }
+
     const QSize native(160, 144);
     assert(displayViewport(native, {500, 400}, DisplayScaling::Integer) ==
            QRectF(90, 56, 320, 288));

@@ -23,6 +23,7 @@
 #include "cupid/gb/cheats.h"
 
 #include "cupid/gb/cartridge.h"
+#include "mbc6_internal.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -262,6 +263,12 @@ CupidGbCheatResult cupid_gb_cheats_import(CupidGbCheats *cheats, const char *cod
 }
 
 static uint16_t selected_bank(const CupidGb *gb, uint16_t address) {
+    if (gb->header.mbc_type == CUPID_GB_MBC6) {
+        if (address >= 0x4000u && address < 0x8000u)
+            return (uint16_t)cupid_gb_mbc6_rom_bank(gb, address, false);
+        if (address >= 0xa000u && address < 0xc000u)
+            return (uint16_t)(cupid_gb_mbc6_ram_offset(gb, address) / 0x1000u);
+    }
     if (address < 0x8000u)
         return (uint16_t)cupid_gb_selected_rom_bank(gb, address < 0x4000u);
     if (address >= 0xa000u && address < 0xc000u) {

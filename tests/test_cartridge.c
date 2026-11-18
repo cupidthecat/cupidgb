@@ -131,12 +131,14 @@ static size_t expected_header_storage(unsigned type, unsigned ram_code) {
         [0x01] = true, [0x02] = true, [0x03] = true, [0x08] = true, [0x09] = true, [0x0b] = true,
         [0x0c] = true, [0x0d] = true, [0x0f] = true, [0x10] = true, [0x11] = true, [0x12] = true,
         [0x13] = true, [0x19] = true, [0x1a] = true, [0x1b] = true, [0x1c] = true, [0x1d] = true,
-        [0x1e] = true, [0x20] = true, [0xfc] = true, [0xfe] = true, [0xff] = true};
+        [0x1e] = true, [0xfc] = true, [0xfe] = true, [0xff] = true};
     static const size_t sizes[] = {0, 0x800, 0x2000, 0x8000, 0x20000, 0x10000};
     if (type == 0x05 || type == 0x06)
         return 512;
     if (type == 0x22)
         return 256;
+    if (type == 0x20)
+        return 0x8000;
     return external_ram[type] && ram_code < sizeof(sizes) / sizeof(sizes[0]) ? sizes[ram_code] : 0;
 }
 
@@ -307,6 +309,18 @@ static void test_address_line_aliases(CupidGbModel model) {
                     cupid_gb_write_u8(gb, 2, (uint8_t)(selection >> 1));
                 }
                 for (unsigned lower = 0; lower < 2; ++lower) {
+                    if (!lower && types[type] == 0x20) {
+                        const unsigned offsets[] = {0x31f, 0x1ffe};
+                        for (unsigned window = 0; window < 2; ++window) {
+                            const unsigned bank = (selection >> (8u * window)) & 255u;
+                            const size_t offset = (bank % (banks * 2u)) * 0x2000u + offsets[window];
+                            const uint8_t expected = offset < populated ? rom[offset] : 0xff;
+                            const uint16_t address =
+                                (uint16_t)(0x4000u + window * 0x2000u + offsets[window]);
+                            assert(cupid_gb_read_u8(gb, address) == expected);
+                        }
+                        continue;
+                    }
                     size_t selected = cupid_gb_selected_rom_bank(gb, lower != 0);
                     if (gb->header.mbc_type == CUPID_GB_MMM01 && gb->mmm01_menu_first)
                         selected += 2;
@@ -349,7 +363,7 @@ static void test_fresh_storage_and_restore(CupidGbModel model) {
                     {0x03, 3, 0x8000}, {0x05, 0, 512},      {0x06, 4, 512},     {0x0c, 2, 0x2000},
                     {0x0d, 3, 0x8000}, {0x10, 2, 0x2000},   {0x12, 2, 0x2000},  {0x13, 3, 0x8000},
                     {0x1a, 2, 0x2000}, {0x1b, 4, 0x20000},  {0x1d, 2, 0x2000},  {0x1e, 3, 0x8000},
-                    {0x20, 2, 0x2000}, {0x22, 4, 256},      {0xfc, 4, 0x20000}, {0xfe, 2, 0x2000},
+                    {0x20, 2, 0x8000}, {0x22, 4, 256},      {0xfc, 4, 0x20000}, {0xfe, 2, 0x2000},
                     {0xff, 2, 0x2000}, {0xbc, 0xc1, 0x2000}};
 
     CupidGb *gb = calloc(1, sizeof(*gb));

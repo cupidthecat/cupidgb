@@ -36,6 +36,7 @@
 #include "cupid/gb/tpp1.h"
 #include "display_clock.h"
 #include "gbs_internal.h"
+#include "mbc6_internal.h"
 #include "printer_internal.h"
 #include "state_internal.h"
 #include "state_io.h"
@@ -49,7 +50,8 @@
 
 enum {
     STATE_HEADER_SIZE = 128,
-    STATE_VERSION_V24 = CUPID_GB_STATE_VERSION,
+    STATE_VERSION_V25 = CUPID_GB_STATE_VERSION,
+    STATE_VERSION_V24 = 24,
     STATE_VERSION_V23 = 23,
     STATE_VERSION_V22 = 22,
     STATE_VERSION_V21 = 21,
@@ -938,7 +940,7 @@ static size_t current_hardware_size(const CupidGb *gb, size_t *startup_length) {
            CUPID_GB_DISPLAY_CLOCK_STATE_SIZE + CUPID_GB_PIXEL_TIMING_STATE_SIZE +
            CUPID_GB_VRAM_BUS_STATE_SIZE + STATE_INPUT_SAMPLE_SIZE + STATE_SERIAL_CLOCK_SIZE +
            STATE_WAVE_HISTORY_SIZE + ram_extension_size(gb) + startup +
-           CUPID_GB_SGB_PROTOCOL_STATE_SIZE;
+           CUPID_GB_SGB_PROTOCOL_STATE_SIZE + (gb->mbc6_flash ? CUPID_GB_MBC6_STATE_SIZE : 0u);
 }
 
 size_t cupid_gb_state_size(const CupidGb *gb) {
@@ -1007,6 +1009,7 @@ static bool overlaps_live_storage(const CupidGb *gb, const void *data, size_t si
            (gb->rom && overlaps(data, size, gb->rom, gb->rom_capacity)) ||
            (gb->cartridge_ram_heap &&
             overlaps(data, size, gb->cartridge_ram_heap, gb->cartridge_ram_capacity)) ||
+           (gb->mbc6_flash && overlaps(data, size, gb->mbc6_flash, CUPID_GB_MBC6_STORAGE_SIZE)) ||
            (printer && overlaps(data, size, printer, sizeof(*printer)));
 }
 
@@ -1043,12 +1046,13 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
     if (overlaps_live_storage(gb, data, size) ||
         ((sections & STATE_SECTION_CAMERA) && !camera_for_snapshot(gb, &camera)) ||
         !valid_hardware(gb, sections, &camera) ||
+        (gb->mbc6_flash && !cupid_gb_mbc6_state_valid(gb)) ||
         (printer && !cupid_gb_printer_state_valid(&printer->state, gb))) {
         return CUPID_GB_STATE_INVALID;
     }
     memset(data, 0, STATE_HEADER_SIZE);
     memcpy(data, state_magic, sizeof(state_magic));
-    put_u32(data + 8, STATE_VERSION_V24);
+    put_u32(data + 8, STATE_VERSION_V25);
     put_u32(data + 12, (uint32_t)size);
     put_u32(data + 16, (uint32_t)gb->model);
     put_u32(data + 20, (uint32_t)gb->rom_size);
@@ -1110,6 +1114,8 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
         !cupid_gb_sgb_protocol_state_encode(gb, data + io.offset, CUPID_GB_SGB_PROTOCOL_STATE_SIZE))
         io.invalid = true;
     io.offset += CUPID_GB_SGB_PROTOCOL_STATE_SIZE;
+    if (gb->mbc6_flash)
+        cupid_gb_mbc6_state(&io, (CupidGb *)gb);
     if (io.invalid || io.offset != hardware_size) {
         return CUPID_GB_STATE_INVALID;
     }
@@ -1164,8 +1170,9 @@ static void import_legacy_sgb_startup(CupidGb *gb) {
 }
 
 static void discard_candidate(CupidGb *candidate) {
-    /* The candidate owns SRAM but borrows ROM and all host attachments. */
+    /* The candidate owns writable storage but borrows ROM and host attachments. */
     free(candidate->cartridge_ram_heap);
+    free(candidate->mbc6_flash);
     free(candidate);
 }
 
@@ -1186,7 +1193,7 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
         return CUPID_GB_STATE_INVALID;
     }
     const uint32_t version = get_u32(data + 8);
-    if (version < STATE_VERSION_V2 || version > STATE_VERSION_V24 ||
+    if (version < STATE_VERSION_V2 || version > STATE_VERSION_V25 ||
         (version < STATE_VERSION_V19 && gb->cartridge_ram_size > CUPID_GB_INLINE_RAM_SIZE)) {
         return CUPID_GB_STATE_UNSUPPORTED_VERSION;
     }
@@ -1211,6 +1218,8 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
     size_t startup_size = 0;
     const size_t protocol_size =
         version >= STATE_VERSION_V22 ? CUPID_GB_SGB_PROTOCOL_STATE_SIZE : 0;
+    const size_t mbc6_size =
+        version >= STATE_VERSION_V25 && gb->mbc6_flash ? CUPID_GB_MBC6_STATE_SIZE : 0;
     /* Version 19 had two complete layouts. Bound the input before hashing, then
      * choose one by exact geometry and descriptor validation below. */
     const size_t minimum_history =
@@ -1242,7 +1251,8 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
                          clock_size + audio_size + display_clock_size + pixel_timing_size +
                          vram_bus_size + input_sample_size + serial_clock_size + maximum_history +
                          startup_maximum + protocol_size + STATE_ACCESSORY_DESCRIPTOR_SIZE +
-                         PRINTER_STATE_WIRE_SIZE)
+                         PRINTER_STATE_WIRE_SIZE +
+                         (version >= STATE_VERSION_V25 ? CUPID_GB_MBC6_STATE_SIZE : 0))
             return CUPID_GB_STATE_INVALID;
     } else if (version >= STATE_VERSION_V5
                    ? device_size < prefix_size ||
@@ -1310,7 +1320,7 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
             (protocol_size &&
              !cupid_gb_sgb_protocol_wire_valid(gb, data + protocol_offset, protocol_size)))
             return CUPID_GB_STATE_INVALID;
-        const size_t accessory_offset = protocol_offset + protocol_size;
+        const size_t accessory_offset = protocol_offset + protocol_size + mbc6_size;
         accessory_size = accessory_wire_size(data, length, accessory_offset, &printer_payload);
         if (!accessory_size)
             return CUPID_GB_STATE_INVALID;
@@ -1356,12 +1366,21 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
      * instance. Decode into separate storage and never run bus writes while loading. */
     *candidate = *gb;
     candidate->cartridge_ram_heap = NULL;
+    candidate->mbc6_flash = NULL;
     if (gb->cartridge_ram_heap) {
         candidate->cartridge_ram_heap = allocate(gb->cartridge_ram_capacity);
         if (!candidate->cartridge_ram_heap) {
             discard_candidate(candidate);
             return CUPID_GB_STATE_OUT_OF_MEMORY;
         }
+    }
+    if (gb->mbc6_flash) {
+        candidate->mbc6_flash = allocate(CUPID_GB_MBC6_STORAGE_SIZE);
+        if (!candidate->mbc6_flash) {
+            discard_candidate(candidate);
+            return CUPID_GB_STATE_OUT_OF_MEMORY;
+        }
+        memset(&candidate->mbc6, 0, sizeof(candidate->mbc6));
     }
     /* Absent legacy output fields must never borrow an unrelated live timeline. */
     memset(&candidate->apu.output, 0, sizeof(candidate->apu.output));
@@ -1517,6 +1536,19 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
     } else {
         cupid_gb_sgb_protocol_state_import_legacy(candidate);
     }
+    if (mbc6_size) {
+        cupid_gb_mbc6_state(&io, candidate);
+    } else if (candidate->mbc6_flash) {
+        /* The old controller mapped single 16 KiB ROM and 8 KiB RAM windows.
+         * Reconstruct their halves. Those states cannot supply a flash image. */
+        const uint8_t rom = (uint8_t)(candidate->current_rom_bank * 2u);
+        const uint8_t ram = (uint8_t)((candidate->current_ram_bank & 3u) * 2u);
+        candidate->mbc6.rom_bank[0] = rom;
+        candidate->mbc6.rom_bank[1] = rom + 1u;
+        candidate->mbc6.ram_bank[0] = ram;
+        candidate->mbc6.ram_bank[1] = ram + 1u;
+        memset(candidate->mbc6_flash, 0xff, CUPID_GB_MBC6_STORAGE_SIZE);
+    }
     if (io.invalid || io.offset != hardware_length ||
         candidate->boot_rom_enabled != ((flags & 1u) != 0) ||
         !valid_hardware_prefix(candidate, version) ||
@@ -1671,11 +1703,13 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
      * callbacks, and a saved device never changes the host's chosen attachment. */
     cupid_gb_camera_cancel_request(candidate);
     free(gb->cartridge_ram_heap);
+    free(gb->mbc6_flash);
     *gb = *candidate;
     if (printer)
         printer->state = *printer_candidate;
     free(printer_candidate);
     candidate->cartridge_ram_heap = NULL;
+    candidate->mbc6_flash = NULL;
     discard_candidate(candidate);
     return CUPID_GB_STATE_OK;
 }

@@ -30,6 +30,7 @@
 
 #include "cupid/gb/cartridge.h"
 #include "cupid/gbc/cgb.h"
+#include "mbc6_internal.h"
 
 static bool ordinary_cartridge_ram(const CupidGb *gb) {
     if (!gb->cartridge_ram_size || gb->cartridge_ram_size > CUPID_GB_INLINE_RAM_SIZE)
@@ -44,6 +45,8 @@ static bool ordinary_cartridge_ram(const CupidGb *gb) {
 }
 
 static size_t cartridge_offset(const CupidGb *gb, uint16_t address) {
+    if (gb->header.mbc_type == CUPID_GB_MBC6)
+        return cupid_gb_mbc6_ram_offset(gb, address);
     const size_t offset = cupid_gb_effective_ram_bank(gb) * 0x2000u + (address - 0xa000u);
     return offset % gb->cartridge_ram_size;
 }
@@ -116,6 +119,8 @@ int cupid_gb_debugger_bank(const CupidGb *gb, uint16_t address) {
         return 0;
     if (address < 0x8000u) {
         const bool lower = address < 0x4000u;
+        if (!lower && gb->header.mbc_type == CUPID_GB_MBC6)
+            return (int)cupid_gb_mbc6_rom_bank(gb, address, true);
         /* MMM01 symbols describe controller banks, not the dump's menu placement.
          * Keep the unlocked menu sentinels intact; only expressions narrow them. */
         return (int)(gb->header.mbc_type == CUPID_GB_MMM01
@@ -124,6 +129,8 @@ int cupid_gb_debugger_bank(const CupidGb *gb, uint16_t address) {
     }
     if (address < 0xa000u)
         return (int)(cupid_cgb_vram_offset(gb, address) / 0x2000u);
+    if (address < 0xc000u && gb->header.mbc_type == CUPID_GB_MBC6)
+        return (int)(cupid_gb_mbc6_ram_offset(gb, address) / 0x1000u);
     if (address < 0xc000u)
         return (int)cupid_gb_effective_ram_bank(gb);
     if (address < 0xe000u)

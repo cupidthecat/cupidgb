@@ -30,7 +30,7 @@
  * and MBC controllers.
  *
  * Implements ROM-only, MBC1 (including multicart), MBC2, MBC3/MBC30,
- * MBC5, MBC7, MMM01, HuC1, and HuC3 banking. MBC6 remains partial.
+ * MBC5, MBC6, MBC7, MMM01, HuC1, and HuC3 banking.
  */
 
 #include "cupid/gb/cartridge.h"
@@ -125,6 +125,12 @@ bool cupid_gb_cartridge_storage_valid(const CupidGb *gb) {
     if (!gb)
         return false;
     const size_t size = gb->cartridge_ram_size;
+    if (gb->loaded && gb->header.mbc_type == CUPID_GB_MBC6) {
+        if (!gb->mbc6_flash || size != CUPID_GB_MBC6_RAM_SIZE)
+            return false;
+    } else if (gb->loaded && gb->mbc6_flash) {
+        return false;
+    }
     if (size <= CUPID_GB_INLINE_RAM_SIZE)
         return !gb->cartridge_ram_heap && !gb->cartridge_ram_capacity;
     return gb->header.mbc_type == CUPID_GB_TPP1 && size <= CUPID_GB_MAX_RAM_SIZE &&
@@ -147,6 +153,8 @@ static size_t cartridge_storage_size(const CupidGbCartridgeHeader *header, size_
             break;
         case CUPID_GB_MBC2:
             return 512u;
+        case CUPID_GB_MBC6:
+            return CUPID_GB_MBC6_RAM_SIZE;
         case CUPID_GB_MBC7:
             return CUPID_GB_MBC7_EEPROM_SIZE;
         case CUPID_GB_TPP1:
@@ -550,7 +558,7 @@ size_t cupid_gb_selected_rom_bank(const CupidGb *gb, bool lower_region) {
             bank = lower_region ? 0u : 1u;
             break;
         default:
-            /* MBC3, MBC6, MBC7, unknown */
+            /* MBC3, MBC7, unknown */
             bank = lower_region ? 0u : gb->current_rom_bank;
             break;
     }
@@ -717,6 +725,7 @@ bool cupid_gb_parse_header(const uint8_t *rom_data, size_t rom_size,
         case 0x13u: /* MBC3+RAM+BATTERY */
         case 0x1bu: /* MBC5+RAM+BATTERY */
         case 0x1eu: /* MBC5+RUMBLE+RAM+BATTERY */
+        case 0x20u: /* MBC6+RAM+FLASH */
         case 0x22u: /* MBC7+SENSOR+EEPROM */
         case 0xfcu: /* Camera */
         case 0xfeu: /* HuC3 (battery-backed RTC/RAM) */
@@ -890,6 +899,9 @@ void cupid_gb_cartridge_reset_controls(CupidGb *gb) {
     gb->mbc7_sensor_x = 0x81d0;
     gb->mbc7_sensor_y = 0x81d0;
     gb->mbc7_latch = false;
+    const bool flash_protected = gb->mbc6.sector_protected;
+    memset(&gb->mbc6, 0, sizeof(gb->mbc6));
+    gb->mbc6.sector_protected = flash_protected;
     if (gb->header.mbc_type == CUPID_GB_HUC3)
         gb->current_rom_bank = HUC3_STARTUP_BANK;
     if (gb->header.mbc_type == CUPID_GB_MBC7) {
@@ -918,7 +930,8 @@ bool cupid_gb_cartridge_source_fits(const CupidGb *gb, const void *source, size_
     return gb && (source || !length) && source_fits_buffer(source, length, gb, sizeof(*gb)) &&
            source_fits_buffer(source, length, gb->rom, gb->rom_capacity) &&
            source_fits_buffer(source, length, gb->cartridge_ram, sizeof(gb->cartridge_ram)) &&
-           source_fits_buffer(source, length, gb->cartridge_ram_heap, gb->cartridge_ram_capacity);
+           source_fits_buffer(source, length, gb->cartridge_ram_heap, gb->cartridge_ram_capacity) &&
+           source_fits_buffer(source, length, gb->mbc6_flash, CUPID_GB_MBC6_STORAGE_SIZE);
 }
 
 /**
@@ -1035,6 +1048,7 @@ bool cupid_gb_load_rom_with_allocator(CupidGb *gb, const uint8_t *rom_data, size
         rom_size < CUPID_GB_MIN_ROM_CAPACITY ? CUPID_GB_MIN_ROM_CAPACITY : rom_size;
     uint8_t *const previous_rom = gb->rom;
     uint8_t *const previous_ram = gb->cartridge_ram_heap;
+    uint8_t *const previous_flash = gb->mbc6_flash;
     uint8_t *candidate_rom = previous_rom;
     if (!previous_rom || gb->rom_capacity != required_capacity) {
         candidate_rom = allocate(required_capacity);
@@ -1055,13 +1069,27 @@ bool cupid_gb_load_rom_with_allocator(CupidGb *gb, const uint8_t *rom_data, size
         }
     }
 
-    /* Both allocations are ready. Finish an aliased source copy before init can
+    uint8_t *candidate_flash = header.mbc_type == CUPID_GB_MBC6 ? previous_flash : NULL;
+    if (header.mbc_type == CUPID_GB_MBC6 && !candidate_flash) {
+        candidate_flash = allocate(CUPID_GB_MBC6_STORAGE_SIZE);
+        if (!candidate_flash) {
+            if (candidate_ram != previous_ram)
+                free(candidate_ram);
+            if (candidate_rom != previous_rom)
+                free(candidate_rom);
+            cupid_log_error("Failed to allocate MBC6 flash storage.");
+            return false;
+        }
+    }
+
+    /* Storage is ready. Finish an aliased source copy before init can
      * clear either the inline SRAM or a reused heap, then transfer ownership. */
     memmove(candidate_rom, rom_data, rom_size);
     gb->rom = candidate_rom;
     gb->rom_capacity = required_capacity;
     gb->cartridge_ram_heap = candidate_ram;
     gb->cartridge_ram_capacity = ram_capacity;
+    gb->mbc6_flash = candidate_flash;
 
     cupid_gb_init(gb);
     gb->rom_size = rom_size;
@@ -1099,6 +1127,8 @@ bool cupid_gb_load_rom_with_allocator(CupidGb *gb, const uint8_t *rom_data, size
     /* A fresh cartridge exposes erased storage until the host restores its
      * battery image. Resolve built-in RAM sizes before filling the array. */
     memset(cupid_gb_cartridge_ram(gb), 0xff, gb->cartridge_ram_size);
+    if (candidate_flash)
+        memset(candidate_flash, 0xff, CUPID_GB_MBC6_STORAGE_SIZE);
 
     gb->loaded = true;
     ++gb->rom_generation;
@@ -1107,6 +1137,8 @@ bool cupid_gb_load_rom_with_allocator(CupidGb *gb, const uint8_t *rom_data, size
         free(previous_rom);
     if (candidate_ram != previous_ram)
         free(previous_ram);
+    if (candidate_flash != previous_flash)
+        free(previous_flash);
 
     cupid_log_infof("Loaded Game Boy ROM: %s",
                     gb->header.title[0] != '\0' ? gb->header.title : "<untitled>");

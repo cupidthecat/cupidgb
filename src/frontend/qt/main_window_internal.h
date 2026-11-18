@@ -282,6 +282,10 @@ class DisplayWidget final : public QWidget {
     QImage image;
     ScreenMessages messages;
     DisplayScaling scaling = DisplayScaling::Integer;
+    ScalingFilter filter = ScalingFilter::Nearest;
+    QImage filteredImage;
+    qint64 filteredSourceKey = 0;
+    ScalingFilter cachedFilter = ScalingFilter::Nearest;
     uint64_t paintCount = 0;
     HostElapsedTimer paintClock;
     qint64 lastPaintAt = 0;
@@ -322,6 +326,17 @@ class DisplayWidget final : public QWidget {
             lastPaintAt = now;
         }
         const QRectF target = displayViewport(image.size(), size(), scaling, devicePixelRatioF());
-        painter.drawImage(target, image);
+        if (filter == ScalingFilter::Nearest) {
+            painter.drawImage(target, image);
+            return;
+        }
+        const QSize output = (target.size() * devicePixelRatioF()).toSize();
+        if (filteredSourceKey != image.cacheKey() || filteredImage.size() != output ||
+            cachedFilter != filter) {
+            filteredImage = filterDisplayImage(image, output, filter);
+            filteredSourceKey = image.cacheKey();
+            cachedFilter = filter;
+        }
+        painter.drawImage(target, filteredImage);
     }
 };

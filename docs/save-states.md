@@ -10,7 +10,7 @@ Load a native state file through File > Load State File or drop a `.s0` through 
 
 Writes use an atomic file replacement. Loading checks the complete cartridge identity and hardware model. A state captured with an active boot overlay requires the matching local boot binary. Failed validation preserves the running session and its host audio queue. A successful load replaces the emulated state, reapplies current physical input, clears queued host audio, and realigns pacing.
 
-New files use CupidGB native version 24. Cartridge versions 2 through 23, including both supported version 19 development layouts, remain loadable when they contain all SRAM required by the receiving cartridge. GBS programs require version 23 or newer and the matching music file already loaded. Desktop loads retain current audio choices and both receiving output owners: ordinary reconstruction/filter history and startup synthesis/queued batches. Saved hardware startup phase, host-only time and command-receiver history still restore. Interoperable BESS state imports remain pending.
+New files use CupidGB native version 25. Cartridge versions 2 through 24, including both supported version 19 development layouts, remain loadable when they contain all SRAM required by the receiving cartridge. GBS programs require version 23 or newer and the matching music file already loaded. Desktop loads retain current audio choices and both receiving output owners: ordinary reconstruction/filter history and startup synthesis/queued batches. Saved hardware startup phase, host-only time and command-receiver history still restore. Interoperable BESS state imports remain pending.
 
 Host camera images and pending device requests stay with the receiving session. Saving a pending host capture writes an idle camera to the file while the live request continues. After full validation, a load into host-camera mode cancels obsolete requests and clears imported busy state while retaining the current image. This also applies to a saved generated countdown. Without a provider, generated captures retain their countdown, while a host-origin snapshot starts idle. The existing 64-byte camera section and strict busy/countdown validator are unchanged. See [Camera cartridges](host-camera.md) for reset, rewind and embedding rules.
 
@@ -342,6 +342,12 @@ The receiver must already own the same program kind, header, payload and bank wi
 ### Cartridge bus after firmware entry in version 24
 
 Version 24 keeps the version 23 layout. The existing two-byte cartridge-bus record accepts `00 00` for a bus that has not been driven since firmware entry. That byte stays at zero until a driven access starts the hold timer. An expired bus still uses `00 FF`. Versions 6 through 23 recorded only the expired value at a zero hold time, so imports retain `FF` for that encoding. Older files cannot recover the initial byte they never stored.
+
+### MBC6 flash in version 25
+
+Version 25 places an MBC6-only record after the SGB receiver record and before the serial accessory descriptor. The record contains the split ROM and SRAM selectors, flash chip and write-enable gates, sector protection, current flash mode, command phase, status and buffered page. The flash array and hidden bytes follow. The payload is fixed at 1,048,978 bytes. Other controllers keep their version 24 payload.
+
+An older MBC6 state that contains the board's 32 KiB SRAM maps its historical 16 KiB ROM selection and 8 KiB SRAM selection into adjacent halves. Flash starts erased with its command latches clear because those states do not contain flash data.
 
 GBS timer-control bit 7 permits double-speed execution on the selected hardware, including monochrome and adapter profiles. On non-CGB hardware, a saved double-speed bit grants no permission on its own: the receiving GBS header must already request it. Physical CGB retains its normal saved speed behavior, including guest speed switches. CGB operating mode remains restricted to physical CGB. The effective bank wiring is part of identity because an extended MBC3 cartridge can leave that configuration attached to a later music session; equal music bytes alone do not establish equivalent execution.
 

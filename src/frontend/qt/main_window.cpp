@@ -350,6 +350,21 @@ void MainWindow::buildMenus() {
             applyDisplaySettings();
         });
     }
+    auto *filters = view->addMenu("Scaling &Filter");
+    auto *filterGroup = new QActionGroup(this);
+    const std::array<const char *, 3> filterNames = {"Nearest Neighbor", "Bilinear",
+                                                     "Smooth Bilinear"};
+    for (size_t i = 0; i < scalingFilterActions_.size(); ++i) {
+        auto *action = filters->addAction(filterNames[i]);
+        action->setObjectName(QString("video/filter/%1").arg(i));
+        action->setCheckable(true);
+        filterGroup->addAction(action);
+        scalingFilterActions_[i] = action;
+        connect(action, &QAction::triggered, this, [this, i] {
+            settings_.setValue("video/filter", int(i));
+            applyDisplaySettings();
+        });
+    }
     auto *windowSize = view->addMenu("&Window Size");
     auto *sizeGroup = new QActionGroup(this);
     for (size_t i = 0; i < windowSizeActions_.size(); ++i) {

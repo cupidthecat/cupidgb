@@ -67,7 +67,8 @@ static bool info_output_valid(const CupidGb *gb, CupidGbGbsInfo *info, const uin
            (!overlaps(info, sizeof(*info), gb, sizeof(*gb)) &&
             !overlaps(info, sizeof(*info), data, length) &&
             !overlaps(info, sizeof(*info), gb->rom, gb->rom_capacity) &&
-            !overlaps(info, sizeof(*info), gb->cartridge_ram_heap, gb->cartridge_ram_capacity));
+            !overlaps(info, sizeof(*info), gb->cartridge_ram_heap, gb->cartridge_ram_capacity) &&
+            !overlaps(info, sizeof(*info), gb->mbc6_flash, CUPID_GB_MBC6_STORAGE_SIZE));
 }
 
 static void decode_info(const uint8_t *header, CupidGbGbsInfo *info) {

@@ -28,6 +28,7 @@
 #include <QDoubleSpinBox>
 #include <QElapsedTimer>
 #include <QPointer>
+#include <QScopeGuard>
 
 bool MainWindow::displayFilesSmokeTest(const QString &directory) {
     MainWindow session(true, true);
@@ -52,6 +53,110 @@ bool MainWindow::displayFilesSmokeTest(const QString &directory) {
     for (const char *action : {"screenshot", "screenshotAs", "copyScreenshot"})
         if (!session.findChild<QAction *>(action)->isEnabled())
             return smokeFailure(__FILE__, __LINE__);
+    // Render the actual widget so filter selection, cache invalidation and
+    // resized output are exercised through the same entry point as desktop paints.
+    DisplayWidget filterProbe(nullptr);
+    filterProbe.scaling = DisplayScaling::Fill;
+    filterProbe.resize(320, 288);
+    filterProbe.image = QImage(2, 2, QImage::Format_RGB32);
+    filterProbe.image.fill(Qt::black);
+    filterProbe.image.setPixel(1, 1, qRgb(255, 255, 255));
+    for (auto selected : {ScalingFilter::Bilinear, ScalingFilter::SmoothBilinear}) {
+        filterProbe.filter = selected;
+        const QSize output =
+            (QSizeF(filterProbe.size()) * filterProbe.devicePixelRatioF()).toSize();
+        QImage rendered(output, QImage::Format_RGB32);
+        rendered.setDevicePixelRatio(filterProbe.devicePixelRatioF());
+        filterProbe.render(&rendered);
+        QImage expected = filterDisplayImage(filterProbe.image, output, selected);
+        expected.setDevicePixelRatio(filterProbe.devicePixelRatioF());
+        if (filterProbe.filteredSourceKey != filterProbe.image.cacheKey() ||
+            filterProbe.cachedFilter != selected || rendered != expected)
+            return smokeFailure(__FILE__, __LINE__);
+    }
+    filterProbe.image.fill(Qt::red);
+    filterProbe.resize(400, 300);
+    const QSize resizedOutput =
+        (QSizeF(filterProbe.size()) * filterProbe.devicePixelRatioF()).toSize();
+    QImage resized(resizedOutput, QImage::Format_RGB32);
+    resized.setDevicePixelRatio(filterProbe.devicePixelRatioF());
+    filterProbe.render(&resized);
+    if (filterProbe.filteredImage.size() != resizedOutput ||
+        filterProbe.filteredSourceKey != filterProbe.image.cacheKey() ||
+        resized.pixel(200, 150) != qRgb(255, 0, 0))
+        return smokeFailure(__FILE__, __LINE__);
+    const QVariant originalFilter = settings_.value("video/filter");
+    const auto restoreFilter = qScopeGuard([&] {
+        if (originalFilter.isValid())
+            settings_.setValue("video/filter", originalFilter);
+        else
+            settings_.remove("video/filter");
+    });
+    const auto configureFilter = [&](int expected, int selected, bool accept) {
+        bool checked = false;
+        bool timedOut = false;
+        QTimer driver;
+        driver.setInterval(10);
+        connect(&driver, &QTimer::timeout, &session, [&] {
+            auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+            if (!dialog || dialog->objectName() != "settings" || dialog->parentWidget() != &session)
+                return;
+            driver.stop();
+            auto *choice = dialog->findChild<QComboBox *>("scalingFilter");
+            auto *buttons = dialog->findChild<QDialogButtonBox *>();
+            checked =
+                choice && buttons && choice->count() == 3 && choice->currentIndex() == expected;
+            if (checked) {
+                choice->setCurrentIndex(selected);
+                buttons->button(accept ? QDialogButtonBox::Ok : QDialogButtonBox::Cancel)->click();
+            } else {
+                dialog->reject();
+            }
+        });
+        QTimer watchdog;
+        watchdog.setSingleShot(true);
+        connect(&watchdog, &QTimer::timeout, &session, [&] {
+            timedOut = true;
+            if (auto *dialog = session.findChild<QDialog *>("settings"))
+                dialog->reject();
+        });
+        driver.start();
+        watchdog.start(3000);
+        session.configure();
+        driver.stop();
+        watchdog.stop();
+        return checked && !timedOut;
+    };
+    for (int mode = 0; mode < 3; ++mode) {
+        auto *action = session.findChild<QAction *>(QString("video/filter/%1").arg(mode));
+        if (!action)
+            return smokeFailure(__FILE__, __LINE__);
+        action->trigger();
+        if (!action->isChecked() || session.display_->filter != ScalingFilter(mode) ||
+            settings_.value("video/filter").toInt() != mode || session.image_ != image ||
+            session.captureState() != state)
+            return smokeFailure(__FILE__, __LINE__);
+        MainWindow restored(true, true);
+        if (restored.display_->filter != ScalingFilter(mode))
+            return smokeFailure(__FILE__, __LINE__);
+        if (!configureFilter(mode, (mode + 1) % 3, false) ||
+            session.display_->filter != ScalingFilter(mode) ||
+            settings_.value("video/filter").toInt() != mode)
+            return smokeFailure(__FILE__, __LINE__);
+        session.copyScreenshot();
+        if (QApplication::clipboard()->image().convertToFormat(QImage::Format_RGB32) != image)
+            return smokeFailure(__FILE__, __LINE__);
+    }
+    if (!configureFilter(2, 1, true) || session.display_->filter != ScalingFilter::Bilinear ||
+        settings_.value("video/filter").toInt() != 1 || session.captureState() != state)
+        return smokeFailure(__FILE__, __LINE__);
+    for (const QVariant &invalid : {QVariant(-1), QVariant(3), QVariant("invalid")}) {
+        settings_.setValue("video/filter", invalid);
+        session.applyDisplaySettings();
+        if (session.display_->filter != ScalingFilter::Nearest ||
+            !session.scalingFilterActions_[0]->isChecked())
+            return smokeFailure(__FILE__, __LINE__);
+    }
     const auto previousFiles = QDir(directory).entryList({"display-files *.png"}, QDir::Files);
     session.screenshotAction_->trigger();
     const auto files = QDir(directory).entryList({"display-files *.png"}, QDir::Files);

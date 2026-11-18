@@ -29,6 +29,7 @@
 
 #include "cupid/gb/audio_output.h"
 #include "cupid/gb/gbs.h"
+#include "cupid/gb/mbc6.h"
 #include "cupid/gb/rtc.h"
 #include "cupid/gb/sgb.h"
 #include "cupid/gb/sgb_startup.h"
@@ -438,6 +439,7 @@ typedef struct CupidGb {
         *cartridge_ram_heap; /* Optional complete TPP1 SRAM allocation, never an inline alias. */
     size_t
         cartridge_ram_capacity; /* Zero for inline storage; host ownership, outside save states. */
+    uint8_t *mbc6_flash;        /* MBC6 array and hidden bytes. Separate from battery SRAM. */
     uint8_t work_ram[0x8000];
     uint8_t object_attribute_memory[0x00a0];
     uint8_t io_registers[0x0080];
@@ -467,6 +469,7 @@ typedef struct CupidGb {
     uint16_t mbc7_sensor_y;
     bool mbc7_latch;
     CupidGbMbc7 mbc7;
+    CupidGbMbc6 mbc6;
     /* MMM01 */
     bool mmm01_locked;
     uint8_t mmm01_bank_base; /* Retained for the legacy native state prefix. */
