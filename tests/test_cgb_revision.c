@@ -20,6 +20,8 @@
  * along with this program. If not, see <https://gnu.org>.
  */
 
+#include "../src/gb/audio_output.h"
+#include "cupid/common/sha256.h"
 #include "cupid/gb/apu.h"
 #include "cupid/gb/reset.h"
 #include "cupid/gb/state.h"
@@ -223,6 +225,106 @@ static void test_length_clear(CupidGbModel model) {
     }
 }
 
+static void test_pcm_delivery(CupidGbModel model, bool fast) {
+    CupidGb *first = machine(model), *second = machine(model);
+    const bool early = cupid_gb_model_is_early_cgb(model);
+    first->double_speed = fast;
+    cupid_gb_write_u8(first, 0xff26, 0);
+    cupid_gb_write_u8(first, 0xff04, 0);
+    cupid_gb_write_u8(first, 0xff26, 0x80);
+    cupid_gb_write_u8(first, 0xff11, 0);
+    cupid_gb_write_u8(first, 0xff12, 0xf0);
+    cupid_gb_write_u8(first, 0xff13, 0xf8);
+    cupid_gb_write_u8(first, 0xff14, 0x87);
+
+    /* A 32-dot period reaches the first high duty position on the seventh
+     * step. At this start phase the early fast gate adds four dots. */
+    const uint16_t before_edge = (uint16_t)(early && fast ? 234 : 230);
+    cupid_gb_tick_apu(first, before_edge);
+    assert(cupid_gb_read_bus_u8(first, 0xff76) == 0);
+    cupid_gb_tick_apu_divider(first, 2);
+    size_t queued_size;
+    uint8_t *queued = snapshot(first, &queued_size);
+
+    const uint8_t at_edge = early ? 0 : 15;
+    assert(cupid_gb_read_bus_u8(first, 0xff76) == at_edge);
+    uint8_t taps[4];
+    cupid_gb_apu_channel_samples(first, taps);
+    assert(taps[0] == 15);
+    assert(cupid_gb_read_bus_u8(first, 0xff76) == at_edge);
+    size_t latched_size;
+    uint8_t *latched = snapshot(first, &latched_size);
+
+    /* Both restore paths retain the pending edge or its already-latched
+     * result. Live audio can resolve the clocks before installing its rate. */
+    assert(cupid_gb_apu_set_sample_rate(second, 48000));
+    assert(cupid_gb_load_state_live(second, queued, queued_size) == CUPID_GB_STATE_OK);
+    assert(cupid_gb_apu_get_sample_rate(second) == 48000);
+    assert(cupid_gb_read_bus_u8(second, 0xff76) == at_edge);
+    assert(cupid_gb_load_state_live(second, latched, latched_size) == CUPID_GB_STATE_OK);
+    assert(cupid_gb_read_bus_u8(second, 0xff76) == at_edge);
+    assert(cupid_gb_load_state(second, queued, queued_size) == CUPID_GB_STATE_OK);
+    assert(cupid_gb_read_bus_u8(second, 0xff76) == at_edge);
+    assert(cupid_gb_load_state(second, latched, latched_size) == CUPID_GB_STATE_OK);
+    assert(cupid_gb_read_bus_u8(second, 0xff76) == at_edge);
+    cupid_gb_tick_apu_divider(second, 2);
+    assert(cupid_gb_read_bus_u8(second, 0xff76) == 15);
+
+    if (early) {
+        /* The preceding schema puts the accessory descriptor directly
+         * after extra OAM. It cannot contain an active PCM delivery latch. */
+        assert(cupid_gb_load_state(second, latched, latched_size) == CUPID_GB_STATE_OK);
+        latched[latched_size - 9] |= 1u;
+        cupid_sha256_parts(latched, 96, latched + 128, latched_size - 128, latched + 96);
+        assert(cupid_gb_load_state(second, latched, latched_size) == CUPID_GB_STATE_INVALID);
+        assert(cupid_gb_read_bus_u8(second, 0xff76) == 0);
+        memmove(latched + latched_size - 10, latched + latched_size - 8, 8);
+        latched_size -= 2;
+        latched[8] = 27;
+        for (unsigned byte = 0; byte < 4; ++byte)
+            latched[12 + byte] = (uint8_t)(latched_size >> (8u * byte));
+        cupid_sha256_parts(latched, 96, latched + 128, latched_size - 128, latched + 96);
+        assert(cupid_gb_load_state(second, latched, latched_size) == CUPID_GB_STATE_OK);
+        assert(cupid_gb_read_bus_u8(second, 0xff76) == 15);
+    }
+
+    free(latched);
+    free(queued);
+    destroy(second);
+    destroy(first);
+}
+
+static void test_pcm_noise(CupidGbModel model, bool fast) {
+    CupidGb *gb = machine(model);
+    const bool early = cupid_gb_model_is_early_cgb(model);
+    gb->double_speed = fast;
+    cupid_gb_write_u8(gb, 0xff26, 0);
+    cupid_gb_write_u8(gb, 0xff04, 0);
+    cupid_gb_write_u8(gb, 0xff26, 0x80);
+    for (uint16_t address = 0xff30; address <= 0xff3f; ++address)
+        cupid_gb_write_u8(gb, address, 0x66);
+    cupid_gb_write_u8(gb, 0xff1a, 0x80);
+    cupid_gb_write_u8(gb, 0xff1c, 0x20);
+    cupid_gb_write_u8(gb, 0xff1d, 0xf0);
+    cupid_gb_write_u8(gb, 0xff1e, 0x87);
+    cupid_gb_write_u8(gb, 0xff21, 0xf0);
+    cupid_gb_write_u8(gb, 0xff22, 0);
+    cupid_gb_write_u8(gb, 0xff23, 0x80);
+
+    /* The fifteenth noise shift exposes the first high sample. The CPU
+     * must still see the wave code when the older noise tap holds zero. */
+    cupid_gb_tick_apu(gb, (uint16_t)(early && fast ? 126 : 122));
+    assert(cupid_gb_read_bus_u8(gb, 0xff77) == 0x06);
+    cupid_gb_tick_apu(gb, 2);
+    assert(cupid_gb_read_bus_u8(gb, 0xff77) == (early && !fast ? 0x06 : 0xf6));
+    uint8_t taps[4];
+    cupid_gb_apu_channel_samples(gb, taps);
+    assert(taps[2] == 6 && taps[3] == 15);
+    cupid_gb_tick_apu(gb, 2);
+    assert(cupid_gb_read_bus_u8(gb, 0xff77) == 0xf6);
+    destroy(gb);
+}
+
 int main(void) {
     for (unsigned i = 0; i < COUNT_OF(models); ++i) {
         test_tail_aliases(models[i]);
@@ -230,6 +332,10 @@ int main(void) {
         test_tail_continuation(models[i]);
         test_revision_identity(models[i]);
         test_length_clear(models[i]);
+        test_pcm_delivery(models[i], false);
+        test_pcm_delivery(models[i], true);
+        test_pcm_noise(models[i], false);
+        test_pcm_noise(models[i], true);
     }
     return 0;
 }

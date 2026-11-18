@@ -176,7 +176,8 @@ typedef struct CupidGbApu {
     uint8_t pulse_dac_hold[2];
     /* DAC disconnect freezes its code until a later channel-output event. */
     uint8_t dac_sample[CUPID_GB_AUDIO_CHANNELS];
-    uint16_t pending_cycles; /* Delivered base T-cycles awaiting a digital APU run. */
+    uint16_t pending_cycles;   /* Delivered base T-cycles awaiting a digital APU run. */
+    uint16_t pcm_read_inhibit; /* Early CGB delivery latch, FF76 in the low byte. */
 
     CupidGbAudioOutput output;
 } CupidGbApu;
@@ -288,6 +289,10 @@ static inline bool cupid_gb_model_is_valid(CupidGbModel model) {
 static inline bool cupid_gb_model_is_cgb(CupidGbModel model) {
     return model == CUPID_GB_MODEL_CGB_E ||
            (model >= CUPID_GB_MODEL_CGB_0 && model <= CUPID_GB_MODEL_CGB_D);
+}
+
+static inline bool cupid_gb_model_is_early_cgb(CupidGbModel model) {
+    return model >= CUPID_GB_MODEL_CGB_0 && model <= CUPID_GB_MODEL_CGB_C;
 }
 
 typedef enum CupidGbProgramKind {

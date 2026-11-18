@@ -137,7 +137,7 @@ void cupid_gb_noise_prepare(CupidGb *gb, bool active) {
     if (!divisor) {
         if (phase & 1) {
             delay += color && background ? -1 : 1;
-        } else if (fast_monochrome) {
+        } else if (gb->double_speed && (!color || cupid_gb_model_is_early_cgb(gb->model))) {
             delay += 2;
         }
         if (background && !active && phase == 0 && started_off) {

@@ -199,8 +199,13 @@ static void color_pulse_trigger(CupidGb *gb, unsigned channel, bool was_active,
     /* The trigger path settles against the power-relative audio divider. An
      * active retrigger takes one 1 MHz tick less than an inactive start. The
      * final two base clocks overlap the ordinary frequency-counter reload. */
-    timing->start_delay =
-        (uint8_t)((was_active ? 6u : 10u) + (apu->clock_phase & 2u) + extra_delay);
+    unsigned phase_delay = apu->clock_phase & 2u;
+    if (!was_active && gb->double_speed && cupid_gb_model_is_early_cgb(gb->model)) {
+        /* The earlier color revisions hold an inactive fast start through
+         * the opposite half of the audio divider. */
+        phase_delay = 4u - phase_delay;
+    }
+    timing->start_delay = (uint8_t)((was_active ? 6u : 10u) + phase_delay + extra_delay);
     *timer = (uint16_t)(*timer + timing->start_delay - 2u);
     timing->clock_started = dac;
     if (!reloaded) {
@@ -287,6 +292,7 @@ void cupid_gb_apu_finish_divider_period(CupidGb *gb) {
         return;
     gb->apu.envelope_delay = 0;
     cupid_gb_apu_run(gb, true);
+    gb->apu.pcm_read_inhibit = 0;
     if (gb->apu.apu_on && cupid_gb_model_is_cgb(gb->model)) {
         cupid_gb_audio_update_channels(gb, color_envelope_fall(gb), 0, false);
     }
@@ -296,6 +302,7 @@ void cupid_gb_apu_div_secondary_event(CupidGb *gb) {
     if (!gb)
         return;
     cupid_gb_apu_run(gb, true);
+    gb->apu.pcm_read_inhibit = 0;
     if (!gb->apu.apu_on || !cupid_gb_model_is_cgb(gb->model)) {
         return;
     }
@@ -720,6 +727,7 @@ void cupid_gb_apu_div_event(CupidGb *gb) {
     if (!gb)
         return;
     cupid_gb_apu_run(gb, true);
+    gb->apu.pcm_read_inhibit = 0;
     if (!gb->apu.apu_on) {
         return;
     }
@@ -803,7 +811,7 @@ uint8_t cupid_gb_apu_read_pcm12(const CupidGb *gb) {
         return 0xff;
     }
     cupid_gb_apu_digital_samples(gb, digital);
-    return (uint8_t)(digital[0] | (digital[1] << 4));
+    return (uint8_t)((digital[0] | (digital[1] << 4)) & ~gb->apu.pcm_read_inhibit);
 }
 
 uint8_t cupid_gb_apu_read_pcm34(const CupidGb *gb) {
@@ -812,7 +820,7 @@ uint8_t cupid_gb_apu_read_pcm34(const CupidGb *gb) {
         return 0xff;
     }
     cupid_gb_apu_digital_samples(gb, digital);
-    return (uint8_t)(digital[2] | (digital[3] << 4));
+    return (uint8_t)((digital[2] | (digital[3] << 4)) & ~(gb->apu.pcm_read_inhibit >> 8));
 }
 
 /**
@@ -1439,27 +1447,42 @@ void cupid_gb_apu_on_write(CupidGb *gb, uint8_t off, uint8_t val) {
 
 /* The digital engine retains base-clock ordering. Each changed channel adds a
  * step at its exact clock offset; host reconstruction runs at sample boundaries. */
-static void execute_audio_cycles(CupidGb *gb, uint16_t cycles) {
+static void execute_audio_cycles(CupidGb *gb, uint16_t cycles, bool run_end) {
     CupidGbApu *apu = &gb->apu;
+    const bool color = cupid_gb_model_is_cgb(gb->model);
+    const bool latch_pcm_edge = run_end && cupid_gb_model_is_early_cgb(gb->model);
     uint16_t c;
     for (c = 0u; c < cycles; ++c) {
         uint8_t changed = 0;
         bool envelope_due = false;
         bool noise_restart_due = false;
-        bool oscillator_running = !gb->cpu.stopped || cupid_gb_model_is_cgb(gb->model);
+        bool oscillator_running = !gb->cpu.stopped || color;
         if (oscillator_running && apu->ch3_wave_access_ticks > 0u) {
             apu->ch3_wave_access_ticks = (uint8_t)(apu->ch3_wave_access_ticks - 1u);
         }
 
         if (apu->apu_on && oscillator_running) {
+            /* The early read taps can hold a zero code across the last
+             * oscillator step at the bus boundary. Internal output spans
+             * and repeated reads do not reset that delivery's latch. */
+            const bool sample_pcm = latch_pcm_edge && c + 1u == cycles;
+            uint8_t previous_pcm[4];
+            if (sample_pcm)
+                cupid_gb_apu_digital_samples(gb, previous_pcm);
             apu->clock_phase = (uint8_t)((apu->clock_phase + 1u) & 3u);
-            if (cupid_gb_model_is_cgb(gb->model)) {
+            if (color) {
                 if (color_sweep_tick(gb))
                     changed |= 1;
-                if (pulse_tick(apu, 0, true))
+                if (pulse_tick(apu, 0, true)) {
                     changed |= 1;
-                if (pulse_tick(apu, 1, true))
+                    if (sample_pcm && !previous_pcm[0])
+                        apu->pcm_read_inhibit |= 0x000fu;
+                }
+                if (pulse_tick(apu, 1, true)) {
                     changed |= 2;
+                    if (sample_pcm && !previous_pcm[1])
+                        apu->pcm_read_inhibit |= 0x00f0u;
+                }
                 if (apu->envelope_delay && !--apu->envelope_delay) {
                     envelope_due = true;
                 }
@@ -1509,8 +1532,11 @@ static void execute_audio_cycles(CupidGb *gb, uint16_t cycles) {
                 }
             }
 
-            if (cupid_gb_noise_tick(gb))
+            if (cupid_gb_noise_tick(gb)) {
                 changed |= 8;
+                if (sample_pcm && !gb->double_speed && !previous_pcm[3])
+                    apu->pcm_read_inhibit |= 0xf000u;
+            }
             if (apu->noise_timing.start_delay && !--apu->noise_timing.start_delay)
                 noise_restart_due = true;
         }
@@ -1573,7 +1599,7 @@ static void run_pending_audio(CupidGb *gb, bool force, bool direct) {
             available = output->max_span;
         }
         const unsigned span = remaining < available ? remaining : available;
-        execute_audio_cycles(gb, (uint16_t)span);
+        execute_audio_cycles(gb, (uint16_t)span, span == remaining);
         remaining -= span;
         if (output->sample_acc >= clock) {
             output->sample_acc -= clock;
@@ -1604,6 +1630,7 @@ void cupid_gb_apu_run(CupidGb *gb, bool force) {
 void cupid_gb_tick_apu_divider(CupidGb *gb, uint16_t cycles) {
     if (!gb || !cycles)
         return;
+    gb->apu.pcm_read_inhibit = 0;
     cupid_gb_audio_credit(gb, cycles);
     if (!gb->cpu.stopped || cupid_gb_model_is_cgb(gb->model)) {
         assert((unsigned)gb->apu.pending_cycles + cycles <= UINT16_MAX);
