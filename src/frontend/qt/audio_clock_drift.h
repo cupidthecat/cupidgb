@@ -82,11 +82,11 @@ class AudioClockDrift {
     double playbackRatio(std::int64_t queuedFrames, unsigned sampleRate) const {
         if (!updates_ || queuedFrames < 0 || !sampleRate)
             return ratio_;
-        // Maintain enough combined playback lead for event-loop jitter.
-        // Limit the correction so a single native buffer-period update only
-        // changes the converter ratio gradually.
+        // Correct queue depth on a shorter timescale than the oscillator
+        // estimate. An empty queue needs enough gain to recover when that
+        // estimate has briefly fallen below the rate the device consumes.
         const double errorSeconds = 0.045 - double(queuedFrames) / sampleRate;
-        const double adjustment = std::clamp(errorSeconds / 2.5, -0.012, 0.012);
+        const double adjustment = std::clamp(errorSeconds / 0.30, -0.10, 0.10);
         return std::clamp(ratio_ + adjustment, 0.9, 1.1);
     }
 

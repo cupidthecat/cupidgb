@@ -92,10 +92,52 @@ bool checkClockTrace() {
                      full["truncated_samples"].toInt() == 3,
                  "Audio trace exceeded its explicit sample capacity");
 }
+
+bool checkClockStepWithBatchedPlayback() {
+    constexpr unsigned rate = 48000;
+    constexpr double nativeCapacity = 1800;
+    constexpr double demandBlock = 600;
+    constexpr double guestFrame = 800;
+    for (double previousRate : {11.0 / 12.0, 1.0}) {
+        for (int phase = 0; phase < 17; ++phase) {
+            AudioClockDrift drift;
+            const auto previousFrames = uint64_t(rate * previousRate);
+            drift.observe(0, 0, 0, rate);
+            drift.observe(INT64_C(1000000000), previousFrames, 0, rate);
+            double accepted = double(previousFrames);
+            double native = nativeCapacity;
+            double pending = 2160 - native;
+            double demand = 0;
+            int nextFrame = phase * 60;
+            for (int ms = 1; ms <= 3000; ++ms) {
+                // Model a rate step against a buffered backend that takes
+                // 12.5 ms blocks while the guest supplies frame-sized bursts.
+                demand += (previousRate + 1.0 / 12.0) * rate / 1000;
+                if (demand >= demandBlock) {
+                    if (!check(native >= demandBlock, "A host clock step drained the audio queue"))
+                        return false;
+                    native -= demandBlock;
+                    demand -= demandBlock;
+                }
+                drift.observe(INT64_C(1000000000) + int64_t(ms) * 1000000, uint64_t(accepted),
+                              int64_t(nativeCapacity - native), rate);
+                if (ms * 60 >= nextFrame) {
+                    pending += guestFrame * drift.playbackRatio(int64_t(native + pending), rate);
+                    nextFrame += 1000;
+                }
+                const double written = std::min(pending, nativeCapacity - native);
+                accepted += written;
+                native += written;
+                pending -= written;
+            }
+        }
+    }
+    return true;
+}
 } // namespace
 
 int main() {
-    if (!checkClockTrace())
+    if (!checkClockTrace() || !checkClockStepWithBatchedPlayback())
         return 1;
     // Native writes contain both new audio and buffer filling. Only the sum
     // of accepted frames and writable capacity isolates actual consumption.

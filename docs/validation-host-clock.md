@@ -287,3 +287,11 @@ the current Windows CGB MBC5 runs alone range from 10.648586 to 14.645429 second
 The integrated matrix does not establish a uniform speedup or attribute a result
 to the branch hint alone. These headless measurements also do not measure native
 presentation pacing or audible playback quality.
+
+## Queue recovery during host rate steps
+
+A 60-second WSLg session with native audio reproduced five idle events after warmup. The native buffer capacity stayed at about 37.5 ms. The queue ran dry near each idle, even though the largest pump gap immediately before an idle was about 5 ms. The sink's consumption rate followed changes in the host's adjusted clock. The rate estimate took longer to adjust after the rate rose.
+
+The converter now responds to queue depth on a 300 ms timescale. A regression models a native consumer taking 12.5 ms blocks and guest audio arriving in frame-sized batches. It checks step increases of 8.33 percentage points from 91.67% and 100% of the nominal host rate across 17 starting offsets.
+
+The faster response recorded zero idle events and zero backend errors in a separate 60-second WSLg CGB-C run. Guest speed after warmup was 99.997% of nominal, and the 95th-percentile widget paint interval was 17.57 ms. The same script applied 105 inputs and flushed its battery file. Listening quality and coverage across titles still require verification.
