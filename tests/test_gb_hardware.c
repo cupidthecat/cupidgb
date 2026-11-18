@@ -1556,10 +1556,9 @@ static void test_ppu_mode3_length_includes_left_edge_sprite_penalty(void) {
     gb.io_registers[CUPID_GB_IO_LCDC] = 0x93u;
     gb.io_registers[CUPID_GB_IO_LY] = 1u;
     gb.io_registers[CUPID_GB_IO_SCX] = 0u;
+    /* Only the left-edge sprite contributes to this line's fetch penalty. */
+    memset(gb.object_attribute_memory, 0, sizeof(gb.object_attribute_memory));
     gb.object_attribute_memory[0] = 17u;
-    gb.object_attribute_memory[1] = 0u;
-    gb.object_attribute_memory[2] = 0u;
-    gb.object_attribute_memory[3] = 0u;
     gb.ppu_counter = CUPID_GB_PPU_OAM_CYCLES;
     memset(&gb.pixels, 0, sizeof(gb.pixels));
     cupid_gb_set_ppu_mode(&gb, CUPID_GB_PPU_MODE_TRANSFER);
