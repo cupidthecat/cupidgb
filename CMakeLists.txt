@@ -523,6 +523,9 @@ if(CUPIDGB_ENABLE_TESTS)
         set_tests_properties(cupidgb_qt_cli_selection cupidgb_qt_cli_cartridge
             PROPERTIES TIMEOUT 90)
         add_test(NAME cupidgb_qt_workflows COMMAND cupidgb --smoke-test --smoke-workflow desktop)
+        # The combined desktop workflow can take about 30 seconds on Windows.
+        set_tests_properties(cupidgb_qt_workflows
+            PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
         add_test(NAME cupidgb_qt_storage_workflows
             COMMAND cupidgb --smoke-test --smoke-workflow storage)
         add_test(NAME cupidgb_qt_sgb_workflows
@@ -531,8 +534,8 @@ if(CUPIDGB_ENABLE_TESTS)
             COMMAND cupidgb --smoke-test --smoke-workflow link)
         add_test(NAME cupidgb_qt_gbs_workflows
             COMMAND cupidgb --smoke-test --smoke-workflow gbs)
-        set_tests_properties(cupidgb_qt_workflows cupidgb_qt_storage_workflows
-            cupidgb_qt_sgb_workflows cupidgb_qt_link_workflows cupidgb_qt_gbs_workflows PROPERTIES
+        set_tests_properties(cupidgb_qt_storage_workflows cupidgb_qt_sgb_workflows
+            cupidgb_qt_link_workflows cupidgb_qt_gbs_workflows PROPERTIES
             ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
     endif()
 endif()
