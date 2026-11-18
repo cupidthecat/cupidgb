@@ -140,6 +140,8 @@ void MainWindow::setupAudio() {
         return;
     audio_ = sink;
     connect(sink.get(), &QAudioSink::stateChanged, this, [this](QAudio::State state) {
+        if (audioClockTrace_.enabled())
+            audioClockTrace_.stateChanged(clock_.nsecsElapsed(), int(state));
         if (state == QAudio::IdleState)
             audioPriming_ = true;
         if (state == QAudio::IdleState && telemetryClock_.isValid() &&
@@ -222,11 +224,19 @@ void MainWindow::pumpAudio() {
         // before starting the sink so frame-sized writes tolerate host scheduling jitter.
         // The 30 ms target stays below the 50 ms execution-backpressure limit.
         if (audioPriming_) {
-            audioClockDrift_.interrupt(clock_.nsecsElapsed());
+            const qint64 now = clock_.nsecsElapsed();
+            audioClockDrift_.interrupt(now);
             if (audioConverter_)
                 audioConverter_->setHostClockRatio(audioClockDrift_.ratio());
-            if (buffer->bytesAvailable() < audioPrimeBytes_)
+            if (buffer->bytesAvailable() < audioPrimeBytes_) {
+                if (audioClockTrace_.enabled())
+                    audioClockTrace_.pump({now, hostAudioBytesWritten_, -1, -1,
+                                           buffer->bytesAvailable(), -1, true,
+                                           audioClockDrift_.ratio(),
+                                           audioConverter_ ? audioConverter_->hostClockRatio() : 1,
+                                           audioClockDrift_.updates(), nextFrame_ - now});
                 return;
+            }
             // Start only when generated audio is ready. Repeated reset/start calls
             // with an empty queue can leave the Windows backend idle after a load.
             if (!audioDevice_) {
@@ -245,6 +255,17 @@ void MainWindow::pumpAudio() {
             if (!self || sink != audio_ || buffer != audioBuffer_ || device != audioDevice_ ||
                 paused_ || menuDepth_ || menuInputSuspended_)
                 return;
+            if (audioClockTrace_.enabled()) {
+                const qint64 nativeBytes = sink->bufferSize();
+                if (!self || sink != audio_ || buffer != audioBuffer_ || device != audioDevice_ ||
+                    paused_ || menuDepth_ || menuInputSuspended_)
+                    return;
+                audioClockTrace_.pump({clock_.nsecsElapsed(), hostAudioBytesWritten_, capacity,
+                                       nativeBytes, buffer->bytesAvailable(), int(state), true,
+                                       audioClockDrift_.ratio(),
+                                       audioConverter_ ? audioConverter_->hostClockRatio() : 1,
+                                       audioClockDrift_.updates(), nextFrame_ - now});
+            }
             const qint64 written = buffer->writeTo(device, capacity);
             if (self && written > 0 && sink == audio_ && buffer == audioBuffer_ && !paused_) {
                 hostAudioBytesWritten_ += uint64_t(written);
@@ -284,6 +305,12 @@ void MainWindow::pumpAudio() {
             if (audioConverter_)
                 audioConverter_->setHostClockRatio(
                     audioClockDrift_.playbackRatio(queuedFrames, sampleRate));
+            if (audioClockTrace_.enabled())
+                audioClockTrace_.pump({now, hostAudioBytesWritten_, capacity, nativeBytes,
+                                       buffer->bytesAvailable(), int(state), false,
+                                       audioClockDrift_.ratio(),
+                                       audioConverter_ ? audioConverter_->hostClockRatio() : 1,
+                                       audioClockDrift_.updates(), nextFrame_ - now});
             const qint64 written = buffer->writeTo(device, capacity);
             if (self && written > 0 && sink == audio_ && buffer == audioBuffer_ &&
                 device == audioDevice_ && format.bytesPerFrame() > 0)

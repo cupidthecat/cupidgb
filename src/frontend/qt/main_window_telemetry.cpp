@@ -27,6 +27,9 @@
 #include <cmath>
 
 void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
+    if (audioClockTrace_.enabled())
+        audioClockTrace_.reset(clock_.nsecsElapsed());
+
     struct WarmupSample {
         bool captured = false;
         double elapsed = 0;
@@ -320,6 +323,8 @@ void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
                     QCryptographicHash::hash(romData_, QCryptographicHash::Sha256).toHex()));
             if (audioBuffer_)
                 report.insert("audio_queue", audioBuffer_->telemetry());
+            if (audioClockTrace_.enabled())
+                report.insert("audio_clock_trace", audioClockTrace_.report());
             report.insert("widget_paint_interval_ms", display_->paintTelemetry());
             if (!image_.isNull()) {
                 const QString screenshotPath = reportPath + ".png";

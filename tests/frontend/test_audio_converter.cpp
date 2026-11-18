@@ -21,8 +21,10 @@
  */
 
 #include "audio_clock_drift.h"
+#include "audio_clock_trace.h"
 #include "audio_converter.h"
 
+#include <QScopeGuard>
 #include <cmath>
 #include <cstring>
 #include <iostream>
@@ -43,9 +45,58 @@ QAudioFormat format(int rate, int channels, QAudioFormat::SampleFormat sampleFor
     result.setSampleFormat(sampleFormat);
     return result;
 }
+
+bool checkClockTrace() {
+    const bool hadVariable = qEnvironmentVariableIsSet("CUPIDGB_AUDIO_TRACE");
+    const QByteArray original = qgetenv("CUPIDGB_AUDIO_TRACE");
+    const auto restore = qScopeGuard([hadVariable, original] {
+        if (hadVariable)
+            qputenv("CUPIDGB_AUDIO_TRACE", original);
+        else
+            qunsetenv("CUPIDGB_AUDIO_TRACE");
+    });
+    qunsetenv("CUPIDGB_AUDIO_TRACE");
+    AudioClockTrace disabled;
+    disabled.pump({});
+    disabled.stateChanged(1, 0);
+    if (!check(!disabled.enabled() && disabled.report()["samples"].toArray().isEmpty(),
+               "Disabled audio tracing retained samples"))
+        return false;
+    qputenv("CUPIDGB_AUDIO_TRACE", "1");
+    AudioClockTrace trace;
+    trace.reset(100);
+    AudioClockTrace::Pump sample{100, 4, 8, 12, 16, 0, false, 0.97, 0.98, 2, -20};
+    trace.pump(sample);
+    sample.rawNanoseconds = 1000100;
+    sample.acceptedBytes = 20;
+    trace.pump(sample);
+    trace.stateChanged(2000100, 1);
+    sample.rawNanoseconds = 10000100;
+    trace.pump(sample);
+    const auto report = trace.report();
+    const auto rows = report["samples"].toArray();
+    if (!check(rows.size() == 3 && rows[1].toArray()[2].toInt() == 1 &&
+                   rows[1].toArray()[3].toInt() == 20 && rows[1].toArray()[7].toInt() == 1 &&
+                   rows[2].toArray()[2].toInt() == 0 &&
+                   rows[2].toArray()[0].toDouble() == 10000000 &&
+                   report["maximum_pump_gap_nanoseconds"].toDouble() == 9000000,
+               "Audio trace lost decimated queue, state-change or clock observations"))
+        return false;
+    trace.reset(0);
+    for (size_t index = 0; index < AudioClockTrace::maximumSamples + 3; ++index) {
+        sample.rawNanoseconds = qint64(index) * AudioClockTrace::sampleIntervalNanoseconds;
+        trace.pump(sample);
+    }
+    const auto full = trace.report();
+    return check(full["samples"].toArray().size() == int(AudioClockTrace::maximumSamples) &&
+                     full["truncated_samples"].toInt() == 3,
+                 "Audio trace exceeded its explicit sample capacity");
+}
 } // namespace
 
 int main() {
+    if (!checkClockTrace())
+        return 1;
     // Native writes contain both new audio and buffer filling. Only the sum
     // of accepted frames and writable capacity isolates actual consumption.
     AudioClockDrift drift;
