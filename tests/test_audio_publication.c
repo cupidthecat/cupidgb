@@ -262,7 +262,7 @@ static void set_envelope(CupidGb *gb, unsigned channel, uint8_t period, uint8_t 
 static void test_envelope_steps(void) {
     for (unsigned model = 0; model < sizeof(models) / sizeof(*models); ++model)
         for (unsigned channel = 0; channel < 4; ++channel) {
-            if (channel == 2 || (models[model] == CUPID_GB_MODEL_CGB && channel != 3))
+            if (channel == 2 || cupid_gb_model_is_cgb(models[model]))
                 continue;
             for (unsigned expires = 0; expires < 2; ++expires) {
                 PublicationFixture fixture = create_fixture(models[model]);
@@ -300,22 +300,25 @@ static void test_color_envelope(void) {
     /* Test each public delivery route: ordinary DIV, completion before another
      * divider boundary, and two explicit base clocks in double-speed mode. */
     for (unsigned delivery = 0; delivery < 3; ++delivery)
-        for (unsigned channel = 0; channel < 2; ++channel)
+        for (unsigned channel = 0; channel < 4; ++channel)
             for (unsigned condition = 0; condition < 5; ++condition) {
+                if (channel == 2)
+                    continue;
                 PublicationFixture fixture = create_fixture(CUPID_GB_MODEL_CGB);
                 CupidGb *gb = fixture.gb;
                 gb->apu.fs_step = 1;
                 gb->double_speed = delivery != 0;
                 gb->apu.envelope_delay = delivery ? 2 : 0;
                 set_envelope(gb, channel, condition == 1 ? 0 : 1, 1);
-                CupidGbPulseTiming *timing = &gb->apu.pulse_timing[channel];
-                timing->envelope_clock = condition != 0;
-                timing->envelope_locked = condition == 2;
-                timing->envelope_lock_pending = condition == 3;
+                CupidGbEnvelopeGate *gate = channel == 3 ? &gb->apu.noise_timing.envelope
+                                                         : &gb->apu.pulse_timing[channel].envelope;
+                gate->clock = condition != 0;
+                gate->locked = condition == 2;
+                gate->lock_pending = condition == 3;
                 const uint8_t previous = gb->apu.dac_sample[channel];
                 restore_with_receiving_routing(&fixture, (condition & 1) != 0);
                 run_color_envelope(gb, delivery);
-                assert(!gb->apu.pulse_timing[channel].envelope_clock);
+                assert(!gate->clock);
                 assert(!gb->apu.envelope_delay);
                 if (condition == 4) {
                     assert(gb->apu.dac_sample[channel] == previous - 1);
@@ -404,9 +407,9 @@ static void test_envelope_length_order(void) {
     assert(ready && gb->apu.ch1_on && gb->apu.ch1_vol == 0 && gb->apu.dac_sample[0] == 0);
     set_length(gb, 0, 1);
     gb->apu.fs_step = 0;
-    gb->apu.pulse_timing[0].envelope_clock = true;
-    gb->apu.pulse_timing[0].envelope_locked = false;
-    gb->apu.pulse_timing[0].envelope_lock_pending = false;
+    gb->apu.pulse_timing[0].envelope.clock = true;
+    gb->apu.pulse_timing[0].envelope.locked = false;
+    gb->apu.pulse_timing[0].envelope.lock_pending = false;
     restore_with_receiving_routing(&fixture, true);
     cupid_gb_apu_div_event(gb);
     /* The envelope publishes code one before length expiry publishes zero.
@@ -440,9 +443,9 @@ static void test_frequency_envelope_order(void) {
     }
     assert(ready && gb->apu.ch1_on && gb->apu.ch1_vol == 1 && gb->apu.dac_sample[0] == 0);
     gb->apu.envelope_delay = 2;
-    gb->apu.pulse_timing[0].envelope_clock = true;
-    gb->apu.pulse_timing[0].envelope_locked = false;
-    gb->apu.pulse_timing[0].envelope_lock_pending = false;
+    gb->apu.pulse_timing[0].envelope.clock = true;
+    gb->apu.pulse_timing[0].envelope.locked = false;
+    gb->apu.pulse_timing[0].envelope.lock_pending = false;
     restore_with_receiving_routing(&fixture, true);
     cupid_gb_tick_apu(gb, 1);
     assert(gb->apu.ch1_vol == 1 && gb->apu.dac_sample[0] == 0);

@@ -1190,7 +1190,7 @@ static void test_color_envelope_edges(void) {
             assert((channel ? gb.apu.ch2_vol : gb.apu.ch1_vol) == 1);
             cupid_gb_write_u8(&gb, 0xff26, 0);
             assert(gb.apu.envelope_delay == 0);
-            assert(!gb.apu.pulse_timing[channel].envelope_locked);
+            assert(!gb.apu.pulse_timing[channel].envelope.locked);
             assert(gb.apu.pulse_timing[channel].edge_age == 4);
         }
     }

@@ -52,7 +52,8 @@
 
 enum {
     STATE_HEADER_SIZE = 128,
-    STATE_VERSION_V28 = CUPID_GB_STATE_VERSION,
+    STATE_VERSION_V29 = CUPID_GB_STATE_VERSION,
+    STATE_VERSION_V28 = 28,
     STATE_VERSION_V27 = 27,
     STATE_VERSION_V26 = 26,
     STATE_VERSION_V25 = 25,
@@ -121,6 +122,29 @@ enum {
 };
 
 static const uint8_t state_magic[8] = {'C', 'U', 'P', 'I', 'D', 'G', 'B', 0};
+
+static void state_noise_envelope(StateIo *io, CupidGb *gb, unsigned version) {
+    CupidGbApu *apu = &gb->apu;
+    CupidGbEnvelopeGate *gate = &apu->noise_timing.envelope;
+    if (version < STATE_VERSION_V29 || !cupid_gb_model_is_cgb(gb->model)) {
+        byte(io, &apu->ch4_env_period);
+        if (io->input)
+            *gate = (CupidGbEnvelopeGate){0};
+        return;
+    }
+
+    /* The period uses three bits. Color states from version 29 also put
+     * the noise envelope latches in the unused bits of that byte. */
+    uint8_t raw = (uint8_t)(apu->ch4_env_period | (gate->clock ? 0x08u : 0u) |
+                            (gate->locked ? 0x10u : 0u) | (gate->lock_pending ? 0x20u : 0u));
+    byte(io, &raw);
+    if (io->input) {
+        if (raw & 0xc0u)
+            io->invalid = true;
+        apu->ch4_env_period = raw & 7u;
+        *gate = (CupidGbEnvelopeGate){(raw & 0x08u) != 0, (raw & 0x10u) != 0, (raw & 0x20u) != 0};
+    }
+}
 
 /* The order below is the v2 wire schema. Every scalar has an explicit width and every
  * array has an explicit element encoding. Never replace this with a structure dump:
@@ -302,7 +326,7 @@ static void state_fields(StateIo *io, CupidGb *gb, unsigned version) {
     BOOL(apu.ch4_len_en);
     U8(apu.ch4_vol);
     BOOL(apu.ch4_env_add);
-    U8(apu.ch4_env_period);
+    state_noise_envelope(io, gb, version);
     U8(apu.ch4_env_timer);
     U8(apu.ch4_div_code);
     U8(apu.ch4_shift);
@@ -405,9 +429,9 @@ static void state_extension_v3(StateIo *io, CupidGb *gb) {
         boolean(io, &timing->clock_started);
         boolean(io, &timing->output_high);
         boolean(io, &timing->output_blocked);
-        boolean(io, &timing->envelope_clock);
-        boolean(io, &timing->envelope_locked);
-        boolean(io, &timing->envelope_lock_pending);
+        boolean(io, &timing->envelope.clock);
+        boolean(io, &timing->envelope.locked);
+        boolean(io, &timing->envelope.lock_pending);
     }
     CupidGbSweepTiming *sweep = &gb->apu.sweep_timing;
     byte(io, &sweep->startup_ticks);
@@ -876,6 +900,7 @@ static bool valid_hardware_prefix(const CupidGb *gb, unsigned version) {
 }
 
 static bool valid_hardware_extension(const CupidGb *gb) {
+    const bool color = cupid_gb_model_is_cgb(gb->model);
     const bool early_cgb = cupid_gb_model_is_early_cgb(gb->model);
     const unsigned pulse_delay_limit = early_cgb ? 14u : 12u;
     const unsigned noise_delay_limit = early_cgb || !cupid_gb_model_is_cgb(gb->model) ? 38u : 34u;
@@ -885,7 +910,7 @@ static bool valid_hardware_extension(const CupidGb *gb) {
         return false;
     }
     if (gb->hdma_blocks_remaining > 128 || gb->hdma_hblank_delay > 3 || gb->apu.clock_phase > 3 ||
-        gb->apu.envelope_delay > 2 ||
+        gb->apu.envelope_delay > (color ? 4u : 2u) ||
         (gb->apu.pcm_read_inhibit && (!early_cgb || (gb->apu.pcm_read_inhibit & 0x0f00u))) ||
         gb->apu.sweep_timing.startup_ticks > 3 || gb->apu.sweep_timing.shift_ticks > 7 ||
         gb->apu.sweep_timing.restart_hold > 8 || gb->apu.sweep_timing.delta > 2047 ||
@@ -905,6 +930,28 @@ static bool valid_hardware_extension(const CupidGb *gb) {
         }
     }
     return true;
+}
+
+static void import_noise_envelope(CupidGb *gb) {
+    CupidGbApu *apu = &gb->apu;
+    CupidGbEnvelopeGate *gate = &apu->noise_timing.envelope;
+    *gate = (CupidGbEnvelopeGate){0};
+    if (!cupid_gb_model_is_cgb(gb->model) || !apu->ch4_on)
+        return;
+
+    /* Former writers counted at phase 7. Project that outstanding count
+     * through phase 6, and through the rising tap if it already passed. */
+    apu->ch4_env_timer &= 7u;
+    if (apu->fs_step != 7u)
+        return;
+    apu->ch4_env_timer = (uint8_t)((apu->ch4_env_timer - 1u) & 7u);
+    const unsigned div_tap = 4u + gb->double_speed;
+    if (apu->ch4_env_timer || !(gb->io_registers[4] & (1u << div_tap)))
+        return;
+    const uint8_t control = gb->io_registers[0x21];
+    apu->ch4_env_timer = control & 7u;
+    gate->clock = apu->ch4_env_timer != 0;
+    gate->lock_pending = gate->clock && apu->ch4_vol == ((control & 8u) ? 15u : 0u);
 }
 
 static bool valid_hardware(const CupidGb *gb, unsigned sections, const CupidGbCamera *camera) {
@@ -1063,7 +1110,7 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
     }
     memset(data, 0, STATE_HEADER_SIZE);
     memcpy(data, state_magic, sizeof(state_magic));
-    put_u32(data + 8, STATE_VERSION_V28);
+    put_u32(data + 8, STATE_VERSION_V29);
     put_u32(data + 12, (uint32_t)size);
     put_u32(data + 16, (uint32_t)gb->model);
     put_u32(data + 20, (uint32_t)gb->rom_size);
@@ -1079,7 +1126,7 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
         cupid_sha256(gb->boot_rom, gb->boot_rom_size, data + 64);
     }
     StateIo io = {NULL, data, STATE_HEADER_SIZE, hardware_size, false};
-    state_fields(&io, (CupidGb *)gb, STATE_VERSION_V24);
+    state_fields(&io, (CupidGb *)gb, STATE_VERSION_V29);
     state_extension_v3(&io, (CupidGb *)gb);
     state_extension_v4(&io, (CupidGb *)gb);
     state_extension_v5(&io, (CupidGb *)gb, sections, &camera);
@@ -1209,7 +1256,7 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
         return CUPID_GB_STATE_INVALID;
     }
     const uint32_t version = get_u32(data + 8);
-    if (version < STATE_VERSION_V2 || version > STATE_VERSION_V28 ||
+    if (version < STATE_VERSION_V2 || version > STATE_VERSION_V29 ||
         (gb->header.mbc_type == CUPID_GB_TAMA5 && version < STATE_VERSION_V26) ||
         (version < STATE_VERSION_V19 && gb->cartridge_ram_size > CUPID_GB_INLINE_RAM_SIZE)) {
         return CUPID_GB_STATE_UNSUPPORTED_VERSION;
@@ -1650,10 +1697,13 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
         candidate->speed_switch_alignment = 0;
         cupid_gb_apu_import_legacy(candidate);
     }
-    if (!valid_hardware_extension(candidate)) {
+    if ((version < STATE_VERSION_V29 && candidate->apu.envelope_delay > 2u) ||
+        !valid_hardware_extension(candidate)) {
         discard_candidate(candidate);
         return CUPID_GB_STATE_INVALID;
     }
+    if (version < STATE_VERSION_V29)
+        import_noise_envelope(candidate);
     import_legacy_sgb_startup(candidate);
     if (version < STATE_VERSION_V11) {
         /* Those writers maintained the pulse latches only for color hardware.

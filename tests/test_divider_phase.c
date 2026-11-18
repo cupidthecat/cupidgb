@@ -171,9 +171,9 @@ static void test_delayed_envelope(void) {
     cupid_gb_write_u8(gb, 0xff26, 0x80);
     cupid_gb_write_u8(gb, 0xff12, 0x91);
     cupid_gb_write_u8(gb, 0xff14, 0x80);
-    gb->apu.pulse_timing[0].envelope_clock = true;
-    gb->apu.pulse_timing[0].envelope_locked = false;
-    gb->apu.pulse_timing[0].envelope_lock_pending = false;
+    gb->apu.pulse_timing[0].envelope.clock = true;
+    gb->apu.pulse_timing[0].envelope.locked = false;
+    gb->apu.pulse_timing[0].envelope.lock_pending = false;
     gb->io_registers[4] = 0x3f;
     gb->div_counter = 63;
     assert(gb->apu.ch1_vol == 9);

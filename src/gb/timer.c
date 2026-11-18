@@ -165,6 +165,11 @@ void cupid_gb_timer_apply_div_reset(CupidGb *gb) {
     if (gb) {
         gb->stop_divider_hold_cycles = 0;
         divider_change(gb, 0u);
+        /* Software resets restart the divider period even when its audio
+         * tap was already low. Late color hardware holds a pending envelope
+         * through the startup period and the following fast period. */
+        if (gb->apu.envelope_delay)
+            gb->apu.envelope_delay = 4;
         gb->divider_subcycle = 0;
     }
 }
@@ -211,7 +216,7 @@ static void clock_cpu_domain(CupidGb *gb) {
         cupid_gb_request_interrupt(gb, CUPID_GB_INTERRUPT_TIMER);
     }
     divider_change(gb, (uint16_t)(divider_phase(gb) + 1u));
-    cupid_gb_tick_apu_divider(gb, gb->double_speed ? 2u : 4u);
+    cupid_gb_apu_credit_divider(gb, gb->double_speed ? 2u : 4u);
 }
 
 static unsigned consume_divider_cycles(CupidGb *gb, unsigned cycles) {
@@ -232,10 +237,13 @@ static void clock_camera_phi(CupidGb *gb, unsigned cycles) {
 }
 
 static void clock_cpu_span(CupidGb *gb, unsigned cycles) {
+    /* Each new delivery clears the previous PCM readback. Divider edges in
+     * this span can put a new value on the bus before the next access. */
+    gb->apu.pcm_read_inhibit = 0;
     if (gb->cpu.stopped) {
         /* STOP keeps output sampling alive once per delivered CPU span. The
          * color APU also keeps running; monochrome oscillators remain held. */
-        cupid_gb_tick_apu_divider(gb, gb->double_speed ? 2u : 4u);
+        cupid_gb_apu_credit_divider(gb, gb->double_speed ? 2u : 4u);
     } else {
         unsigned edges = consume_divider_cycles(gb, cycles);
         while (edges--)
@@ -552,6 +560,7 @@ static void bus_clock_dot(CupidGb *gb, unsigned phase) {
 }
 
 static unsigned bus_clock_span(CupidGb *gb, unsigned phase, unsigned cycles) {
+    gb->apu.pcm_read_inhibit = 0;
     uint32_t half_cycles = 0;
     const unsigned toggle = gb->speed_switch_toggle_cycles;
     const unsigned old_cycles = toggle && toggle < cycles ? toggle : 0;

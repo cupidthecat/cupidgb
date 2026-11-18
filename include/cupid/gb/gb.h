@@ -55,15 +55,19 @@
  * ch4_timer retains a legacy nominal period; noise_timing owns the running divider.
  * output holds the host-rate reconstruction, filter, and queued stereo frames.
  */
+typedef struct CupidGbEnvelopeGate {
+    bool clock;
+    bool locked;
+    bool lock_pending;
+} CupidGbEnvelopeGate;
+
 typedef struct CupidGbPulseTiming {
-    uint8_t start_delay; /* Remaining trigger settling time, 0..12 base T-cycles. */
+    uint8_t start_delay; /* Remaining trigger settling time, 0..14 base T-cycles. */
     uint8_t edge_age;    /* Base T-cycles since a frequency edge; 4 means older. */
     bool clock_started;
     bool output_high;
     bool output_blocked;
-    bool envelope_clock;
-    bool envelope_locked;
-    bool envelope_lock_pending;
+    CupidGbEnvelopeGate envelope;
 } CupidGbPulseTiming;
 
 typedef struct CupidGbSweepTiming {
@@ -79,7 +83,7 @@ typedef struct CupidGbSweepTiming {
 typedef struct CupidGbNoiseTiming {
     uint16_t divider_counter; /* Ordinary edges mask to 14 bits; DAC-off carries retain all 16. */
     uint8_t clock_phase;      /* Power-relative base-clock phase, 0..7. */
-    uint8_t remaining;        /* Remaining 2 MHz prescaler ticks, 0..34. */
+    uint8_t remaining;        /* Remaining 2 MHz prescaler ticks, 0..38. */
     bool foreground;
     bool background;
     bool started_dac_off;
@@ -90,6 +94,7 @@ typedef struct CupidGbNoiseTiming {
     bool pre_shift_bit7;
     bool feedback_latch; /* Delayed exclusive-or feedback for monochrome noise shifts. */
     uint8_t start_delay; /* Monochrome trigger settling time, 0..12 base T-cycles. */
+    CupidGbEnvelopeGate envelope;
 } CupidGbNoiseTiming;
 
 typedef struct CupidGbApu {
@@ -168,7 +173,7 @@ typedef struct CupidGbApu {
 
     /* Hardware clock/output latches; native v3 appends these after its v2 prefix. */
     uint8_t clock_phase;    /* Power-relative base-clock phase, 0..3. */
-    uint8_t envelope_delay; /* Deferred color double-speed envelope edge, 0..2 base clocks. */
+    uint8_t envelope_delay; /* Deferred color double-speed envelope edge, 0..4 base clocks. */
     CupidGbPulseTiming pulse_timing[2];
     CupidGbSweepTiming sweep_timing;
     CupidGbNoiseTiming noise_timing;

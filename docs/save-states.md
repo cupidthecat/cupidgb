@@ -10,7 +10,7 @@ Load a native state file through File > Load State File or drop a `.s0` through 
 
 Writes use an atomic file replacement. Loading checks the complete cartridge identity and hardware model. A state captured with an active boot overlay requires the matching local boot binary. Failed validation preserves the running session and its host audio queue. A successful load replaces the emulated state, reapplies current physical input, clears queued host audio, and realigns pacing.
 
-New files use CupidGB native version 28. Earlier cartridge states, including both supported version 19 development layouts, remain loadable on their original hardware profiles when they contain the required hardware history and SRAM. GBS programs require version 23 or newer and the matching music file already loaded. Desktop loads retain current listening settings, reconstruction and filter history, and the receiving startup synthesis and queued batches. Saved hardware startup phase, host-only time and command-receiver history still restore. Interoperable BESS state imports remain pending.
+New files use CupidGB native version 29. Earlier cartridge states, including both supported version 19 development layouts, remain loadable on their original hardware profiles when they contain the required hardware history and SRAM. GBS programs require version 23 or newer and the matching music file already loaded. Desktop loads retain current listening settings, reconstruction and filter history, and the receiving startup synthesis and queued batches. Saved hardware startup phase, host-only time and command-receiver history still restore. Interoperable BESS state imports remain pending.
 
 Host camera images and pending device requests stay with the receiving session. Saving a pending host capture writes an idle camera to the file while the live request continues. After full validation, a load into host-camera mode cancels obsolete requests and clears imported busy state while retaining the current image. This also applies to a saved generated countdown. Without a provider, generated captures retain their countdown, while a host-origin snapshot starts idle. The existing 64-byte camera section and strict busy/countdown validator are unchanged. See [Camera cartridges](host-camera.md) for reset, rewind and embedding rules.
 
@@ -368,6 +368,10 @@ The model field identifies the exact revision. Existing CGB states use model ID 
 ### PCM reads in version 28
 
 Version 28 adds two bytes after extra OAM on CGB revisions 0 through C. They hold the bits suppressed in the current FF76 and FF77 readback. Exact and desktop loads restore the latch and any pending APU clocks. Version 27 imports start with the latch clear and can still resolve an edge in their saved pending clocks.
+
+### CGB envelopes in version 29
+
+CGB states store the noise envelope clock and endpoint lock in three previously unused bits of the noise period byte. The existing envelope delay can hold four base clocks when a DIV reset restarts a pending edge. Exact and desktop loads preserve both values. For older files, the loader uses the saved noise countdown, frame sequencer phase, and DIV tap to infer whether the clock was high. Endpoint lock is inferred only for an armed edge.
 
 ## Validation scope
 

@@ -271,7 +271,7 @@ static void test_pcm_delivery(CupidGbModel model, bool fast) {
     assert(cupid_gb_read_bus_u8(second, 0xff76) == 15);
 
     if (early) {
-        /* The preceding schema puts the accessory descriptor directly
+        /* Version 27 puts the accessory descriptor directly
          * after extra OAM. It cannot contain an active PCM delivery latch. */
         assert(cupid_gb_load_state(second, latched, latched_size) == CUPID_GB_STATE_OK);
         latched[latched_size - 9] |= 1u;
@@ -355,6 +355,129 @@ static void test_fast_noise_restart(CupidGbModel model) {
     destroy(first);
 }
 
+static void arm_envelopes(CupidGb *gb, bool fast) {
+    gb->double_speed = fast;
+    cupid_gb_write_u8(gb, 0xff26, 0);
+    cupid_gb_write_u8(gb, 0xff04, 0);
+    cupid_gb_write_u8(gb, 0xff26, 0x80);
+    cupid_gb_write_u8(gb, 0xff11, 0xc0);
+    cupid_gb_write_u8(gb, 0xff12, 0x41);
+    cupid_gb_write_u8(gb, 0xff14, 0x80);
+    cupid_gb_write_u8(gb, 0xff16, 0xc0);
+    cupid_gb_write_u8(gb, 0xff17, 0x19);
+    cupid_gb_write_u8(gb, 0xff19, 0x80);
+    cupid_gb_write_u8(gb, 0xff21, 0x41);
+    cupid_gb_write_u8(gb, 0xff23, 0x80);
+
+    gb->apu.fs_step = 7;
+    gb->io_registers[4] = (uint8_t)(fast ? 0x3f : 0x1f);
+    gb->div_counter = 63;
+    gb->apu.ch1_duty_pos = gb->apu.ch2_duty_pos = 1;
+    for (unsigned channel = 0; channel < 2; ++channel) {
+        CupidGbPulseTiming *pulse = &gb->apu.pulse_timing[channel];
+        pulse->output_high = pulse->envelope.clock = true;
+        pulse->output_blocked = false;
+    }
+    gb->apu.noise_timing.output_high = gb->apu.noise_timing.envelope.clock = true;
+    gb->apu.noise_timing.remaining = 30;
+}
+
+static void assert_envelope_read(CupidGb *gb, uint8_t pulse, uint8_t noise) {
+    for (unsigned read = 0; read < 2; ++read) {
+        assert(cupid_gb_read_bus_u8(gb, 0xff76) == pulse);
+        assert(cupid_gb_read_bus_u8(gb, 0xff77) == noise);
+    }
+}
+
+static void test_envelope_clock_order(CupidGbModel model, bool fast, bool software) {
+    CupidGb *source = machine(model), *target = machine(model);
+    const bool early = cupid_gb_model_is_early_cgb(model);
+    arm_envelopes(source, fast);
+    assert_envelope_read(source, 0x14, 0x40);
+    if (software)
+        cupid_gb_write_u8(source, 0xff04, 0);
+    else
+        cupid_gb_tick(source, 1);
+
+    const bool deferred = fast && !early;
+    const uint8_t pulse = deferred ? 0x14 : !fast ? 0x23 : model == CUPID_GB_MODEL_CGB_0 ? 1 : 0x21;
+    const uint8_t noise = deferred ? 0x40 : fast ? 0x10 : 0x30;
+    assert_envelope_read(source, pulse, noise);
+    size_t length;
+    uint8_t *state = snapshot(source, &length);
+    assert(cupid_gb_apu_set_sample_rate(target, 48000));
+    assert(cupid_gb_load_state_live(target, state, length) == CUPID_GB_STATE_OK);
+    assert(cupid_gb_apu_get_sample_rate(target) == 48000);
+    assert_envelope_read(target, pulse, noise);
+    assert(cupid_gb_load_state(target, state, length) == CUPID_GB_STATE_OK);
+    assert_envelope_read(target, pulse, noise);
+
+    if (deferred && software) {
+        cupid_gb_tick(target, 1);
+        assert_envelope_read(target, 0x14, 0x40);
+        /* Restart again while DIV is low and the envelope remains pending. */
+        cupid_gb_write_u8(target, 0xff04, 0);
+        cupid_gb_tick(target, 1);
+        assert_envelope_read(target, 0x14, 0x40);
+    }
+    cupid_gb_tick(target, 1);
+    assert_envelope_read(target, 0x23, 0x30);
+    free(state);
+    destroy(target);
+    destroy(source);
+}
+
+static void test_legacy_noise_envelope(CupidGbModel model) {
+    CupidGb *source = machine(model), *target = machine(model);
+    arm_envelopes(source, false);
+    source->apu.noise_timing.envelope = (CupidGbEnvelopeGate){0};
+    source->apu.ch4_env_timer = 1;
+    size_t length;
+    uint8_t *state = snapshot(source, &length);
+    state[8] = 28;
+    cupid_sha256_parts(state, 96, state + 128, length - 128, state + 96);
+    target->apu.noise_timing.envelope.locked = true;
+    assert(cupid_gb_load_state(target, state, length) == CUPID_GB_STATE_OK);
+    assert(target->apu.noise_timing.envelope.clock && !target->apu.noise_timing.envelope.locked);
+    assert(cupid_gb_read_bus_u8(target, 0xff77) == 0x40);
+    cupid_gb_tick(target, 1);
+    assert(cupid_gb_read_bus_u8(target, 0xff77) == 0x30);
+    free(state);
+    destroy(target);
+    destroy(source);
+}
+
+static void test_envelope_control_writes(CupidGbModel model) {
+    CupidGb *gb = machine(model);
+    const bool early = cupid_gb_model_is_early_cgb(model);
+    const uint16_t ports[] = {0xff12, 0xff17, 0xff21};
+    const uint16_t triggers[] = {0xff14, 0xff19, 0xff23};
+    uint8_t *countdowns[] = {&gb->apu.ch1_env_timer, &gb->apu.ch2_env_timer,
+                             &gb->apu.ch4_env_timer};
+    const uint8_t *volumes[] = {&gb->apu.ch1_vol, &gb->apu.ch2_vol, &gb->apu.ch4_vol};
+    const CupidGbEnvelopeGate *gates[] = {&gb->apu.pulse_timing[0].envelope,
+                                          &gb->apu.pulse_timing[1].envelope,
+                                          &gb->apu.noise_timing.envelope};
+    arm_envelopes(gb, false);
+    for (unsigned channel = 0; channel < COUNT_OF(ports); ++channel) {
+        cupid_gb_write_u8(gb, ports[channel], 0xf9);
+        cupid_gb_write_u8(gb, triggers[channel], 0x80);
+        *countdowns[channel] = 0;
+        cupid_gb_apu_div_secondary_event(gb);
+        assert(*volumes[channel] == 15);
+        assert(gates[channel]->clock && gates[channel]->lock_pending);
+        cupid_gb_write_u8(gb, ports[channel], 0xf0);
+        assert(*volumes[channel] == 1 && !*countdowns[channel]);
+        assert(!gates[channel]->clock && gates[channel]->locked);
+        cupid_gb_write_u8(gb, ports[channel], 0xf1);
+        assert(*volumes[channel] == (early ? 3 : 1));
+        cupid_gb_write_u8(gb, ports[channel], 0xf9);
+        assert(*volumes[channel] == (early ? 11 : 13));
+        assert(gates[channel]->locked);
+    }
+    destroy(gb);
+}
+
 int main(void) {
     for (unsigned i = 0; i < COUNT_OF(models); ++i) {
         test_tail_aliases(models[i]);
@@ -367,6 +490,11 @@ int main(void) {
         test_pcm_noise(models[i], false);
         test_pcm_noise(models[i], true);
         test_fast_noise_restart(models[i]);
+        for (unsigned speed = 0; speed < 2; ++speed)
+            for (unsigned software = 0; software < 2; ++software)
+                test_envelope_clock_order(models[i], speed != 0, software != 0);
+        test_legacy_noise_envelope(models[i]);
+        test_envelope_control_writes(models[i]);
     }
     return 0;
 }

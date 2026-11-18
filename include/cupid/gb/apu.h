@@ -33,6 +33,8 @@ void cupid_gb_tick_apu(CupidGb *gb, uint16_t cycles);
  * Clocks supplied by the current event preserve any envelope it just latched;
  * direct APU ticking retains its separate cycle-by-cycle delay semantics. */
 void cupid_gb_apu_finish_divider_period(CupidGb *gb);
+/* Credit clocks after CPU delivery has opened the PCM readback window. */
+void cupid_gb_apu_credit_divider(CupidGb *gb, uint16_t cycles);
 void cupid_gb_tick_apu_divider(CupidGb *gb, uint16_t cycles);
 /* Deliver previously credited audio clocks. Ordinary delivery may retain a short
  * pending span; register and divider boundaries force its execution. */
