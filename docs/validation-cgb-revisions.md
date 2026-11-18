@@ -49,3 +49,11 @@ A separate set of 1,152 noise cases matched all 128 reads per case. The set cove
 Both pulse channels and noise sample the envelope endpoint on the rising audio divider edge. They update volume on the falling edge. At double speed, revisions D and E defer the update by four CPU T-cycles after a natural fall or eight after a DIV write. Writing DIV again restarts the pending delay. Revisions 0 through C update immediately and can hold some PCM bits low until the next CPU delivery. Repeated reads during the same delivery return the same bits.
 
 All 576 falling-edge and 396 register-write guest cases matched 128 PCM reads each. The comparisons cover all six revisions and both speeds, including the revision 0 pulse-2 transition, active noise writes, and endpoint lock. Another 288 cases matched volume and PCM observations at each CPU T-cycle from the triggering edge through the following 12 cycles. Regression tests exercise repeated DIV writes, exact and desktop continuation, and version 28 import.
+
+## Noise-selector writes
+
+On CGB revisions 0 through C, writing NR43 passes through an all-high control value before the requested value settles. Even a write with the same frequency selector can shift the LFSR. A prescaler reload exposes both adjacent divider counts and can add a clock edge. Color noise feedback uses the live shift-register bits during these transitions.
+
+Revision D can set feedback cells while retaining the current output tap. Other transitions clock the tap, then settle the feedback cells according to the sampled selector levels and the new LFSR width. The revision D operation table comes from controlled read and state observations.
+
+All 4,032 CPU cases across the six revisions matched prescaler and LFSR state and 128 PCM reads after the write. Another 1,008 mixed-width guest cases matched on revision 0. Controlled tests matched 262,144 writes on revisions 0 and C. They varied all selector pairs, both speeds, the reload flag, and active and inactive noise state. The D/E comparison matched 196,608 controlled active cases, the same number of inactive cases, and 61,440 supplemental cases for conditional feedback on D. Physical behavior and unmeasured LFSR histories remain open.

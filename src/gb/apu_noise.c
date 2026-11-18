@@ -263,6 +263,116 @@ static void color_noise_selector_pulse(CupidGb *gb, unsigned from, unsigned to) 
     color_noise_store_bits(apu, bits);
 }
 
+typedef enum CgbDNoiseAction {
+    CGB_D_NOISE_HOLD,
+    CGB_D_NOISE_SHIFT,
+    CGB_D_NOISE_SET_FEEDBACK_WITHOUT_SHIFT,
+    CGB_D_NOISE_SHIFT_SET_FEEDBACK,
+    CGB_D_NOISE_SHIFT_RETAIN_NARROW_FEEDBACK,
+    CGB_D_NOISE_SHIFT_INTERSECT_PRIOR,
+    CGB_D_NOISE_SHIFT_CLEAR_NEIGHBOR_IF_BIT6_LOW,
+    CGB_D_NOISE_SHIFT_CLEAR_NEIGHBOR_UNLESS_BIT6_ONLY,
+    CGB_D_NOISE_SHIFT_CLEAR_NEIGHBOR,
+    CGB_D_NOISE_SHIFT_RETAIN_FEEDBACK_ON_LOW_PAIR
+} CgbDNoiseAction;
+
+/* When all three sampled levels are high, selected writes set the feedback
+ * cells without a shift. Each bit identifies the new selector. */
+static const uint16_t cgb_d_feedback_set[16] = {
+    0x2e28u, 0x3c04u, 0x3a20u, 0x3000u, 0x2e08u, 0x0c04u, 0x2a00u, 0x0000u,
+    0x3e28u, 0x3c04u, 0x3a20u, 0x3010u, 0x2e08u, 0x0c04u, 0x0000u, 0x0000u,
+};
+
+/* Old selector by new selector for high endpoints and a low intermediate
+ * level. The measured operations are encoded as CgbDNoiseAction values. */
+static const uint8_t cgb_d_noise_action[16][16] = {
+    {0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 3, 3, 8, 3, 0, 0}, /* 0 */
+    {0, 0, 0, 0, 0, 0, 0, 0, 5, 0, 3, 3, 7, 7, 0, 0}, /* 1 */
+    {0, 0, 0, 0, 0, 0, 0, 0, 2, 3, 0, 3, 7, 3, 0, 0}, /* 2 */
+    {0, 0, 0, 0, 0, 0, 0, 0, 5, 2, 2, 0, 3, 3, 0, 0}, /* 3 */
+    {0, 0, 0, 0, 0, 0, 0, 0, 2, 3, 3, 3, 0, 3, 0, 0}, /* 4 */
+    {0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 3, 3, 2, 0, 0, 0}, /* 5 */
+    {0, 0, 0, 0, 0, 0, 0, 0, 2, 3, 2, 3, 2, 3, 0, 0}, /* 6 */
+    {0, 0, 0, 0, 0, 0, 0, 0, 5, 2, 2, 2, 2, 2, 0, 0}, /* 7 */
+    {0, 4, 6, 4, 3, 9, 3, 3, 0, 0, 0, 0, 0, 0, 0, 0}, /* 8 */
+    {3, 0, 9, 3, 3, 3, 3, 3, 0, 0, 0, 0, 0, 0, 0, 0}, /* 9 */
+    {3, 4, 0, 9, 3, 9, 3, 3, 0, 0, 0, 0, 0, 0, 0, 0}, /* A */
+    {3, 8, 3, 0, 3, 3, 3, 3, 0, 0, 0, 0, 0, 0, 0, 0}, /* B */
+    {6, 9, 9, 9, 0, 4, 3, 3, 0, 0, 0, 0, 0, 0, 0, 0}, /* C */
+    {3, 5, 9, 3, 3, 0, 3, 3, 0, 0, 0, 0, 0, 0, 0, 0}, /* D */
+    {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, /* E */
+    {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, /* F */
+};
+
+static bool cgb_d_clear_noise_neighbor(CgbDNoiseAction action, uint16_t bits) {
+    if (bits & 1u)
+        return false;
+    switch (action) {
+        case CGB_D_NOISE_SHIFT_CLEAR_NEIGHBOR_IF_BIT6_LOW:
+            return !(bits & 0x40u);
+        case CGB_D_NOISE_SHIFT_CLEAR_NEIGHBOR_UNLESS_BIT6_ONLY:
+            return (bits & 0x60u) != 0x40u;
+        case CGB_D_NOISE_SHIFT_CLEAR_NEIGHBOR:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static void cgb_d_noise_selector_write(CupidGb *gb, unsigned from, unsigned to, bool high,
+                                       bool intermediate_high) {
+    CgbDNoiseAction action;
+    if (!high) {
+        action = intermediate_high ? CGB_D_NOISE_SHIFT : CGB_D_NOISE_HOLD;
+    } else if (intermediate_high) {
+        action = (cgb_d_feedback_set[from] & (1u << to)) ? CGB_D_NOISE_SET_FEEDBACK_WITHOUT_SHIFT
+                                                         : CGB_D_NOISE_HOLD;
+    } else {
+        action = (CgbDNoiseAction)cgb_d_noise_action[from][to];
+    }
+    if (action == CGB_D_NOISE_HOLD)
+        return;
+
+    CupidGbApu *apu = &gb->apu;
+    const uint16_t before = color_noise_bits(apu);
+    const uint16_t cells = apu->ch4_width7 ? 0x4040u : 0x4000u;
+    if (action == CGB_D_NOISE_SET_FEEDBACK_WITHOUT_SHIFT) {
+        color_noise_store_bits(apu, before | cells);
+        return;
+    }
+
+    if (cgb_d_clear_noise_neighbor(action, before))
+        color_noise_store_bits(apu, before & 0x7ffdu);
+
+    /* A shift publishes its output before the feedback cells settle.
+     * Only the intersecting write samples the output a second time. */
+    noise_register_shift(gb, true);
+    uint16_t after = color_noise_bits(apu);
+    switch (action) {
+        case CGB_D_NOISE_SHIFT_SET_FEEDBACK:
+        case CGB_D_NOISE_SHIFT_CLEAR_NEIGHBOR_IF_BIT6_LOW:
+        case CGB_D_NOISE_SHIFT_CLEAR_NEIGHBOR_UNLESS_BIT6_ONLY:
+        case CGB_D_NOISE_SHIFT_CLEAR_NEIGHBOR:
+            after |= cells;
+            break;
+        case CGB_D_NOISE_SHIFT_RETAIN_NARROW_FEEDBACK:
+            if (apu->ch4_width7)
+                after |= before & cells;
+            break;
+        case CGB_D_NOISE_SHIFT_INTERSECT_PRIOR:
+            after = (after & before) | (before & 1u) | cells;
+            apu->noise_timing.output_high = (after & 1u) != 0;
+            noise_publish_register_edge(gb);
+            break;
+        case CGB_D_NOISE_SHIFT_RETAIN_FEEDBACK_ON_LOW_PAIR:
+            after |= (before & 3u) == 2u ? before & cells : cells;
+            break;
+        default:
+            break;
+    }
+    color_noise_store_bits(apu, after);
+}
+
 static void color_noise_frequency_write(CupidGb *gb, uint8_t previous) {
     CupidGbApu *apu = &gb->apu;
     CupidGbNoiseTiming *timing = &apu->noise_timing;
@@ -282,6 +392,10 @@ static void color_noise_frequency_write(CupidGb *gb, uint8_t previous) {
     bool old_level = (timing->divider_counter & (1u << from)) != 0;
     bool new_level = (timing->divider_counter & (1u << to)) != 0;
     bool middle_level = (timing->divider_counter & (1u << middle)) != 0;
+    if (gb->model == CUPID_GB_MODEL_CGB_D && old_level == new_level) {
+        cgb_d_noise_selector_write(gb, from, to, old_level, middle_level);
+        return;
+    }
     if (old_level != new_level) {
         if (new_level)
             noise_register_shift(gb, true);
@@ -318,16 +432,17 @@ static void color_noise_frequency_write(CupidGb *gb, uint8_t previous) {
     }
 }
 
-static void monochrome_selector_transition(CupidGb *gb, uint8_t from, uint8_t to) {
+static void early_selector_transition(CupidGb *gb, uint8_t from, uint8_t to) {
     CupidGbApu *apu = &gb->apu;
     CupidGbNoiseTiming *timing = &apu->noise_timing;
+    const bool color = cupid_gb_model_is_cgb(gb->model);
     apu->ch4_width7 = (to & 8u) != 0;
     if ((from >> 4) == (to >> 4))
         return;
 
-    /* The upper selector settles first. A reload edge exposes both adjacent
-     * divider values; each falling transition samples feedback before the next
-     * rising transition can shift it into the register. */
+    /* The upper selector settles first. On a reload edge both adjacent
+     * divider counts drive the selector. Monochrome falling edges capture
+     * feedback for the next shift. Color feedback follows the live bits. */
     const unsigned middle = ((from >> 4) & 7u) | ((to >> 4) & 8u);
     uint16_t counter = timing->divider_counter;
     if (timing->reload_edge)
@@ -335,16 +450,16 @@ static void monochrome_selector_transition(CupidGb *gb, uint8_t from, uint8_t to
     const bool before = ((counter >> (from >> 4)) & 1u) != 0;
     const bool between = ((counter >> middle) & 1u) != 0;
     const bool after = ((counter >> (to >> 4)) & 1u) != 0;
-    if (before && !between)
+    if (!color && before && !between)
         timing->feedback_latch = !noise_feedback(apu);
 
     if (before == after && before != between) {
         if (!after)
-            noise_register_shift(gb, false);
+            noise_register_shift(gb, color);
     } else if (!before && after) {
         const bool narrow = apu->ch4_width7;
         apu->ch4_width7 = true;
-        noise_register_shift(gb, false);
+        noise_register_shift(gb, color);
         apu->ch4_width7 = narrow;
         if ((to >> 4) <= 2u && between && !(counter & 8u)) {
             noise_register_shift(gb, true);
@@ -356,13 +471,14 @@ static void monochrome_selector_transition(CupidGb *gb, uint8_t from, uint8_t to
         noise_register_shift(gb, true);
     }
 
-    if (between && !after)
+    if (!color && between && !after)
         timing->feedback_latch = !noise_feedback(apu);
 }
 
 void cupid_gb_noise_frequency_write(CupidGb *gb, uint8_t previous) {
     CupidGbApu *apu = &gb->apu;
-    if (cupid_gb_model_is_cgb(gb->model)) {
+    const bool early_color = cupid_gb_model_is_early_cgb(gb->model);
+    if (cupid_gb_model_is_cgb(gb->model) && !early_color) {
         color_noise_frequency_write(gb, previous);
         return;
     }
@@ -379,13 +495,16 @@ void cupid_gb_noise_frequency_write(CupidGb *gb, uint8_t previous) {
         const unsigned old_mask = 1u << (previous >> 4);
         const unsigned new_mask = 1u << (value >> 4);
         if (!(counter & old_mask) && (counter & new_mask) && (counter & 0x80u) &&
-            (prior & old_mask) && !(prior & new_mask) && (prior & 0x80u))
+            (prior & old_mask) && !(prior & new_mask) && (prior & 0x80u)) {
+            if (early_color)
+                apu->ch4_width7 = (previous & 8u) != 0;
             noise_register_shift(gb, true);
+        }
     }
-    /* Monochrome register writes briefly expose all selector lines, even when
-     * the final value is unchanged. Preserve the order of both transitions. */
-    monochrome_selector_transition(gb, previous, 0xff);
-    monochrome_selector_transition(gb, 0xff, value);
+    /* On monochrome and CGB 0 through C, even a write that keeps the same
+     * selector passes through the all-high register value. */
+    early_selector_transition(gb, previous, 0xff);
+    early_selector_transition(gb, 0xff, value);
 }
 
 void cupid_gb_noise_disconnect(CupidGb *gb) {

@@ -478,6 +478,110 @@ static void test_envelope_control_writes(CupidGbModel model) {
     destroy(gb);
 }
 
+static void test_early_noise_selector(CupidGbModel model) {
+    if (!cupid_gb_model_is_early_cgb(model))
+        return;
+
+    /* Observe the write plus the final machine cycle of LDH. All four cases
+     * keep the frequency selector, including a narrow-to-wide write. */
+    static const struct {
+        bool fast;
+        bool reload;
+        uint8_t old_control;
+        uint8_t remaining;
+        uint8_t phase;
+        uint16_t counter;
+        uint16_t lfsr;
+        uint8_t expected_remaining;
+        uint16_t expected_counter;
+        uint16_t expected_lfsr;
+        uint8_t expected_pcm;
+    } cases[] = {
+        {false, false, 0x01, 2, 0, 0x0702, 0x74b1, 12, 0x0703, 0x5d0c, 0},
+        {false, true, 0x01, 4, 4, 0x0703, 0x3a58, 14, 0x0703, 0x5d6c, 0},
+        {true, true, 0x01, 4, 4, 0x0700, 0x6963, 15, 0x0700, 0x74f1, 0xf0},
+        {false, false, 0x09, 2, 0, 0x0702, 0x5fdf, 12, 0x0703, 0x77f7, 0xf0},
+    };
+
+    for (unsigned i = 0; i < COUNT_OF(cases); ++i) {
+        CupidGb *gb = machine(model);
+        gb->double_speed = cases[i].fast;
+        cupid_gb_write_u8(gb, 0xff26, 0);
+        cupid_gb_write_u8(gb, 0xff04, 0);
+        cupid_gb_write_u8(gb, 0xff26, 0x80);
+        cupid_gb_write_u8(gb, 0xff21, 0xf0);
+        cupid_gb_write_u8(gb, 0xff22, cases[i].old_control);
+        cupid_gb_write_u8(gb, 0xff23, 0x80);
+
+        CupidGbNoiseTiming *timing = &gb->apu.noise_timing;
+        timing->remaining = cases[i].remaining;
+        timing->clock_phase = cases[i].phase;
+        timing->reload_edge = cases[i].reload;
+        timing->divider_counter = cases[i].counter;
+        timing->output_high = (cases[i].lfsr & 1u) != 0;
+        gb->apu.ch4_lfsr = cases[i].lfsr ^ 0x7fffu;
+
+        cupid_gb_write_u8(gb, 0xff22, 0x03);
+        cupid_gb_tick(gb, 1);
+        assert(cupid_gb_read_bus_u8(gb, 0xff77) == cases[i].expected_pcm);
+        assert(timing->remaining == cases[i].expected_remaining);
+        assert(timing->divider_counter == cases[i].expected_counter);
+        assert(gb->apu.ch4_lfsr == (cases[i].expected_lfsr ^ 0x7fffu));
+        assert(!gb->apu.ch4_width7 && gb->apu.ch4_shift == 0 && gb->apu.ch4_div_code == 3);
+        destroy(gb);
+    }
+}
+
+static void test_late_noise_selector(CupidGbModel model) {
+    if (model != CUPID_GB_MODEL_CGB_D && model != CUPID_GB_MODEL_CGB_E)
+        return;
+
+    /* Include a feedback-only write, a gated shift, and a transition that
+     * retains feedback on D when the write selects narrow mode. */
+    static const struct {
+        uint8_t old_control;
+        uint8_t new_control;
+        uint16_t counter;
+        uint16_t lfsr;
+        uint16_t expected_d;
+        uint16_t expected_e;
+        bool held_high;
+    } cases[] = {
+        {0x01, 0xa1, 0x0501, 0x1234, 0x5234, 0x1234, false},
+        {0x01, 0x91, 0x0100, 0x47c7, 0x63e3, 0x63e3, true},
+        {0x01, 0x91, 0x0201, 0x47c7, 0x63e3, 0x47c7, true},
+        {0x01, 0xc1, 0x1001, 0x0002, 0x4000, 0x4002, false},
+        {0x81, 0x11, 0x0102, 0x0041, 0x0020, 0x0020, false},
+        {0x81, 0x19, 0x0102, 0x0041, 0x0060, 0x0020, false},
+    };
+
+    for (unsigned i = 0; i < COUNT_OF(cases); ++i) {
+        CupidGb *gb = machine(model);
+        cupid_gb_write_u8(gb, 0xff26, 0);
+        cupid_gb_write_u8(gb, 0xff26, 0x80);
+        cupid_gb_write_u8(gb, 0xff21, 0xf0);
+        cupid_gb_write_u8(gb, 0xff22, cases[i].old_control);
+        cupid_gb_write_u8(gb, 0xff23, 0x80);
+        CupidGbNoiseTiming *timing = &gb->apu.noise_timing;
+        timing->divider_counter = cases[i].counter;
+        timing->remaining = 3;
+        timing->output_high = (cases[i].lfsr & 1u) != 0;
+        timing->last_shift_narrow = (cases[i].old_control & 8u) != 0;
+        timing->pre_shift_bit7 = (cases[i].lfsr & 0x80u) != 0;
+        gb->apu.ch4_lfsr = cases[i].lfsr ^ 0x7fffu;
+
+        cupid_gb_write_u8(gb, 0xff22, cases[i].new_control);
+        const uint16_t expected =
+            model == CUPID_GB_MODEL_CGB_D ? cases[i].expected_d : cases[i].expected_e;
+        assert(gb->apu.ch4_lfsr == (expected ^ 0x7fffu));
+        assert(cupid_gb_read_bus_u8(gb, 0xff77) == (cases[i].held_high ? 0xf0u : 0));
+        assert(timing->divider_counter == cases[i].counter && timing->remaining == 3);
+        assert(timing->last_shift_narrow == ((cases[i].new_control & 8u) != 0));
+        assert(timing->pre_shift_bit7 == ((cases[i].lfsr & 0x80u) != 0));
+        destroy(gb);
+    }
+}
+
 int main(void) {
     for (unsigned i = 0; i < COUNT_OF(models); ++i) {
         test_tail_aliases(models[i]);
@@ -495,6 +599,8 @@ int main(void) {
                 test_envelope_clock_order(models[i], speed != 0, software != 0);
         test_legacy_noise_envelope(models[i]);
         test_envelope_control_writes(models[i]);
+        test_early_noise_selector(models[i]);
+        test_late_noise_selector(models[i]);
     }
     return 0;
 }
