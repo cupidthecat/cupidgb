@@ -835,8 +835,7 @@ void cupid_gb_cartridge_post_boot(CupidGb *gb) {
     cupid_gb_display_clock_import_legacy(gb);
     /* Cartridge requirements cannot change the selected physical model. */
     gb->cgb_mode = gb->model == CUPID_GB_MODEL_CGB && (gb->header.cgb_flag & 0x80u) != 0;
-    gb->sgb.enabled = (gb->model == CUPID_GB_MODEL_SGB || gb->model == CUPID_GB_MODEL_SGB2) &&
-                      gb->header.sgb_flag == 3;
+    gb->sgb.enabled = cupid_gb_model_is_sgb(gb->model) && gb->header.sgb_flag == 3;
     /* Without executed firmware, project the two header permission bytes into
      * the post-boot latch. No received packet history is invented. */
     gb->sgb.commands_disabled = cupid_gb_sgb_host_present(gb) &&
@@ -848,7 +847,7 @@ void cupid_gb_cartridge_post_boot(CupidGb *gb) {
     gb->io_registers[0x4d] = 0;
     gb->io_registers[0x4f] = (uint8_t)(0xfeu | (gb->cgb_vram_bank & 1u));
     gb->io_registers[0x70] = (uint8_t)(0xf8u | gb->cgb_wram_bank);
-    if (gb->model == CUPID_GB_MODEL_SGB || gb->model == CUPID_GB_MODEL_SGB2) {
+    if (cupid_gb_model_is_sgb(gb->model)) {
         /* Approximate the elapsed header-transfer time when firmware is absent.
          * Executable firmware replaces this phase when its overlay is entered. */
         gb->div_counter = cupid_gb_sgb_boot_div_counter(gb->rom, gb->rom_size);

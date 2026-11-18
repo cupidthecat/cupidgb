@@ -699,7 +699,7 @@ static CpuWrite cpu_write_plan(CupidGb *gb, uint16_t address, uint8_t value, uns
         if (gb->model == CUPID_GB_MODEL_CGB) {
             if (!gb->double_speed)
                 write.commit = write.sample = boundary - 2;
-        } else if (gb->model == CUPID_GB_MODEL_SGB || gb->model == CUPID_GB_MODEL_SGB2) {
+        } else if (cupid_gb_model_is_sgb(gb->model)) {
             write.commit = write.sample = boundary - 1;
         } else {
             write.kind = CPU_WRITE_PALETTE;
@@ -739,7 +739,7 @@ static void cpu_write_early(CupidGb *gb, const CpuWrite *write) {
         cupid_gb_write_u8(gb, write->address, value);
     } else if (write->kind == CPU_WRITE_SWEEP) {
         return;
-    } else if (gb->model == CUPID_GB_MODEL_SGB || gb->model == CUPID_GB_MODEL_SGB2) {
+    } else if (cupid_gb_model_is_sgb(gb->model)) {
         /* Object fetching observes the pulse even though the old register value
          * is restored before the next LCD dot. */
         cupid_gb_write_u8(gb, write->address, write->value);

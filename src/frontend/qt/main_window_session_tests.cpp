@@ -409,7 +409,8 @@ bool MainWindow::idleTimerSmokeTest(const QString &path) {
 bool MainWindow::pacingSmokeTest(const QString &path) {
     if (!idleTimerSmokeTest(path))
         return smokeFailure(__FILE__, __LINE__);
-    for (const auto model : {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_SGB, CUPID_GB_MODEL_SGB2}) {
+    for (const auto model : {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_SGB, CUPID_GB_MODEL_SGB2,
+                             CUPID_GB_MODEL_SGB_PAL}) {
         settings_.setValue("emulation/model", int(model));
         if (!openRom(path))
             return smokeFailure(__FILE__, __LINE__);

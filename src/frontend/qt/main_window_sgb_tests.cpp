@@ -107,7 +107,7 @@ bool MainWindow::sgbSmokeTest(const QString &directory) {
     QJsonArray cases;
     QJsonObject nativeAudio{{"requested", audioCheck_}, {"passed", false}};
     bool nativeChecked = false;
-    for (const auto model : {CUPID_GB_MODEL_SGB, CUPID_GB_MODEL_SGB2}) {
+    for (const auto model : {CUPID_GB_MODEL_SGB, CUPID_GB_MODEL_SGB2, CUPID_GB_MODEL_SGB_PAL}) {
         for (int enhanced = 0; enhanced < 2; ++enhanced) {
             const bool detailed = model == CUPID_GB_MODEL_SGB2 && !enhanced;
             const bool native = audioCheck_ && detailed;

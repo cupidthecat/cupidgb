@@ -18,7 +18,7 @@ This guide describes the current timing contracts and the invariants needed when
 | PCM frame | One left/right output sample pair at the configured sample rate |
 | Host deadline | Monotonic host nanoseconds used by Qt to schedule more guest work |
 
-Call `cupid_gb_base_clock_hz(gb)` to convert base T-cycles to physical seconds. The SGB NTSC profile uses 4,295,454 Hz. DMG, DMG0, MGB, CGB, and SGB2 use 4,194,304 Hz. A null instance returns the latter default. SGB PAL is not implemented.
+Call `cupid_gb_base_clock_hz(gb)` to convert base T-cycles to physical seconds. The SGB NTSC profile uses 4,295,454 Hz. DMG, DMG0, MGB, CGB, and SGB2 use 4,194,304 Hz. A null instance returns the latter default. SGB PAL uses 4,256,274 Hz.
 
 CGB double speed doubles CPU-domain progress relative to the base clock. It does not double the LCD, channel oscillator, or output sample clocks. One double-speed M-cycle consumes two base T-cycles every time it executes. Alternating zero-dot and four-dot batches would preserve an average rate while moving intervening reads and interrupts to the wrong dots.
 
@@ -223,6 +223,6 @@ Use equivalent explicit models, boot binaries, settings, and inputs for external
 
 ## Remaining hardware work
 
-The timing helpers cover particular register conflicts and hardware revisions. Ordinary instruction writes and interrupt stack writes need separate coverage. HBlank/OAM boundary STAT-write qualification, fine LCDC/palette conflicts, OAM corruption, DMA contention/stalls, STOP behavior, further serial edge combinations, external transport and revision-specific startup remain incomplete. The retained serial clock selector, SC-write ordering, tested KEY0 transitions and native-state continuation have [separate regression coverage](validation-serial-selection.md). Grouped CGB and monochrome profiles do not qualify each physical revision. SGB PAL and full SGB host integration remain pending.
+The timing helpers cover particular register conflicts and hardware revisions. Ordinary instruction writes and interrupt stack writes need separate coverage. HBlank/OAM boundary STAT-write qualification, fine LCDC/palette conflicts, OAM corruption, DMA contention/stalls, STOP behavior, further serial edge combinations, external transport and revision-specific startup remain incomplete. The retained serial clock selector, SC-write ordering, tested KEY0 transitions and native-state continuation have [separate regression coverage](validation-serial-selection.md). Grouped CGB and monochrome profiles do not qualify each physical revision. Wider SGB PAL qualification and full SGB host integration remain pending.
 
 Preserve failing and inconclusive cases. A narrow phase fix must not be described as complete interrupt, graphics, or audio accuracy without corresponding evidence.

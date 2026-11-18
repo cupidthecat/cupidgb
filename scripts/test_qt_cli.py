@@ -133,11 +133,12 @@ def check_selection(run, binary, environment, root, plain, licensed, color):
 
     for requested, actual in (("dmg", "dmgabc"), ("dmgabc", "dmgabc"),
                               ("dmg0", "dmg0"), ("mgb", "mgb"),
-                              ("cgb", "cgb"), ("sgb", "sgb"), ("sgb2", "sgb2")):
+                              ("cgb", "cgb"), ("sgb", "sgb"), ("sgb2", "sgb2"),
+                              ("sgbpal", "sgbpal")):
         result = run(plain, "--model", requested)
         assert result["requested_model"] == actual, result
         assert result["hardware_model"] == actual, result
-        assert result["base_clock_hz"] == (4295454 if actual == "sgb" else 4194304)
+        assert result["base_clock_hz"] == {"sgb": 4295454, "sgbpal": 4256274}.get(actual, 4194304)
     result = run(licensed, "--model", "auto")
     assert result["requested_model"] == "auto" and result["hardware_model"] == "cgb"
     result = run(color, "--model", "auto")
@@ -157,7 +158,7 @@ def check_selection(run, binary, environment, root, plain, licensed, color):
         assert post_warmup["elapsed_seconds"] > 0
     else:
         assert post_warmup["reason"] == "warmup_sample_unavailable"
-    for requested in ("dmg", "dmg0", "mgb", "sgb", "sgb2"):
+    for requested in ("dmg", "dmg0", "mgb", "sgb", "sgb2", "sgbpal"):
         run(color, "--model", requested, expected=1)
     for options in (("--model", "invalid"), ("--model", "cgb-e"),
                     ("--model", "cgb", "--smoke-test"),

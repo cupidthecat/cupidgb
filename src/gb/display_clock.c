@@ -31,7 +31,7 @@
 enum { FRAME_DOTS = 70224, ROW_HALF_DOTS = 912 };
 
 bool cupid_gb_display_clock_capable(const CupidGb *gb) {
-    return gb && (unsigned)gb->model <= CUPID_GB_MODEL_SGB2;
+    return gb && (unsigned)gb->model <= CUPID_GB_MODEL_SGB_PAL;
 }
 
 static bool lcd_on(const CupidGb *gb) {

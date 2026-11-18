@@ -246,7 +246,7 @@ static void prepare_candidate(CupidGb *next, const CupidGb *previous, uint8_t *i
 CupidGbGbsResult cupid_gb_load_gbs_with_allocator(CupidGb *gb, const uint8_t *data, size_t length,
                                                   CupidGbGbsInfo *info, void *(*allocate)(size_t)) {
     if (!gb || !data || !allocate || gb->model < CUPID_GB_MODEL_DMG_ABC ||
-        gb->model > CUPID_GB_MODEL_SGB2 || !cupid_gb_cartridge_storage_valid(gb) ||
+        gb->model > CUPID_GB_MODEL_SGB_PAL || !cupid_gb_cartridge_storage_valid(gb) ||
         !info_output_valid(gb, info, data, length))
         return CUPID_GB_GBS_INVALID_ARGUMENT;
     if (length < CUPID_GB_GBS_HEADER_SIZE)
@@ -289,7 +289,8 @@ CupidGbGbsResult cupid_gb_load_gbs(CupidGb *gb, const uint8_t *data, size_t leng
 
 CupidGbGbsResult cupid_gb_gbs_start_track_with_allocator(CupidGb *gb, uint8_t track,
                                                          void *(*allocate)(size_t)) {
-    if (!gb || !allocate || gb->model < CUPID_GB_MODEL_DMG_ABC || gb->model > CUPID_GB_MODEL_SGB2)
+    if (!gb || !allocate || gb->model < CUPID_GB_MODEL_DMG_ABC ||
+        gb->model > CUPID_GB_MODEL_SGB_PAL)
         return CUPID_GB_GBS_INVALID_ARGUMENT;
     if (!cupid_gb_gbs_info(gb, NULL))
         return CUPID_GB_GBS_NOT_LOADED;

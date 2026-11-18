@@ -191,7 +191,7 @@ static void test_hold(CupidGbModel model, bool enhanced, unsigned reset) {
 }
 
 static void test_model_and_reentry(void) {
-    for (unsigned model = CUPID_GB_MODEL_DMG_ABC; model <= CUPID_GB_MODEL_SGB2; ++model) {
+    for (unsigned model = CUPID_GB_MODEL_DMG_ABC; model <= CUPID_GB_MODEL_SGB_PAL; ++model) {
         CupidGb *gb = machine((CupidGbModel)model, false, false);
         assert(!cupid_gb_sgb_startup_held(gb) && !cupid_gb_sgb_startup_active(gb));
         assert(gb->sgb_startup.phase == 200 && gb->sgb_startup.output.noise_state == 1);
@@ -205,7 +205,7 @@ static void test_model_and_reentry(void) {
         assert(gb->work_ram[0x234] == 0x67 && gb->power_on.generation_seed == seed);
         assert(gb->sgb_startup.elapsed_cycles == 0 && gb->sgb_startup.output.dropped_frames == 0 &&
                gb->sgb_startup.output.batch_count == 0);
-        if (model == CUPID_GB_MODEL_SGB || model == CUPID_GB_MODEL_SGB2) {
+        if (cupid_gb_model_is_sgb((CupidGbModel)model)) {
             assert(cupid_gb_sgb_startup_held(gb) && gb->sgb_startup.phase == -10);
             assert(gb->display_cycles_since_frame == 0);
         } else {
@@ -282,7 +282,7 @@ static void test_debugger_hold(void) {
 }
 
 int main(void) {
-    for (unsigned model = CUPID_GB_MODEL_SGB; model <= CUPID_GB_MODEL_SGB2; ++model)
+    for (unsigned model = CUPID_GB_MODEL_SGB; model <= CUPID_GB_MODEL_SGB_PAL; ++model)
         for (unsigned enhanced = 0; enhanced < 2; ++enhanced)
             for (unsigned reset = 0; reset < 3; ++reset)
                 test_hold((CupidGbModel)model, enhanced != 0, reset);

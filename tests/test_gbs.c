@@ -122,7 +122,7 @@ static void rehash(uint8_t *bytes, size_t length) {
 static void test_initialization(void) {
     static const uint8_t controls[] = {0, 4, 0x40, 0x44, 0x80, 0x84, 0xc0, 0xc4};
     static const uint8_t tracks[] = {0, 1, 254, 255};
-    for (unsigned model = CUPID_GB_MODEL_DMG_ABC; model <= CUPID_GB_MODEL_SGB2; ++model) {
+    for (unsigned model = CUPID_GB_MODEL_DMG_ABC; model <= CUPID_GB_MODEL_SGB_PAL; ++model) {
         CupidGb *gb = machine((CupidGbModel)model);
         Fixture input = fixture(0x100, 0x200);
         /* Arbitrary music bytes at cartridge-header offsets must neither select
@@ -169,7 +169,7 @@ static void test_initialization(void) {
                     assert(gb->rom[vector + 1] == vector && gb->rom[vector + 2] == 1);
             }
             assert(!cupid_gb_sgb_startup_held(gb));
-            if (model == CUPID_GB_MODEL_SGB || model == CUPID_GB_MODEL_SGB2)
+            if (cupid_gb_model_is_sgb((CupidGbModel)model))
                 assert(gb->sgb.commands_disabled);
             execute_init(gb, info.first_track);
             for (unsigned i = 0; i < sizeof(tracks); ++i) {
@@ -243,7 +243,7 @@ static void assert_output_prefix(const CupidGbAudioOutput *before,
 
 static void test_audio_initialization(void) {
     Fixture input = fixture(0x200, 0x100);
-    for (int model = CUPID_GB_MODEL_DMG_ABC; model <= CUPID_GB_MODEL_SGB2; ++model) {
+    for (int model = CUPID_GB_MODEL_DMG_ABC; model <= CUPID_GB_MODEL_SGB_PAL; ++model) {
         CupidGb *gb = machine((CupidGbModel)model);
         assert(cupid_gb_apu_set_sample_rate(gb, 48000));
         assert(cupid_gb_apu_set_filter_mode(gb, CUPID_GB_AUDIO_FILTER_OFF));
@@ -331,7 +331,7 @@ static void test_transactions_and_host_state(void) {
     assert(cupid_gb_gbs_start_track(gb, 254) == CUPID_GB_GBS_OK);
     assert_output_prefix(output, &gb->apu.output);
 
-    gb->model = (CupidGbModel)(CUPID_GB_MODEL_SGB2 + 1);
+    gb->model = (CupidGbModel)(CUPID_GB_MODEL_SGB_PAL + 1);
     *snapshot = *gb;
     assert(cupid_gb_gbs_start_track(gb, 0) == CUPID_GB_GBS_INVALID_ARGUMENT);
     assert(!memcmp(gb, snapshot, sizeof(*gb)));
@@ -407,7 +407,7 @@ static void test_heap_source(void) {
 }
 
 static void test_state_continuation(void) {
-    for (unsigned model = CUPID_GB_MODEL_DMG_ABC; model <= CUPID_GB_MODEL_SGB2; ++model) {
+    for (unsigned model = CUPID_GB_MODEL_DMG_ABC; model <= CUPID_GB_MODEL_SGB_PAL; ++model) {
         for (unsigned speed = 0; speed < 2; ++speed) {
             CupidGb *gb = machine((CupidGbModel)model);
             Fixture input = fixture(0x200, 0x100);
@@ -522,7 +522,7 @@ static void test_state_identity_and_flags(void) {
 
 static void test_halt_clock_domains(void) {
     Fixture input = fixture(0x200, 0x100);
-    for (unsigned model = CUPID_GB_MODEL_DMG_ABC; model <= CUPID_GB_MODEL_SGB2; ++model) {
+    for (unsigned model = CUPID_GB_MODEL_DMG_ABC; model <= CUPID_GB_MODEL_SGB_PAL; ++model) {
         for (unsigned fast = 0; fast < 2; ++fast) {
             CupidGb *gb = machine((CupidGbModel)model);
             input.data[15] = (uint8_t)(5u | (fast ? 0x80u : 0u));
@@ -567,7 +567,7 @@ static void test_halt_clock_domains(void) {
 static void test_last_vblank_line(void) {
     Fixture input = fixture(0x200, 0x100);
     const uint8_t comparisons[] = {0, 152, 153};
-    for (unsigned model = CUPID_GB_MODEL_DMG_ABC; model <= CUPID_GB_MODEL_SGB2; ++model) {
+    for (unsigned model = CUPID_GB_MODEL_DMG_ABC; model <= CUPID_GB_MODEL_SGB_PAL; ++model) {
         for (unsigned fast = 0; fast < 2; ++fast) {
             for (unsigned compare = 0; compare < sizeof(comparisons); ++compare) {
                 CupidGb *gb = machine((CupidGbModel)model);

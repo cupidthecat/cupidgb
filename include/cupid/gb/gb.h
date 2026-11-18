@@ -268,7 +268,8 @@ typedef enum CupidGbModel {
     CUPID_GB_MODEL_MGB = 2,
     CUPID_GB_MODEL_CGB = 3,
     CUPID_GB_MODEL_SGB = 4,
-    CUPID_GB_MODEL_SGB2 = 5
+    CUPID_GB_MODEL_SGB2 = 5,
+    CUPID_GB_MODEL_SGB_PAL = 6
 } CupidGbModel;
 
 typedef enum CupidGbProgramKind {
@@ -666,10 +667,12 @@ void cupid_gb_set_memory_access_callback(CupidGb *gb, CupidGbMemoryAccessCallbac
                                          void *user_data);
 void cupid_gb_set_model(CupidGb *gb, CupidGbModel model);
 /* Physical base-speed T-cycles per second, independent of CGB double speed.
- * SGB uses its NTSC host-derived clock; other current models use 4194304 Hz.
+ * SGB uses its regional host-derived clock; other current models use 4194304 Hz.
  * A NULL instance returns the ordinary handheld clock. */
 uint32_t cupid_gb_base_clock_hz(const CupidGb *gb);
 const char *cupid_gb_model_name(CupidGbModel model);
+/** Return whether the profile contains an emulated SGB or SGB2 host. */
+bool cupid_gb_model_is_sgb(CupidGbModel model);
 bool cupid_gb_parse_header(const uint8_t *rom_data, size_t rom_size,
                            CupidGbCartridgeHeader *header);
 bool cupid_gb_load_rom_file(CupidGb *gb, const char *path);

@@ -196,8 +196,8 @@ static void same_stream(const Stream *first, const Stream *second) {
 
 static void check_four_apis(void) {
     const int phases[] = {-10, -1, 0, 95, 96, 199, 200};
-    const CupidGbModel models[] = {CUPID_GB_MODEL_SGB, CUPID_GB_MODEL_SGB2};
-    for (unsigned model = 0; model < 2; ++model)
+    const CupidGbModel models[] = {CUPID_GB_MODEL_SGB, CUPID_GB_MODEL_SGB2, CUPID_GB_MODEL_SGB_PAL};
+    for (unsigned model = 0; model < sizeof(models) / sizeof(models[0]); ++model)
         for (unsigned enhanced = 0; enhanced < 2; ++enhanced)
             for (unsigned stage = 0; stage < sizeof(phases) / sizeof(phases[0]); ++stage) {
                 CupidGb *source = create(models[model], enhanced != 0);
@@ -393,8 +393,8 @@ static void count_presentation(const CupidGb *gb, uint8_t type, void *context) {
 }
 
 static void check_two_presentations(void) {
-    const CupidGbModel models[] = {CUPID_GB_MODEL_SGB, CUPID_GB_MODEL_SGB2};
-    for (unsigned model = 0; model < 2; ++model)
+    const CupidGbModel models[] = {CUPID_GB_MODEL_SGB, CUPID_GB_MODEL_SGB2, CUPID_GB_MODEL_SGB_PAL};
+    for (unsigned model = 0; model < sizeof(models) / sizeof(models[0]); ++model)
         for (unsigned enhanced = 0; enhanced < 2; ++enhanced) {
             CupidGb *gb = create(models[model], enhanced != 0);
             assert(cupid_gb_apu_set_sample_rate(gb, 192000));

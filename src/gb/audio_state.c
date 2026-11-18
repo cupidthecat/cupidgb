@@ -126,7 +126,8 @@ bool cupid_gb_audio_state_valid(const CupidGb *gb) {
     /* A rate change keeps pending delivery credit. Its bound therefore uses the
      * largest supported rate, rather than the newly selected smaller rate. */
     const uint32_t step = (uint32_t)(((uint64_t)rate * (UINT64_C(1) << 29)) / clock);
-    const uint16_t span = (uint16_t)(2u * ((clock + 2u * rate - 1u) / (2u * rate)));
+    const uint64_t phase_pair = 2u * (uint64_t)step;
+    const uint16_t span = (uint16_t)(2u * (((UINT64_C(1) << 29) + phase_pair - 1u) / phase_pair));
     if ((output->max_span || output->fraction_step) &&
         (output->max_span != span || output->fraction_step != step))
         return false;

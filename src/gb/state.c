@@ -428,7 +428,7 @@ static void state_extension_v3(StateIo *io, CupidGb *gb) {
 }
 
 static bool valid_model(CupidGbModel model) {
-    return model >= CUPID_GB_MODEL_DMG_ABC && model <= CUPID_GB_MODEL_SGB2;
+    return model >= CUPID_GB_MODEL_DMG_ABC && model <= CUPID_GB_MODEL_SGB_PAL;
 }
 
 static void state_extension_v4(StateIo *io, CupidGb *gb) {
@@ -437,7 +437,7 @@ static void state_extension_v4(StateIo *io, CupidGb *gb) {
 }
 
 static bool sgb_model(CupidGbModel model) {
-    return model == CUPID_GB_MODEL_SGB || model == CUPID_GB_MODEL_SGB2;
+    return cupid_gb_model_is_sgb(model);
 }
 
 /* Version 5 sections follow the immutable hardware and cartridge identity. */
@@ -1141,9 +1141,8 @@ static void import_legacy_sgb_startup(CupidGb *gb) {
      * VBlank phase. The DIV subphase depends on the cartridge header packet
      * stream, so retain that validated value. No memory or host configuration
      * belongs to this migration. */
-    if ((gb->model != CUPID_GB_MODEL_SGB && gb->model != CUPID_GB_MODEL_SGB2) ||
-        gb->boot_rom_enabled || gb->elapsed_cycles ||
-        cpu->a != (gb->model == CUPID_GB_MODEL_SGB ? 0x01u : 0xffu) || cpu->f || cpu->b ||
+    if (!cupid_gb_model_is_sgb(gb->model) || gb->boot_rom_enabled || gb->elapsed_cycles ||
+        cpu->a != (gb->model == CUPID_GB_MODEL_SGB2 ? 0xffu : 0x01u) || cpu->f || cpu->b ||
         cpu->c != 0x14u || cpu->d || cpu->e || cpu->h != 0xc0u || cpu->l != 0x60u ||
         cpu->sp != 0xfffeu || cpu->pc != CUPID_GB_ENTRY_POINT || cpu->ime || cpu->ime_delay ||
         cpu->halt_bug || cpu->halted || cpu->just_halted || cpu->stopped || gb->interrupt_enable ||

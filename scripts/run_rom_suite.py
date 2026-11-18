@@ -84,7 +84,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("runner", type=Path)
     parser.add_argument("roms", type=Path, nargs="+")
-    parser.add_argument("--model", choices=("dmg", "mgb", "cgb", "sgb", "sgb2"), default="dmg")
+    parser.add_argument("--model", choices=("dmg", "mgb", "cgb", "sgb", "sgb2", "sgbpal"), default="dmg")
     parser.add_argument("--protocol", choices=("serial", "register", "fibonacci", "memory", "none"),
                         default="serial")
     parser.add_argument("--frames", type=int, default=600)

@@ -326,7 +326,8 @@ void MainWindow::configure() {
     model->addItem("Game Boy (DMG0)", CUPID_GB_MODEL_DMG0);
     model->addItem("Game Boy Pocket / Light", CUPID_GB_MODEL_MGB);
     model->addItem("Game Boy Color", CUPID_GB_MODEL_CGB);
-    model->addItem("Super Game Boy", CUPID_GB_MODEL_SGB);
+    model->addItem("Super Game Boy NTSC", CUPID_GB_MODEL_SGB);
+    model->addItem("Super Game Boy PAL", CUPID_GB_MODEL_SGB_PAL);
     model->addItem("Super Game Boy 2", CUPID_GB_MODEL_SGB2);
     model->setCurrentIndex(
         model->findData(modelOverride_.value_or(settings_.value("emulation/model", -1).toInt())));

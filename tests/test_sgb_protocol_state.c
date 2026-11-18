@@ -57,7 +57,7 @@ static unsigned continuation_cases, v22_continuation_cases, legacy_cases, reject
     allocation_calls;
 
 static bool physical(CupidGbModel model) {
-    return model == CUPID_GB_MODEL_SGB || model == CUPID_GB_MODEL_SGB2;
+    return cupid_gb_model_is_sgb((CupidGbModel)model);
 }
 
 static CupidGb *create(CupidGbModel model, bool enhanced, bool boot, bool legacy_mapper) {
@@ -283,7 +283,7 @@ static void poison(CupidGb *gb, bool disabled) {
 
 static void pulse_continuations(unsigned version) {
     assert(version == 22 || version == CUPID_GB_STATE_VERSION);
-    for (unsigned model = CUPID_GB_MODEL_SGB; model <= CUPID_GB_MODEL_SGB2; ++model)
+    for (unsigned model = CUPID_GB_MODEL_SGB; model <= CUPID_GB_MODEL_SGB_PAL; ++model)
         for (unsigned enhanced = 0; enhanced < 2; ++enhanced)
             for (unsigned stage = 0; stage < 5; ++stage) {
                 CupidGb *source = create((CupidGbModel)model, enhanced != 0, true, false);
@@ -387,7 +387,7 @@ static void reject(CupidGb *gb, Blob invalid, CupidGbStateResult expected) {
 }
 
 static void structural_checks(void) {
-    for (unsigned model = CUPID_GB_MODEL_DMG_ABC; model <= CUPID_GB_MODEL_SGB2; ++model) {
+    for (unsigned model = CUPID_GB_MODEL_DMG_ABC; model <= CUPID_GB_MODEL_SGB_PAL; ++model) {
         CupidGb *source = create((CupidGbModel)model, false, false, false);
         CupidGb *target = create((CupidGbModel)model, false, false, false);
         if (physical((CupidGbModel)model)) {
@@ -486,7 +486,7 @@ static Blob legacy_blob(const CupidGb *gb, Blob current, unsigned version, bool 
 }
 
 static void legacy_projection(void) {
-    for (unsigned model = CUPID_GB_MODEL_DMG_ABC; model <= CUPID_GB_MODEL_SGB2; ++model)
+    for (unsigned model = CUPID_GB_MODEL_DMG_ABC; model <= CUPID_GB_MODEL_SGB_PAL; ++model)
         for (unsigned declared = 0; declared <= physical((CupidGbModel)model); ++declared) {
             CupidGb *source = create((CupidGbModel)model, declared != 0, false, true);
             CupidGb *target = create((CupidGbModel)model, declared != 0, false, true);
@@ -561,8 +561,8 @@ int main(void) {
     structural_checks();
     legacy_projection();
     legacy_partial_header();
-    assert(continuation_cases == 160 && v22_continuation_cases == 80 && legacy_cases == 672 &&
-           rejection_cases == 232);
+    assert(continuation_cases == 240 && v22_continuation_cases == 120 && legacy_cases == 840 &&
+           rejection_cases == 260);
     printf("Adapter protocol state checks passed: %u pulse continuations (%u version 22), "
            "%u older legacy imports, "
            "%u public API rejections.\n",

@@ -53,7 +53,7 @@ int main(int argc, char **argv) {
          "Use auto, an unsigned decimal seed, or a 0x hexadecimal seed for this session.", "seed"});
     parser.addOption({"model",
                       "Use hardware for this session: auto, dmg, dmgabc, dmg0, mgb, "
-                      "cgb, sgb, sgb2.",
+                      "cgb, sgb, sgbpal, sgb2.",
                       "profile"});
     parser.addOption(
         {"run-seconds", "Run the frontend for a bounded duration and exit.", "seconds"});
@@ -114,7 +114,7 @@ int main(int argc, char **argv) {
         if (name == "auto") {
             modelOverride = -1;
         } else {
-            for (int model = CUPID_GB_MODEL_DMG_ABC; model <= CUPID_GB_MODEL_SGB2; ++model) {
+            for (int model = CUPID_GB_MODEL_DMG_ABC; model <= CUPID_GB_MODEL_SGB_PAL; ++model) {
                 if (name == QString::fromLatin1(cupid_gb_model_name(CupidGbModel(model))) ||
                     (name == "dmg" && model == CUPID_GB_MODEL_DMG_ABC)) {
                     modelOverride = model;
@@ -123,8 +123,8 @@ int main(int argc, char **argv) {
             }
         }
         if (!modelOverride) {
-            qCritical(
-                "Invalid hardware profile. Use --model auto|dmg|dmgabc|dmg0|mgb|cgb|sgb|sgb2.");
+            qCritical("Invalid hardware profile. Use --model "
+                      "auto|dmg|dmgabc|dmg0|mgb|cgb|sgb|sgbpal|sgb2.");
             return 1;
         }
     }

@@ -37,7 +37,7 @@
 static bool valid_request(const CupidGb *gb, CupidGbResetKind kind) {
     if (!gb || !gb->loaded || !gb->rom || !gb->rom_size || gb->rom_size > CUPID_GB_MAX_ROM_SIZE ||
         gb->rom_size > gb->rom_capacity || !cupid_gb_cartridge_storage_valid(gb) ||
-        gb->model < CUPID_GB_MODEL_DMG_ABC || gb->model > CUPID_GB_MODEL_SGB2 ||
+        gb->model < CUPID_GB_MODEL_DMG_ABC || gb->model > CUPID_GB_MODEL_SGB_PAL ||
         (kind != CUPID_GB_RESET_HARD && kind != CUPID_GB_RESET_QUICK))
         return false;
     return !gb->boot_rom_size ||

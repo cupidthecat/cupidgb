@@ -33,7 +33,7 @@ enum { TEST_STATE_SGB_PROTOCOL_BYTES = 85 };
 /* These wire widths stay explicit so older fixture lengths do not depend on
  * the current encoder's own size calculation or the in-memory struct layout. */
 static size_t test_state_startup_size(const CupidGb *gb) {
-    if (gb->model != CUPID_GB_MODEL_SGB && gb->model != CUPID_GB_MODEL_SGB2)
+    if (!cupid_gb_model_is_sgb(gb->model))
         return 0;
     const CupidGbSgbStartupAudio *audio = &gb->sgb_startup.output;
     assert(audio->batch_count <= 2);
@@ -55,8 +55,7 @@ static size_t test_state_post_ram_size(const CupidGb *gb) {
 /* Expected projection for pre-v22 equality checks. Preserve the original ROM
  * fixture and its digest; only newly absent receiver history gets a default. */
 static inline void test_state_legacy_protocol(CupidGb *gb) {
-    gb->sgb.commands_disabled =
-        (gb->model == CUPID_GB_MODEL_SGB || gb->model == CUPID_GB_MODEL_SGB2) && !gb->sgb.enabled;
+    gb->sgb.commands_disabled = cupid_gb_model_is_sgb(gb->model) && !gb->sgb.enabled;
     for (unsigned index = 0; index < 84; ++index)
         gb->sgb.received_header[index] = 0;
 }

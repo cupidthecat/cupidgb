@@ -28,6 +28,7 @@
 
 enum {
     SGB_CLOCK_HZ = 4295454,
+    SGB_PAL_CLOCK_HZ = 4256274,
     SGB2_CLOCK_HZ = 4194304,
     STARTUP_FRAME_CYCLES = 70224,
     STARTUP_HOLD_THRESHOLD = 2048,
@@ -54,7 +55,8 @@ void cupid_gb_sgb_startup_audio_reset(CupidGbSgbStartupAudio *audio, uint64_t ge
 
 uint32_t cupid_gb_sgb_startup_audio_frame_count(uint32_t rate, uint32_t base_clock) {
     if (rate < 8000u || rate > 192000u ||
-        (base_clock != SGB_CLOCK_HZ && base_clock != SGB2_CLOCK_HZ))
+        (base_clock != SGB_CLOCK_HZ && base_clock != SGB_PAL_CLOCK_HZ &&
+         base_clock != SGB2_CLOCK_HZ))
         return 0;
     return (uint32_t)(((uint64_t)rate * STARTUP_FRAME_CYCLES) / base_clock);
 }

@@ -30,7 +30,7 @@
 #include <string.h>
 
 bool cupid_gb_sgb_host_present(const CupidGb *gb) {
-    return gb && (gb->model == CUPID_GB_MODEL_SGB || gb->model == CUPID_GB_MODEL_SGB2);
+    return gb && cupid_gb_model_is_sgb(gb->model);
 }
 
 bool cupid_gb_sgb_startup_active(const CupidGb *gb) {

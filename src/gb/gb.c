@@ -86,6 +86,8 @@ const char *cupid_gb_model_name(CupidGbModel model) {
             return "sgb";
         case CUPID_GB_MODEL_SGB2:
             return "sgb2";
+        case CUPID_GB_MODEL_SGB_PAL:
+            return "sgbpal";
         case CUPID_GB_MODEL_DMG_ABC:
         default:
             return "dmgabc";
@@ -110,9 +112,16 @@ void cupid_gb_set_model(CupidGb *gb, CupidGbModel model) {
     gb->model = model;
 }
 
+bool cupid_gb_model_is_sgb(CupidGbModel model) {
+    return model == CUPID_GB_MODEL_SGB || model == CUPID_GB_MODEL_SGB2 ||
+           model == CUPID_GB_MODEL_SGB_PAL;
+}
+
 uint32_t cupid_gb_base_clock_hz(const CupidGb *gb) {
-    /* The first SGB divides its NTSC host clock by five. SGB2 has an
+    /* The first SGB divides its regional host clock by five. SGB2 has an
      * independent oscillator matching the handheld base clock. */
+    if (gb && gb->model == CUPID_GB_MODEL_SGB_PAL)
+        return 4256274u;
     return gb && gb->model == CUPID_GB_MODEL_SGB ? 4295454u : 4194304u;
 }
 
@@ -156,7 +165,7 @@ static void cupid_gb_apply_boot_profile(CupidGb *gb) {
         gb->io_registers[CUPID_GB_IO_LY] = 0x00u;
         gb->div_counter = 52u;
         gb->ppu_counter = 0u;
-    } else if (gb->model == CUPID_GB_MODEL_SGB) {
+    } else if (gb->model == CUPID_GB_MODEL_SGB || gb->model == CUPID_GB_MODEL_SGB_PAL) {
         gb->cpu.a = 0x01u;
         gb->cpu.f = 0x00u;
         gb->cpu.b = 0x00u;
@@ -361,30 +370,28 @@ void cupid_gb_init(CupidGb *gb) {
     gb->io_registers[CUPID_GB_IO_WY] = 0x00u;
     gb->io_registers[CUPID_GB_IO_WX] = 0x00u;
     /* APU post-boot-ROM register state */
-    gb->io_registers[0x10u] = 0x80u; /* NR10 */
-    gb->io_registers[0x11u] = 0xbfu; /* NR11 */
-    gb->io_registers[0x12u] = 0xf3u; /* NR12 */
-    gb->io_registers[0x14u] = 0xbfu; /* NR14 */
-    gb->io_registers[0x16u] = 0x3fu; /* NR21 */
-    gb->io_registers[0x17u] = 0x00u; /* NR22 */
-    gb->io_registers[0x19u] = 0xbfu; /* NR24 */
-    gb->io_registers[0x1au] = 0x7fu; /* NR30 */
-    gb->io_registers[0x1bu] = 0xffu; /* NR31 */
-    gb->io_registers[0x1cu] = 0x9fu; /* NR32 */
-    gb->io_registers[0x1eu] = 0xbfu; /* NR34 */
-    gb->io_registers[0x20u] = 0xffu; /* NR41 */
-    gb->io_registers[0x21u] = 0x00u; /* NR42 */
-    gb->io_registers[0x22u] = 0x00u; /* NR43 */
-    gb->io_registers[0x23u] = 0xbfu; /* NR44 */
-    gb->io_registers[0x24u] = 0x77u; /* NR50 */
-    gb->io_registers[0x25u] = 0xf3u; /* NR51 */
-    gb->io_registers[0x26u] = (gb->model == CUPID_GB_MODEL_SGB || gb->model == CUPID_GB_MODEL_SGB2)
-                                  ? 0xf0u
-                                  : 0xf1u; /* NR52 */
+    gb->io_registers[0x10u] = 0x80u;                                            /* NR10 */
+    gb->io_registers[0x11u] = 0xbfu;                                            /* NR11 */
+    gb->io_registers[0x12u] = 0xf3u;                                            /* NR12 */
+    gb->io_registers[0x14u] = 0xbfu;                                            /* NR14 */
+    gb->io_registers[0x16u] = 0x3fu;                                            /* NR21 */
+    gb->io_registers[0x17u] = 0x00u;                                            /* NR22 */
+    gb->io_registers[0x19u] = 0xbfu;                                            /* NR24 */
+    gb->io_registers[0x1au] = 0x7fu;                                            /* NR30 */
+    gb->io_registers[0x1bu] = 0xffu;                                            /* NR31 */
+    gb->io_registers[0x1cu] = 0x9fu;                                            /* NR32 */
+    gb->io_registers[0x1eu] = 0xbfu;                                            /* NR34 */
+    gb->io_registers[0x20u] = 0xffu;                                            /* NR41 */
+    gb->io_registers[0x21u] = 0x00u;                                            /* NR42 */
+    gb->io_registers[0x22u] = 0x00u;                                            /* NR43 */
+    gb->io_registers[0x23u] = 0xbfu;                                            /* NR44 */
+    gb->io_registers[0x24u] = 0x77u;                                            /* NR50 */
+    gb->io_registers[0x25u] = 0xf3u;                                            /* NR51 */
+    gb->io_registers[0x26u] = cupid_gb_model_is_sgb(gb->model) ? 0xf0u : 0xf1u; /* NR52 */
     /* Sync APU struct with boot-ROM state */
     gb->apu.apu_on = true;
     gb->apu.ch1_dac = true;
-    gb->apu.ch1_on = !(gb->model == CUPID_GB_MODEL_SGB || gb->model == CUPID_GB_MODEL_SGB2);
+    gb->apu.ch1_on = !cupid_gb_model_is_sgb(gb->model);
     gb->apu.ch1_duty = 2u; /* 50% (NR11 = 0xBF) */
     gb->apu.ch1_len = 63u; /* NR11 length bits = 0x3F → 64-63=1 → stored 1 */
     gb->apu.ch1_vol = 15u;
@@ -396,10 +403,8 @@ void cupid_gb_init(CupidGb *gb) {
     gb->apu.ch4_lfsr = 0x7fffu;
     cupid_cgb_init_state(gb);
     gb->io_registers[0x4du] = 0x00u; /* KEY1: normal speed, switch not armed */
-    gb->io_registers[0x00u] = (gb->model == CUPID_GB_MODEL_SGB || gb->model == CUPID_GB_MODEL_SGB2)
-                                  ? 0xffu
-                                  : 0xcfu; /* P1 */
-    gb->joypad = 0xffu;                    /* all buttons released (0=pressed) */
+    gb->io_registers[0x00u] = cupid_gb_model_is_sgb(gb->model) ? 0xffu : 0xcfu; /* P1 */
+    gb->joypad = 0xffu; /* all buttons released (0=pressed) */
     memset(gb->joypad_extra, 0xff, sizeof(gb->joypad_extra));
     gb->frame_ready = false;
     gb->stat_irq_delay = 0u;

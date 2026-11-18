@@ -41,7 +41,11 @@ static void configure_rate(CupidGb *gb, uint32_t rate) {
      * upward-rounded increment accumulates whole frames on the television
      * adapter's clock; truncation keeps its history bounded during long runs. */
     output->fraction_step = (uint32_t)(((uint64_t)rate * (UINT64_C(1) << 29)) / clock);
-    output->max_span = (uint16_t)(2u * ((clock + 2u * rate - 1u) / (2u * rate)));
+    /* Keep the even scheduling span large enough for the truncated phase
+     * increment. Exact rational divisors can otherwise stop one phase unit
+     * before a reconstruction frame (PAL at 64,489 Hz). */
+    const uint64_t phase_pair = 2u * (uint64_t)output->fraction_step;
+    output->max_span = (uint16_t)(2u * (((UINT64_C(1) << 29) + phase_pair - 1u) / phase_pair));
     cupid_gb_audio_filter_set_rate(&output->filter, clock, rate);
 }
 

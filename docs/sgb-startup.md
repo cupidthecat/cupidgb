@@ -60,15 +60,15 @@ The artwork is a branding choice. Its implementation is not evidence of image id
 
 Startup synthesis has its own normalized voice phases, sweep/filter history and private noise generator. Its seed derives from the current power-on generation with a separate domain tag. It consumes neither power-on RAM noise nor handheld interference noise. The voices and waveform construction are original CupidGB code; exact timbre remains unqualified.
 
-Each presentation generates `floor(rate * 70224 / physical_model_clock)` mono samples. This uses a fresh integer count for each presentation, without carrying a fractional remainder into the next batch. The model clocks are 4,295,454 Hz for SGB and 4,194,304 Hz for SGB2. Supported rates remain 8,000 through 192,000 Hz. For example:
+Each presentation generates `floor(rate * 70224 / physical_model_clock)` mono samples. This uses a fresh integer count for each presentation, without carrying a fractional remainder into the next batch. The model clocks are 4,295,454 Hz for SGB NTSC, 4,256,274 Hz for SGB PAL and 4,194,304 Hz for SGB2. Supported rates remain 8,000 through 192,000 Hz. For example:
 
-| Output rate | SGB samples per batch | SGB2 samples per batch |
-| --- | --- | --- |
-| 8,000 Hz | 130 | 133 |
-| 44,100 Hz | 720 | 738 |
-| 48,000 Hz | 784 | 803 |
-| 96,000 Hz | 1,569 | 1,607 |
-| 192,000 Hz | 3,138 | 3,214 |
+| Output rate | SGB NTSC samples per batch | SGB PAL samples per batch | SGB2 samples per batch |
+| --- | --- | --- | --- |
+| 8,000 Hz | 130 | 131 | 133 |
+| 44,100 Hz | 720 | 727 | 738 |
+| 48,000 Hz | 784 | 791 | 803 |
+| 96,000 Hz | 1,569 | 1,583 | 1,607 |
+| 192,000 Hz | 3,138 | 3,167 | 3,214 |
 
 When a batch exceeds 2,048 frames, synthesis advances once per pair of output samples and repeats that value for the second sample. An odd final frame advances only once and does not produce an extra sample. Once materialized, the batch retains its samples and rate until consumed. Partial drains never regenerate it.
 

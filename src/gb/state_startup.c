@@ -55,7 +55,7 @@ typedef struct StartupFields {
 } StartupFields;
 
 static bool physical_host(const CupidGb *gb) {
-    return gb && (gb->model == CUPID_GB_MODEL_SGB || gb->model == CUPID_GB_MODEL_SGB2);
+    return gb && cupid_gb_model_is_sgb(gb->model);
 }
 
 static void signed_word(StateIo *io, int16_t *value) {

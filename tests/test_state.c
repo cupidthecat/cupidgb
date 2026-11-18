@@ -235,7 +235,7 @@ static void prepare_phase(CupidGb *gb, unsigned phase) {
 static void test_resume(void) {
     CupidGb *a = calloc(1, sizeof(*a)), *b = calloc(1, sizeof(*b));
     assert(a && b);
-    for (unsigned model = 0; model <= CUPID_GB_MODEL_SGB2; ++model) {
+    for (unsigned model = 0; model <= CUPID_GB_MODEL_SGB_PAL; ++model) {
         for (unsigned options = 0; options < (model == CUPID_GB_MODEL_CGB ? 8u : 4u); ++options) {
             for (unsigned phase = 0; phase < 4; ++phase) {
                 bool boot = (options & 1) != 0;

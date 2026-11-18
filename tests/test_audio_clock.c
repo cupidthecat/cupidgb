@@ -39,7 +39,8 @@ static CupidGb *new_machine(CupidGbModel model, uint32_t rate) {
 }
 
 static void test_rate_domain(void) {
-    const CupidGbModel models[] = {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_SGB};
+    const CupidGbModel models[] = {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_SGB,
+                                   CUPID_GB_MODEL_SGB_PAL};
     const uint64_t frame = UINT64_C(1) << 29;
     for (unsigned model = 0; model < sizeof(models) / sizeof(*models); ++model) {
         CupidGb *gb = new_machine(models[model], 8000);
@@ -54,6 +55,27 @@ static void test_rate_domain(void) {
         }
         free(gb);
     }
+}
+
+static void test_pal_phase_continuity(void) {
+    /* This PAL rate divides the physical half-clock exactly. Truncating the
+     * phase increment needs an extra scheduling pair at that boundary. */
+    const uint32_t rate = 64489;
+    CupidGb *gb = new_machine(CUPID_GB_MODEL_SGB_PAL, rate);
+    gb->sgb_startup.phase = 200;
+    assert(cupid_gb_base_clock_hz(gb) == 4256274u);
+    assert(gb->apu.output.max_span == 68);
+    uint64_t frames = 0;
+    const unsigned spans = 100000;
+    int16_t samples[256];
+    for (unsigned span = 0; span < spans; ++span) {
+        cupid_gb_tick_apu(gb, 128);
+        cupid_gb_apu_run(gb, true);
+        assert(cupid_gb_audio_state_valid(gb));
+        frames += cupid_gb_apu_drain(gb, samples, 128);
+    }
+    assert(frames == (uint64_t)spans * 128u * rate / cupid_gb_base_clock_hz(gb));
+    free(gb);
 }
 
 static void seed_boundary(CupidGb *gb, unsigned index) {
@@ -140,6 +162,7 @@ static void test_legacy_increment(void) {
 
 int main(void) {
     test_rate_domain();
+    test_pal_phase_continuity();
     test_phase_boundary();
     test_legacy_increment();
     puts("Audio clock bounds and legacy cache restoration passed");

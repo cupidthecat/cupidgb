@@ -397,7 +397,7 @@ static void handheld_cannot_receive(void) {
 }
 
 int main(void) {
-    const CupidGbModel models[] = {CUPID_GB_MODEL_SGB, CUPID_GB_MODEL_SGB2};
+    const CupidGbModel models[] = {CUPID_GB_MODEL_SGB, CUPID_GB_MODEL_SGB2, CUPID_GB_MODEL_SGB_PAL};
     for (unsigned model = 0; model < sizeof(models) / sizeof(models[0]); ++model) {
         for (unsigned declared = 0; declared < 2; ++declared) {
             physical_receiver(models[model], declared != 0);

@@ -91,7 +91,7 @@ static void select_period(CupidGb *gb, uint32_t period) {
 }
 
 static void test_oscillator_and_debt(void) {
-    for (unsigned model = CUPID_GB_MODEL_DMG_ABC; model <= CUPID_GB_MODEL_SGB2; ++model) {
+    for (unsigned model = CUPID_GB_MODEL_DMG_ABC; model <= CUPID_GB_MODEL_SGB_PAL; ++model) {
         for (unsigned speed = 0; speed <= (model == CUPID_GB_MODEL_CGB); ++speed) {
             TestClock clock = {1700000040, 0};
             CupidGb *gb = new_machine((CupidGbModel)model, &clock, 0, 0);
@@ -212,7 +212,7 @@ static void test_instruction_spans(void) {
 
 static void test_register_spans(void) {
     static const uint8_t ports[] = {0x10, 0x40, 0x41, 0x42, 0x43, 0x45, 0x47, 0x48, 0x49, 0x4b};
-    for (unsigned model = CUPID_GB_MODEL_DMG_ABC; model <= CUPID_GB_MODEL_SGB2; ++model) {
+    for (unsigned model = CUPID_GB_MODEL_DMG_ABC; model <= CUPID_GB_MODEL_SGB_PAL; ++model) {
         const bool color = model == CUPID_GB_MODEL_CGB;
         const bool handheld = model == CUPID_GB_MODEL_DMG_ABC || model == CUPID_GB_MODEL_DMG0 ||
                               model == CUPID_GB_MODEL_MGB;

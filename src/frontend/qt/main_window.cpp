@@ -607,7 +607,7 @@ bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflo
                     : modelOverride_.value_or(settings_.value("emulation/model", -1).toInt());
     if (!music && model < 0)
         model = automaticModel(data);
-    if (model > CUPID_GB_MODEL_SGB2 || (!music && model < CUPID_GB_MODEL_DMG_ABC)) {
+    if (model > CUPID_GB_MODEL_SGB_PAL || (!music && model < CUPID_GB_MODEL_DMG_ABC)) {
         reportError("The configured hardware model is invalid.");
         return false;
     }
@@ -668,7 +668,7 @@ bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflo
             name = "cgb_boot.bin";
         else if (model == CUPID_GB_MODEL_MGB)
             name = "mgb_boot.bin";
-        else if (model == CUPID_GB_MODEL_SGB)
+        else if (model == CUPID_GB_MODEL_SGB || model == CUPID_GB_MODEL_SGB_PAL)
             name = "sgb_boot.bin";
         else if (model == CUPID_GB_MODEL_SGB2)
             name = "sgb2_boot.bin";
