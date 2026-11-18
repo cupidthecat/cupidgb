@@ -64,6 +64,8 @@ void MainWindow::recordAudio(const CoreAudioCollector &collected) {
             continue;
         if (!recorder_->append(collected.samples() + span.firstFrame * 2u, span.frames)) {
             const QString error = recorder_->errorString();
+            if (deferLinkRecordingError(error))
+                return;
             if (stopRecording())
                 reportError("Audio recording stopped: " + error);
             return;
@@ -220,15 +222,16 @@ QByteArray MainWindow::convertPlaybackAudio(const int16_t *samples, size_t frame
     QByteArray converted = audioConverter_->convert(samples, frames);
     const size_t frameBytes = size_t(format.bytesPerFrame());
     size_t capacity = TurboAudioWindow::unlimitedFrames;
-    if (turbo_) {
+    if (playbackTurbo()) {
         // The threshold frame is accepted too. This bounds the pending whole
         // host frames; the audio backend has its own separate buffering.
         const size_t maximum = size_t(format.sampleRate()) / 8 + 1;
         const size_t queued = size_t(audioBuffer_->bytesAvailable()) / frameBytes;
         capacity = queued < maximum ? maximum - queued : 0;
     }
-    const auto filtered = turboAudioWindow_.filter(converted.data(), size_t(converted.size()),
-                                                   frameBytes, turbo_, turboCapQuarters_, capacity);
+    const auto filtered =
+        turboAudioWindow_.filter(converted.data(), size_t(converted.size()), frameBytes,
+                                 playbackTurbo(), playbackTurboCap(), capacity);
     if (filtered.status != TurboAudioWindow::Status::Ok)
         return {};
     converted.truncate(qsizetype(filtered.outputFrames * frameBytes));

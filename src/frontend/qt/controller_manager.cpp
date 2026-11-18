@@ -746,4 +746,25 @@ void ControllerManager::stopRumble() {
         backend_.stopRumble(state.info.instance);
 }
 
+void ControllerManager::setPlayerRumble(unsigned player, double amplitude) {
+    if (player >= 4)
+        return;
+    const bool allowed =
+        delivery_ && configuration_.enabled && configuration_.rumble && std::isfinite(amplitude);
+    const double intensity = allowed ? std::clamp(amplitude, 0.0, 1.0) : 0.0;
+    const double strength = std::clamp(configuration_.rumbleStrength, 0, 100) / 100.0;
+    const auto value = uint16_t(
+        intensity > 0.0 && strength > 0.0 ? std::pow(intensity, strength) * strength * 65535 : 0);
+    // A linked peer publishes independently. Updating one player's motor must
+    // neither refresh nor stop the other player's most recent amplitude.
+    for (const auto &[id, state] : states_) {
+        if (profile(state.info).player != int(player))
+            continue;
+        if (eligible(state) && value)
+            backend_.rumble(id, value, value, 250);
+        else
+            backend_.stopRumble(id);
+    }
+}
+
 } // namespace cupid::input

@@ -38,6 +38,8 @@ bool MainWindow::smokeTest(SmokeWorkflow workflow) {
         return largeCartridgeRamSmokeTest(directory.path());
     if (workflow == SmokeWorkflow::Sgb)
         return sgbSmokeTest(directory.path());
+    if (workflow == SmokeWorkflow::Link)
+        return linkSmokeTest(directory.path());
     if (!playbackSmokeTest(directory.path()) || !startupSmokeTest(directory.path()) ||
         !rtcSmokeTest(directory.path()) || !audioPolicySmokeTest(directory.path()) ||
         !resetSmokeTest(directory.path()) || !cameraSmokeTest(directory.path()) ||
@@ -1052,12 +1054,19 @@ bool MainWindow::smokeTest(SmokeWorkflow workflow) {
         !screenMessagesSmokeTest(path, directory.path()) || display_->collectPaintIntervals ||
         !display_->paintIntervals.empty() || display_->lastPaintAt)
         return smokeFailure(__FILE__, __LINE__);
+    if (workflow == SmokeWorkflow::All && !linkSmokeTest(directory.path()))
+        return smokeFailure(__FILE__, __LINE__);
     qInfo("CupidGB Qt workflow smoke test passed");
     return !failed_;
 }
 
 bool MainWindow::audioLifecycleSmokeTest(const QString &path) {
     QScopedValueRollback<bool> operation(stateOperation_, true);
+    // Reentrant audio checks keep the caller alive with separate cartridge storage.
+    QTemporaryDir storage(QFileInfo(path).dir().filePath("audio-lifecycle-XXXXXX"));
+    const QString sessionPath = storage.filePath(QFileInfo(path).fileName());
+    if (!storage.isValid() || !QFile::copy(path, sessionPath))
+        return smokeFailure(__FILE__, __LINE__);
     const bool hadCap = settings_.contains("emulation/turboCap");
     const QVariant savedCap = settings_.value("emulation/turboCap");
     const auto restoreCap = qScopeGuard([&] {
@@ -1068,7 +1077,7 @@ bool MainWindow::audioLifecycleSmokeTest(const QString &path) {
     });
     MainWindow session(true, true, true);
     session.timer_.stop();
-    if (!session.openRom(path))
+    if (!session.openRom(sessionPath))
         return smokeFailure(__FILE__, __LINE__);
     for (unsigned frame = 0; frame < 4; ++frame)
         if (!session.runFrame())

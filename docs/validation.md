@@ -18,6 +18,8 @@ The [storage, wave and camera checkpoint](validation-storage-wave.md) records fu
 
 ## Builds and automated checks
 
+The later [linked-window checkpoint](validation-link.md) records the paired-clock comparisons, refreshed mapper corpus, complete platform gates, cartridge scan and native two-window measurements for the link-play changes. Its results have their own source and artifact identities.
+
 | Environment | Configuration | Result |
 | --- | --- | --- |
 | Windows x64, MSVC 19.43, Qt 6.8.3 | Release desktop/core | Nine CTest checks, visible frontend workflow smoke, local deployed executable |

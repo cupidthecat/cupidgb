@@ -7,6 +7,7 @@ CupidGB emulates Game Boy and Game Boy Color hardware with a C core and a Qt des
 | [Build and installation](building.md) | Dependencies, Windows and Linux builds, Release IPO, deployment, core-only builds, and sanitizers |
 | [User guide](user-guide.md) | Opening cartridges, controls, settings, display, audio, capture, and save workflows |
 | [Controllers](controllers.md) | Device selection, capture, mappings, dead zones, player routing, focus, native menus and cartridge feedback |
+| [Link play](link-play.md) | Two local cartridge windows, cable and infrared connections, paired controls and separate saves |
 | [Camera cartridges](host-camera.md) | Default-camera capture, image conversion, request lifetime, generated input and save-state behavior |
 | [Hardware support](hardware.md) | Models, startup, cartridge controllers, hardware subsystems, and known limits |
 | [SGB startup](sgb-startup.md) | Host introduction timing, original artwork, ordered sound, reset and native continuation |
@@ -37,5 +38,7 @@ CupidGB emulates Game Boy and Game Boy Color hardware with a C core and a Qt des
 | [Hardware integration validation](validation-hardware-selection.md) | Combined hardware gates, state interchange, mapper limits, native workflows and Windows gameplay |
 | [Storage, wave and camera validation](validation-storage-wave.md) | Combined SRAM ownership, native version 20, NR30 disconnect behavior and camera timeline checks |
 | [SGB startup validation](validation-sgb-startup.md) | Host-only startup clocks, ordered output, version 21 continuation and scoped desktop/runtime observations |
+| [SGB protocol validation](validation-sgb-protocol.md) | Boot-header permission, version 22 continuation, paired observations and bounded gameplay |
+| [Link and LY validation](validation-link.md) | Two-window cable workflows, ignored LY writes, mapper tests, library scan and native paired gameplay |
 
 Start with the build guide if you have a source checkout. For an executable that already runs, use the user guide. A result in the validation record applies to the stated revision, inputs, settings, and duration; it does not qualify every later build.

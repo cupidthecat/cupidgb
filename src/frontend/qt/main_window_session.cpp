@@ -30,6 +30,8 @@ void MainWindow::resetPacing() {
     nextFrame_ = clock_.nsecsElapsed();
     clockPacer_.reset();
     refreshTimerInterval();
+    if (auto *owner = linkOwner(); owner && owner != this)
+        owner->resetPacing();
 }
 
 void MainWindow::refreshTimerInterval() {
@@ -37,12 +39,17 @@ void MainWindow::refreshTimerInterval() {
     // interval so native audio callbacks cannot strand a running session at idle cadence.
     const bool idle = !emulator_ || paused_ || menuDepth_ || menuInputSuspended_ ||
                       (rewind_ && (rewindFailed_ || rewindExhausted_));
-    const int interval = idle ? 16 : 1;
+    const bool secondary = linkOwner() && linkOwner() != this;
+    const int interval = idle || secondary ? 16 : 1;
     if (timer_.interval() != interval)
         timer_.setInterval(interval);
 }
 
 void MainWindow::setTurboCap(unsigned quarters) {
+    if (auto *owner = linkOwner(); owner && owner != this) {
+        owner->setTurboCap(quarters);
+        return;
+    }
     if (quarters < 6 || quarters > 16)
         quarters = 0;
     settings_.setValue("emulation/turboCap", quarters * 25);
@@ -52,9 +59,19 @@ void MainWindow::setTurboCap(unsigned quarters) {
         turboCapQuarters_ = quarters;
         resetPacing();
     }
+    if (auto *partner = linkPartner()) {
+        partner->turboCapQuarters_ = quarters;
+        partner->settings_.setValue("emulation/turboCap", quarters * 25);
+        for (size_t i = 0; i < partner->turboCapActions_.size(); ++i)
+            partner->turboCapActions_[i]->setChecked(turboCapChoices[i] == quarters);
+    }
 }
 
 void MainWindow::tick() {
+    if (linkSession_) {
+        tickLink();
+        return;
+    }
     const auto refreshInterval = qScopeGuard([this] { refreshTimerInterval(); });
     refreshControllerGate();
     if (!emulator_ || paused_ || stateOperation_ || menuDepth_ || menuInputSuspended_)
@@ -124,11 +141,11 @@ void MainWindow::tick() {
     }
 }
 
-bool MainWindow::runFrame(Playback playback, PlaybackResult *result) {
+bool MainWindow::beginPlayback(Playback playback, PlaybackWork &work) {
     if (!emulator_)
         return false;
+    work.playback = playback;
     const bool replay = playback != Playback::Forward;
-    const bool lastStep = playback == Playback::RewindEnd;
     if (!replay)
         rewindExhausted_ = false;
     auto &gb = emulator_->gb;
@@ -137,134 +154,178 @@ bool MainWindow::runFrame(Playback playback, PlaybackResult *result) {
         !stopRecording())
         return false;
     if (audioConverter_)
-        audioConverter_->setInputRate(double(rate) * speedSteps_ / 16);
-    const uint64_t startPresentation = cupid_gb_presentation_cycles(&gb);
-    const uint64_t startGuest = gb.elapsed_cycles;
-    if (result)
-        *result = {0, 0, timelineId_};
-    CoreAudioCollector collected;
-    bool collectionFailed = !collectAudio(collected);
-    bool executionFailed = false;
-    bool attemptedHardware = false;
-    bool attemptedGuest = false;
-    QString debuggerStop;
-    // Presentation time also advances while adapter startup holds the CPU.
-    // The hardware-call guard stays finite even if the display cannot publish.
-    for (unsigned steps = 0; !collectionFailed && steps < 80000; ++steps) {
-        if (CoreAudioCollector::needsDrain(gb) && !collectAudio(collected)) {
-            collectionFailed = true;
-            break;
-        }
-        if (!replay && !inputTrace_.empty() && gb.elapsed_cycles >= telemetryStartCycles_) {
-            const uint64_t frame = (gb.elapsed_cycles - telemetryStartCycles_) / 70224;
-            while (inputTraceIndex_ < inputTrace_.size() &&
-                   inputTrace_[inputTraceIndex_].first <= frame) {
-                physicalJoypad_ = inputTrace_[inputTraceIndex_++].second;
-                setJoypad(physicalJoypad_);
-            }
-        }
-        if (debugger_ && debugger_->bp_count) {
-            const auto stop = cupid_gb_debugger_check(debugger_.get(), &gb);
-            if (stop == CUPID_GB_DEBUG_STOP_BREAKPOINT || stop == CUPID_GB_DEBUG_STOP_ERROR) {
-                debuggerStop = stop == CUPID_GB_DEBUG_STOP_ERROR
-                                   ? "Breakpoint condition evaluation failed."
-                                   : "Breakpoint reached.";
-                break;
-            }
-        }
-        // A before-instruction stop retains a pending frame latch. A host-only
-        // call still performs real display work, but owns no instruction history.
-        if (!steps)
-            gb.frame_ready = false;
-        const bool held = cupid_gb_sgb_startup_held(&gb);
-        const bool watching = !held && !replay && debugger_ && debugger_->wp_count;
-        if (watching)
-            cupid_gb_debugger_watch_begin(debugger_.get(), &gb);
-        attemptedHardware = true;
-        attemptedGuest |= !held;
-        const bool executed = cupid_emulator_step(emulator_.get());
-        const auto watchStop =
-            watching ? cupid_gb_debugger_watch_end(debugger_.get(), &gb) : CUPID_GB_DEBUG_STOP_NONE;
-        if (!executed) {
-            executionFailed = true;
-            break;
-        }
-        if (gb.sgb.player_count != controllerPlayerCount_)
-            refreshControllerPlayerCount();
-        if (watchStop == CUPID_GB_DEBUG_STOP_WATCHPOINT || watchStop == CUPID_GB_DEBUG_STOP_ERROR) {
-            debuggerStop = debuggerWatchMessage(watchStop == CUPID_GB_DEBUG_STOP_ERROR);
-            break;
-        }
-        if (lastStep || gb.frame_ready ||
-            cupid_gb_presentation_cycles(&gb) - startPresentation >= 70224)
-            break;
+        audioConverter_->setInputRate(double(rate) * playbackSpeed() / 16);
+    work.startPresentation = cupid_gb_presentation_cycles(&gb);
+    work.startGuest = gb.elapsed_cycles;
+    work.session = sessionId_;
+    work.timeline = timelineId_;
+    work.collectionFailed = !collectAudio(work.collected);
+    return true;
+}
+
+bool MainWindow::preparePlaybackStep(PlaybackWork &work) {
+    if (!emulator_ || sessionId_ != work.session || timelineId_ != work.timeline ||
+        work.collectionFailed || work.executionFailed || !work.debuggerStop.isEmpty())
+        return false;
+    auto &gb = emulator_->gb;
+    const bool replay = work.playback != Playback::Forward;
+    if (CoreAudioCollector::needsDrain(gb) && !collectAudio(work.collected)) {
+        work.collectionFailed = true;
+        return false;
     }
+    if (!replay && !inputTrace_.empty() && gb.elapsed_cycles >= telemetryStartCycles_) {
+        const uint64_t frame = (gb.elapsed_cycles - telemetryStartCycles_) / 70224;
+        while (inputTraceIndex_ < inputTrace_.size() &&
+               inputTrace_[inputTraceIndex_].first <= frame) {
+            physicalJoypad_ = inputTrace_[inputTraceIndex_++].second;
+            setJoypad(physicalJoypad_);
+        }
+    }
+    if (debugger_ && debugger_->bp_count) {
+        const auto stop = cupid_gb_debugger_check(debugger_.get(), &gb);
+        if (stop == CUPID_GB_DEBUG_STOP_BREAKPOINT || stop == CUPID_GB_DEBUG_STOP_ERROR) {
+            work.debuggerStop = stop == CUPID_GB_DEBUG_STOP_ERROR
+                                    ? "Breakpoint condition evaluation failed."
+                                    : "Breakpoint reached.";
+            return false;
+        }
+    }
+    // A before-instruction stop retains a pending frame latch. A host-only
+    // call still performs real display work, but owns no instruction history.
+    if (!work.steps)
+        gb.frame_ready = false;
+    const bool held = cupid_gb_sgb_startup_held(&gb);
+    work.watching = !held && !replay && debugger_ && debugger_->wp_count;
+    if (work.watching)
+        cupid_gb_debugger_watch_begin(debugger_.get(), &gb);
+    work.attemptedHardware = true;
+    work.attemptedGuest |= !held;
+    return true;
+}
+
+bool MainWindow::completePlaybackStep(PlaybackWork &work, bool executed) {
+    ++work.steps;
+    auto &gb = emulator_->gb;
+    const auto watchStop = work.watching ? cupid_gb_debugger_watch_end(debugger_.get(), &gb)
+                                         : CUPID_GB_DEBUG_STOP_NONE;
+    if (!executed) {
+        work.executionFailed = true;
+        return false;
+    }
+    if (inputPlayerCount() != controllerPlayerCount_)
+        refreshControllerPlayerCount();
+    if (watchStop == CUPID_GB_DEBUG_STOP_WATCHPOINT || watchStop == CUPID_GB_DEBUG_STOP_ERROR) {
+        work.debuggerStop = debuggerWatchMessage(watchStop == CUPID_GB_DEBUG_STOP_ERROR);
+        return false;
+    }
+    return true;
+}
+
+bool MainWindow::finishPlayback(PlaybackWork &work, PlaybackResult *result, bool pumpOutput,
+                                bool commitOutput) {
+    if (!emulator_ || sessionId_ != work.session || timelineId_ != work.timeline)
+        return false;
+    auto &gb = emulator_->gb;
+    const bool replay = work.playback != Playback::Forward;
     // Stop paths retain the final step's PCM too. Collection itself performs no
     // presentation, hardware work, pacing charge, or backend callback.
-    if (!collectionFailed)
-        collectionFailed = !collectAudio(collected);
-    const uint64_t presentationCycles = cupid_gb_presentation_cycles(&gb) - startPresentation;
-    const uint64_t guestCycles = gb.elapsed_cycles - startGuest;
-    if (result) {
-        result->presentationCycles = presentationCycles;
-        result->guestCycles = guestCycles;
-    }
+    if (!work.collectionFailed)
+        work.collectionFailed = !collectAudio(work.collected);
+    const uint64_t presentationCycles = cupid_gb_presentation_cycles(&gb) - work.startPresentation;
+    const uint64_t guestCycles = gb.elapsed_cycles - work.startGuest;
+    if (result)
+        *result = {presentationCycles, guestCycles, work.timeline};
     if (replay)
         replayedGuestCycles_ += guestCycles;
-    const bool stopping = collectionFailed || executionFailed || !debuggerStop.isEmpty();
-    const bool completedFrame = attemptedHardware && gb.frame_ready;
+    const bool stopping =
+        work.collectionFailed || work.executionFailed || !work.debuggerStop.isEmpty();
+    const bool completedFrame = work.attemptedHardware && gb.frame_ready;
     const uint64_t session = sessionId_;
     const uint64_t timeline = timelineId_;
+    const auto link = linkSession_;
+    const QPointer<MainWindow> partner = linkPartner();
+    const uint64_t partnerSession = partner ? partner->sessionId_ : 0;
+    const uint64_t partnerTimeline = partner ? partner->timelineId_ : 0;
     const bool wasPaused = paused_;
     const unsigned menuDepth = menuDepth_;
     const bool menuInputSuspended = menuInputSuspended_;
-    const auto unchanged = [this, session, timeline, wasPaused, menuDepth, menuInputSuspended] {
+    const auto unchanged = [this, session, timeline, link, partner, partnerSession, partnerTimeline,
+                            wasPaused, menuDepth, menuInputSuspended] {
         return emulator_ && sessionId_ == session && timelineId_ == timeline &&
+               linkSession_ == link &&
+               (!link || (partner && partner->linkSession_ == link &&
+                          partner->sessionId_ == partnerSession &&
+                          partner->timelineId_ == partnerTimeline)) &&
                paused_ == wasPaused && menuDepth_ == menuDepth &&
                menuInputSuspended_ == menuInputSuspended;
     };
     QByteArray converted;
-    if (!stopping && audio_ && audioConverter_ && !paused_)
-        converted = convertPlaybackAudio(collected.samples(), collected.frames(), audio_->format());
+    if (commitOutput && !stopping && audio_ && audioConverter_ && !paused_)
+        converted = convertPlaybackAudio(work.collected.samples(), work.collected.frames(),
+                                         audio_->format());
     // Publish before a host audio call can dispatch pause/load/close. A solely
     // held call bypasses automatic rewind, while explicit snapshots remain valid.
     if (!stopping && completedFrame) {
         advanceScreenMessages();
         present(Presentation::Frame);
         advanceControls();
-        if (attemptedGuest)
+        if (work.attemptedGuest)
             rememberFrame();
         if (replay)
             ++replayedFrames_;
-    } else if (!stopping && !replay) {
+    } else if (!stopping && !replay && !linkSession_) {
+        // A linked quantum may end at only the other console's vblank. Its
+        // unfinished peer image is published at that peer's own frame boundary.
         present(Presentation::Redraw);
     }
-    if (attemptedHardware) {
+    if (work.attemptedHardware) {
         updatePrinter();
         finishControllerRumble();
         watchBattery();
     }
-    if (!replay)
-        recordAudio(collected);
+    if (commitOutput && !replay)
+        recordAudio(work.collected);
     if (!unchanged())
         return true;
-    if (collectionFailed || executionFailed) {
-        setPaused(true);
-        reportError(collectionFailed
-                        ? "Audio output could not be preserved. Emulation is paused."
-                        : "CPU execution stopped. The cartridge remains open for inspection.");
+    if (work.collectionFailed || work.executionFailed) {
+        if (pumpOutput) {
+            setPaused(true);
+            reportError(work.collectionFailed
+                            ? "Audio output could not be preserved. Emulation is paused."
+                            : "CPU execution stopped. The cartridge remains open for inspection.");
+        }
         return false;
     }
-    if (!debuggerStop.isEmpty()) {
-        stopDebugger(debuggerStop);
+    if (!work.debuggerStop.isEmpty()) {
+        if (pumpOutput)
+            stopDebugger(work.debuggerStop);
         return true;
     }
     if (audio_ && !paused_ && !converted.isEmpty()) {
         audioBuffer_->append(converted.constData(), converted.size());
-        pumpAudio();
+        if (pumpOutput)
+            pumpAudio();
     }
     // No guest or presentation state is touched after a backend callback.
     return true;
+}
+
+bool MainWindow::runFrame(Playback playback, PlaybackResult *result) {
+    if (linkSession_)
+        return playback == Playback::Forward && runLinkedFrame(result);
+    PlaybackWork work;
+    if (!beginPlayback(playback, work))
+        return false;
+    // Presentation time also advances while adapter startup holds the CPU.
+    // The hardware-call guard stays finite even if the display cannot publish.
+    for (unsigned steps = 0; steps < 80000 && preparePlaybackStep(work); ++steps) {
+        if (!completePlaybackStep(work, cupid_emulator_step(emulator_.get())))
+            break;
+        if (playback == Playback::RewindEnd || emulator_->gb.frame_ready ||
+            cupid_gb_presentation_cycles(&emulator_->gb) - work.startPresentation >= 70224)
+            break;
+    }
+    return finishPlayback(work, result);
 }
 
 QByteArray MainWindow::captureState(bool reportFailure, bool rewindSnapshot) {
@@ -322,8 +383,8 @@ bool MainWindow::restoreState(const QByteArray &bytes, bool reportFailure, bool 
     ++timelineId_;
     cancelCameraCapture();
     resetControllerRumble();
-    controllerPlayerCount_ =
-        cupid_gb_sgb_host_present(&emulator_->gb) ? emulator_->gb.sgb.player_count : 1;
+    rebaseLink();
+    controllerPlayerCount_ = inputPlayerCount();
     return true;
 }
 
@@ -514,7 +575,7 @@ void MainWindow::rebaseRewindAfterReset(uint64_t previousPresentationCycles) {
 
 void MainWindow::rememberFrame() {
     const int seconds = std::clamp(settings_.value("emulation/rewindSeconds", 120).toInt(), 0, 600);
-    if (!emulator_ || !seconds || rewindFailed_)
+    if (!emulator_ || !seconds || rewindFailed_ || linkSession_)
         return;
     trackRewindTime(cupid_gb_presentation_cycles(&emulator_->gb));
     const uint32_t clockHz = cupid_gb_base_clock_hz(&emulator_->gb);
@@ -577,6 +638,10 @@ void MainWindow::rememberFrame() {
 }
 
 bool MainWindow::rewindFrame(PlaybackResult *result) {
+    if (linkSession_) {
+        statusBar()->showMessage("Rewind is unavailable while a link cable is connected.", 3000);
+        return false;
+    }
     if (!emulator_ || rewindFailed_ || rewindExhausted_) {
         statusBar()->showMessage(rewindFailed_ ? "Rewind unavailable: snapshot capture failed"
                                                : "No earlier rewind history");

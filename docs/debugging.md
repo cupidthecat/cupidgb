@@ -107,6 +107,8 @@ Menu Reset, Quick Reset, Reload and `reset reload` refresh cartridge, firmware a
 
 ## Instruction history and playback
 
+With a cable connected, debugger execution advances the peer on the shared physical timeline. Opening the debugger pauses both games, and a breakpoint or watchpoint in either console stops the pair. Step, Next and Finish operate on the selected console while the peer catches up as needed. Backstep is unavailable while connected because the instruction history cannot restore both consoles together. State files still restore only their selected console. See [Link play](link-play.md).
+
 Explicit Step, Next, and Finish execution captures instruction snapshots. Backstep restores one instruction boundary, including CPU, timer, graphics, cartridge, and sound-generator state. History retains at most 128 snapshots within a 32 MiB budget for compressed buffer capacity and stored entries; the oldest entries are evicted when either limit is reached. Container overhead and temporary capture buffers use additional memory. Instruction history is separate from ordinary frame rewind.
 
 Continuing normal playback or advancing a frame clears instruction history. Cartridge replacement, reset, successful state loading, frame rewind, and debugger edits also invalidate it. An execution failure can still have changed hardware state; its pre-step snapshot remains available for Backstep. No instruction snapshots are captured while the debugger is unused.

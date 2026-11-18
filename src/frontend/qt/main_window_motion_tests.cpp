@@ -461,7 +461,19 @@ bool MainWindow::motionSmokeTest(const QString &directory) {
     timer_.stop();
     if (controllers_->motionEnabled() || (emulator_->gb.joypad & 1) ||
         !(emulator_->gb.joypad & 0x10) || mouseButtonA_ || physicalJoypad_ != 0xff ||
-        emulator_->gb.elapsed_cycles || !closeRom())
+        emulator_->gb.elapsed_cycles) {
+        qCritical("Motion cartridge transition failed: classified=%d joypad=%02x mouse=%d "
+                  "keyboard=%02x cycles=%llu controller=%02x manager=%02x delivery=%d "
+                  "inputAllowed=%d paused=%d deferred=%d activeIsMain=%d",
+                  int(controllers_->motionEnabled()), unsigned(emulator_->gb.joypad),
+                  int(mouseButtonA_), unsigned(physicalJoypad_),
+                  qulonglong(emulator_->gb.elapsed_cycles), unsigned(controllerOutput_.buttons[0]),
+                  unsigned(controllers_->output().buttons[0]), int(controllers_->deliveryEnabled()),
+                  int(controllers_->backend().inputAllowed()), int(paused_),
+                  int(controllerInputDeferred_), int(QApplication::activeWindow() == this));
+        return smokeFailure(__FILE__, __LINE__);
+    }
+    if (!closeRom())
         return smokeFailure(__FILE__, __LINE__);
     pad.detach();
     if (!waitForController([&] { return !controllers_->backend().state(pad.id, &heldState); }) ||

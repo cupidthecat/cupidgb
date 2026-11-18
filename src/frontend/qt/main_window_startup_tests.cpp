@@ -64,8 +64,12 @@ bool MainWindow::startupSmokeTest(const QString &directory) {
     };
     const QString monochrome = cartridge("monochrome.gb", 0);
     const QString color = cartridge("color.gbc", 0x80);
+    const QString companion = fixtures.filePath("monochrome-companion.gb");
+    const QString automaticPath = fixtures.filePath("monochrome-automatic.gb");
+    const QString coldColor = fixtures.filePath("color-cold.gbc");
     const QString noBoot = QStringLiteral("");
-    if (monochrome.isEmpty() || color.isEmpty())
+    if (monochrome.isEmpty() || color.isEmpty() || !QFile::copy(monochrome, companion) ||
+        !QFile::copy(monochrome, automaticPath) || !QFile::copy(color, coldColor))
         return smokeFailure(__FILE__, __LINE__);
 
     MainWindow fixed(true, false, false, noBoot, CUPID_GB_MODEL_DMG_ABC, uint64_t(0));
@@ -83,7 +87,7 @@ bool MainWindow::startupSmokeTest(const QString &directory) {
     {
         MainWindow repeated(true, false, false, noBoot, CUPID_GB_MODEL_DMG_ABC, uint64_t(0));
         repeated.timer_.stop();
-        if (!repeated.openRom(monochrome) || startupMemory(repeated.emulator_->gb) != fixedMemory)
+        if (!repeated.openRom(companion) || startupMemory(repeated.emulator_->gb) != fixedMemory)
             return smokeFailure(__FILE__, __LINE__);
     }
     fixed.emulator_->gb.work_ram[0x123] ^= 0xff;
@@ -109,7 +113,7 @@ bool MainWindow::startupSmokeTest(const QString &directory) {
     {
         MainWindow receiver(true, false, false, noBoot, CUPID_GB_MODEL_DMG_ABC, otherSeed);
         receiver.timer_.stop();
-        if (!receiver.openRom(monochrome) ||
+        if (!receiver.openRom(companion) ||
             cupid_gb_get_power_on_seed(&receiver.emulator_->gb) != otherSeed)
             return smokeFailure(__FILE__, __LINE__);
         const QByteArray receiverMemory = startupMemory(receiver.emulator_->gb);
@@ -125,7 +129,7 @@ bool MainWindow::startupSmokeTest(const QString &directory) {
 
     MainWindow automatic(true, false, false, noBoot, CUPID_GB_MODEL_DMG_ABC);
     automatic.timer_.stop();
-    if (!automatic.openRom(monochrome) || automatic.powerOnSeedOverride_ ||
+    if (!automatic.openRom(automaticPath) || automatic.powerOnSeedOverride_ ||
         automatic.emulator_->gb.power_on.fixed_seed)
         return smokeFailure(__FILE__, __LINE__);
     const uint64_t automaticSeed = cupid_gb_get_power_on_seed(&automatic.emulator_->gb);
@@ -135,13 +139,13 @@ bool MainWindow::startupSmokeTest(const QString &directory) {
         // assuming two entropy samples must differ or have a particular value.
         MainWindow replay(true, false, false, noBoot, CUPID_GB_MODEL_DMG_ABC, automaticSeed);
         replay.timer_.stop();
-        if (!replay.openRom(monochrome) || startupMemory(replay.emulator_->gb) != automaticMemory)
+        if (!replay.openRom(companion) || startupMemory(replay.emulator_->gb) != automaticMemory)
             return smokeFailure(__FILE__, __LINE__);
     }
     const QByteArray beforeFailure = automatic.captureState();
     const CupidEmulator *beforeCore = automatic.emulator_.get();
     automatic.bootDirectoryOverride_ = fixtures.filePath("missing-firmware");
-    if (automatic.openRom(monochrome) || automatic.emulator_.get() != beforeCore ||
+    if (automatic.openRom(automaticPath) || automatic.emulator_.get() != beforeCore ||
         automatic.captureState() != beforeFailure ||
         cupid_gb_get_power_on_seed(&automatic.emulator_->gb) != automaticSeed ||
         automatic.emulator_->gb.power_on.fixed_seed)
@@ -154,13 +158,14 @@ bool MainWindow::startupSmokeTest(const QString &directory) {
     {
         MainWindow replay(true, false, false, noBoot, CUPID_GB_MODEL_DMG_ABC, restartedSeed);
         replay.timer_.stop();
-        if (!replay.openRom(monochrome) ||
+        if (!replay.openRom(companion) ||
             startupMemory(replay.emulator_->gb) != startupMemory(automatic.emulator_->gb))
             return smokeFailure(__FILE__, __LINE__);
     }
 
     const QByteArray battery(8192, char(0x6d));
-    if (!writeStartupFixture(fixtures.filePath("color.sav"), battery))
+    if (!writeStartupFixture(fixtures.filePath("color.sav"), battery) ||
+        !writeStartupFixture(fixtures.filePath("color-cold.sav"), battery))
         return smokeFailure(__FILE__, __LINE__);
     MainWindow handoff(true, false, false, noBoot, CUPID_GB_MODEL_CGB, uint64_t(0));
     handoff.timer_.stop();
@@ -179,7 +184,7 @@ bool MainWindow::startupSmokeTest(const QString &directory) {
         return smokeFailure(__FILE__, __LINE__);
     MainWindow cold(true, false, false, firmware.path(), CUPID_GB_MODEL_CGB, uint64_t(0));
     cold.timer_.stop();
-    if (!cold.openRom(color) || !cold.emulator_->gb.boot_rom_enabled ||
+    if (!cold.openRom(coldColor) || !cold.emulator_->gb.boot_rom_enabled ||
         cold.emulator_->gb.cpu.pc != 0 || cupid_gb_get_power_on_seed(&cold.emulator_->gb) != 0 ||
         std::all_of(std::begin(cold.emulator_->gb.work_ram) + 0x2000,
                     std::begin(cold.emulator_->gb.work_ram) + 0x3000,

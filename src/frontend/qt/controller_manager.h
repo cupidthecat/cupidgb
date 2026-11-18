@@ -102,6 +102,7 @@ class ControllerManager final : public QObject {
     void setPreferredInstance(SDL_JoystickID instance);
     QMap<SDL_JoystickID, int> playerOverrides() const;
     void setRumble(double amplitude, bool singlePlayer = false);
+    void setPlayerRumble(unsigned player, double amplitude);
     void stopRumble();
 
     std::function<void(const ControllerOutput &)> outputChanged;

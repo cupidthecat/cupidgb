@@ -32,6 +32,8 @@ extern "C" {
 }
 
 void MainWindow::setPrinterConnected(bool connected) {
+    if (connected)
+        disconnectLink();
     if (!connected) {
         if (printer_) {
             if (emulator_)

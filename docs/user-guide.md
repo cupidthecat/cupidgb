@@ -1,6 +1,6 @@
 # User guide
 
-CupidGB runs one cartridge at a time. It keeps desktop settings per user and stores cartridge battery data and numbered save states beside the cartridge file. Use an ordinary writable folder for games whose saves you want to keep.
+CupidGB runs one cartridge in each window. It keeps desktop settings per user and stores cartridge battery data and numbered save states beside the cartridge file. Use an ordinary writable folder for games whose saves you want to keep. File > New Window opens another session; two sessions can connect for local link play.
 
 ## Open, reset, and close
 
@@ -40,6 +40,7 @@ All reset workflows keep an active audio recording and held input. Menus suspend
 | Slow motion | Hold Shift |
 | Rapid A / B | Unassigned; configure in Settings |
 | Open / close cartridge | Ctrl+O / Ctrl+W |
+| New cartridge window | Ctrl+Shift+N |
 | Reload cartridge | Unassigned; configure in Settings |
 | Reset / pause | Ctrl+R / Ctrl+P |
 | Quick Reset | Ctrl+Alt+R |
@@ -62,7 +63,7 @@ Ordinary focus loss releases input so returning to the window does not leave a k
 
 ## Configure keys and shortcuts
 
-Open Emulation > Settings. Each game button and hold mode accepts one key, including a standalone modifier or Tab. Empty bindings disable that input. Command shortcuts may combine a key with modifiers. The dialog rejects duplicate mappings and conflicting unmodified command keys.
+Open Emulation > Settings. Each game button and hold mode accepts one key, including a standalone modifier or Tab. Empty bindings disable that input. The eight Link player 2 fields control the partner of the focused window during a cable session and start unassigned. Command shortcuts may combine a key with modifiers. The dialog rejects duplicate mappings and conflicting unmodified command keys. Accepted input bindings apply to every open cartridge window.
 
 Changes apply when you accept the dialog. Hardware settings take effect on ordinary Reset or cartridge open. Quick Reset and Reload retain the active model; all three refresh boot inputs. Cancel keeps the previous settings. Keyboard layouts and platform shortcut handling need broader qualification.
 
@@ -130,6 +131,12 @@ Audio > Audio Channels enables or mutes Square Channel 1, Square Channel 2, Wave
 
 Audio > Start Audio Recording writes stereo 16-bit PCM into a WAVE file. Choose the action again to stop. Recording captures forward handheld output before host volume, mute, and resampling. Pause and rewind add no samples. The adapter introduction and its silent lead-in play through the selected audio device but add no samples to the recording. Reset, Quick Reset, Reload and native console resets keep the recording and its sample rate. Cartridge replacement, closing, or an explicit core sample-rate change ends the file. Loading a state continues the recording with the restored forward timeline.
 
+## Link play
+
+Use File > New Window or Ctrl+Shift+N to open a second cartridge. Choose Emulation > Connect > Link Cable and select its window, then start the connection from each game's own menus. Two players using the same cartridge need separate copies in separate writable folders. CupidGB prevents two windows from writing the same save storage.
+
+Ordinary keys and a player 1 controller operate the focused game. The Link player 2 keys and a player 2 controller operate its partner. Pause, menus, Turbo and slow motion affect the pair. Each game keeps its own saves, screenshots and recording. Rewind and debugger Backstep are unavailable while connected. Choose Connect > None or close either cartridge to disconnect. See [Link play](link-play.md) for reset, state-load and accessory behavior.
+
 ## Game Boy Printer
 
 With a cartridge open, choose Emulation > Connect > Game Boy Printer, then use the game's print command. The printer feed opens when the game sends an image. Save PNG exports the feed at its original 160-pixel width and closes the feed window. Print opens the system print dialog. Choose Emulation > Connect > None to disconnect. Closing the feed starts a fresh roll when the next image arrives.
@@ -180,4 +187,4 @@ CupidGB uses Qt's per-user native settings backend with organization and applica
 
 `--smoke-test` and `--run-seconds` use isolated temporary settings. They do not overwrite normal desktop preferences. For command-line checks, input traces, and bounded runtime reports, see [testing and measurements](testing.md).
 
-Tools > Debugger (Ctrl+C) pauses for CPU stepping, breakpoints, symbols, register/memory commands, and bounded instruction Backstep. Tools > Memory and Graphics opens memory, tile, map, OAM, and palette inspectors. Read [the debugger guide](debugging.md) before editing a session. Advanced debugger commands, paired link sessions, keyboard accessories, custom cheat expressions, and music-file playback remain incomplete.
+Tools > Debugger (Ctrl+C) pauses for CPU stepping, breakpoints, symbols, register/memory commands, and bounded instruction Backstep. Tools > Memory and Graphics opens memory, tile, map, OAM, and palette inspectors. Read [the debugger guide](debugging.md) before editing a session. Advanced debugger commands, broader linked-game qualification, keyboard accessories, custom cheat expressions, and music-file playback remain incomplete.

@@ -22,6 +22,12 @@ Older builds could save the untouched SGB or SGB2 post-boot profile with LY at `
 
 Version 1 execution states cannot continue in the changed pixel and audio core. File > Recover Battery from Older State validates the older file and exports supported battery data to a separate file. Recovery preserves the original file and running session. It does not restore execution. See [battery saves](battery-saves.md).
 
+## Connected consoles
+
+A state slot belongs to one cartridge window. Loading it restores that console while retaining its current cable connection, the peer's state and the cable's host-owned outgoing bit history. The shared scheduler rebases the restored clock origin while preserving the relative instruction lead between endpoints. Live infrared input also stays with the receiving session. These host values add no fields to native version 22.
+
+Two separately saved files are not an atomic snapshot of the pair. Restoring one side during a game's transfer can disrupt its protocol. Rewind and debugger Backstep are unavailable while connected because their history restores only one console. Disconnecting starts a new independent history. See [Link play](link-play.md) for the desktop workflow and [the core API](core-api.md#paired-console-execution) for ownership rules.
+
 ## Rewind
 
 Hold Tab to move backward through captured frames. Rewind restores and removes history entries, then executes the selected state forward for one replay interval. With sufficient history, normal rewind first returns to the current frame position and subsequently moves back one frame per interval. Holding Space consumes one additional history entry, moving back one frame initially and two thereafter. The selected Turbo cap and slow-motion rate also apply to replay pacing. Insufficient history ends replay and waits for release; it does not invent another complete frame.

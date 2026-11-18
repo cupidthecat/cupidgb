@@ -57,4 +57,4 @@ The paired bank probe checks every one of the 65,536 ROM-latch values at two byt
 
 The probe, libraries, headers, compiler and all 264 build inputs retain their recorded hashes. An offline companion receipt corrects the original report parser's rejection of eight ordinary cartridge-load messages; it retains all comparison rows and leaves the original logs and receipt unchanged. The companion has SHA-256 `fcc61a21524410218d18b0412231a7b115a26bd8fcdb9654b5883415570841f2`.
 
-The configured ceiling does not establish tested gameplay at every capacity. Cartridge RAM remains limited to 128 KiB, including TPP1; larger SRAM populations, physical peripherals and every-game compatibility remain open in the [parity checklist](parity.md).
+The configured ceiling does not establish tested gameplay at every capacity. This checkpoint limited cartridge RAM to 128 KiB, including TPP1. The later [storage, wave and camera checkpoint](validation-storage-wave.md) extends declared TPP1 SRAM through 2 MiB and records its separate validation. Physical peripherals and every-game compatibility remain open in the [parity checklist](parity.md).

@@ -98,7 +98,7 @@ ControllerDialog::ControllerDialog(ControllerManager &manager,
     background_ = new QCheckBox("Allow gameplay input while CupidGB is in the background");
     background_->setObjectName("controllerBackground");
     background_->setChecked(draft_.background);
-    rumble_ = new QCheckBox("Cartridge rumble on player 1 controllers");
+    rumble_ = new QCheckBox("Enable cartridge rumble");
     rumble_->setObjectName("controllerRumble");
     rumble_->setChecked(draft_.rumble);
     strength_ = new QSlider(Qt::Horizontal);
@@ -125,7 +125,8 @@ ControllerDialog::ControllerDialog(ControllerManager &manager,
     for (int i = 1; i <= 4; ++i)
         player_->addItem(QString("Player %1").arg(i), i - 1);
     player_->setToolTip(
-        "Players 2–4 require a Super Game Boy cartridge that requests multiplayer.");
+        "With a link cable, Player 2 controls the other game from the focused window. "
+        "Players 3–4 require a Super Game Boy cartridge that requests multiplayer.");
     press_ = new QSpinBox;
     press_->setObjectName("controllerPressThreshold");
     press_->setRange(1, 32766);

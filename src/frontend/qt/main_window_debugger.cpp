@@ -119,6 +119,8 @@ void MainWindow::resetDebuggerTimeline(bool clearSession) {
 void MainWindow::pauseDebugger() {
     if (!debuggerInputPaused_)
         debuggerPlayerButtons_ = livePlayerButtons();
+    if (linkSession_ && emulator_)
+        debuggerPlayerButtons_[0] = emulator_->gb.joypad;
     debuggerInputPaused_ = true;
     debuggerTimer_.stop();
     const auto previousStop = debugger_ ? debugger_->last_stop : CUPID_GB_DEBUG_STOP_NONE;
@@ -312,6 +314,10 @@ void MainWindow::debuggerSlice() {
     }
     if (stateOperation_ || menuDepth_ || menuInputSuspended_)
         return;
+    if (linkSession_) {
+        linkedDebuggerSlice();
+        return;
+    }
     QScopedValueRollback<bool> operation(stateOperation_, true);
     // Paused debugger instructions can collect motor samples and publish frames.
     // Every exit, including a breakpoint or failed step, discards that host
@@ -333,7 +339,7 @@ void MainWindow::debuggerSlice() {
         const auto result = cupid_gb_debugger_step(debugger_.get(), &emulator_->gb);
         const bool conditionError =
             remembered && result == CUPID_GB_DEBUG_STOP_ERROR && debugger_->steps == previousSteps;
-        if (emulator_->gb.sgb.player_count != controllerPlayerCount_)
+        if (inputPlayerCount() != controllerPlayerCount_)
             refreshControllerPlayerCount();
         if (remembered && (result == CUPID_GB_DEBUG_STOP_BREAKPOINT ||
                            result == CUPID_GB_DEBUG_STOP_NO_ROM || conditionError)) {
@@ -368,6 +374,12 @@ void MainWindow::debuggerSlice() {
 }
 
 bool MainWindow::debuggerBackstep() {
+    if (linkSession_) {
+        if (debuggerWindow_)
+            debuggerWindow_->appendOutput(
+                "Instruction Backstep is unavailable while a link cable is connected.");
+        return false;
+    }
     if (!emulator_ || debuggerHistory_.empty()) {
         if (debuggerWindow_)
             debuggerWindow_->appendOutput(
@@ -385,8 +397,7 @@ bool MainWindow::debuggerBackstep() {
     ++timelineId_;
     cancelCameraCapture();
     resetControllerRumble();
-    controllerPlayerCount_ =
-        cupid_gb_sgb_host_present(&emulator_->gb) ? emulator_->gb.sgb.player_count : 1;
+    controllerPlayerCount_ = inputPlayerCount();
     debuggerHistoryBytes_ -= debuggerHistory_.back().capacity() + qsizetype(sizeof(QByteArray));
     debuggerHistory_.pop_back();
     // Live Backstep retains receiving stream history, just like disk load and

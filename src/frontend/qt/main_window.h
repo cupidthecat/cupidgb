@@ -80,7 +80,10 @@ class MainWindow final : public QMainWindow {
                         std::optional<uint64_t> powerOnSeedOverride = std::nullopt);
     ~MainWindow() override;
     bool openRom(const QString &path);
-    enum class SmokeWorkflow { All, Desktop, Storage, Sgb };
+    MainWindow *newWindow();
+    bool connectLink(MainWindow *partner);
+    void disconnectLink();
+    enum class SmokeWorkflow { All, Desktop, Storage, Sgb, Link };
     bool smokeTest(SmokeWorkflow workflow = SmokeWorkflow::All);
     void beginBoundedRun(double seconds, const QString &reportPath);
     bool loadInputTrace(const QString &path);
@@ -93,6 +96,29 @@ class MainWindow final : public QMainWindow {
 
   private:
     void buildMenus();
+    void registerLinkWindow();
+    void unregisterLinkWindow();
+    bool storageAvailable(const QString &rom, const QString &battery);
+    void refreshLinkMenu();
+    bool replaceLinkEndpoint(CupidGb *replacement);
+    void rebaseLink();
+    MainWindow *linkPartner() const;
+    MainWindow *linkOwner() const;
+    void setLinkPaused(bool paused, bool retainInput);
+    void synchronizeInputBindings();
+    void applyControllerConfiguration(const cupid::input::ControllerConfiguration &configuration,
+                                      const QMap<SDL_JoystickID, int> &players,
+                                      SDL_JoystickID preferred);
+    void releaseLinkedInput();
+    void applyLinkedPlayerButtons(const std::array<uint8_t, 4> &buttons);
+    unsigned inputPlayerCount() const;
+    bool deferLinkRecordingError(const QString &message);
+    bool playbackTurbo() const;
+    unsigned playbackSpeed() const;
+    unsigned playbackTurboCap() const;
+    void tickLink();
+    void linkedDebuggerSlice();
+    bool linkSmokeTest(const QString &directory);
     void buildColorMenus(QMenu *view);
     void buildPaletteFileMenu(QMenu *palette);
     void importPalette();
@@ -130,6 +156,7 @@ class MainWindow final : public QMainWindow {
     bool controllerSmokeTest(const QString &directory);
     QString bootDirectory() const;
     void setPaused(bool paused, bool retainInput = false);
+    void setPausedLocal(bool paused, bool retainInput);
     void releaseKeys(bool resetAudio = true);
     void setJoypad(uint8_t mask);
     void applyHeldButtons();
@@ -169,7 +196,14 @@ class MainWindow final : public QMainWindow {
         uint64_t timeline = 0;
     };
 
+    struct PlaybackWork;
+    bool beginPlayback(Playback playback, PlaybackWork &work);
+    bool preparePlaybackStep(PlaybackWork &work);
+    bool completePlaybackStep(PlaybackWork &work, bool executed);
+    bool finishPlayback(PlaybackWork &work, PlaybackResult *result, bool pumpOutput = true,
+                        bool commitOutput = true);
     bool runFrame(Playback playback = Playback::Forward, PlaybackResult *result = nullptr);
+    bool runLinkedFrame(PlaybackResult *result = nullptr);
     enum class Presentation { Redraw, Frame, Reset };
     void present(Presentation presentation = Presentation::Redraw);
     void notifyOnScreen(const QString &message);
@@ -256,6 +290,10 @@ class MainWindow final : public QMainWindow {
     const std::optional<int> modelOverride_;
     const std::optional<uint64_t> powerOnSeedOverride_;
     std::unique_ptr<CupidEmulator> emulator_;
+    struct LinkSession;
+    std::shared_ptr<LinkSession> linkSession_;
+    bool outgoingLinkBit_ = false;
+    bool linkWindowClosing_ = false;
     std::unique_ptr<HostCamera> hostCamera_;
     QString cameraError_;
     using CheatCollection = std::unique_ptr<CupidGbCheats, decltype(&cupid_gb_cheats_destroy)>;
@@ -278,6 +316,7 @@ class MainWindow final : public QMainWindow {
     QAction *debuggerAction_ = nullptr;
     QAction *inspectorsAction_ = nullptr;
     QMenu *connectionsMenu_ = nullptr;
+    QMenu *linkMenu_ = nullptr;
     QAction *printerAction_ = nullptr;
     QAction *disconnectAction_ = nullptr;
     PrinterWindow *printerWindow_ = nullptr;
@@ -348,6 +387,9 @@ class MainWindow final : public QMainWindow {
     std::array<QAction *, 10> saveSlotActions_{};
     std::array<QAction *, 10> loadSlotActions_{};
     std::array<int, 8> keys_{};
+    std::array<int, 8> linkedKeys_{};
+    uint8_t linkedKeyboardJoypad_ = 0xff;
+    std::array<uint8_t, 2> linkedInput_{0xff, 0xff};
     std::array<int, 5> specialKeys_{};
     std::unique_ptr<cupid::input::ControllerManager> controllers_;
     cupid::input::ControllerOutput controllerOutput_;

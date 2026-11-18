@@ -36,6 +36,7 @@
 #include <QTimer>
 
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <map>
 #include <vector>
@@ -111,6 +112,9 @@ class ControllerBackend final : public QObject {
     bool eventFilter(QObject *watched, QEvent *event) override;
 
   private:
+    struct SharedTransport;
+    static SharedTransport &transport();
+
     struct Device {
         SDL_Joystick *joystick = nullptr;
         SDL_GameController *controller = nullptr;
@@ -124,16 +128,14 @@ class ControllerBackend final : public QObject {
     void closeDevice(Device &device);
     void updateGate();
     void discardPendingEdges();
-    void drainEvents(Uint32 first, Uint32 last);
     void dispatch(const SDL_Event &event);
     void assertThread() const;
 
     std::map<SDL_JoystickID, Device> devices_;
+    std::deque<SDL_Event> pendingEvents_;
     QTimer timer_;
     QElapsedTimer clock_;
-    QString previousBackgroundHint_;
     bool initialized_ = false, polling_ = false;
-    bool hadBackgroundHint_ = false, installedBackgroundHint_ = false;
     bool focused_ = true, enabled_ = true, background_ = false;
 };
 

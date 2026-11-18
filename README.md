@@ -2,7 +2,7 @@
 
 CupidGB is a Game Boy and Game Boy Color emulator with a C11 hardware core and a Qt 6 desktop interface for Windows and Linux. Development is ongoing. Complete hardware accuracy, feature parity, and compatibility with every cartridge have not been established.
 
-The desktop supports cartridge open/reload/recent files and drag/drop, configurable keyboard and controller input, shortcuts, pause/reset/frame advance, fullscreen and display settings, audio playback and WAVE recording, battery RAM/clock persistence, ten native state slots, and bounded rewind history. It can load cartridge archives through 7-Zip and display, save, or print Game Boy Printer output. Cheat controls support Game Genie and GameShark codes, banked rules, and memory searches. CPU debugging and memory/graphics inspectors help examine a running cartridge. The hardware core remains separate from Qt and the SDL2 device backend.
+The desktop supports multiple cartridge windows with local cable and infrared connections, configurable keyboard and controller input for two linked players, shortcuts, pause/reset/frame advance, fullscreen and display settings, audio playback and WAVE recording, battery RAM/clock persistence, ten native state slots, and bounded rewind history for independent sessions. It can load cartridge archives through 7-Zip and display, save, or print Game Boy Printer output. Cheat controls support Game Genie and GameShark codes, banked rules, and memory searches. CPU debugging and memory/graphics inspectors help examine a running cartridge. The hardware core remains separate from Qt and the SDL2 device backend.
 
 ## Start playing
 
@@ -21,6 +21,7 @@ Use `--model dmg`, `--model cgb`, or another supported profile to fix hardware f
 | Select / Start | Backspace / Enter |
 | Turbo / rewind / slow motion | Hold Space / Tab / Shift |
 | Open / reset / pause | Ctrl+O / Ctrl+R / Ctrl+P |
+| New cartridge window | Ctrl+Shift+N |
 | Quick Reset | Ctrl+Alt+R |
 | Save / load numbered slot | Ctrl+digit / Ctrl+Shift+digit |
 | Fullscreen / mute / screenshot | Ctrl+F / Ctrl+M / F12 |
@@ -41,7 +42,9 @@ Audio settings include Accurate, waveform-preserving and disabled high-pass filt
 
 Camera cartridges can request an in-memory capture from the system default camera. Capture starts at the guest's first shutter request, and a failed request retains the previous image. Host images stay outside save files and rewind history. See [Camera cartridges](docs/host-camera.md) for conversion, device lifetime and validation limits.
 
-Physical controller/motion qualification, advanced debugger commands, paired cable sessions and other accessories, custom cheat expressions, state interchange, individual hardware revisions, uncommon cartridge behavior, and advanced display/audio features remain incomplete. [The parity checklist](docs/parity.md) records the full scope.
+For [link play](docs/link-play.md), open a second cartridge with File > New Window, then choose Emulation > Connect > Link Cable. Use separate writable cartridge copies for two players using the same game. Pause and playback speed apply to the pair; saves and recordings belong to each window.
+
+Physical controller/motion qualification, advanced debugger commands, broader linked-game qualification and other accessories, custom cheat expressions, state interchange, individual hardware revisions, uncommon cartridge behavior, and advanced display/audio features remain incomplete. [The parity checklist](docs/parity.md) records the full scope.
 
 Ordinary Reset restarts play with the selected hardware settings and clears rewind. Quick Reset retains physical memory and compatible rewind; installed firmware executes again and can overwrite that memory. Reload refreshes assets while keeping the active model and pause choice. All reset workflows retain an active recording. See [the user guide](docs/user-guide.md#open-reset-and-close) for storage and firmware details.
 
@@ -80,6 +83,7 @@ See [build and installation](docs/building.md) for Ninja, core-only builds, sani
 
 - [User guide](docs/user-guide.md): controls, settings, display/audio, boot, capture, and save workflows.
 - [Controllers](docs/controllers.md): layouts, capture, devices, player routing, native menus, feedback and qualification limits.
+- [Link play](docs/link-play.md): paired windows, two-player controls, shared playback and independent save storage.
 - [Hardware support](docs/hardware.md): current models/controllers and their limits.
 - [SGB startup](docs/sgb-startup.md): adapter introduction, guest and presentation clocks, ordered audio and state continuation.
 - [SGB header validation](docs/validation-sgb-protocol.md): checked command reception, native continuation, platform gates and bounded gameplay results.

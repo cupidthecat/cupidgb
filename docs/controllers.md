@@ -24,7 +24,7 @@ The action table also includes Menu, hold controls and the application's registe
 
 Directional bindings navigate an open native menu or dialog, A accepts, and B or Menu goes back. Turbo and Rewind bindings move to the next and previous native control; the standard defaults use the shoulder buttons. Movement requires a new directional press; stick jitter beyond a held threshold does not repeatedly move the selection. A mapping capture owns its input until completed or skipped. Keyboard and mouse navigation remain available.
 
-Opening a menu suspends guest execution while retaining controls already held by the keyboard, mouse and controllers. Real releases still update those holds. New navigation presses do not enter the guest while the menu is open. Closing the last menu reconciles current controller state before execution resumes. Reset, Quick Reset and Reload preserve unchanged held controls without creating another input sample. Switching to another application or tool window releases gameplay input.
+In an independent session, opening a menu suspends guest execution while retaining controls already held by the keyboard, mouse and controllers. Real releases still update those holds. A cable session releases held game controls in both windows when either menu opens. New navigation presses do not enter the guest while the menu is open. Closing the last menu reconciles current controller state before execution resumes. Reset, Quick Reset and Reload preserve unchanged held controls without creating another input sample. Switching to another application or tool window releases gameplay input.
 
 Open menus temporarily suspend guest execution and clear queued playback without changing the user's Pause choice. Nested menus keep that suspension active until all menus close. Choosing Pause or resuming through the menu changes the actual pause state and is not undone when the menu closes. Settings dialogs separately save, pause and restore the prior session state.
 
@@ -32,15 +32,25 @@ Open menus temporarily suspend guest execution and clear queued playback without
 
 Background input is off by default. Losing application focus releases controller gameplay and hold actions. The background option allows gameplay while another application has focus; it does not let a controller feed a settings dialog's game inputs. Keyboard focus-release behavior stays separate. Paused debugger inspection retains stopped guest input while physical controller state continues to update; normal resume and explicit state loading reconcile live input.
 
+With background input enabled and no active CupidGB window, the most recently focused open cartridge owns controller delivery. Its player 1 and player 2 roles stay the same as when it had focus. Closing it transfers delivery to the next open cartridge in focus order. Keyboard keys still release on focus loss.
+
 Disconnecting a held device releases its contributions. A reconnect gets a new live connection ID and starts from current physical state. Saved layouts use a GUID plus a serial when available, otherwise a device path, otherwise the device class. Paths can change between ports. Identical devices without a serial or path share a saved layout and default player. The dialog retains independent player overrides for current connections; those weak identities cannot promise the same individual assignment after reconnect. Choose the device again if an ambiguous preferred-device match selects another identical unit.
 
 Invalid saved controller data falls back to defaults and reports that fallback. Accepting the dialog replaces it with a valid configuration. Controller identities, layouts and preferences are host settings. They do not enter cartridge saves or native hardware snapshots.
 
 ## SGB players
 
-The Player selector assigns the device to one of four input slots. Keyboard input belongs to player 1. While the guest has one player, all eligible controllers feed player 1 regardless of those saved assignments. Disabled devices remain disabled, and a preferred-device choice still limits which devices contribute. Once a Super Game Boy cartridge requests multiple players, devices feed their assigned slots. Current held masks stay available through changes in either direction, and routing updates after the hardware step that changes the player count. Assign distinct devices as needed. This is local SGB input, not cable link emulation or network multiplayer.
+The Player selector assigns the device to one of four input slots. Keyboard input belongs to player 1. In an independent single-player session, all eligible controllers feed player 1 regardless of those saved assignments. Disabled devices remain disabled, and a preferred-device choice still limits which devices contribute. Once a Super Game Boy cartridge requests multiple players, devices feed their assigned slots. Current held masks stay available through changes in either direction, and routing updates after the hardware step that changes the player count. Assign distinct devices as needed.
 
 The core stores four independent active-low masks. Changing a nonselected mask leaves the interrupt line alone. Selecting a held player's lines can request the normal JOYP interrupt. The hardware's three-count command is also recognized. It selects the first or third slot and leaves that selection stable when the guest polls for the next player.
+
+## Cable players
+
+A connected pair uses two input roles relative to the focused cartridge window. A player 1 controller feeds that window; a player 2 controller feeds its partner. The eight Link player 2 keyboard fields in Settings provide another way to operate the partner and start unassigned. Focus changes release the previous routed holds before the new window takes input.
+
+Each input source contributes independently. The inactive partner's controller gate cannot erase a routed hold from the focused window. Brief presses and releases remain available to the correct window even when another window polls the shared device first. Menu navigation, pause, background policy and disconnect release or suspend input through the ordinary controls. Cable routing takes precedence over local SGB slot routing while connected. Controller preference changes apply to every open cartridge window. See [Link play](link-play.md) for connection and save workflows.
+
+For rumble cartridges, the focused game's motor feeds its player 1 controller and the partner's motor feeds player 2. Resetting one game stops its motor without canceling the other game's output. Shared pause, menus, focus loss and disconnect stop both. These routing checks use virtual devices; physical controller feedback still requires qualification.
 
 ## Cartridge feedback
 
@@ -70,7 +80,9 @@ A changed controller sample or pointer move becomes the current tilt source. Unc
 
 The backend initializes SDL joystick, game-controller and haptic subsystems, without SDL video, SDL audio or SDL2main. Qt keeps the application entry point and event loop. Input polling uses an 8 ms timer on the application thread. Raw device transport, typed binding evaluation, Qt workflows and the emulation core remain separate.
 
-The backend owns SDL joystick/controller event streams and preserves unrelated events. It retains no emulator pointer. Callbacks are synchronous; destructive or lifecycle work is queued until they return. It closes its own handles and subsystem references, preserving references another SDL client owns. A future SDL client must coordinate event-stream and process-wide hint ownership.
+A process-wide transport collects SDL joystick/controller events and preserves unrelated event types. Each window receives its own pending queue after its input gate has been checked. Re-enabling one window clears only its stale button edges and keeps device metadata and other windows' queues. Callbacks are synchronous; destructive or lifecycle work is queued until they return. The transport retains no emulator pointer.
+
+The first backend acquires the shared SDL subsystem references and background-input hint; the final backend releases them. External SDL references remain intact. Device handles remain owned by their backend. Rumble follows the latest successful owner for each device, so closing an earlier owner cannot stop a newer command. Another SDL client outside this transport must coordinate ownership of these event types and process-wide hints.
 
 Regression checks use real SDL virtual devices with Qt event loops. They cover multiple and identical devices, normalized and raw input, axis boundaries, hats, transient edges, hotplug, reconnect, capture isolation, Cancel/OK, persistent settings, independent players, focus/background gates, menus, selected-line interrupts, state continuation and virtual rumble callbacks. Application smoke checks use generated cartridges, not commercial game content.
 

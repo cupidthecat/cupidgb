@@ -187,9 +187,23 @@ Do not mutate internal fields from another thread. The public structures expose 
 
 Register `cupid_gb_set_serial_output_callback(gb, callback, user_data)` to observe completed internal-clock transfers. The callback receives a const instance, the SB byte latched when SC starts the transfer, and the supplied user pointer. It runs synchronously after the eighth shift, the clearing of SC's start bit, and the serial interrupt request. Other work in the enclosing machine cycle can still be pending. The callback must neither mutate nor reenter the emulator. Queue any later host work outside the callback.
 
-The core writes no serial bytes to stdout and performs no host-stream flushing. A host can buffer, display, or ignore observed bytes. This API observes completed bytes. Separate bit-level link APIs support internal- and external-clock transfers; desktop coordination of linked sessions remains pending.
+The core writes no serial bytes to stdout and performs no host-stream flushing. A host can buffer, display, or ignore observed bytes. This API observes completed bytes. Separate bit-level link APIs support internal- and external-clock transfers, and `cupid/gb/link.h` coordinates two consoles on a shared physical timeline.
 
 Registration survives initialization, cartridge loading, boot reset, and native-state loading. Cleanup or registration with a null callback clears both callback and user pointer. These host fields are excluded from snapshots: restoring guest state preserves the current registration rather than restoring an old pointer. A state load does not replay previously observed bytes.
+
+## Paired console execution
+
+Zero-initialize a `CupidGbLinkPair`, then call `cupid_gb_link_attach` with two distinct loaded consoles. Both consoles must have free serial and infrared callback slots. A rejected attachment leaves their registrations and the pair unchanged. Keep the pair and both consoles at stable addresses, use one host thread, and detach before destroying them.
+
+`cupid_gb_link_step` chooses and executes one complete hardware step. Hosts with debugger or input instrumentation use `cupid_gb_link_next`, execute exactly one step on that endpoint, then call `cupid_gb_link_advance` once. Do not call `next` between execution and accounting. Check each result; an invalid connection, changed ownership, unaccounted peer step, arithmetic overflow or unchanged no-progress step is a failure. A CGB speed switch can validly consume a step without advancing presentation time when its finite oscillator-freeze countdown decreases.
+
+The scheduler compares elapsed presentation time at each model's physical frequency. It includes SGB startup holds, preserves fractional differences through integer cross multiplication, and selects endpoint zero when their relative times are equal. CGB double speed changes instruction duration through the existing core clock path. It does not change the physical base frequency used to compare the consoles.
+
+Serial callbacks retain each sender's launched bit and sample the peer before applying its external clock. A fresh host latch starts low; attaching during a transfer does not reconstruct an earlier launch from SB. Infrared callbacks forward actual emitted levels. Native states remain version 22 because callback ownership, launched bits and the scheduling offset belong to the live host connection.
+
+After a successful in-place reset or state load, call `cupid_gb_link_rebase`. It refreshes observed clocks, cartridge generations and model frequencies while preserving the signed scheduling offset, launched bits and incoming infrared levels. Ordinary pause/resume needs no rebase. Use `cupid_gb_link_replace` to commit a prepared console replacement before freeing the previous console; rejection leaves the connection intact. Replacement preserves that side's live host history.
+
+Detach removes only registrations still owned by the pair. It preserves launched bits for reconnecting the same host endpoints and emits no synthetic infrared transition. Hosts that create a new pair when reconnecting existing windows must carry each window's launched bit into its new endpoint. A new attachment begins with a zero scheduling offset. Single-console state files do not capture an entire pair or the other console's timeline.
 
 ## Battery data
 

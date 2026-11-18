@@ -43,6 +43,7 @@ class WaveRecorder final {
     QString errorString() const;
 
   private:
+    friend struct WaveRecorderTestAccess;
     QByteArray header() const;
     bool write(const QByteArray &bytes);
 

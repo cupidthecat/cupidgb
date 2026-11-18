@@ -99,6 +99,22 @@ extern "C" {
 #include "cupid/gbc/cgb.h"
 }
 
+struct MainWindow::PlaybackWork {
+    Playback playback = Playback::Forward;
+    CoreAudioCollector collected;
+    uint64_t startPresentation = 0;
+    uint64_t startGuest = 0;
+    uint64_t session = 0;
+    uint64_t timeline = 0;
+    unsigned steps = 0;
+    bool collectionFailed = false;
+    bool executionFailed = false;
+    bool attemptedHardware = false;
+    bool attemptedGuest = false;
+    bool watching = false;
+    QString debuggerStop;
+};
+
 namespace {
 constexpr std::array<int, 8> defaultKeys = {Qt::Key_Right,     Qt::Key_Left,  Qt::Key_Up,
                                             Qt::Key_Down,      Qt::Key_X,     Qt::Key_Z,

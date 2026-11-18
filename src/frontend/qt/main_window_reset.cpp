@@ -148,6 +148,7 @@ bool MainWindow::resetConsole(CupidGbResetKind kind) {
     cancelCameraCapture();
     resetControllerRumble();
     ++sessionId_;
+    rebaseLink();
     rebaseRewindAfterReset(previousCycles);
     resetDebuggerTimeline();
     if (inspectorsWindow_)

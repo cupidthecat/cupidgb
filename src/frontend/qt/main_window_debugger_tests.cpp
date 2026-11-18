@@ -461,10 +461,14 @@ bool MainWindow::debuggerSmokeTest(const QString &directory) {
     if (!emulator_ || emulator_->gb.cpu.halted || emulator_->gb.cpu.pc != 0x100 ||
         emulator_->gb.elapsed_cycles || failed_ != beforeIllegalFailure)
         return smokeFailure(__FILE__, __LINE__);
+    // The debugger remains open while playback uses its own battery and state paths.
+    const QString playbackPath = QDir(directory).filePath("illegal-playback.gb");
+    if (!QFile::copy(illegalPath, playbackPath))
+        return smokeFailure(__FILE__, __LINE__);
     for (const auto model : {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_CGB}) {
         MainWindow session(true, true, false, QStringLiteral(""), int(model));
         session.timer_.stop();
-        if (!session.openRom(illegalPath) || session.debugger_)
+        if (!session.openRom(playbackPath) || session.debugger_)
             return smokeFailure(__FILE__, __LINE__);
         for (unsigned frame = 0; frame < 3; ++frame) {
             const uint64_t beforeCycles = session.emulator_->gb.elapsed_cycles;

@@ -23,6 +23,18 @@
 #include "main_window_internal.h"
 
 namespace {
+QList<QPointer<MainWindow>> inputWindowOrder;
+
+void rememberInputWindow(MainWindow *window, bool focused) {
+    inputWindowOrder.removeAll(nullptr);
+    if (focused) {
+        inputWindowOrder.removeAll(window);
+        inputWindowOrder.prepend(window);
+    } else if (!inputWindowOrder.contains(window)) {
+        inputWindowOrder.append(window);
+    }
+}
+
 bool objectBelongsTo(const QObject *object, const QObject *owner) {
     // Popup menus are separate windows. QWidget ancestry intentionally stops
     // at that boundary, while QObject ownership retains their parent menu/window.
@@ -34,6 +46,14 @@ bool objectBelongsTo(const QObject *object, const QObject *owner) {
 } // namespace
 
 void MainWindow::setPaused(bool value, bool retainInput) {
+    if (linkSession_) {
+        setLinkPaused(value, retainInput);
+        return;
+    }
+    setPausedLocal(value, retainInput);
+}
+
+void MainWindow::setPausedLocal(bool value, bool retainInput) {
     if (!value)
         debuggerInputPaused_ = false;
     if (debugger_) {
@@ -81,6 +101,7 @@ void MainWindow::releaseKeys(bool resetAudio) {
     rapidHeld_.fill(false);
     rapidPhase_.fill(0);
     physicalJoypad_ = 0xff;
+    linkedKeyboardJoypad_ = 0xff;
     reconcileControllerInput(resetAudio);
 }
 
@@ -109,6 +130,8 @@ std::array<uint8_t, 4> MainWindow::livePlayerButtons() const {
         return buttons;
     buttons = controllerOutput_.buttons;
     buttons[0] &= physicalJoypad_;
+    if (linkSession_)
+        buttons[1] &= linkedKeyboardJoypad_;
     if (mouseButtonA_ && emulator_ && emulator_->gb.header.mbc_type == CUPID_GB_MBC7)
         buttons[0] &= 0xefu;
     for (size_t action = 0; action < rapidHeld_.size(); ++action) {
@@ -126,8 +149,11 @@ std::array<uint8_t, 4> MainWindow::livePlayerButtons() const {
 }
 
 void MainWindow::applyPlayerButtons(const std::array<uint8_t, 4> &buttons) {
-    controllerPlayerCount_ =
-        cupid_gb_sgb_host_present(&emulator_->gb) ? emulator_->gb.sgb.player_count : 1;
+    controllerPlayerCount_ = inputPlayerCount();
+    if (linkSession_) {
+        applyLinkedPlayerButtons(buttons);
+        return;
+    }
     uint8_t first = buttons[0];
     if (controllerPlayerCount_ == 1)
         for (unsigned player = 1; player < 4; ++player)
@@ -141,11 +167,46 @@ void MainWindow::applyPlayerButtons(const std::array<uint8_t, 4> &buttons) {
             cupid_gb_set_buttons_for_player(&emulator_->gb, player, buttons[player]);
 }
 
+unsigned MainWindow::inputPlayerCount() const {
+    if (linkSession_)
+        return 2;
+    return emulator_ && cupid_gb_sgb_host_present(&emulator_->gb) ? emulator_->gb.sgb.player_count
+                                                                  : 1;
+}
+
+void MainWindow::applyLinkedPlayerButtons(const std::array<uint8_t, 4> &buttons) {
+    auto *partner = linkPartner();
+    if (!partner || !emulator_ || !partner->emulator_)
+        return;
+    linkedInput_ = {buttons[0], buttons[1]};
+    const uint8_t own = linkedInput_[0] & partner->linkedInput_[1];
+    const uint8_t peer = partner->linkedInput_[0] & linkedInput_[1];
+    // Each window owns its own contribution. A gated peer releases only that
+    // contribution, so it cannot erase player two input routed by the focused window.
+    if (!(paused_ && debuggerInputPaused_) && emulator_->gb.joypad != own)
+        setJoypad(own);
+    if (!(partner->paused_ && partner->debuggerInputPaused_) &&
+        partner->emulator_->gb.joypad != peer)
+        partner->setJoypad(peer);
+}
+
+void MainWindow::releaseLinkedInput() {
+    if (!linkSession_)
+        return;
+    if (controllers_)
+        controllers_->stopRumble();
+    controllerOutput_.buttons.fill(0xff);
+    controllerOutput_.held.fill(false);
+    for (auto &rapid : controllerOutput_.rapid)
+        rapid.fill(false);
+    releaseKeys(false);
+    applyLinkedPlayerButtons({0xff, 0xff, 0xff, 0xff});
+}
+
 void MainWindow::refreshControllerPlayerCount() {
     if (!emulator_)
         return;
-    const unsigned count =
-        cupid_gb_sgb_host_present(&emulator_->gb) ? emulator_->gb.sgb.player_count : 1;
+    const unsigned count = inputPlayerCount();
     if (count == controllerPlayerCount_)
         return;
     // An SGB command can change routing inside one guest frame. Update before the next opcode.
@@ -186,7 +247,7 @@ void MainWindow::reconcileControllerInput(bool resetAudio) {
         return !paused_ && (keyboardSpecialHeld_[action] || controllerOutput_.held[action]);
     };
     turbo_ = held(0);
-    rewind_ = held(1);
+    rewind_ = !linkSession_ && held(1);
     slowHeld_ = held(2);
     for (size_t i = 0; i < rapidHeld_.size(); ++i) {
         const bool next = !paused_ && keyboardSpecialHeld_[i + 3];
@@ -225,11 +286,21 @@ void MainWindow::refreshControllerGate() {
     const bool focused = QApplication::applicationState() == Qt::ApplicationActive;
     controllers_->setFocused(focused || (isolated_ && !isVisible()));
     const auto *active = QApplication::activeWindow();
+    rememberInputWindow(this, active == this);
+    MainWindow *backgroundOwner = nullptr;
+    for (const auto &window : inputWindowOrder)
+        if (window && window->emulator_ && !window->linkWindowClosing_) {
+            backgroundOwner = window;
+            break;
+        }
     const auto ownMenu = [this](const QWidget *widget) {
         return qobject_cast<const QMenu *>(widget) && objectBelongsTo(widget, this);
     };
     const auto *popup = QApplication::activePopupWidget();
-    const bool otherWindow = active && active != this && !ownMenu(active);
+    // Losing application focus must not make every window consume the same
+    // player slots. Preserve the last focused live cartridge's routing roles.
+    const bool otherWindow =
+        active ? active != this && !ownMenu(active) : backgroundOwner && backgroundOwner != this;
     // Menus keep physical delivery so releases cannot leave controls stuck.
     // The receive path suppresses their new presses and command shortcuts.
     const bool blocked = (isolated_ && !controllerSmokeActive_) || stateOperation_ ||
@@ -239,9 +310,14 @@ void MainWindow::refreshControllerGate() {
     // Classification belongs to the cartridge, independently of delivery gates.
     // A paused tilt axis must not become a digital direction on resume.
     controllers_->setMotionEnabled(emulator_ && emulator_->gb.header.mbc_type == CUPID_GB_MBC7);
-    if (!stateOperation_ && controllerInputDeferred_) {
+    const bool backgroundResync =
+        !active && backgroundOwner == this && controllers_->configuration().background &&
+        controllers_->deliveryEnabled() && !(controllerOutput_ == controllers_->output());
+    if (!stateOperation_ && (controllerInputDeferred_ || backgroundResync)) {
         // A real release during a blocked transaction may leave the manager at
         // its already neutral output, so reopening need not emit another change.
+        // Likewise, focus loss releases routed input while a background-enabled
+        // manager can retain an unchanged physical hold for the selected owner.
         controllerInputDeferred_ = false;
         receiveControllerOutput(controllers_->output());
     }
@@ -252,7 +328,8 @@ void MainWindow::navigateControllerMenu(const QString &action, SDL_JoystickID in
     QWidget *target = QApplication::activePopupWidget();
     if (!target)
         target = QApplication::activeModalWidget();
-    if (!target || QApplication::applicationState() != Qt::ApplicationActive ||
+    if (!target || !objectBelongsTo(target, this) ||
+        QApplication::applicationState() != Qt::ApplicationActive ||
         target->property("controllerCaptureActive").toBool() ||
         target->property("controllerCaptureConsumed").toBool())
         return;
@@ -270,8 +347,11 @@ void MainWindow::navigateControllerMenu(const QString &action, SDL_JoystickID in
         return;
     QPointer<QWidget> guarded(target);
     QTimer::singleShot(0, this, [this, guarded, value] {
-        if (!guarded || (QApplication::activePopupWidget() != guarded &&
-                         QApplication::activeModalWidget() != guarded))
+        if (!guarded || !objectBelongsTo(guarded, this) ||
+            guarded->property("controllerCaptureActive").toBool() ||
+            guarded->property("controllerCaptureConsumed").toBool() ||
+            (QApplication::activePopupWidget() != guarded &&
+             QApplication::activeModalWidget() != guarded))
             return;
         QPointer<QWidget> receiver = guarded->focusWidget();
         // Menus receive keys directly; dialogs use their current visible focus child.
@@ -292,8 +372,14 @@ void MainWindow::navigateControllerMenu(const QString &action, SDL_JoystickID in
 }
 
 void MainWindow::resetControllerRumble() {
-    if (controllers_)
+    if (auto *partner = linkPartner()) {
+        if (controllers_)
+            controllers_->setPlayerRumble(0, 0.0);
+        if (partner->controllers_)
+            partner->controllers_->setPlayerRumble(1, 0.0);
+    } else if (controllers_) {
         controllers_->stopRumble();
+    }
     rumbleSampleSum_ = rumbleSampleCount_ = 0;
     rumblePublishedAmplitudes_.clear();
     rumbleLastCycles_ = emulator_ ? emulator_->gb.elapsed_cycles : 0;
@@ -308,9 +394,16 @@ void MainWindow::finishControllerRumble() {
         return;
     }
     rumbleLastCycles_ = now;
-    for (const double amplitude : rumblePublishedAmplitudes_)
-        controllers_->setRumble(!paused_ && !rewind_ && !stateOperation_ ? amplitude : 0.0,
-                                controllerPlayerCount_ == 1);
+    for (const double amplitude : rumblePublishedAmplitudes_) {
+        const double active = !paused_ && !rewind_ && !stateOperation_ ? amplitude : 0.0;
+        if (auto *partner = linkPartner()) {
+            controllers_->setPlayerRumble(0, active);
+            if (partner->controllers_)
+                partner->controllers_->setPlayerRumble(1, active);
+        } else {
+            controllers_->setRumble(active, controllerPlayerCount_ == 1);
+        }
+    }
     rumblePublishedAmplitudes_.clear();
 }
 
@@ -325,9 +418,8 @@ void MainWindow::configureControllers() {
         ControllerDialog dialog(*controllers_, commands, this);
         if (dialog.exec() == QDialog::Accepted) {
             const auto configuration = dialog.configuration();
-            controllers_->configure(configuration, dialog.playerOverrides());
-            controllers_->setPreferredInstance(dialog.preferredInstance());
-            settings_.setValue("controllers/configuration", configuration.save());
+            applyControllerConfiguration(configuration, dialog.playerOverrides(),
+                                         dialog.preferredInstance());
         }
     }
     refreshControllerGate();
@@ -350,7 +442,7 @@ void MainWindow::advanceControls() {
     applyHeldButtons();
     if (audioConverter_)
         audioConverter_->setInputRate(double(cupid_gb_apu_get_sample_rate(&emulator_->gb)) *
-                                      speedSteps_ / 16);
+                                      playbackSpeed() / 16);
 }
 
 bool MainWindow::eventFilter(QObject *object, QEvent *event) {
@@ -367,12 +459,15 @@ bool MainWindow::eventFilter(QObject *object, QEvent *event) {
     if (event->type() == QEvent::ApplicationActivate ||
         (event->type() == QEvent::WindowActivate && object == this))
         motionFocusActive_ = true;
+    if (event->type() == QEvent::WindowActivate && object == this)
+        rememberInputWindow(this, true);
     if (handleMotionEvent(object, event))
         return true;
     if (deactivate) {
         menuInputSuspended_ = false;
         if (otherWindowActivated)
             refreshControllerGate();
+        releaseLinkedInput();
         releaseKeys();
     }
     if (event->type() == QEvent::ApplicationDeactivate && controllers_) {
@@ -407,8 +502,13 @@ bool MainWindow::eventFilter(QObject *object, QEvent *event) {
             const bool held = pressed && !paused_;
             keyboardSpecialHeld_[action] = held;
             reconcileControllerInput();
-            if (action == 1 && held && rewindStates_.size() < 2)
-                statusBar()->showMessage("No earlier rewind history");
+            if (action == 1 && held) {
+                if (linkSession_)
+                    statusBar()->showMessage(
+                        "Rewind is unavailable while a link cable is connected.", 3000);
+                else if (rewindStates_.size() < 2)
+                    statusBar()->showMessage("No earlier rewind history");
+            }
             resetPacing();
             return menuRelease ? QMainWindow::eventFilter(object, event) : true;
         }
@@ -425,6 +525,19 @@ bool MainWindow::eventFilter(QObject *object, QEvent *event) {
                 return menuRelease ? QMainWindow::eventFilter(object, event) : true;
             }
         }
+        if (linkSession_)
+            for (size_t i = 0; i < linkedKeys_.size(); ++i) {
+                if (!linkedKeys_[i] || value != linkedKeys_[i])
+                    continue;
+                const uint8_t mask = uint8_t(1u << i);
+                if (pressed && !paused_)
+                    linkedKeyboardJoypad_ &= uint8_t(~mask);
+                else
+                    linkedKeyboardJoypad_ |= mask;
+                if (!(paused_ && debuggerInputPaused_))
+                    applyHeldButtons();
+                return menuRelease ? QMainWindow::eventFilter(object, event) : true;
+            }
     }
     return QMainWindow::eventFilter(object, event);
 }

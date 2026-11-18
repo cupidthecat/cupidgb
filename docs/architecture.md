@@ -76,6 +76,7 @@ Qt's debugger window presents commands and views through callbacks. MainWindow o
 | `src/gb/audio_state.c`, `state_io.h` | Portable audio history, bounded fields and snapshot timing validation |
 | `src/gb/input.c` | Physical button masks, selected JOYP lines, input interrupts |
 | `src/gb/infrared.c` | Shared infrared sensing, LED latches, and host connection callbacks |
+| `src/gb/link.c` | Paired serial pins, infrared forwarding, callback ownership and physical-clock interleave |
 | `src/gb/printer.c`, `src/gb/printer_state.c` | Printer protocol, image jobs, and native device-state codec |
 | `src/gb/sgb.c` | SGB command packets, palette/attribute state, masking, border rendering |
 | `src/gb/sgb_startup.c`, `sgb_startup_audio.c`, `sgb_startup_render.c` | Host startup timing, bounded sound delivery and pure CupidGB artwork |
@@ -86,6 +87,7 @@ Qt's debugger window presents commands and views through callbacks. MainWindow o
 | `src/compat/native_v1.c` | Frozen older-state battery recovery |
 | `src/frontend/qt/main_window.cpp`, `main_window_reset.cpp` | Desktop session lifecycle, reset transactions and menu actions |
 | `src/frontend/qt/main_window_audio.cpp`, `main_window_input.cpp`, `main_window_motion.cpp`, `main_window_session.cpp` | Host audio, input/controller routing, motion, pacing, rewind and state files |
+| `src/frontend/qt/main_window_link.cpp` | Linked document lifetime, shared pacing, paired debugger execution and output coordination |
 | `src/frontend/qt/main_window_display.cpp`, `main_window_debugger.cpp`, `main_window_telemetry.cpp` | Display settings/presentation, debugger integration and bounded runtime reports |
 | `src/frontend/qt/main_window_*tests.cpp` | Generated native Qt workflow checks |
 | `src/gb/cheats.c`, `src/frontend/qt/cheats_window.cpp`, `cheat_search.cpp` | Read interception and file codec, native cheat controls, physical RAM searches |
@@ -96,6 +98,8 @@ Qt's debugger window presents commands and views through callbacks. MainWindow o
 | `src/frontend/qt/audio_buffer.h` | Generated-audio queue and reentrant host-write transactions |
 
 Serial completion calls an optional host observer with the byte latched at transfer start. The core owns transfer timing, SB/SC updates, and interrupt requests; the caller owns diagnostics and output buffering. `cupidgb_rom_runner` installs its own observer for verdict text and counters. Ordinary desktop execution performs no serial writes or flushes on stdout. Observer pointers are host resources preserved across guest resets and state loads, and cleared at cleanup.
+
+`CupidGbLinkPair` connects two existing consoles without owning their memory or host queues. A bounded signed offset compares elapsed presentation clocks weighted by the peer's physical frequency. Serial callbacks exchange launched and sampled bits synchronously; infrared callbacks forward the emitted level. Connection latches and the relative offset remain host state across native loads and resets. The embedding host replaces endpoints before releasing old allocations and stops both timelines for atomic user actions. [The core API](core-api.md#paired-console-execution) describes ownership and stepping order.
 
 ## Host lifecycle and ownership
 

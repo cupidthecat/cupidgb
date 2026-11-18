@@ -37,6 +37,8 @@ MainWindow::MainWindow(bool isolated, bool automated, bool audioCheck,
     setCentralWidget(display_);
     for (size_t i = 0; i < keys_.size(); ++i)
         keys_[i] = settings_.value(QString("input/%1").arg(i), defaultKeys[i]).toInt();
+    for (size_t i = 0; i < linkedKeys_.size(); ++i)
+        linkedKeys_[i] = settings_.value(QString("input/linkPlayer2/%1").arg(i), 0).toInt();
     for (size_t i = 0; i < specialKeys_.size(); ++i)
         specialKeys_[i] =
             settings_.value(QString("input/special/%1").arg(i), defaultSpecialKeys[i]).toInt();
@@ -125,6 +127,7 @@ MainWindow::MainWindow(bool isolated, bool automated, bool audioCheck,
                 // The guest stops while a menu owns input. Keep existing holds,
                 // but allow their physical releases to reach the paused machine.
                 menuInputSuspended_ = true;
+                releaseLinkedInput();
                 clearAudio();
                 resetControllerRumble();
                 resetPacing();
@@ -147,9 +150,11 @@ MainWindow::MainWindow(bool isolated, bool automated, bool audioCheck,
         });
     }
     refreshActions();
+    registerLinkWindow();
 }
 
 MainWindow::~MainWindow() {
+    unregisterLinkWindow();
     if (controllers_) {
         controllers_->outputChanged = {};
         controllers_->shortcutPressed = {};
@@ -184,6 +189,9 @@ MainWindow::~MainWindow() {
 
 void MainWindow::buildMenus() {
     auto *file = menuBar()->addMenu("&File");
+    auto *newSession = file->addAction("New &Window", QKeySequence("Ctrl+Shift+N"));
+    registerShortcut(newSession, "newWindow");
+    connect(newSession, &QAction::triggered, this, [this] { newWindow(); });
     auto *open = file->addAction("&Open ROM…", QKeySequence("Ctrl+O"));
     registerShortcut(open, "open");
     connect(open, &QAction::triggered, this, [this] {
@@ -236,7 +244,7 @@ void MainWindow::buildMenus() {
     file->addSeparator();
     auto *quit = file->addAction("&Quit", QKeySequence("Ctrl+Q"));
     registerShortcut(quit, "quit");
-    connect(quit, &QAction::triggered, this, &QWidget::close);
+    connect(quit, &QAction::triggered, this, [] { QApplication::closeAllWindows(); });
     auto *emulation = menuBar()->addMenu("&Emulation");
     resetAction_ = emulation->addAction("&Reset", QKeySequence("Ctrl+R"));
     registerShortcut(resetAction_, "reset");
@@ -452,8 +460,14 @@ void MainWindow::buildMenus() {
         accessories->addAction(action);
     }
     disconnectAction_->setChecked(true);
-    connect(disconnectAction_, &QAction::triggered, this, [this] { setPrinterConnected(false); });
+    connect(disconnectAction_, &QAction::triggered, this, [this] {
+        disconnectLink();
+        setPrinterConnected(false);
+    });
     connect(printerAction_, &QAction::triggered, this, [this] { setPrinterConnected(true); });
+    linkMenu_ = connectionsMenu_->addMenu("Link &Cable");
+    linkMenu_->setObjectName("linkCable");
+    connect(linkMenu_, &QMenu::aboutToShow, this, [this] { refreshLinkMenu(); });
     auto *tools = menuBar()->addMenu("&Tools");
     debuggerAction_ = tools->addAction("&Debugger", QKeySequence("Ctrl+C"));
     registerShortcut(debuggerAction_, "debugger");
@@ -527,6 +541,7 @@ bool MainWindow::openRom(const QString &path) {
 }
 
 bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflow) {
+    QScopedValueRollback<bool> operation(stateOperation_, true);
     if (isStatePath(path)) {
         reportError(
             "State files cannot be opened as cartridges. Open a cartridge, then load its state.");
@@ -589,6 +604,10 @@ bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflo
         canonicalSave.compare(info.canonicalFilePath(), pathCase) == 0) {
         cupid_emulator_shutdown(candidate.get());
         reportError("The battery save path points to the cartridge. Choose separate files.");
+        return false;
+    }
+    if (!storageAvailable(absolute, save)) {
+        cupid_emulator_shutdown(candidate.get());
         return false;
     }
     // Reject unavailable firmware before exporting the current cartridge's clock.
@@ -727,8 +746,14 @@ bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflo
     const bool resetChangedBattery =
         workflow != ResetWorkflow::Open && sameBattery && emulator_ &&
         candidate->gb.battery_write_generation != emulator_->gb.battery_write_generation;
-    if (!sameCartridge && workflow == ResetWorkflow::Open)
+    if (!sameCartridge && workflow == ResetWorkflow::Open) {
+        disconnectLink();
         setPrinterConnected(false);
+    }
+    if (!replaceLinkEndpoint(&candidate->gb)) {
+        cupid_emulator_shutdown(candidate.get());
+        return false;
+    }
     commitCameraSession(&candidate->gb, workflow);
     if (emulator_)
         cupid_emulator_shutdown(emulator_.get());
@@ -840,6 +865,10 @@ bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflo
     display_->messages.clear();
     display_->messages.showCartridge(QCoreApplication::applicationVersion(), romData_);
     present(Presentation::Reset);
+    // A new cartridge reclassifies held controller axes while callbacks are gated.
+    // Commit those controls before its first snapshot; resets retain their native contacts.
+    if (workflow == ResetWorkflow::Open)
+        applyHeldButtons();
     rememberFrame();
     refreshActions();
     return true;
@@ -886,8 +915,10 @@ void MainWindow::watchBattery() {
 }
 
 bool MainWindow::closeRom() {
+    QScopedValueRollback<bool> operation(stateOperation_, true);
     if (!flushBattery(true) || !stopRecording())
         return false;
+    disconnectLink();
     cancelCameraCapture();
     hostCamera_.reset();
     cameraError_.clear();

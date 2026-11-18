@@ -501,6 +501,12 @@ void MainWindow::configure() {
         edits[i]->setObjectName(QString("input/%1").arg(i));
         form->addRow(buttonNames[i], edits[i]);
     }
+    std::array<QKeySequenceEdit *, 8> linkedEdits;
+    for (size_t i = 0; i < linkedEdits.size(); ++i) {
+        linkedEdits[i] = new InputKeyEdit(linkedKeys_[i]);
+        linkedEdits[i]->setObjectName(QString("input/linkPlayer2/%1").arg(i));
+        form->addRow(QString("Link player 2: %1").arg(buttonNames[i]), linkedEdits[i]);
+    }
     std::array<QKeySequenceEdit *, 5> specialEdits;
     for (size_t i = 0; i < specialEdits.size(); ++i) {
         specialEdits[i] = new InputKeyEdit(specialKeys_[i]);
@@ -527,8 +533,8 @@ void MainWindow::configure() {
     auto *note =
         new QLabel("Choose one key per button or mode. Empty mappings disable an input.\n"
                    "Command shortcuts may include modifiers. Each mapping must be unique.\n"
-                   "Rewind duration is bounded by the selected memory limit.\n"
-                   "Controllers and debugger tools remain incomplete.");
+                   "Link player 2 controls the other game from the focused window.\n"
+                   "Rewind duration is bounded by the selected memory limit.");
     note->setWordWrap(true);
     layout->addWidget(note);
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
@@ -554,6 +560,7 @@ void MainWindow::configure() {
             return;
         }
         std::array<int, 8> values{};
+        std::array<int, 8> linkedValues{};
         std::array<int, 5> specialValues{};
         std::vector<int> used;
         auto readInput = [&](QKeySequenceEdit *edit, int &value) {
@@ -578,6 +585,12 @@ void MainWindow::configure() {
                                      "Choose unique single keys for buttons and modes.");
                 return;
             }
+        for (size_t i = 0; i < linkedEdits.size(); ++i)
+            if (!readInput(linkedEdits[i], linkedValues[i])) {
+                QMessageBox::warning(&dialog, "Input",
+                                     "Choose unique single keys for both link players and modes.");
+                return;
+            }
         for (size_t i = 0; i < specialEdits.size(); ++i)
             if (!readInput(specialEdits[i], specialValues[i])) {
                 QMessageBox::warning(&dialog, "Input",
@@ -600,9 +613,12 @@ void MainWindow::configure() {
             commands.push_back(sequence);
         }
         keys_ = values;
+        linkedKeys_ = linkedValues;
         specialKeys_ = specialValues;
         for (size_t i = 0; i < values.size(); ++i)
             settings_.setValue(QString("input/%1").arg(i), values[i]);
+        for (size_t i = 0; i < linkedValues.size(); ++i)
+            settings_.setValue(QString("input/linkPlayer2/%1").arg(i), linkedValues[i]);
         for (size_t i = 0; i < specialValues.size(); ++i)
             settings_.setValue(QString("input/special/%1").arg(i), specialValues[i]);
         for (size_t i = 0; i < commands.size(); ++i) {
@@ -610,6 +626,7 @@ void MainWindow::configure() {
             settings_.setValue("shortcuts/" + shortcutActions_[i]->objectName(),
                                commands[i].toString(QKeySequence::PortableText));
         }
+        synchronizeInputBindings();
         if (!modelOverride_)
             settings_.setValue("emulation/model", model->currentData());
         const auto clockMode = CupidGbRtcMode(rtcMode->currentData().toInt());
