@@ -28,6 +28,7 @@
 #include <stdint.h>
 
 #include "cupid/gb/audio_output.h"
+#include "cupid/gb/gbs.h"
 #include "cupid/gb/rtc.h"
 #include "cupid/gb/sgb.h"
 #include "cupid/gb/sgb_startup.h"
@@ -270,6 +271,11 @@ typedef enum CupidGbModel {
     CUPID_GB_MODEL_SGB2 = 5
 } CupidGbModel;
 
+typedef enum CupidGbProgramKind {
+    CUPID_GB_PROGRAM_CARTRIDGE = 0,
+    CUPID_GB_PROGRAM_GBS = 1
+} CupidGbProgramKind;
+
 /* Pixel queues retain fetched data across CPU writes and save/rewind boundaries.
  * Palette lookup happens when a pixel leaves the queue, rather than at HBlank. */
 typedef struct CupidGbPixels {
@@ -416,6 +422,14 @@ typedef struct CupidGb {
     size_t rom_size;
     size_t rom_capacity;     /* Owned host allocation size; excluded from native save states. */
     uint64_t rom_generation; /* Successful cartridge loads invalidate cached host state identity. */
+    /* Immutable host program identity. Native states retain the receiving descriptor;
+     * ordinary cartridges keep the music header and accepted payload length zero. */
+    CupidGbProgramKind program_kind;
+    uint8_t gbs_header[CUPID_GB_GBS_HEADER_SIZE];
+    size_t gbs_payload_size;
+    /* Cartridge configuration can leave wide MBC3 wiring attached to a later
+     * music program. This host latch survives resets and loads, but not cleanup. */
+    bool mbc3_extended_history;
     uint8_t video_ram[0x4000];
     uint8_t cartridge_ram[CUPID_GB_INLINE_RAM_SIZE];
     size_t cartridge_ram_size;

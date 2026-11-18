@@ -259,8 +259,9 @@ static void color_envelope_lower(CupidGbApu *apu, unsigned channel) {
     }
 }
 
-static void color_envelope_fall(CupidGb *gb) {
+static uint8_t color_envelope_fall(CupidGb *gb) {
     CupidGbApu *apu = &gb->apu;
+    uint8_t changed = 0;
     for (unsigned channel = 0; channel < 2; ++channel) {
         CupidGbPulseTiming *timing = &apu->pulse_timing[channel];
         if (!timing->envelope_clock) {
@@ -273,21 +274,21 @@ static void color_envelope_fall(CupidGb *gb) {
         }
         uint8_t *volume = channel ? &apu->ch2_vol : &apu->ch1_vol;
         *volume = (uint8_t)((*volume + ((value & 8) ? 1 : 15)) & 15);
-        pulse_latch_wave(apu, channel);
+        if ((channel ? apu->ch2_on : apu->ch1_on) && !timing->output_blocked) {
+            pulse_latch_wave(apu, channel);
+            changed |= (uint8_t)(1u << channel);
+        }
     }
+    return changed;
 }
 
 void cupid_gb_apu_finish_divider_period(CupidGb *gb) {
     if (!gb || !gb->apu.envelope_delay)
         return;
-    const uint8_t delay = gb->apu.envelope_delay;
     gb->apu.envelope_delay = 0;
     cupid_gb_apu_run(gb, true);
-    gb->apu.envelope_delay = delay;
-    gb->apu.envelope_delay = 0;
     if (gb->apu.apu_on && gb->model == CUPID_GB_MODEL_CGB) {
-        color_envelope_fall(gb);
-        cupid_gb_audio_update_channels(gb, 3, 0, false);
+        cupid_gb_audio_update_channels(gb, color_envelope_fall(gb), 0, false);
     }
 }
 
@@ -343,11 +344,21 @@ static void color_envelope_write(CupidGb *gb, unsigned channel, uint8_t old, uin
     pulse_latch_wave(apu, channel);
 }
 
-static void color_pulse_frequency_write(CupidGbApu *apu, unsigned channel, uint16_t old_frequency,
-                                        bool high_write, bool trigger) {
+static void pulse_frequency_reload(CupidGbApu *apu, unsigned channel) {
+    const uint8_t age = apu->pulse_timing[channel].edge_age;
+    if (age < 2) {
+        const uint16_t frequency = channel ? apu->ch2_freq : apu->ch1_freq;
+        uint16_t *timer = channel ? &apu->ch2_timer : &apu->ch1_timer;
+        /* Either frequency byte can replace a reload during this two-clock
+         * window. The current duty bit remains held until the next edge. */
+        *timer = (uint16_t)((2048u - frequency) * 4u - age);
+    }
+}
+
+static void color_pulse_high_write(CupidGbApu *apu, unsigned channel, uint16_t old_frequency,
+                                   bool trigger) {
     CupidGbPulseTiming *timing = &apu->pulse_timing[channel];
     uint16_t frequency = channel ? apu->ch2_freq : apu->ch1_freq;
-    uint16_t *timer = channel ? &apu->ch2_timer : &apu->ch1_timer;
     uint8_t *index = channel ? &apu->ch2_duty_pos : &apu->ch1_duty_pos;
     bool active = channel ? apu->ch2_on : apu->ch1_on;
     if (timing->edge_age > 2) {
@@ -357,13 +368,9 @@ static void color_pulse_frequency_write(CupidGbApu *apu, unsigned channel, uint1
      * input during its reload window cancels that phase advance, while the
      * already latched digital sample survives until the next frequency edge. A fresh
      * trigger clears eligibility for that cancellation while its delay remains. */
-    if (active && !timing->start_delay && high_write && !trigger && old_frequency >= 0x700 &&
-        frequency < 0x700) {
+    if (active && !timing->start_delay && !trigger && old_frequency >= 0x700 && frequency < 0x700) {
         *index = (uint8_t)((*index + 7u) & 7u);
         timing->output_blocked = false;
-    }
-    if (timing->edge_age < 2) {
-        *timer = (uint16_t)((2048u - frequency) * 4u - timing->edge_age);
     }
 }
 
@@ -380,7 +387,8 @@ static bool color_sweep_complete(CupidGb *gb) {
     if (subtract) {
         apu->ch1_sweep_subtracted = true;
     } else if (apu->ch1_sweep_shadow + addend > 0x7ff) {
-        return pulse_gate_off(apu, 0);
+        pulse_gate_off(apu, 0);
+        return true;
     }
     return false;
 }
@@ -431,9 +439,10 @@ static void color_sweep_schedule(CupidGb *gb) {
     apu->ch1_sweep_timer = (uint8_t)(((control >> 4) & 7) + 1);
 }
 
-static void color_sweep_write(CupidGb *gb, uint8_t previous, uint8_t value) {
+static bool color_sweep_write(CupidGb *gb, uint8_t previous, uint8_t value) {
     CupidGbApu *apu = &gb->apu;
     CupidGbSweepTiming *timing = &apu->sweep_timing;
+    bool cutoff = false;
     if (timing->startup_ticks == 2) {
         timing->shift_ticks = value & 7;
         if (!timing->shift_ticks) {
@@ -446,14 +455,19 @@ static void color_sweep_write(CupidGb *gb, uint8_t previous, uint8_t value) {
     if (!(value & 8) &&
         apu->ch1_sweep_shadow + timing->completed_delta + ((previous & 8) != 0) > 0x7ff) {
         pulse_gate_off(apu, 0);
+        cutoff = true;
     }
     color_sweep_schedule(gb);
+    return cutoff;
 }
 
-static void cupid_gb_apu_clock_pulse_length(CupidGbApu *apu, unsigned channel) {
+static bool cupid_gb_apu_clock_pulse_length(CupidGbApu *apu, unsigned channel) {
     uint8_t *length = channel ? &apu->ch2_len : &apu->ch1_len;
-    if (*length && !--*length)
+    if (*length && !--*length) {
         pulse_gate_off(apu, channel);
+        return true;
+    }
+    return false;
 }
 
 /**
@@ -467,23 +481,27 @@ static void cupid_gb_apu_clock_pulse_length(CupidGbApu *apu, unsigned channel) {
  *
  * @param apu Pointer to the APU state.
  */
-static void cupid_gb_apu_clock_length(CupidGbApu *apu) {
-    if (apu->ch1_len_en)
-        cupid_gb_apu_clock_pulse_length(apu, 0);
-    if (apu->ch2_len_en)
-        cupid_gb_apu_clock_pulse_length(apu, 1);
+static uint8_t cupid_gb_apu_clock_length(CupidGbApu *apu) {
+    uint8_t expired = 0;
+    if (apu->ch1_len_en && cupid_gb_apu_clock_pulse_length(apu, 0))
+        expired |= 1;
+    if (apu->ch2_len_en && cupid_gb_apu_clock_pulse_length(apu, 1))
+        expired |= 2;
     if (apu->ch3_len_en && apu->ch3_len > 0u) {
         apu->ch3_len = (uint16_t)(apu->ch3_len - 1u);
         if (apu->ch3_len == 0u) {
             apu->ch3_on = false;
+            expired |= 4;
         }
     }
     if (apu->ch4_len_en && apu->ch4_len > 0u) {
         apu->ch4_len = (uint8_t)(apu->ch4_len - 1u);
         if (apu->ch4_len == 0u) {
             apu->ch4_on = false;
+            expired |= 8;
         }
     }
+    return expired;
 }
 
 /**
@@ -509,13 +527,15 @@ static bool cupid_gb_apu_next_step_clocks_length(const CupidGbApu *apu) {
  * @param channel_on Pointer to the channel's active flag; set to `false` if
  *                   the counter reaches zero.
  */
-static void cupid_gb_apu_clock_length_once_u8(uint8_t *length, bool *channel_on) {
+static bool cupid_gb_apu_clock_length_once_u8(uint8_t *length, bool *channel_on) {
     if (*length > 0u) {
         *length = (uint8_t)(*length - 1u);
         if (*length == 0u) {
             *channel_on = false;
+            return true;
         }
     }
+    return false;
 }
 
 /**
@@ -527,13 +547,15 @@ static void cupid_gb_apu_clock_length_once_u8(uint8_t *length, bool *channel_on)
  * @param channel_on Pointer to the channel's active flag; set to `false` if
  *                   the counter reaches zero.
  */
-static void cupid_gb_apu_clock_length_once_u16(uint16_t *length, bool *channel_on) {
+static bool cupid_gb_apu_clock_length_once_u16(uint16_t *length, bool *channel_on) {
     if (*length > 0u) {
         *length = (uint16_t)(*length - 1u);
         if (*length == 0u) {
             *channel_on = false;
+            return true;
         }
     }
+    return false;
 }
 
 /**
@@ -578,7 +600,7 @@ static uint16_t cupid_gb_apu_calc_sweep_freq(CupidGbApu *apu, bool *overflow) {
  *
  * @param gb Pointer to the Game Boy state.
  */
-static void cupid_gb_apu_clock_sweep(CupidGb *gb) {
+static uint8_t cupid_gb_apu_clock_sweep(CupidGb *gb) {
     CupidGbApu *apu = &gb->apu;
     if (gb->model == CUPID_GB_MODEL_CGB) {
         if (!apu->ch1_sweep_timer) {
@@ -586,11 +608,11 @@ static void cupid_gb_apu_clock_sweep(CupidGb *gb) {
         }
         apu->ch1_sweep_timer = apu->ch1_sweep_timer == 1 ? 8 : apu->ch1_sweep_timer - 1;
         color_sweep_schedule(gb);
-        return;
+        return 0;
     }
 
     if (!apu->ch1_sweep_en) {
-        return;
+        return 0;
     }
     if (apu->ch1_sweep_timer > 0u) {
         apu->ch1_sweep_timer = (uint8_t)(apu->ch1_sweep_timer - 1u);
@@ -604,6 +626,7 @@ static void cupid_gb_apu_clock_sweep(CupidGb *gb) {
 
             if (overflow) {
                 pulse_gate_off(apu, 0);
+                return 1;
             } else if (apu->ch1_sweep_shift != 0u) {
                 bool second_overflow = false;
 
@@ -616,10 +639,12 @@ static void cupid_gb_apu_clock_sweep(CupidGb *gb) {
                 (void)cupid_gb_apu_calc_sweep_freq(apu, &second_overflow);
                 if (second_overflow) {
                     pulse_gate_off(apu, 0);
+                    return 1;
                 }
             }
         }
     }
+    return 0;
 }
 
 /**
@@ -631,7 +656,8 @@ static void cupid_gb_apu_clock_sweep(CupidGb *gb) {
  *
  * @param apu Pointer to the APU state.
  */
-static void cupid_gb_apu_clock_envelope(CupidGbApu *apu, bool color) {
+static uint8_t cupid_gb_apu_clock_envelope(CupidGbApu *apu, bool color) {
+    uint8_t changed = 0;
     /* CH1 */
     if (!color && apu->ch1_env_period != 0u) {
         if (apu->ch1_env_timer > 0u) {
@@ -641,8 +667,10 @@ static void cupid_gb_apu_clock_envelope(CupidGbApu *apu, bool color) {
             apu->ch1_env_timer = apu->ch1_env_period;
             if (apu->ch1_env_add && apu->ch1_vol < 15u) {
                 apu->ch1_vol = (uint8_t)(apu->ch1_vol + 1u);
+                changed |= apu->ch1_on && !apu->pulse_timing[0].output_blocked ? 1 : 0;
             } else if (!apu->ch1_env_add && apu->ch1_vol > 0u) {
                 apu->ch1_vol = (uint8_t)(apu->ch1_vol - 1u);
+                changed |= apu->ch1_on && !apu->pulse_timing[0].output_blocked ? 1 : 0;
             }
         }
     }
@@ -655,8 +683,10 @@ static void cupid_gb_apu_clock_envelope(CupidGbApu *apu, bool color) {
             apu->ch2_env_timer = apu->ch2_env_period;
             if (apu->ch2_env_add && apu->ch2_vol < 15u) {
                 apu->ch2_vol = (uint8_t)(apu->ch2_vol + 1u);
+                changed |= apu->ch2_on && !apu->pulse_timing[1].output_blocked ? 2 : 0;
             } else if (!apu->ch2_env_add && apu->ch2_vol > 0u) {
                 apu->ch2_vol = (uint8_t)(apu->ch2_vol - 1u);
+                changed |= apu->ch2_on && !apu->pulse_timing[1].output_blocked ? 2 : 0;
             }
         }
     }
@@ -669,11 +699,14 @@ static void cupid_gb_apu_clock_envelope(CupidGbApu *apu, bool color) {
             apu->ch4_env_timer = apu->ch4_env_period;
             if (apu->ch4_env_add && apu->ch4_vol < 15u) {
                 apu->ch4_vol = (uint8_t)(apu->ch4_vol + 1u);
+                changed |= apu->ch4_on ? 8 : 0;
             } else if (!apu->ch4_env_add && apu->ch4_vol > 0u) {
                 apu->ch4_vol = (uint8_t)(apu->ch4_vol - 1u);
+                changed |= apu->ch4_on ? 8 : 0;
             }
         }
     }
+    return changed;
 }
 
 void cupid_gb_apu_div_event(CupidGb *gb) {
@@ -707,23 +740,26 @@ void cupid_gb_apu_div_event(CupidGb *gb) {
         if (gb->double_speed) {
             apu->envelope_delay = 2;
         } else {
-            color_envelope_fall(gb);
+            cupid_gb_audio_update_channels(gb, color_envelope_fall(gb), 0, false);
         }
     }
     /* Bit 0 clocks length, bit 1 sweep, and bit 2 envelopes. */
     static const uint8_t clocks[] = {1, 0, 3, 0, 1, 0, 3, 4};
     unsigned edges = clocks[phase];
     apu->fs_step = (uint8_t)((phase + 1) & 7);
+    /* Each real event owns its output update. Preserve their order: an envelope
+     * can publish a nonzero code before length expiry returns it to zero. Host
+     * reconstruction may retain a different routing after a live state load. */
     if (edges & 1) {
-        cupid_gb_apu_clock_length(apu);
+        cupid_gb_audio_update_channels(gb, cupid_gb_apu_clock_length(apu), 0, false);
     }
     if (edges & 2) {
-        cupid_gb_apu_clock_sweep(gb);
+        cupid_gb_audio_update_channels(gb, cupid_gb_apu_clock_sweep(gb), 0, false);
     }
     if (edges & 4) {
-        cupid_gb_apu_clock_envelope(apu, gb->model == CUPID_GB_MODEL_CGB);
+        cupid_gb_audio_update_channels(
+            gb, cupid_gb_apu_clock_envelope(apu, gb->model == CUPID_GB_MODEL_CGB), 0, false);
     }
-    cupid_gb_audio_update_channels(gb, 15, 0, false);
 }
 
 static void cupid_gb_apu_digital_samples(const CupidGb *gb, uint8_t digital[4]) {
@@ -1110,6 +1146,7 @@ void cupid_gb_apu_on_write(CupidGb *gb, uint8_t off, uint8_t val) {
 
     uint8_t previous = gb->io_registers[off];
     gb->io_registers[off] = val;
+    uint8_t changed = 0;
 
     switch (off) {
         // CH1
@@ -1121,9 +1158,10 @@ void cupid_gb_apu_on_write(CupidGb *gb, uint8_t off, uint8_t val) {
             apu->ch1_sweep_neg = (val & 0x08u) != 0u;
             apu->ch1_sweep_shift = (uint8_t)(val & 0x07u);
             if (gb->model == CUPID_GB_MODEL_CGB) {
-                color_sweep_write(gb, previous, val);
+                changed = color_sweep_write(gb, previous, val) ? 1 : 0;
             } else if (old_neg && !apu->ch1_sweep_neg && apu->ch1_sweep_subtracted) {
                 pulse_gate_off(apu, 0);
+                changed = 1;
             }
             break;
         }
@@ -1132,6 +1170,8 @@ void cupid_gb_apu_on_write(CupidGb *gb, uint8_t off, uint8_t val) {
             apu->ch1_len = (uint8_t)(64u - (val & 0x3fu));
             break;
         case 0x12u: // NR12 envelope
+            changed =
+                !(val & 0xf8u) || (apu->ch1_on && !apu->pulse_timing[0].output_blocked) ? 1 : 0;
             if (gb->model == CUPID_GB_MODEL_CGB) {
                 if (apu->ch1_on && (val & 0xf8)) {
                     color_envelope_write(gb, 0, previous, val);
@@ -1145,14 +1185,9 @@ void cupid_gb_apu_on_write(CupidGb *gb, uint8_t off, uint8_t val) {
                 pulse_disconnect_dac(apu, 0);
             break;
         case 0x13u: // NR13 freq low
-        {
-            uint16_t old_frequency = apu->ch1_freq;
             apu->ch1_freq = (uint16_t)((apu->ch1_freq & 0x700u) | (uint16_t)val);
-            if (gb->model == CUPID_GB_MODEL_CGB) {
-                color_pulse_frequency_write(apu, 0, old_frequency, false, false);
-            }
+            pulse_frequency_reload(apu, 0);
             break;
-        }
         case 0x14u: // NR14 freq high + trigger
         {
             /* Trigger timing samples activity before this write's extra length
@@ -1168,16 +1203,20 @@ void cupid_gb_apu_on_write(CupidGb *gb, uint8_t off, uint8_t val) {
             apu->ch1_len_en = (val & 0x40u) != 0u;
             trigger = (val & 0x80u) != 0u;
             if (gb->model == CUPID_GB_MODEL_CGB) {
-                color_pulse_frequency_write(apu, 0, old_frequency, true, trigger);
+                color_pulse_high_write(apu, 0, old_frequency, trigger);
             }
+            pulse_frequency_reload(apu, 0);
 
             if (!cupid_gb_apu_next_step_clocks_length(apu) && !old_len_en && apu->ch1_len_en) {
-                cupid_gb_apu_clock_pulse_length(apu, 0);
+                if (cupid_gb_apu_clock_pulse_length(apu, 0) && !trigger)
+                    changed = 1;
             }
 
             length_reloaded = apu->ch1_len == 0u;
             if (trigger) {
                 cupid_gb_apu_trigger_ch1(gb, old_frequency, was_active);
+                if (apu->ch1_dac && (!was_active || !apu->pulse_timing[0].output_blocked))
+                    changed = 1;
                 if (!cupid_gb_apu_next_step_clocks_length(apu) && apu->ch1_len_en &&
                     length_reloaded) {
                     cupid_gb_apu_clock_pulse_length(apu, 0);
@@ -1191,6 +1230,8 @@ void cupid_gb_apu_on_write(CupidGb *gb, uint8_t off, uint8_t val) {
             apu->ch2_len = (uint8_t)(64u - (val & 0x3fu));
             break;
         case 0x17u: // NR22
+            changed =
+                !(val & 0xf8u) || (apu->ch2_on && !apu->pulse_timing[1].output_blocked) ? 2 : 0;
             if (gb->model == CUPID_GB_MODEL_CGB) {
                 if (apu->ch2_on && (val & 0xf8)) {
                     color_envelope_write(gb, 1, previous, val);
@@ -1204,14 +1245,9 @@ void cupid_gb_apu_on_write(CupidGb *gb, uint8_t off, uint8_t val) {
                 pulse_disconnect_dac(apu, 1);
             break;
         case 0x18u: // NR23
-        {
-            uint16_t old_frequency = apu->ch2_freq;
             apu->ch2_freq = (uint16_t)((apu->ch2_freq & 0x700u) | (uint16_t)val);
-            if (gb->model == CUPID_GB_MODEL_CGB) {
-                color_pulse_frequency_write(apu, 1, old_frequency, false, false);
-            }
+            pulse_frequency_reload(apu, 1);
             break;
-        }
         case 0x19u: // NR24
         {
             const bool was_active = apu->ch2_on;
@@ -1225,16 +1261,20 @@ void cupid_gb_apu_on_write(CupidGb *gb, uint8_t off, uint8_t val) {
             apu->ch2_len_en = (val & 0x40u) != 0u;
             trigger = (val & 0x80u) != 0u;
             if (gb->model == CUPID_GB_MODEL_CGB) {
-                color_pulse_frequency_write(apu, 1, old_frequency, true, trigger);
+                color_pulse_high_write(apu, 1, old_frequency, trigger);
             }
+            pulse_frequency_reload(apu, 1);
 
             if (!cupid_gb_apu_next_step_clocks_length(apu) && !old_len_en && apu->ch2_len_en) {
-                cupid_gb_apu_clock_pulse_length(apu, 1);
+                if (cupid_gb_apu_clock_pulse_length(apu, 1) && !trigger)
+                    changed = 2;
             }
 
             length_reloaded = apu->ch2_len == 0u;
             if (trigger) {
                 cupid_gb_apu_trigger_ch2(gb, old_frequency, was_active);
+                if (apu->ch2_dac && (!was_active || !apu->pulse_timing[1].output_blocked))
+                    changed = 2;
                 if (!cupid_gb_apu_next_step_clocks_length(apu) && apu->ch2_len_en &&
                     length_reloaded) {
                     cupid_gb_apu_clock_pulse_length(apu, 1);
@@ -1258,6 +1298,7 @@ void cupid_gb_apu_on_write(CupidGb *gb, uint8_t off, uint8_t val) {
                         apu->ch3_sample_byte = gb->io_registers[0x3au];
                 }
                 apu->ch3_on = false;
+                changed = 4;
             }
             break;
         case 0x1bu: // NR31 length
@@ -1265,6 +1306,7 @@ void cupid_gb_apu_on_write(CupidGb *gb, uint8_t off, uint8_t val) {
             break;
         case 0x1cu: // NR32 output level
             apu->ch3_out_level = (uint8_t)((val >> 5u) & 0x03u);
+            changed = apu->ch3_on ? 4 : 0;
             break;
         case 0x1du: // NR33
             apu->ch3_freq = (uint16_t)((apu->ch3_freq & 0x700u) | (uint16_t)val);
@@ -1301,12 +1343,14 @@ void cupid_gb_apu_on_write(CupidGb *gb, uint8_t off, uint8_t val) {
             }
 
             if (!cupid_gb_apu_next_step_clocks_length(apu) && !old_len_en && apu->ch3_len_en) {
-                cupid_gb_apu_clock_length_once_u16(&apu->ch3_len, &apu->ch3_on);
+                if (cupid_gb_apu_clock_length_once_u16(&apu->ch3_len, &apu->ch3_on) && !trigger)
+                    changed = 4;
             }
 
             length_reloaded = apu->ch3_len == 0u;
             if (trigger) {
                 cupid_gb_apu_trigger_ch3(gb);
+                changed = apu->ch3_dac ? 4 : 0;
                 if (!cupid_gb_apu_next_step_clocks_length(apu) && apu->ch3_len_en &&
                     length_reloaded) {
                     cupid_gb_apu_clock_length_once_u16(&apu->ch3_len, &apu->ch3_on);
@@ -1328,6 +1372,7 @@ void cupid_gb_apu_on_write(CupidGb *gb, uint8_t off, uint8_t val) {
             apu->ch4_len = (uint8_t)(64u - (val & 0x3fu));
             break;
         case 0x21u: // NR42
+            changed = !(val & 0xf8u) || apu->ch4_on ? 8 : 0;
             apu->ch4_dac = (val & 0xf8u) != 0u;
             if (!apu->ch4_dac) {
                 cupid_gb_noise_disconnect(gb);
@@ -1350,12 +1395,15 @@ void cupid_gb_apu_on_write(CupidGb *gb, uint8_t off, uint8_t val) {
             trigger = (val & 0x80u) != 0u;
 
             if (!cupid_gb_apu_next_step_clocks_length(apu) && !old_len_en && apu->ch4_len_en) {
-                cupid_gb_apu_clock_length_once_u8(&apu->ch4_len, &apu->ch4_on);
+                if (cupid_gb_apu_clock_length_once_u8(&apu->ch4_len, &apu->ch4_on) && !trigger)
+                    changed = 8;
             }
 
             length_reloaded = apu->ch4_len == 0u;
             if (trigger) {
                 const bool started = cupid_gb_apu_trigger_ch4(gb);
+                if (started && apu->ch4_dac)
+                    changed = 8;
                 if (started && !cupid_gb_apu_next_step_clocks_length(apu) && apu->ch4_len_en &&
                     length_reloaded) {
                     cupid_gb_apu_clock_length_once_u8(&apu->ch4_len, &apu->ch4_on);
@@ -1368,9 +1416,8 @@ void cupid_gb_apu_on_write(CupidGb *gb, uint8_t off, uint8_t val) {
     }
     if (off == 0x24 || off == 0x25) {
         cupid_gb_audio_update_channels(gb, 15, 0, true);
-    } else if (off >= 0x10 && off <= 0x23) {
-        const unsigned channel = off <= 0x14 ? 0 : off <= 0x19 ? 1 : off <= 0x1e ? 2 : 3;
-        cupid_gb_audio_update_channels(gb, (uint8_t)(1u << channel), 0, false);
+    } else if (changed) {
+        cupid_gb_audio_update_channels(gb, changed, 0, false);
     }
     /* Reconnecting the first monochrome DAC restores its full voltage against
      * the held capacitor; an attack ramp here would create a false transient. */
@@ -1390,6 +1437,8 @@ static void execute_audio_cycles(CupidGb *gb, uint16_t cycles) {
     uint16_t c;
     for (c = 0u; c < cycles; ++c) {
         uint8_t changed = 0;
+        bool envelope_due = false;
+        bool noise_restart_due = false;
         bool oscillator_running = !gb->cpu.stopped || gb->model == CUPID_GB_MODEL_CGB;
         if (oscillator_running && apu->ch3_wave_access_ticks > 0u) {
             apu->ch3_wave_access_ticks = (uint8_t)(apu->ch3_wave_access_ticks - 1u);
@@ -1405,8 +1454,7 @@ static void execute_audio_cycles(CupidGb *gb, uint16_t cycles) {
                 if (pulse_tick(apu, 1, true))
                     changed |= 2;
                 if (apu->envelope_delay && !--apu->envelope_delay) {
-                    color_envelope_fall(gb);
-                    changed |= 3;
+                    envelope_due = true;
                 }
             } else {
                 if (pulse_tick(apu, 0, false))
@@ -1456,19 +1504,26 @@ static void execute_audio_cycles(CupidGb *gb, uint16_t cycles) {
 
             if (cupid_gb_noise_tick(gb))
                 changed |= 8;
-            if (apu->noise_timing.start_delay && !--apu->noise_timing.start_delay) {
-                const bool empty_length = apu->ch4_len == 0;
-                if (cupid_gb_apu_trigger_ch4(gb)) {
-                    if (empty_length && apu->ch4_len_en &&
-                        !cupid_gb_apu_next_step_clocks_length(apu))
-                        cupid_gb_apu_clock_length_once_u8(&apu->ch4_len, &apu->ch4_on);
-                    changed |= 8;
-                }
-            }
+            if (apu->noise_timing.start_delay && !--apu->noise_timing.start_delay)
+                noise_restart_due = true;
         }
 
         if (changed)
             cupid_gb_audio_update_channels(gb, changed, (unsigned)c + 1u, false);
+        /* Oscillator edges precede delayed restarts and envelope steps, even
+         * on the same clock. Combining their final code can suppress the
+         * routing update after a live state restore. */
+        if (noise_restart_due) {
+            const bool empty_length = apu->ch4_len == 0;
+            if (cupid_gb_apu_trigger_ch4(gb)) {
+                if (empty_length && apu->ch4_len_en && !cupid_gb_apu_next_step_clocks_length(apu))
+                    cupid_gb_apu_clock_length_once_u8(&apu->ch4_len, &apu->ch4_on);
+                if (apu->ch4_dac)
+                    cupid_gb_audio_update_channels(gb, 8, (unsigned)c + 1u, false);
+            }
+        }
+        if (envelope_due)
+            cupid_gb_audio_update_channels(gb, color_envelope_fall(gb), (unsigned)c + 1u, false);
     }
     cupid_gb_audio_advance(gb, cycles);
 }

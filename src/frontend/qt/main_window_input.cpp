@@ -54,6 +54,7 @@ void MainWindow::setPaused(bool value, bool retainInput) {
 }
 
 void MainWindow::setPausedLocal(bool value, bool retainInput) {
+    const QPointer<MainWindow> self(this);
     if (!value)
         debuggerInputPaused_ = false;
     if (debugger_) {
@@ -77,13 +78,20 @@ void MainWindow::setPausedLocal(bool value, bool retainInput) {
         reconcileControllerInput(false);
     else
         releaseKeys(false);
-    QSignalBlocker blocker(pauseAction_);
-    pauseAction_->setChecked(value);
+    {
+        const QSignalBlocker blocker(pauseAction_);
+        pauseAction_->setChecked(value);
+    }
     resetPacing();
     clearAudio();
+    if (!self)
+        return;
     if (value)
         flushBattery();
+    if (!self)
+        return;
     refreshDebugger();
+    refreshMusicControls();
 }
 
 void MainWindow::releaseKeys(bool resetAudio) {
@@ -543,7 +551,13 @@ bool MainWindow::eventFilter(QObject *object, QEvent *event) {
 }
 
 void MainWindow::closeEvent(QCloseEvent *event) {
-    if (!closeRom()) {
+    const QPointer<MainWindow> self(this);
+    const bool closed = closeRom();
+    if (!self) {
+        event->accept();
+        return;
+    }
+    if (!closed) {
         event->ignore();
         return;
     }

@@ -232,6 +232,8 @@ bool MainWindow::prepareResetSymbols(std::unique_ptr<CupidGbDebugger> &symbols) 
 }
 
 bool MainWindow::reloadRom() {
+    if (musicInfo_)
+        return false;
     return resetCartridge(ResetWorkflow::Reload);
 }
 

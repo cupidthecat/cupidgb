@@ -1,16 +1,16 @@
 # User guide
 
-CupidGB runs one cartridge in each window. It keeps desktop settings per user and stores cartridge battery data and numbered save states beside the cartridge file. Use an ordinary writable folder for games whose saves you want to keep. File > New Window opens another session; two sessions can connect for local link play.
+CupidGB runs one cartridge or GBS music program in each window. It keeps desktop settings per user and stores cartridge battery data and numbered save states beside the loaded file. Use an ordinary writable folder for games whose saves you want to keep. File > New Window opens another session; two sessions can connect for local link play.
 
 ## Open, reset, and close
 
-Choose File > Open ROM, press Ctrl+O, drag a cartridge onto the window, or pass its path on the command line:
+Choose File > Open File, press Ctrl+O, drag a cartridge onto the window, or pass its path on the command line:
 
 ```sh
 cupidgb /path/to/cartridge.gbc
 ```
 
-Open a `.gb`, `.gbc`, or `.sgb` file directly. With 7-Zip installed, CupidGB also opens `.zip`, `.7z`, and `.rar` archives containing exactly one unencrypted cartridge. Compressed RAR files require a 7-Zip installation with the RAR codec. CupidGB reads the cartridge into memory. Battery saves and state slots keep the archive extension in their names, such as `game.zip.sav` and `game.zip.s1`. File > Open Recent keeps up to ten successful cartridge paths.
+Open a `.gb`, `.gbc`, or `.sgb` cartridge, or a `.gbs` music file, directly. With 7-Zip installed, CupidGB also opens `.zip`, `.7z`, and `.rar` archives containing exactly one supported, unencrypted file. Compressed RAR files require a 7-Zip installation with the RAR codec. CupidGB reads the selected file into memory. Battery saves and state slots keep the archive extension in their names, such as `game.zip.sav` and `game.zip.s1`. File > Open Recent keeps up to ten successful paths. Music uses a compact track player; [the music guide](gbs-music.md) explains its transport and reset behavior.
 
 Automatic hardware selection uses the cartridge header. It selects color hardware for color-capable cartridges, SGB for SGB-enhanced monochrome cartridges, and may select color hardware for licensed monochrome cartridges to provide their compatibility palette. Select a specific model in Emulation > Settings when reproducing model-dependent behavior. A color-only cartridge cannot open under a selected monochrome model.
 
@@ -20,7 +20,7 @@ The SGB profile uses its NTSC base clock of 4,295,454 Hz. SGB2 and the other cur
 
 SGB and SGB2 show a CupidGB introduction when executing a configured boot ROM, including with ordinary monochrome cartridges. The adapter holds the guest CPU for the first 106 presentations, then lets firmware execute while the introduction finishes. Approximate post-boot startup skips the introduction. Hiding the SGB border keeps the introduction inside the game viewport.
 
-Emulation > Reset saves the current battery and clock history, refreshes the cartridge, firmware and companion symbols, and applies the selected hardware settings. It starts execution again and clears rewind history. File > Close ROM saves the current battery and closes the session. A failed battery write prevents reset, reload, closing or replacement and keeps the session and any recording available for retry.
+Emulation > Reset saves the current battery and clock history, refreshes the cartridge, firmware and companion symbols, and applies the selected hardware settings. It starts execution again and clears rewind history. File > Close File saves the current battery and closes the session. A failed battery write prevents reset, reload, closing or replacement and keeps the session and any recording available for retry.
 
 Emulation > Quick Reset, or Ctrl+Alt+R, keeps the active hardware model and physical work RAM, high RAM, object memory and color palette memory while restarting the console. It refreshes the cartridge, firmware and companion symbols. VRAM and execution state restart. Quick Reset resumes play and retains rewind when the cartridge bytes, model and firmware are unchanged. Installed firmware executes again and can overwrite retained memory. Without firmware, the approximate color handoff clears WRAM bank 2 and object memory.
 
@@ -187,4 +187,4 @@ CupidGB uses Qt's per-user native settings backend with organization and applica
 
 `--smoke-test` and `--run-seconds` use isolated temporary settings. They do not overwrite normal desktop preferences. For command-line checks, input traces, and bounded runtime reports, see [testing and measurements](testing.md).
 
-Tools > Debugger (Ctrl+C) pauses for CPU stepping, breakpoints, symbols, register/memory commands, and bounded instruction Backstep. Tools > Memory and Graphics opens memory, tile, map, OAM, and palette inspectors. Read [the debugger guide](debugging.md) before editing a session. Advanced debugger commands, broader linked-game qualification, keyboard accessories, custom cheat expressions, and music-file playback remain incomplete.
+Tools > Debugger (Ctrl+C) pauses for CPU stepping, breakpoints, symbols, register/memory commands, and bounded instruction Backstep. Tools > Memory and Graphics opens memory, tile, map, OAM, and palette inspectors. Read [the debugger guide](debugging.md) before editing a session. Advanced debugger commands, broader linked-game qualification, keyboard accessories, custom cheat expressions, and broad music-library compatibility remain incomplete.

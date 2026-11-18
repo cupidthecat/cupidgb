@@ -1,6 +1,6 @@
 # Validation record
 
-This record starts with the desktop and timing checks on 2026-11-04 and includes later work through 2026-11-17. Results apply to each stated build, input set, and scope. They do not establish complete hardware or frontend parity. The comparison source revision is `ea667ad79aa28409f034b1fd6da7304e1844750d`.
+This record starts with the desktop and timing checks on 2026-11-04 and includes later work through 2026-11-18. Results apply to each stated build, input set, and scope. They do not establish complete hardware or frontend parity. The comparison source revision is `ea667ad79aa28409f034b1fd6da7304e1844750d`.
 
 Earlier sections retain the results and assumptions of their original builds. A result without a recorded model clock does not qualify the corrected SGB clock. Use the current model-clock reports when comparing physical speed across profiles.
 
@@ -19,6 +19,8 @@ The [storage, wave and camera checkpoint](validation-storage-wave.md) records fu
 ## Builds and automated checks
 
 The later [linked-window checkpoint](validation-link.md) records the paired-clock comparisons, refreshed mapper corpus, complete platform gates, cartridge scan and native two-window measurements for the link-play changes. Its results have their own source and artifact identities.
+
+The [GBS player checkpoint](validation-gbs.md) records music execution, reconstruction-history corrections, double-speed display boundaries, version 23 program identity and native player workflows. Its generated music inputs and listening-history comparisons remain separate from cartridge gameplay qualification.
 
 | Environment | Configuration | Result |
 | --- | --- | --- |

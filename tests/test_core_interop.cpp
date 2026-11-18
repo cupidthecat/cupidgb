@@ -20,6 +20,7 @@
  * along with this program.  If not, see <https://gnu.org>.
  */
 
+#include "cupid/gb/gbs.h"
 #include "cupid/gb/startup.h"
 
 #include <algorithm>
@@ -137,6 +138,75 @@ void live_state(const std::vector<uint8_t> &rom, CupidGbModel model) {
         assert(cupid_gb_step(gb.get()));
     assert(!gb->serial_bits_remaining && observation.count == 1 && observation.last == 0x41);
 }
+
+std::vector<uint8_t> music_program() {
+    std::vector<uint8_t> program(CUPID_GB_GBS_HEADER_SIZE + 64u);
+    std::memcpy(program.data(), "GBS\x01", 4);
+    program[4] = 2;
+    program[5] = 2;
+    program[7] = 2;     // Load at 0200.
+    program[9] = 2;     // Init at 0200.
+    program[10] = 0x10; // Play at 0210.
+    program[11] = 2;
+    program[12] = 0xf0;
+    program[13] = 0xdf;
+    program[14] = 0xfc;
+    program[15] = 0x85; // Timer playback and GBS double speed, including monochrome hardware.
+    std::memcpy(program.data() + 16, "Interop music", 13);
+    const std::array<uint8_t, 9> init = {0xea, 0x01, 0xc0, 0x3e, 0x5a, 0xea, 0x00, 0xc0, 0xc9};
+    const std::array<uint8_t, 8> play = {0xfa, 0x02, 0xc0, 0x3c, 0xea, 0x02, 0xc0, 0xc9};
+    std::copy(init.begin(), init.end(), program.begin() + CUPID_GB_GBS_HEADER_SIZE);
+    std::copy(play.begin(), play.end(), program.begin() + CUPID_GB_GBS_HEADER_SIZE + 16u);
+    return program;
+}
+
+void music_lifecycle(const std::vector<uint8_t> &rom, CupidGbModel model) {
+    Hardware gb(new CupidGb{});
+    cupid_gb_set_model(gb.get(), model);
+    cupid_gb_set_power_on_seed(gb.get(), UINT64_C(0x26154));
+    cupid_gb_init(gb.get());
+    Observation observation;
+    cupid_gb_set_serial_output_callback(gb.get(), serial_output, &observation);
+    auto program = music_program();
+    CupidGbGbsInfo info{};
+    assert(cupid_gb_load_gbs(gb.get(), program.data(), program.size(), &info) == CUPID_GB_GBS_OK);
+    assert(gb->loaded && gb->model == model && gb->cpu.a == 1);
+    assert(info.first_track == 1 && info.track_count == 2);
+    assert(std::strcmp(info.title, "Interop music") == 0);
+    assert(cupid_gb_battery_size(gb.get()) == 0);
+    const uint64_t generation = gb->rom_generation;
+    // The host's mutable source is not the live program or its metadata.
+    program[16] = 'X';
+    program[CUPID_GB_GBS_HEADER_SIZE] = 0x76;
+    for (unsigned i = 0; i < 32; ++i)
+        assert(cupid_gb_step(gb.get()));
+    assert(gb->work_ram[0] == 0x5a && gb->work_ram[1] == 1);
+    std::vector<uint8_t> state(cupid_gb_state_size(gb.get()));
+    assert(!state.empty());
+    size_t written = 0;
+    assert(cupid_gb_save_state(gb.get(), state.data(), state.size(), &written) ==
+           CUPID_GB_STATE_OK);
+    assert(written == state.size());
+    assert(cupid_gb_gbs_start_track(gb.get(), 255) == CUPID_GB_GBS_OK);
+    assert(gb->rom_generation == generation && gb->cpu.a == 255);
+    for (unsigned i = 0; i < 32; ++i)
+        assert(cupid_gb_step(gb.get()));
+    assert(gb->work_ram[0] == 0x5a && gb->work_ram[1] == 255);
+    assert(cupid_gb_load_state(gb.get(), state.data(), state.size()) == CUPID_GB_STATE_OK);
+    assert(gb->work_ram[0] == 0x5a && gb->work_ram[1] == 1);
+    assert(cupid_gb_gbs_info(gb.get(), &info) && info.first_track == 1);
+    assert(std::strcmp(info.title, "Interop music") == 0);
+    assert(gb->serial_output_callback == serial_output &&
+           gb->serial_output_user_data == &observation);
+    program[0] = 0;
+    assert(cupid_gb_load_gbs(gb.get(), program.data(), program.size(), nullptr) ==
+           CUPID_GB_GBS_INVALID_HEADER);
+    assert(cupid_gb_gbs_info(gb.get(), nullptr) && gb->work_ram[1] == 1);
+    assert(cupid_gb_load_rom(gb.get(), rom.data(), rom.size()));
+    assert(!cupid_gb_gbs_info(gb.get(), nullptr));
+    assert(gb->rom_generation != generation && gb->header.has_battery);
+    assert(cupid_gb_battery_size(gb.get()) == 8192);
+}
 } // namespace
 
 int main() {
@@ -149,4 +219,7 @@ int main() {
     legacy_recovery(rom);
     live_state(rom, CUPID_GB_MODEL_DMG_ABC);
     live_state(rom, CUPID_GB_MODEL_CGB);
+    music_lifecycle(rom, CUPID_GB_MODEL_DMG_ABC);
+    music_lifecycle(rom, CUPID_GB_MODEL_CGB);
+    music_lifecycle(rom, CUPID_GB_MODEL_SGB2);
 }

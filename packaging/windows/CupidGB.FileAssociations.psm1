@@ -1,5 +1,5 @@
 # @file    CupidGB.FileAssociations.psm1
-# @brief   Manage per-user cartridge associations while preserving unrelated registrations.
+# @brief   Manage per-user cartridge and music associations without changing existing defaults.
 # @author  cupidthecat
 # @date    2026-11-16
 #
@@ -40,7 +40,8 @@ function Get-CupidGBRegistrationPlan {
     $entries = [Collections.Generic.List[object]]::new()
     foreach ($type in @(
         @{ Extension = '.gb'; ProgId = 'CupidGB.GameBoy'; Description = 'CupidGB Game Boy cartridge' },
-        @{ Extension = '.gbc'; ProgId = 'CupidGB.GameBoyColor'; Description = 'CupidGB Game Boy Color cartridge' }
+        @{ Extension = '.gbc'; ProgId = 'CupidGB.GameBoyColor'; Description = 'CupidGB Game Boy Color cartridge' },
+        @{ Extension = '.gbs'; ProgId = 'CupidGB.Music'; Description = 'CupidGB Game Boy music' }
     )) {
         $key = 'Software\Classes\' + $type.ProgId
         $entries.Add(@($key, '', $type.Description, 'String'))
@@ -60,6 +61,7 @@ function Get-CupidGBRegistrationPlan {
     $entries.Add(@(($application + '\shell\open\command'), '', $command, 'String'))
     $entries.Add(@(($application + '\SupportedTypes'), '.gb', '', 'String'))
     $entries.Add(@(($application + '\SupportedTypes'), '.gbc', '', 'String'))
+    $entries.Add(@(($application + '\SupportedTypes'), '.gbs', '', 'String'))
     $entries.Add(@($capabilities, 'ApplicationName', 'CupidGB', 'String'))
     $entries.Add(@($capabilities, 'ApplicationDescription', 'Game Boy and Game Boy Color emulator', 'String'))
     $entries.Add(@($capabilities, 'ApplicationIcon', $icon, 'String'))
@@ -90,6 +92,7 @@ function Assert-CupidGBOwnedRegistration {
     param([Microsoft.Win32.RegistryKey] $UserRoot)
 
     foreach ($path in @('Software\Classes\CupidGB.GameBoy', 'Software\Classes\CupidGB.GameBoyColor',
+            'Software\Classes\CupidGB.Music',
             'Software\Classes\Applications\cupidgb.exe', 'Software\CupidGB\Capabilities')) {
         $key = $UserRoot.OpenSubKey($path)
         try {
@@ -185,7 +188,8 @@ function Unregister-CupidGBFileAssociations {
                 'Software\CupidGB', 'Software')) {
             [void]$paths.Add($current)
             if ($current -in @('Software\Classes\.gb\OpenWithProgids',
-                    'Software\Classes\.gbc\OpenWithProgids')) { break }
+                    'Software\Classes\.gbc\OpenWithProgids',
+                    'Software\Classes\.gbs\OpenWithProgids')) { break }
             $current = $current.Substring(0, $current.LastIndexOf('\'))
         }
     }

@@ -998,6 +998,67 @@ bool MainWindow::linkSmokeTest(const QString &directory) {
         QFile::remove(ownerWave);
     }
 
+    // An unlinked recorder reports immediately. Its error dialog can delete the
+    // same window, so both playback and debugger callers must unwind safely.
+    const QString recordingCase = qEnvironmentVariable("CUPIDGB_RECORDING_LIFETIME_CASE");
+    bool selectedRecordingCase = false;
+    for (const bool debugger : {false, true}) {
+        const QString name = debugger ? QStringLiteral("debugger") : QStringLiteral("playback");
+        if (!recordingCase.isEmpty() && recordingCase != name)
+            continue;
+        selectedRecordingCase = true;
+        QPointer<MainWindow> victim =
+            new MainWindow(true, true, false, noBoot, CUPID_GB_MODEL_DMG_ABC, uint64_t(1));
+        const auto cleanup = qScopeGuard([&] {
+            if (victim)
+                delete victim.data();
+        });
+        victim->timer_.stop();
+        const QString wave = fixtures.filePath("recording-lifetime-" + name + ".wav");
+        if (!victim->openRom(firstPath) || !victim->startRecording(wave))
+            return smokeFailure(__FILE__, __LINE__);
+        cupid_gb_tick_apu(&victim->emulator_->gb, 4096);
+        if (!cupid_gb_apu_pending(&victim->emulator_->gb).handheld_frames)
+            return smokeFailure(__FILE__, __LINE__);
+        WaveRecorderTestAccess::reachCapacity(*victim->recorder_);
+        victim->isolated_ = false;
+        victim->automated_ = false;
+        bool errorSeen = false, recordingStopped = false, timedOut = false;
+        QElapsedTimer deadline;
+        deadline.start();
+        QTimer callback;
+        callback.setInterval(1);
+        connect(&callback, &QTimer::timeout, &callback, [&] {
+            auto *error = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+            if (deadline.elapsed() > 2000) {
+                timedOut = true;
+                callback.stop();
+                if (error)
+                    error->reject();
+                return;
+            }
+            if (!error || error->parentWidget() != victim)
+                return;
+            errorSeen =
+                error->icon() == QMessageBox::Critical && error->text().contains("RIFF size limit");
+            recordingStopped = victim->recorder_ && !victim->recorder_->active();
+            callback.stop();
+            delete victim.data();
+        });
+        callback.start();
+        auto *window = victim.data();
+        qInfo("CupidGB recording lifetime %s starting", qPrintable(name));
+        if (debugger)
+            window->drainDebuggerAudio();
+        else
+            window->runFrame();
+        if (victim || !errorSeen || !recordingStopped || timedOut)
+            return smokeFailure(__FILE__, __LINE__);
+        qInfo("CupidGB recording lifetime %s passed", qPrintable(name));
+    }
+    if (!selectedRecordingCase)
+        return smokeFailure(__FILE__, __LINE__);
+
     qInfo("Linked frontend checks passed: guest transfer, two windows, independent input, "
           "player-two bindings/controllers, paired pause, state/reset retention, debugger, "
           "storage, recording failures, printer and close lifecycle.");

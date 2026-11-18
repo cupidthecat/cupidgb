@@ -25,6 +25,8 @@
 
 #include "host_camera.h"
 
+#include <QScopeGuard>
+
 MainWindow::MainWindow(bool isolated, bool automated, bool audioCheck,
                        const QString &bootDirectoryOverride, std::optional<int> modelOverride,
                        std::optional<uint64_t> powerOnSeedOverride)
@@ -73,8 +75,10 @@ MainWindow::MainWindow(bool isolated, bool automated, bool audioCheck,
             audioRefreshTimer_.start(10);
             return;
         }
+        const QPointer<MainWindow> self(this);
         setupAudio();
-        resetPacing();
+        if (self)
+            resetPacing();
     });
     timer_.start();
     clock_.start();
@@ -192,15 +196,21 @@ void MainWindow::buildMenus() {
     auto *newSession = file->addAction("New &Window", QKeySequence("Ctrl+Shift+N"));
     registerShortcut(newSession, "newWindow");
     connect(newSession, &QAction::triggered, this, [this] { newWindow(); });
-    auto *open = file->addAction("&Open ROM…", QKeySequence("Ctrl+O"));
+    auto *open = file->addAction("&Open File…", QKeySequence("Ctrl+O"));
     registerShortcut(open, "open");
     connect(open, &QAction::triggered, this, [this] {
+        const QPointer<MainWindow> self(this);
         const bool wasPaused = paused_;
         setPaused(true);
+        if (!self)
+            return;
         const QString path = QFileDialog::getOpenFileName(
-            this, "Open ROM", settings_.value("files/lastDirectory").toString(),
-            "Game Boy cartridges (*.gb *.gbc *.sgb *.zip *.7z *.rar);;All files (*)");
-        if (path.isEmpty() || !openRom(path))
+            this, "Open File", settings_.value("files/lastDirectory").toString(),
+            "Game Boy files (*.gb *.gbc *.sgb *.gbs *.zip *.7z *.rar);;"
+            "Cartridges (*.gb *.gbc *.sgb);;GBS music (*.gbs);;All files (*)");
+        if (!self)
+            return;
+        if ((path.isEmpty() || !openRom(path)) && self)
             setPaused(wasPaused);
     });
     recentMenu_ = file->addMenu("Open &Recent");
@@ -210,13 +220,22 @@ void MainWindow::buildMenus() {
     connect(reloadAction_, &QAction::triggered, this, [this] { reloadRom(); });
     loadStateFileAction_ = file->addAction("Load State File…");
     connect(loadStateFileAction_, &QAction::triggered, this, [this] {
-        QScopedValueRollback<bool> operation(stateOperation_, true);
+        const QPointer<MainWindow> self(this);
+        const bool previousOperation = stateOperation_;
+        stateOperation_ = true;
+        const auto operation = qScopeGuard([self, previousOperation] {
+            if (self)
+                self->stateOperation_ = previousOperation;
+        });
         const QString path = QFileDialog::getOpenFileName(
             this, "Load State File", QFileInfo(romPath_).absolutePath(),
             "State files (*.s? *.sn?);;All files (*)");
+        if (!self)
+            return;
         if (!path.isEmpty())
             loadStateFile(path);
-        resetPacing();
+        if (self)
+            resetPacing();
     });
     auto *recover = file->addAction("Recover Battery from Older State…");
     connect(recover, &QAction::triggered, this, [this] {
@@ -238,7 +257,7 @@ void MainWindow::buildMenus() {
             recoverBattery(source, destination);
         resetPacing();
     });
-    closeAction_ = file->addAction("&Close ROM", QKeySequence("Ctrl+W"));
+    closeAction_ = file->addAction("&Close File", QKeySequence("Ctrl+W"));
     registerShortcut(closeAction_, "close");
     connect(closeAction_, &QAction::triggered, this, [this] { closeRom(); });
     file->addSeparator();
@@ -530,9 +549,21 @@ void MainWindow::reportError(const QString &message) {
     if (isolated_ || automated_)
         qCritical("%s", qPrintable(message));
     else {
-        QScopedValueRollback<bool> operation(stateOperation_, true);
-        QMessageBox::critical(this, "CupidGB", message);
-        resetPacing();
+        const QPointer<MainWindow> self(this);
+        const bool previousOperation = stateOperation_;
+        stateOperation_ = true;
+        const auto operation = qScopeGuard([self, previousOperation] {
+            if (self)
+                self->stateOperation_ = previousOperation;
+        });
+        // A nested native event loop may close the owning window. Keep the
+        // dialog independently guarded instead of parenting a stack object.
+        const QPointer<QMessageBox> dialog =
+            new QMessageBox(QMessageBox::Critical, "CupidGB", message, QMessageBox::Ok, this);
+        const auto cleanup = qScopeGuard([dialog] { delete dialog.data(); });
+        dialog->exec();
+        if (self)
+            resetPacing();
     }
 }
 
@@ -541,7 +572,14 @@ bool MainWindow::openRom(const QString &path) {
 }
 
 bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflow) {
-    QScopedValueRollback<bool> operation(stateOperation_, true);
+    const QPointer<MainWindow> self(this);
+    const bool previousOperation = stateOperation_;
+    stateOperation_ = true;
+    const auto operation = qScopeGuard([self, previousOperation] {
+        if (self)
+            self->stateOperation_ = previousOperation;
+    });
+    const uint64_t previousSession = sessionId_;
     if (isStatePath(path)) {
         reportError(
             "State files cannot be opened as cartridges. Open a cartridge, then load its state.");
@@ -556,40 +594,52 @@ bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflo
         return false;
     }
     QString error;
-    const QByteArray data = readCartridgeFile(path, error);
+    const GameMedia media = readGameMedia(path, error);
+    const QByteArray &data = media.data;
+    const bool music = media.kind == GameMediaKind::Gbs;
     if (data.isEmpty()) {
         reportError(error);
         return false;
     }
-    auto candidate = std::make_unique<CupidEmulator>();
+    auto candidate = music ? std::unique_ptr<CupidEmulator>() : std::make_unique<CupidEmulator>();
     int model = reload && emulator_
                     ? int(emulator_->gb.model)
                     : modelOverride_.value_or(settings_.value("emulation/model", -1).toInt());
-    if (model < 0)
+    if (!music && model < 0)
         model = automaticModel(data);
-    if (model > CUPID_GB_MODEL_SGB2 || model < CUPID_GB_MODEL_DMG_ABC) {
+    if (model > CUPID_GB_MODEL_SGB2 || (!music && model < CUPID_GB_MODEL_DMG_ABC)) {
         reportError("The configured hardware model is invalid.");
         return false;
     }
-    if ((uint8_t(data[0x143]) & 0xc0) == 0xc0 && model != CUPID_GB_MODEL_CGB) {
+    if (!music && (uint8_t(data[0x143]) & 0xc0) == 0xc0 && model != CUPID_GB_MODEL_CGB) {
         reportError("This cartridge requires Game Boy Color. Select Automatic or Game Boy Color.");
         return false;
     }
-    if (powerOnSeedOverride_)
-        cupid_gb_set_power_on_seed(&candidate->gb, *powerOnSeedOverride_);
-    else
-        cupid_gb_clear_power_on_seed(&candidate->gb);
-    // Select host policy before initialization and battery import can establish clock history.
-    cupid_gb_set_rtc_mode(&candidate->gb, configuredRtcMode(settings_));
-    cupid_emulator_init(candidate.get(),
-                        model == CUPID_GB_MODEL_CGB ? CUPID_SYSTEM_GBC : CUPID_SYSTEM_GB);
-    cupid_gb_set_model(&candidate->gb, CupidGbModel(model));
-    if (!cupid_emulator_load_rom(candidate.get(),
-                                 reinterpret_cast<const uint8_t *>(data.constData()),
-                                 size_t(data.size()))) {
-        cupid_emulator_shutdown(candidate.get());
-        reportError("The cartridge could not be loaded.");
-        return false;
+    std::optional<CupidGbGbsInfo> candidateMusic;
+    if (music) {
+        CupidGbGbsInfo metadata{};
+        if (!prepareMusicCandidate(candidate, data, model, metadata))
+            return false;
+        candidateMusic = metadata;
+    } else {
+        if (powerOnSeedOverride_)
+            cupid_gb_set_power_on_seed(&candidate->gb, *powerOnSeedOverride_);
+        else
+            cupid_gb_clear_power_on_seed(&candidate->gb);
+        // Select host policy before initialization and battery import establish clock history.
+        cupid_gb_set_rtc_mode(&candidate->gb, configuredRtcMode(settings_));
+        cupid_emulator_init(candidate.get(),
+                            model == CUPID_GB_MODEL_CGB ? CUPID_SYSTEM_GBC : CUPID_SYSTEM_GB);
+        cupid_gb_set_model(&candidate->gb, CupidGbModel(model));
+        if (emulator_)
+            candidate->gb.mbc3_extended_history = emulator_->gb.mbc3_extended_history;
+        if (!cupid_emulator_load_rom(candidate.get(),
+                                     reinterpret_cast<const uint8_t *>(data.constData()),
+                                     size_t(data.size()))) {
+            cupid_emulator_shutdown(candidate.get());
+            reportError("The cartridge could not be loaded.");
+            return false;
+        }
     }
     const QString absolute = QFileInfo(path).absoluteFilePath();
     const QFileInfo info(absolute);
@@ -611,7 +661,7 @@ bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflo
         return false;
     }
     // Reject unavailable firmware before exporting the current cartridge's clock.
-    const QString bootFolder = bootDirectory();
+    const QString bootFolder = music ? QString() : bootDirectory();
     if (!bootFolder.isEmpty()) {
         QString name = "dmg_boot.bin";
         if (model == CUPID_GB_MODEL_CGB)
@@ -748,6 +798,10 @@ bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflo
         candidate->gb.battery_write_generation != emulator_->gb.battery_write_generation;
     if (!sameCartridge && workflow == ResetWorkflow::Open) {
         disconnectLink();
+        if (!self || sessionId_ != previousSession) {
+            cupid_emulator_shutdown(candidate.get());
+            return false;
+        }
         setPrinterConnected(false);
     }
     if (!replaceLinkEndpoint(&candidate->gb)) {
@@ -758,14 +812,12 @@ bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflo
     if (emulator_)
         cupid_emulator_shutdown(emulator_.get());
     emulator_ = std::move(candidate);
-    {
-        // Device reclassification can emit output immediately. Gate callbacks
-        // through the commit; resetting a session does not release its controls.
-        QScopedValueRollback<bool> operation(stateOperation_, true);
-        if (workflow == ResetWorkflow::Open)
-            releaseKeys(false);
-        controllers_->setMotionEnabled(emulator_->gb.header.mbc_type == CUPID_GB_MBC7);
-    }
+    setMusicSession(candidateMusic, candidateMusic ? candidateMusic->first_track : 0);
+    // Device reclassification can emit output immediately. The outer operation
+    // still gates callbacks; resetting a session does not release its controls.
+    if (workflow == ResetWorkflow::Open)
+        releaseKeys(false);
+    controllers_->setMotionEnabled(emulator_->gb.header.mbc_type == CUPID_GB_MBC7);
     cheats_ = std::move(candidateCheats);
     cheatPath_ = cheatPath;
     if (!sameCheatSession)
@@ -792,14 +844,17 @@ bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflo
             this);
     else
         cupid_gb_set_rumble_sample_callback(&emulator_->gb, nullptr, nullptr);
-    if (motorCapable)
+    if (motorCapable || music)
         cupid_gb_set_presentation_callback(
             &emulator_->gb,
             [](const CupidGb *gb, uint8_t type, void *user) {
                 (void)type;
                 auto *window = static_cast<MainWindow *>(user);
-                if (!window->emulator_ || &window->emulator_->gb != gb ||
-                    !window->rumbleSampleCount_)
+                if (!window->emulator_ || &window->emulator_->gb != gb)
+                    return;
+                if (window->musicInfo_)
+                    window->musicFramePending_ = true;
+                if (!window->rumbleSampleCount_)
                     return;
                 window->rumblePublishedAmplitudes_.push_back(
                     double(window->rumbleSampleSum_) / (3.0 * double(window->rumbleSampleCount_)));
@@ -816,6 +871,7 @@ bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflo
     else
         resetRewind();
     ++sessionId_;
+    const uint64_t committedSession = sessionId_;
     resetDebuggerTimeline(!sameCartridge && !reload);
     if (inspectorsWindow_)
         inspectorsWindow_->sessionChanged();
@@ -854,16 +910,22 @@ bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflo
     // Reload keeps its existing pause choice without a transient resume. The
     // reset transaction retains controls until an actual input event changes them.
     setPaused(workflow == ResetWorkflow::Reload && paused_, workflow != ResetWorkflow::Open);
+    if (!self || sessionId_ != committedSession)
+        return true;
     setWindowTitle(info.fileName() + " — CupidGB");
-    statusBar()->showMessage(bootFolder.isEmpty() ? "Post-boot startup; no boot ROM selected"
-                                                  : "Boot ROM loaded");
+    statusBar()->showMessage(music                  ? "Music playback"
+                             : bootFolder.isEmpty() ? "Post-boot startup; no boot ROM selected"
+                                                    : "Boot ROM loaded");
     if (!cheatWarning.isEmpty()) {
         qWarning("%s", qPrintable(cheatWarning));
         statusBar()->showMessage(cheatWarning);
     }
     setupAudio();
+    if (!self || sessionId_ != committedSession)
+        return true;
     display_->messages.clear();
-    display_->messages.showCartridge(QCoreApplication::applicationVersion(), romData_);
+    if (!music)
+        display_->messages.showCartridge(QCoreApplication::applicationVersion(), romData_);
     present(Presentation::Reset);
     // A new cartridge reclassifies held controller axes while callbacks are gated.
     // Commit those controls before its first snapshot; resets retain their native contacts.
@@ -915,22 +977,34 @@ void MainWindow::watchBattery() {
 }
 
 bool MainWindow::closeRom() {
-    QScopedValueRollback<bool> operation(stateOperation_, true);
+    const QPointer<MainWindow> self(this);
+    const bool previousOperation = stateOperation_;
+    stateOperation_ = true;
+    const auto operation = qScopeGuard([self, previousOperation] {
+        if (self)
+            self->stateOperation_ = previousOperation;
+    });
+    const uint64_t previousSession = sessionId_;
     if (!flushBattery(true) || !stopRecording())
         return false;
     disconnectLink();
+    if (!self || sessionId_ != previousSession)
+        return true;
     cancelCameraCapture();
     hostCamera_.reset();
     cameraError_.clear();
     resetMotionInput();
     setPrinterConnected(false);
     ++sessionId_;
+    const uint64_t closingSession = sessionId_;
     resetControllerRumble();
     resetDebuggerTimeline(true);
     saveTimer_.stop();
     batteryDirty_ = false;
     releaseKeys(false);
     stopAudio();
+    if (!self || sessionId_ != closingSession)
+        return true;
     audioBuffer_.reset();
     if (emulator_)
         cupid_emulator_shutdown(emulator_.get());
@@ -956,6 +1030,7 @@ bool MainWindow::closeRom() {
     display_->messages.clear();
     display_->setMinimumSize(160, 144);
     display_->update();
+    setMusicSession(std::nullopt, 0);
     setWindowTitle("CupidGB");
     refreshActions();
     return true;
@@ -966,6 +1041,13 @@ void MainWindow::refreshActions() {
                          frameAction_, screenshotAction_, screenshotAsAction_,
                          copyScreenshotAction_, loadStateFileAction_, recordingAction_})
         action->setEnabled(bool(emulator_));
+    reloadAction_->setEnabled(bool(emulator_) && !musicInfo_);
+    for (auto *action : {screenshotAction_, screenshotAsAction_, copyScreenshotAction_})
+        action->setEnabled(bool(emulator_) && !musicInfo_);
+    for (auto *action : windowSizeActions_)
+        action->setEnabled(!musicInfo_);
+    if (auto *fullscreen = findChild<QAction *>("fullscreen"))
+        fullscreen->setEnabled(!musicInfo_);
     recordingAction_->setText(recorder_ && recorder_->active() ? "Stop Audio &Recording"
                                                                : "Start Audio &Recording…");
     for (auto *action : saveSlotActions_)
@@ -977,6 +1059,7 @@ void MainWindow::refreshActions() {
     connectionsMenu_->setEnabled(bool(emulator_));
     refreshCheats();
     refreshDebugger();
+    refreshMusicControls();
 }
 
 QString MainWindow::bootDirectory() const {

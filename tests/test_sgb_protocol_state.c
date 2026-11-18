@@ -53,7 +53,8 @@ typedef struct Guard {
     CupidGbPrinterState *printer;
 } Guard;
 
-static unsigned continuation_cases, legacy_cases, rejection_cases, allocation_calls;
+static unsigned continuation_cases, v22_continuation_cases, legacy_cases, rejection_cases,
+    allocation_calls;
 
 static bool physical(CupidGbModel model) {
     return model == CUPID_GB_MODEL_SGB || model == CUPID_GB_MODEL_SGB2;
@@ -131,7 +132,7 @@ static Blob capture(const CupidGb *gb) {
     assert(cupid_gb_save_state_with_context(gb, trusted, blob.size, &second, &context) ==
            CUPID_GB_STATE_OK);
     assert(first == blob.size && second == blob.size && blob.data[blob.size] == 0xa7);
-    assert(blob.data[8] == 22 && !memcmp(blob.data, trusted, blob.size));
+    assert(blob.data[8] == CUPID_GB_STATE_VERSION && !memcmp(blob.data, trusted, blob.size));
     assert(!memcmp(before, gb, sizeof(*before)));
     free(before);
     free(trusted);
@@ -280,7 +281,8 @@ static void poison(CupidGb *gb, bool disabled) {
         gb->apu.output.buf[index] = (int16_t)(100 + index * 13);
 }
 
-static void pulse_continuations(void) {
+static void pulse_continuations(unsigned version) {
+    assert(version == 22 || version == CUPID_GB_STATE_VERSION);
     for (unsigned model = CUPID_GB_MODEL_SGB; model <= CUPID_GB_MODEL_SGB2; ++model)
         for (unsigned enhanced = 0; enhanced < 2; ++enhanced)
             for (unsigned stage = 0; stage < 5; ++stage) {
@@ -288,6 +290,10 @@ static void pulse_continuations(void) {
                 uint8_t writes[PACKET_WRITES];
                 const unsigned cursor = checkpoint(source, stage, writes);
                 Blob saved = capture(source);
+                /* Version 22 uses the same cartridge payload and digest. Give
+                 * that importer its own header and integrity hash explicitly. */
+                put_u32(saved.data + 8, version);
+                seal(saved);
                 wire_matches(source, saved);
                 CupidGb *boundary = malloc(sizeof(*boundary));
                 assert(boundary);
@@ -305,6 +311,8 @@ static void pulse_continuations(void) {
                     same_protocol(target, boundary);
                     if (api < 2) {
                         Blob restored = capture(target);
+                        put_u32(restored.data + 8, version);
+                        seal(restored);
                         assert(restored.size == saved.size &&
                                !memcmp(restored.data, saved.data, saved.size));
                         free(restored.data);
@@ -315,6 +323,7 @@ static void pulse_continuations(void) {
                     finish(target, writes, cursor, stage == 4);
                     same_protocol(source, target);
                     ++continuation_cases;
+                    v22_continuation_cases += version == 22;
                     destroy(target);
                 }
                 free(boundary);
@@ -546,14 +555,17 @@ static void legacy_partial_header(void) {
 }
 
 int main(void) {
-    assert(CUPID_GB_STATE_VERSION == 22 && CUPID_SGB_HEADER_BYTES == RECEIVED_BYTES);
-    pulse_continuations();
+    assert(CUPID_GB_STATE_VERSION > 22 && CUPID_SGB_HEADER_BYTES == RECEIVED_BYTES);
+    pulse_continuations(CUPID_GB_STATE_VERSION);
+    pulse_continuations(22);
     structural_checks();
     legacy_projection();
     legacy_partial_header();
-    assert(continuation_cases == 80 && legacy_cases == 672 && rejection_cases == 232);
-    printf("Adapter protocol state checks passed: %u pulse continuations, %u legacy imports, "
+    assert(continuation_cases == 160 && v22_continuation_cases == 80 && legacy_cases == 672 &&
+           rejection_cases == 232);
+    printf("Adapter protocol state checks passed: %u pulse continuations (%u version 22), "
+           "%u older legacy imports, "
            "%u public API rejections.\n",
-           continuation_cases, legacy_cases, rejection_cases);
+           continuation_cases, v22_continuation_cases, legacy_cases, rejection_cases);
     return 0;
 }

@@ -22,6 +22,8 @@
 #include "cupid/gb/apu.h"
 #include "cupid/gb/timer.h"
 
+#include "../src/gb/apu_noise.h"
+
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -211,6 +213,187 @@ static void test_pulse_pitch(void) {
             }
         }
     }
+}
+
+static void check_pulse_reload(CupidGb *gb, CupidGbModel model, bool double_speed, unsigned channel,
+                               unsigned age, bool high_write, uint8_t value) {
+    *gb = (CupidGb){0};
+    gb->model = model;
+    gb->cgb_mode = model == CUPID_GB_MODEL_CGB;
+    gb->double_speed = double_speed;
+    cupid_gb_sgb_startup_reset(gb, false);
+    const uint16_t base = channel ? 0xff16 : 0xff11;
+    const uint16_t previous = high_write ? 0x6f0 : 0x7f0;
+    const uint16_t frequency =
+        high_write ? (uint16_t)((value << 8u) | 0xf0u) : (uint16_t)(0x700u | value);
+    const uint32_t previous_period = (2048u - previous) * 4u;
+    const uint32_t period = (2048u - frequency) * 4u;
+    cupid_gb_write_u8(gb, 0xff26, 0x80);
+    cupid_gb_write_u8(gb, base, 0xc0);
+    cupid_gb_write_u8(gb, base + 1, 0xf0);
+    cupid_gb_write_u8(gb, base + 2, (uint8_t)previous);
+    cupid_gb_write_u8(gb, base + 3, (uint8_t)(0x80u | (previous >> 8u)));
+    tick_audio(gb, (channel ? gb->apu.ch2_timer : gb->apu.ch1_timer) + age);
+    assert(gb->apu.pulse_timing[channel].edge_age == age);
+    const uint8_t position = channel ? gb->apu.ch2_duty_pos : gb->apu.ch1_duty_pos;
+    const bool output_high = gb->apu.pulse_timing[channel].output_high;
+    const uint8_t sample = gb->apu.dac_sample[channel];
+    /* Either byte can replace the next period inside the two-base-clock reload
+     * window. Later writes retain the old deadline. These high-byte cases avoid
+     * the separate color duty-cancellation gate at the 0x700 boundary. */
+    const uint32_t next_edge = (age < 2 ? period : previous_period) - age;
+    cupid_gb_write_u8(gb, (uint16_t)(base + (high_write ? 3 : 2)), value);
+    assert((channel ? gb->apu.ch2_freq : gb->apu.ch1_freq) == frequency);
+    assert((channel ? gb->apu.ch2_duty_pos : gb->apu.ch1_duty_pos) == position);
+    assert(gb->apu.pulse_timing[channel].output_high == output_high);
+    assert(gb->apu.dac_sample[channel] == sample);
+    tick_audio(gb, next_edge - 1u);
+    assert((channel ? gb->apu.ch2_duty_pos : gb->apu.ch1_duty_pos) == position);
+    tick_audio(gb, 1);
+    assert((channel ? gb->apu.ch2_duty_pos : gb->apu.ch1_duty_pos) == ((position + 1u) & 7u));
+    tick_audio(gb, period - 1u);
+    assert((channel ? gb->apu.ch2_duty_pos : gb->apu.ch1_duty_pos) == ((position + 1u) & 7u));
+    tick_audio(gb, 1);
+    assert((channel ? gb->apu.ch2_duty_pos : gb->apu.ch1_duty_pos) == ((position + 2u) & 7u));
+}
+
+static void test_pulse_frequency_reload_window(void) {
+    const CupidGbModel models[] = {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_DMG0, CUPID_GB_MODEL_MGB,
+                                   CUPID_GB_MODEL_SGB,     CUPID_GB_MODEL_SGB2, CUPID_GB_MODEL_CGB};
+    const uint8_t writes[2][2] = {{0xe0, 0xf8}, {5, 7}};
+    CupidGb *gb = calloc(1, sizeof(*gb));
+    assert(gb);
+    for (unsigned model = 0; model < sizeof(models) / sizeof(models[0]); ++model)
+        for (unsigned speed = 0; speed < 2; ++speed)
+            for (unsigned channel = 0; channel < 2; ++channel)
+                for (unsigned age = 0; age <= 4; ++age)
+                    for (unsigned high = 0; high < 2; ++high)
+                        for (unsigned change = 0; change < 2; ++change)
+                            check_pulse_reload(gb, models[model], speed != 0, channel, age,
+                                               high != 0, writes[high][change]);
+    free(gb);
+}
+
+static void prepare_noise_phase(CupidGb *gb, CupidGbModel model, bool double_speed,
+                                unsigned divisor, unsigned phase) {
+    *gb = (CupidGb){0};
+    gb->model = model;
+    gb->cgb_mode = model == CUPID_GB_MODEL_CGB;
+    gb->double_speed = double_speed;
+    cupid_gb_sgb_startup_reset(gb, false);
+    cupid_gb_write_u8(gb, 0xff26, 0x80);
+    cupid_gb_write_u8(gb, 0xff21, 0xf0);
+    cupid_gb_write_u8(gb, 0xff22, (uint8_t)(0x10u | divisor));
+    gb->apu.noise_timing.clock_phase = (uint8_t)(phase * 2u);
+}
+
+static void test_noise_startup_clock_matrix(void) {
+    const CupidGbModel models[] = {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_DMG0, CUPID_GB_MODEL_MGB,
+                                   CUPID_GB_MODEL_SGB,     CUPID_GB_MODEL_SGB2, CUPID_GB_MODEL_CGB};
+    /* First prescaler deadlines in 2 MHz clocks, before retrigger/history effects.
+     * The second row family covers fast monochrome clocks used by music files. */
+    static const uint8_t deadlines[2][8][4] = {{{6, 7, 6, 7},
+                                                {10, 9, 8, 11},
+                                                {10, 13, 12, 11},
+                                                {14, 17, 16, 15},
+                                                {18, 21, 20, 19},
+                                                {22, 25, 24, 23},
+                                                {26, 29, 28, 27},
+                                                {30, 33, 32, 31}},
+                                               {{8, 7, 8, 7},
+                                                {10, 9, 12, 11},
+                                                {14, 13, 12, 11},
+                                                {18, 17, 16, 15},
+                                                {22, 21, 20, 19},
+                                                {26, 25, 24, 23},
+                                                {30, 29, 28, 27},
+                                                {34, 33, 32, 31}}};
+    CupidGb *gb = calloc(1, sizeof(*gb));
+    assert(gb);
+    for (unsigned model = 0; model < sizeof(models) / sizeof(models[0]); ++model) {
+        const bool color = models[model] == CUPID_GB_MODEL_CGB;
+        for (unsigned speed = 0; speed < 2; ++speed) {
+            const bool fast_monochrome = !color && speed;
+            for (unsigned divisor = 0; divisor < 8; ++divisor) {
+                for (unsigned phase = 0; phase < 4; ++phase) {
+                    for (unsigned active = 0; active < 2; ++active) {
+                        prepare_noise_phase(gb, models[model], speed != 0, divisor, phase);
+                        gb->apu.ch4_on = active != 0;
+                        gb->apu.noise_timing.background = active != 0;
+                        gb->apu.noise_timing.remaining = active ? 7 : 0;
+                        unsigned deadline = deadlines[fast_monochrome][divisor][phase];
+                        if (active && divisor == 1 && (phase & 1))
+                            deadline -= 4;
+                        if (active && color && !divisor && (phase & 1))
+                            deadline -= 2;
+                        cupid_gb_noise_prepare(gb, active != 0);
+                        assert(gb->apu.noise_timing.remaining == deadline);
+                        assert(gb->apu.ch4_lfsr ==
+                               (active && !divisor && phase == 3 ? 0x7faa : 0x7fff));
+                        gb->apu.ch4_on = true;
+                        gb->apu.ch4_vol = 15;
+                        tick_audio(gb, deadline * 2u - 1u);
+                        assert(gb->apu.noise_timing.divider_counter == 0);
+                        tick_audio(gb, 1);
+                        assert(gb->apu.noise_timing.divider_counter == 1);
+                        const unsigned period = divisor ? divisor * 8u : 4u;
+                        tick_audio(gb, period - 1u);
+                        assert(gb->apu.noise_timing.divider_counter == 1);
+                        tick_audio(gb, 1);
+                        assert(gb->apu.noise_timing.divider_counter == 2);
+                    }
+                }
+            }
+
+            /* A retrigger can retain a carry immediately before the old counter
+             * reload. Fast monochrome clocks expose one additional old tick. */
+            for (unsigned divisor = 2; divisor < 8; ++divisor)
+                for (unsigned phase = 0; phase < 4; ++phase)
+                    for (unsigned remaining = 1; remaining <= 2; ++remaining) {
+                        prepare_noise_phase(gb, models[model], speed != 0, divisor, phase);
+                        gb->apu.ch4_on = true;
+                        gb->apu.noise_timing.background = true;
+                        gb->apu.noise_timing.remaining = (uint8_t)remaining;
+                        cupid_gb_noise_prepare(gb, true);
+                        assert(gb->apu.noise_timing.divider_counter ==
+                               (remaining == 1 || fast_monochrome ? 1 : 0));
+                    }
+
+            /* Inactive background counting and a disconnected DAC affect startup
+             * independently. Preserve their ordering around the speed adjustment. */
+            const unsigned history_divisors[] = {0, 1, 5};
+            for (unsigned item = 0; item < 3; ++item) {
+                const unsigned divisor = history_divisors[item];
+                for (unsigned phase = 0; phase < 4; ++phase)
+                    for (unsigned dac = 0; dac < 2; ++dac)
+                        for (unsigned started_off = 0; started_off < 2; ++started_off) {
+                            prepare_noise_phase(gb, models[model], speed != 0, divisor, phase);
+                            cupid_gb_write_u8(gb, 0xff21, dac ? 0xf0 : 0);
+                            gb->apu.noise_timing.background = true;
+                            gb->apu.noise_timing.started_dac_off = started_off != 0;
+                            unsigned deadline = deadlines[fast_monochrome][divisor][phase];
+                            if (!divisor) {
+                                if (color && (phase & 1))
+                                    deadline -= 2;
+                                if (!phase && started_off)
+                                    deadline += 28;
+                                if (fast_monochrome)
+                                    --deadline;
+                            } else if (!phase && divisor == 1) {
+                                deadline -= 4;
+                            } else if (!phase && !dac) {
+                                deadline += 4;
+                            }
+                            cupid_gb_noise_prepare(gb, false);
+                            assert(gb->apu.noise_timing.remaining == deadline);
+                            assert(gb->apu.noise_timing.foreground == (dac != 0));
+                            assert(gb->apu.noise_timing.started_dac_off == (dac == 0));
+                            assert(!gb->apu.noise_timing.output_high && !gb->apu.ch4_on);
+                        }
+            }
+        }
+    }
+    free(gb);
 }
 
 static void test_pulse_trigger_length_enable(void) {
@@ -1504,6 +1687,8 @@ int main(void) {
     test_cgb_compatibility_uses_color_hardware();
     test_sweep_zero_period_and_shadow();
     test_pulse_pitch();
+    test_pulse_frequency_reload_window();
+    test_noise_startup_clock_matrix();
     test_noise_clock();
     test_monochrome_noise_latches();
     test_partial_drain();

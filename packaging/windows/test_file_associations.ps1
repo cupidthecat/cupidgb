@@ -82,7 +82,7 @@ function Set-Value {
 }
 function Get-ActualDefaults {
     $root = [Microsoft.Win32.Registry]::CurrentUser
-    foreach ($extension in @('.gb', '.gbc')) {
+    foreach ($extension in @('.gb', '.gbc', '.gbs')) {
         $classes = 'Software\Classes\' + $extension
         $choice = 'Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\' + $extension + '\UserChoice'
         @($extension, (Get-Value $root $classes), (Get-Value $root $choice 'ProgId'),
@@ -110,7 +110,7 @@ try {
     $next = Join-Path $moved 'cupidgb.exe'
     [IO.File]::WriteAllBytes($exe, [byte[]]@(0x4D, 0x5A))
     [IO.File]::WriteAllBytes($next, [byte[]]@(0x4D, 0x5A))
-    foreach ($extension in @('.gb', '.gbc')) {
+    foreach ($extension in @('.gb', '.gbc', '.gbs')) {
         Set-Value $root ('Software\Classes\' + $extension) '' 'Other.Cartridge'
         Set-Value $root ('Software\Classes\' + $extension + '\OpenWithProgids') 'Other.Cartridge' ''
         $choice = 'Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\' + $extension + '\UserChoice'
@@ -130,6 +130,13 @@ try {
     Assert-Check ($arguments.Count -eq 2 -and $arguments[0] -ceq $exe -and
         $arguments[1] -ceq $cartridge) 'Windows argument parsing changed a cartridge path.'
     Assert-Check ((Get-Value $root 'Software\Classes\Applications\cupidgb.exe\SupportedTypes' '.gbc') -ceq '') 'SupportedTypes is absent.'
+    Assert-Check ((Get-Value $root 'Software\Classes\Applications\cupidgb.exe\SupportedTypes' '.gbs') -ceq '') 'Music SupportedTypes is absent.'
+    Assert-Check ((Get-Value $root 'Software\CupidGB\Capabilities\FileAssociations' '.gbs') -ceq 'CupidGB.Music') 'Music capabilities are absent.'
+    $music = Join-Path $folder ('Track & 100% ' + [char]0x732B + '.gbs')
+    $musicCommand = (Get-Value $root 'Software\Classes\CupidGB.Music\shell\open\command').Replace('%1', $music)
+    $musicArguments = [CupidGB.PrivateHiveTest]::Arguments($musicCommand)
+    Assert-Check ($musicArguments.Count -eq 2 -and $musicArguments[0] -ceq $exe -and
+        $musicArguments[1] -ceq $music) 'Windows argument parsing changed a music path.'
     Assert-Check ((Get-Value $root 'Software\RegisteredApplications' 'CupidGB') -ceq 'Software\CupidGB\Capabilities') 'Capabilities are not advertised.'
     $again = Register-CupidGBFileAssociations -ExecutablePath $exe -UserRoot $root
     Assert-Check (-not $again.Changed) 'Repeated registration was not idempotent.'
@@ -146,9 +153,10 @@ try {
     Assert-Check $removed.Changed 'Unregistration made no changes.'
     Assert-Check ((Get-Value $root 'Software\Classes\CupidGB.GameBoy' 'UnrelatedValue') -ceq 'preserve') 'Unregistration removed an unrelated value.'
     Assert-Check ($null -eq (Get-Value $root 'Software\Classes\CupidGB.GameBoy\shell\open\command')) 'The owned open command remains.'
+    Assert-Check ($null -eq (Get-Value $root 'Software\Classes\CupidGB.Music\shell\open\command')) 'The owned music command remains.'
     Assert-Check ($null -eq (Get-Value $root 'Software\RegisteredApplications' 'CupidGB')) 'The owned capability entry remains.'
     Assert-Check (-not (Unregister-CupidGBFileAssociations -ExecutablePath $next -UserRoot $root).Changed) 'Repeated removal was not idempotent.'
-    foreach ($extension in @('.gb', '.gbc')) {
+    foreach ($extension in @('.gb', '.gbc', '.gbs')) {
         Assert-Check ((Get-Value $root ('Software\Classes\' + $extension)) -ceq 'Other.Cartridge') 'An existing extension default changed.'
         Assert-Check ((Get-Value $root ('Software\Classes\' + $extension + '\OpenWithProgids') 'Other.Cartridge') -ceq '') 'Another Open With entry changed.'
         $choice = 'Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\' + $extension + '\UserChoice'

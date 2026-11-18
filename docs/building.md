@@ -79,6 +79,7 @@ For Ninja, first open an x64 Visual Studio developer shell so compiler, linker, 
 cmake -S . -B build-ninja -G Ninja -DCMAKE_BUILD_TYPE=Release `
     "-DCMAKE_PREFIX_PATH=C:/Qt/6.8.3/msvc2022_64;C:/Libraries/SDL2-2.28.5"
 cmake --build build-ninja --parallel 4
+$env:PATH = "C:/Qt/6.8.3/msvc2022_64/bin;$env:PATH"
 ctest --test-dir build-ninja --output-on-failure
 ./build-ninja/cupidgb.exe C:/Games/cartridge.gb
 ```
@@ -130,7 +131,7 @@ The MSVC configuration rejects this sanitizer option. Enabling sanitizers suppre
 
 ## Installation and deployment
 
-The desktop configuration installs the executable, project license and supplied SDL2 notices. Windows installation also copies the selected SDL2 runtime and optional per-user Open With scripts. The executable includes CupidGB icon and version resources. Linux installation supplies a desktop entry, GB/GBC MIME descriptions, and an SVG application icon:
+The desktop configuration installs the executable, project license and supplied SDL2 notices. Windows installation also copies the selected SDL2 runtime and optional per-user Open With scripts. The executable includes CupidGB icon and version resources. Linux installation supplies a desktop entry, MIME descriptions for GB/GBC cartridges and GBS music, and an SVG application icon:
 
 ```sh
 cmake --install build --prefix /path/to/install
@@ -155,7 +156,7 @@ Copy-Item packaging/windows/Register-CupidGB.ps1, packaging/windows/Unregister-C
 
 Include the notices and license material required by the libraries actually shipped. Test the staged folder with development Qt paths removed from its environment. Check launch, dialogs, images, audio, and clean shutdown; dependency copying alone does not qualify deployment.
 
-The optional Windows scripts add CupidGB to Open With choices for `.gb` and `.gbc`, preserving current defaults and `UserChoice` entries. They are not run during installation or application startup. [Windows integration](../packaging/windows/README.md) describes registration, removal, private-hive checks, and icon regeneration.
+The optional Windows scripts add CupidGB to Open With choices for `.gb`, `.gbc` and `.gbs`, preserving current defaults and `UserChoice` entries. They are not run during installation or application startup. [Windows integration](../packaging/windows/README.md) describes registration, removal, private-hive checks, and icon regeneration.
 
 Qt continues to own video, audio and its event loop. SDL2 initializes only controller-related subsystems. The controller virtual-device tests need no physical gamepad, but their success does not qualify real drivers, motors or motion devices. See [controllers](controllers.md) for the input boundary and test limits.
 

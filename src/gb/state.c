@@ -35,6 +35,7 @@
 #include "cupid/gb/ppu.h"
 #include "cupid/gb/tpp1.h"
 #include "display_clock.h"
+#include "gbs_internal.h"
 #include "printer_internal.h"
 #include "state_internal.h"
 #include "state_io.h"
@@ -48,7 +49,8 @@
 
 enum {
     STATE_HEADER_SIZE = 128,
-    STATE_VERSION_V22 = CUPID_GB_STATE_VERSION,
+    STATE_VERSION_V23 = CUPID_GB_STATE_VERSION,
+    STATE_VERSION_V22 = 22,
     STATE_VERSION_V21 = 21,
     STATE_VERSION_V20 = 20,
     STATE_VERSION_V19 = 19,
@@ -789,7 +791,7 @@ static bool valid_v5_sections(const CupidGb *gb, unsigned sections, const CupidG
 static bool ready(const CupidGb *gb) {
     return gb && gb->loaded && gb->rom && gb->rom_size >= 0x150 &&
            gb->rom_size <= CUPID_GB_MAX_ROM_SIZE && gb->rom_size <= gb->rom_capacity &&
-           cupid_gb_cartridge_storage_valid(gb);
+           cupid_gb_cartridge_storage_valid(gb) && cupid_gb_program_valid(gb);
 }
 
 static bool valid_hardware_prefix(const CupidGb *gb, unsigned version) {
@@ -821,7 +823,9 @@ static bool valid_hardware_prefix(const CupidGb *gb, unsigned version) {
         gb->dma_index > 160 || gb->dma_start_delay > 2 || gb->dma_restart_delay > 2 ||
         gb->ppu_counter >= 114 || gb->ppu_lcd_warmup_lines > 2 || gb->stat_irq_delay > 1 ||
         gb->cgb_vram_bank > 1 || gb->cgb_wram_bank > 7 ||
-        ((gb->cgb_mode || gb->double_speed) && gb->model != CUPID_GB_MODEL_CGB) ||
+        (gb->cgb_mode && gb->model != CUPID_GB_MODEL_CGB) ||
+        (gb->double_speed && gb->model != CUPID_GB_MODEL_CGB &&
+         !(gb->program_kind == CUPID_GB_PROGRAM_GBS && (gb->gbs_header[15] & 0x80u))) ||
         gb->mbc1_bank_low5 > 31 || gb->mbc1_bank_high2 > 3 || gb->mbc5_rom_bank > 511 ||
         gb->current_rom_bank > (version >= STATE_VERSION_V16 && gb->header.mbc_type == CUPID_GB_TPP1
                                     ? 65535u
@@ -893,7 +897,7 @@ static bool valid_hardware_extension(const CupidGb *gb) {
 }
 
 static bool valid_hardware(const CupidGb *gb, unsigned sections, const CupidGbCamera *camera) {
-    return valid_hardware_prefix(gb, STATE_VERSION_V22) && valid_hardware_extension(gb) &&
+    return valid_hardware_prefix(gb, STATE_VERSION_V23) && valid_hardware_extension(gb) &&
            cupid_gb_audio_state_valid(gb) && cupid_gb_sgb_startup_state_valid(gb) &&
            cupid_gb_sgb_protocol_state_valid(gb) && valid_v5_sections(gb, sections, camera) &&
            valid_infrared(gb) && cupid_gb_display_clock_state_valid(gb) &&
@@ -1042,22 +1046,23 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
     }
     memset(data, 0, STATE_HEADER_SIZE);
     memcpy(data, state_magic, sizeof(state_magic));
-    put_u32(data + 8, STATE_VERSION_V22);
+    put_u32(data + 8, STATE_VERSION_V23);
     put_u32(data + 12, (uint32_t)size);
     put_u32(data + 16, (uint32_t)gb->model);
     put_u32(data + 20, (uint32_t)gb->rom_size);
     put_u32(data + 24, gb->boot_rom_enabled ? (uint32_t)gb->boot_rom_size : 0);
-    put_u32(data + 28, gb->boot_rom_enabled ? 1 : 0);
+    put_u32(data + 28, (gb->boot_rom_enabled ? 1u : 0u) |
+                           (gb->program_kind == CUPID_GB_PROGRAM_GBS ? 2u : 0u));
     if (rom_digest) {
         memcpy(data + 32, rom_digest, 32);
     } else {
-        cupid_sha256(gb->rom, gb->rom_size, data + 32);
+        cupid_gb_program_digest(gb, data + 32);
     }
     if (gb->boot_rom_enabled) {
         cupid_sha256(gb->boot_rom, gb->boot_rom_size, data + 64);
     }
     StateIo io = {NULL, data, STATE_HEADER_SIZE, hardware_size, false};
-    state_fields(&io, (CupidGb *)gb, STATE_VERSION_V22);
+    state_fields(&io, (CupidGb *)gb, STATE_VERSION_V23);
     state_extension_v3(&io, (CupidGb *)gb);
     state_extension_v4(&io, (CupidGb *)gb);
     state_extension_v5(&io, (CupidGb *)gb, sections, &camera);
@@ -1068,7 +1073,7 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
     if (gb->dma_phase > 3u)
         io.invalid = true;
     state_input_and_display(&io, (CupidGb *)gb);
-    state_video_bus(&io, (CupidGb *)gb, STATE_VERSION_V22);
+    state_video_bus(&io, (CupidGb *)gb, STATE_VERSION_V23);
     state_stop_ports(&io, (CupidGb *)gb);
     bytes(&io, ((CupidGb *)gb)->apu.pulse_dac_hold, 2);
     if (!(sections & STATE_SECTION_HUC3))
@@ -1180,7 +1185,7 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
         return CUPID_GB_STATE_INVALID;
     }
     const uint32_t version = get_u32(data + 8);
-    if (version < STATE_VERSION_V2 || version > STATE_VERSION_V22 ||
+    if (version < STATE_VERSION_V2 || version > STATE_VERSION_V23 ||
         (version < STATE_VERSION_V19 && gb->cartridge_ram_size > CUPID_GB_INLINE_RAM_SIZE)) {
         return CUPID_GB_STATE_UNSUPPORTED_VERSION;
     }
@@ -1252,13 +1257,21 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
     if (get_u32(data + 16) != (uint32_t)gb->model) {
         return CUPID_GB_STATE_WRONG_MODEL;
     }
+    const uint32_t flags = get_u32(data + 28);
+    if (flags & ~(version >= STATE_VERSION_V23 ? 3u : 1u))
+        return CUPID_GB_STATE_INVALID;
+    /* The loaded program owns this permission. An incoming flag or an ordinary
+     * cartridge's payload can never enable music-specific hardware semantics. */
+    if (((flags & 2u) != 0) != (gb->program_kind == CUPID_GB_PROGRAM_GBS) ||
+        (gb->program_kind == CUPID_GB_PROGRAM_GBS && version < STATE_VERSION_V23))
+        return CUPID_GB_STATE_WRONG_ROM;
     if (get_u32(data + 20) != gb->rom_size) {
         return CUPID_GB_STATE_WRONG_ROM;
     }
     if (rom_digest) {
         memcpy(digest, rom_digest, sizeof(digest));
     } else {
-        cupid_sha256(gb->rom, gb->rom_size, digest);
+        cupid_gb_program_digest(gb, digest);
     }
     if (memcmp(digest, data + 32, sizeof(digest))) {
         return CUPID_GB_STATE_WRONG_ROM;
@@ -1315,11 +1328,11 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
         (version >= STATE_VERSION_V5 && device_size != extended_wire_size(sections))) {
         return CUPID_GB_STATE_INVALID;
     }
-    uint32_t boot_length = get_u32(data + 24), flags = get_u32(data + 28);
-    if (flags > 1 || (!flags && boot_length)) {
+    const uint32_t boot_length = get_u32(data + 24);
+    if (!(flags & 1u) && boot_length) {
         return CUPID_GB_STATE_INVALID;
     }
-    if (flags) {
+    if (flags & 1u) {
         if (!boot_length || boot_length > CUPID_GB_MAX_BOOT_ROM_SIZE ||
             boot_length != gb->boot_rom_size) {
             return CUPID_GB_STATE_WRONG_BOOT_ROM;
@@ -1503,7 +1516,8 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
     } else {
         cupid_gb_sgb_protocol_state_import_legacy(candidate);
     }
-    if (io.invalid || io.offset != hardware_length || candidate->boot_rom_enabled != (flags != 0) ||
+    if (io.invalid || io.offset != hardware_length ||
+        candidate->boot_rom_enabled != ((flags & 1u) != 0) ||
         !valid_hardware_prefix(candidate, version) ||
         !valid_v5_sections(candidate, sections, &candidate->camera) || !valid_infrared(candidate)) {
         discard_candidate(candidate);
@@ -1696,7 +1710,7 @@ CupidGbStateResult cupid_gb_state_context_init(CupidGbStateContext *context, con
     context->rom_size = gb->rom_size;
     context->rom_generation = gb->rom_generation;
     context->model = gb->model;
-    cupid_sha256(gb->rom, gb->rom_size, context->rom_digest);
+    cupid_gb_program_digest(gb, context->rom_digest);
     return CUPID_GB_STATE_OK;
 }
 
@@ -1762,7 +1776,7 @@ const char *cupid_gb_state_result_name(CupidGbStateResult result) {
         case CUPID_GB_STATE_UNSUPPORTED_VERSION:
             return "Unsupported state version";
         case CUPID_GB_STATE_WRONG_ROM:
-            return "State belongs to a different cartridge";
+            return "State belongs to a different program";
         case CUPID_GB_STATE_WRONG_MODEL:
             return "State uses a different hardware model";
         case CUPID_GB_STATE_WRONG_BOOT_ROM:
@@ -1772,7 +1786,7 @@ const char *cupid_gb_state_result_name(CupidGbStateResult result) {
         case CUPID_GB_STATE_OUT_OF_MEMORY:
             return "Cannot allocate state storage";
         case CUPID_GB_STATE_NO_ROM:
-            return "No cartridge is loaded";
+            return "No program is loaded";
         default:
             return "Unknown state error";
     }

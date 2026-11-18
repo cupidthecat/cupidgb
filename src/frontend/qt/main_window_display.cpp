@@ -172,6 +172,8 @@ void MainWindow::resizeWindowCentered(const QSize &windowSize, const QRect &prev
 }
 
 void MainWindow::resizeDisplay(int scale) {
+    if (musicPresentation_)
+        return;
     scale = std::clamp(scale, 1, 8);
     if (isFullScreen()) {
         showNormal();
@@ -188,11 +190,15 @@ void MainWindow::resizeDisplay(int scale) {
 void MainWindow::notifyOnScreen(const QString &message) {
     if (!emulator_)
         return;
+    if (musicInfo_) {
+        statusBar()->showMessage(message, 3000);
+        return;
+    }
     display_->messages.show(message);
 }
 
 void MainWindow::advanceScreenMessages() {
-    if (!display_->messages.enabled())
+    if (musicInfo_ || !display_->messages.enabled())
         return;
     const QString mode = turbo_      ? QStringLiteral("Fast forward...")
                          : slowHeld_ ? QStringLiteral("Slow motion...")
@@ -203,6 +209,8 @@ void MainWindow::advanceScreenMessages() {
 
 void MainWindow::present(Presentation presentation) {
     if (!emulator_)
+        return;
+    if (presentMusic())
         return;
     const auto &gb = emulator_->gb;
     const bool sgb = cupid_gb_sgb_host_present(&gb);

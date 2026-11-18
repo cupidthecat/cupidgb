@@ -22,6 +22,8 @@
 
 #include "main_window_internal.h"
 
+#include "gbs_player.h"
+
 #include <cmath>
 
 void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
@@ -32,6 +34,8 @@ void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
         uint64_t presentationCycles = 0;
         uint64_t images = 0;
         uint64_t paints = 0;
+        uint64_t musicWaveforms = 0;
+        uint64_t musicPaints = 0;
         uint64_t audioFrames = 0;
         uint64_t handheldAudioFrames = 0;
         uint64_t startupAudioFrames = 0;
@@ -49,6 +53,9 @@ void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
     telemetryStartCycles_ = emulator_->gb.elapsed_cycles;
     telemetryStartPresentationCycles_ = cupid_gb_presentation_cycles(&emulator_->gb);
     presentedImages_ = 0;
+    musicWaveformsPublished_ = 0;
+    if (musicPlayer_)
+        musicPlayer_->resetTelemetry();
     generatedAudioFrames_ = 0;
     handheldAudioFrames_ = 0;
     startupAudioFrames_ = 0;
@@ -110,6 +117,8 @@ void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
                 warmup->presentationCycles = cupid_gb_presentation_cycles(&emulator_->gb);
                 warmup->images = presentedImages_;
                 warmup->paints = display_->paintCount;
+                warmup->musicWaveforms = musicWaveformsPublished_;
+                warmup->musicPaints = musicPlayer_ ? musicPlayer_->waveformPaintCount() : 0;
                 warmup->audioFrames = generatedAudioFrames_;
                 warmup->handheldAudioFrames = handheldAudioFrames_;
                 warmup->startupAudioFrames = startupAudioFrames_;
@@ -144,6 +153,9 @@ void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
                  double(presentationCycles) / elapsed / clockHz * 100},
                 {"images_submitted_to_widget", double(presentedImages_)},
                 {"widget_paint_events", double(display_->paintCount)},
+                {"music_waveforms_published", double(musicWaveformsPublished_)},
+                {"music_widget_paint_events",
+                 double(musicPlayer_ ? musicPlayer_->waveformPaintCount() : 0)},
                 {"audio_frames_generated", double(generatedAudioFrames_)},
                 {"handheld_audio_frames_generated", double(handheldAudioFrames_)},
                 {"startup_audio_frames_generated", double(startupAudioFrames_)},
@@ -157,6 +169,9 @@ void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
                 {"audio_priming_pending", audioPriming_},
                 {"audio_error_events", double(audioErrorEvents_)},
                 {"audio_sink_created", bool(audio_)},
+                {"audio_muted", muteAction_->isChecked()},
+                {"audio_volume_percent", settings_.value("audio/volume", 100).toInt()},
+                {"audio_sink_volume", audio_ ? double(audio_->volume()) : 0.0},
                 {"audio_requested_device_id_base64",
                  QString::fromLatin1(
                      settings_.value("audio/outputDevice").toByteArray().toBase64())},
@@ -215,6 +230,11 @@ void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
                                   double(presentedImages_ - warmup->images));
                 postWarmup.insert("widget_paint_events",
                                   double(display_->paintCount - warmup->paints));
+                postWarmup.insert("music_waveforms_published",
+                                  double(musicWaveformsPublished_ - warmup->musicWaveforms));
+                postWarmup.insert("music_widget_paint_events",
+                                  double((musicPlayer_ ? musicPlayer_->waveformPaintCount() : 0) -
+                                         warmup->musicPaints));
                 postWarmup.insert("audio_frames_generated",
                                   double(generatedAudioFrames_ - warmup->audioFrames));
                 postWarmup.insert("handheld_audio_frames_generated",
@@ -235,6 +255,8 @@ void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
                         {"presentation_base_speed_t_cycles", double(warmup->presentationCycles)},
                         {"images_submitted_to_widget", double(warmup->images)},
                         {"widget_paint_events", double(warmup->paints)},
+                        {"music_waveforms_published", double(warmup->musicWaveforms)},
+                        {"music_widget_paint_events", double(warmup->musicPaints)},
                         {"audio_frames_generated", double(warmup->audioFrames)},
                         {"handheld_audio_frames_generated", double(warmup->handheldAudioFrames)},
                         {"startup_audio_frames_generated", double(warmup->startupAudioFrames)},
@@ -263,7 +285,14 @@ void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
                         : QString::fromLatin1(cupid_gb_model_name(CupidGbModel(*modelOverride_)));
             report.insert("requested_model", requestedModel);
             report.insert("guest_double_speed", emulator_->gb.double_speed);
-            report.insert("startup_mode", emulator_->gb.boot_rom_size ? "boot-rom" : "post-boot");
+            report.insert("media_kind", musicInfo_ ? "gbs" : "cartridge");
+            if (musicInfo_) {
+                report.insert("music_declared_track_count", int(musicInfo_->track_count));
+                report.insert("music_selected_track_index", int(musicTrack_));
+            }
+            report.insert("startup_mode", musicInfo_                    ? "music-program"
+                                          : emulator_->gb.boot_rom_size ? "boot-rom"
+                                                                        : "post-boot");
             report.insert(
                 "power_on_seed_hex",
                 QString::number(qulonglong(cupid_gb_get_power_on_seed(&emulator_->gb)), 16)

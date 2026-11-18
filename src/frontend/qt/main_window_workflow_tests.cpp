@@ -40,6 +40,8 @@ bool MainWindow::smokeTest(SmokeWorkflow workflow) {
         return sgbSmokeTest(directory.path());
     if (workflow == SmokeWorkflow::Link)
         return linkSmokeTest(directory.path());
+    if (workflow == SmokeWorkflow::Gbs)
+        return gbsSmokeTest(directory.path());
     if (!playbackSmokeTest(directory.path()) || !startupSmokeTest(directory.path()) ||
         !rtcSmokeTest(directory.path()) || !audioPolicySmokeTest(directory.path()) ||
         !resetSmokeTest(directory.path()) || !cameraSmokeTest(directory.path()) ||
@@ -1054,7 +1056,8 @@ bool MainWindow::smokeTest(SmokeWorkflow workflow) {
         !screenMessagesSmokeTest(path, directory.path()) || display_->collectPaintIntervals ||
         !display_->paintIntervals.empty() || display_->lastPaintAt)
         return smokeFailure(__FILE__, __LINE__);
-    if (workflow == SmokeWorkflow::All && !linkSmokeTest(directory.path()))
+    if (workflow == SmokeWorkflow::All &&
+        (!linkSmokeTest(directory.path()) || !gbsSmokeTest(directory.path())))
         return smokeFailure(__FILE__, __LINE__);
     qInfo("CupidGB Qt workflow smoke test passed");
     return !failed_;

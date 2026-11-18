@@ -452,17 +452,23 @@ uint8_t cupid_gb_tick_halt(CupidGb *gb) {
     }
 
     uint8_t middle = before;
+    const uint16_t dots = gb->double_speed ? 1u : 2u;
+    if (gb->double_speed)
+        gb->speed_phase = !gb->speed_phase;
     for (unsigned half = 0; half < 2; ++half) {
         /* Monochrome HALT polls between two complete two-T-cycle deliveries.
-         * A carried divider period can finish in either half. */
+         * GBS can double this CPU clock: DIV and DMA still receive two T-cycles,
+         * while display and cartridge clocks receive only one base dot. */
         clock_cpu_span(gb, 2u);
         cupid_gb_apu_run(gb, false);
+        if (gb->double_speed && cupid_gb_lcd_enabled(gb))
+            gb->speed_switch_alignment = (uint8_t)((gb->speed_switch_alignment + 2u) & 7u);
         sample_rumble_delivery(gb, 0);
-        advance_base_time(gb, 2u);
-        cupid_gb_tick_ppu_dots(gb, 2u);
+        advance_base_time(gb, dots);
+        cupid_gb_tick_ppu_dots(gb, dots);
         cupid_gb_tick_dma_tcycles(gb, 2u);
-        finish_display_span(gb, 4u);
-        cupid_gb_rtc_tick(gb, 4u);
+        finish_display_span(gb, (unsigned)dots * 2u);
+        cupid_gb_rtc_tick(gb, (uint32_t)dots * 2u);
         if (!half)
             middle = (uint8_t)(gb->interrupt_enable & gb->interrupt_flags & 0x1fu);
     }

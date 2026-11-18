@@ -42,6 +42,10 @@ bool MainWindow::collectAudio(CoreAudioCollector &collected) {
     generatedAudioFrames_ += collected.frames() - frames;
     handheldAudioFrames_ += collected.frames(CUPID_GB_AUDIO_ORIGIN_HANDHELD) - handheld;
     startupAudioFrames_ += collected.frames(CUPID_GB_AUDIO_ORIGIN_SGB_STARTUP) - startup;
+    if (collected.frames() > frames)
+        appendMusicSamples(collected.samples() + frames * 2, collected.frames() - frames);
+    if (complete)
+        publishMusicFrame();
     return complete;
 }
 
@@ -76,15 +80,29 @@ void MainWindow::recordAudio(const CoreAudioCollector &collected) {
 void MainWindow::setupAudio() {
     // Some audio backends dispatch Qt events while opening or closing a stream.
     // Guest execution must not reenter a pause, load, or rewind transition.
-    QScopedValueRollback<bool> operation(stateOperation_, true);
+    const QPointer<MainWindow> self(this);
+    const bool previousOperation = stateOperation_;
+    stateOperation_ = true;
+    const auto operation = qScopeGuard([self, previousOperation] {
+        if (self)
+            self->stateOperation_ = previousOperation;
+    });
+    const uint64_t session = sessionId_;
+    const auto current = [self, session] { return self && self->sessionId_ == session; };
     stopAudio();
+    if (!current())
+        return;
     audioConverter_.reset();
     audioBuffer_ = std::make_shared<AudioBuffer>();
     const QByteArray requested = settings_.value("audio/outputDevice").toByteArray();
     QAudioDevice device = QMediaDevices::defaultAudioOutput();
+    if (!current())
+        return;
     audioDeviceFallback_ = false;
     if (!requested.isEmpty()) {
         const auto available = QMediaDevices::audioOutputs();
+        if (!current())
+            return;
         const auto match = std::find_if(
             available.cbegin(), available.cend(),
             [&requested](const QAudioDevice &candidate) { return candidate.id() == requested; });
@@ -114,8 +132,12 @@ void MainWindow::setupAudio() {
     audioQueueLimit_ = format.bytesForDuration(50000);
     audioPrimeBytes_ = format.bytesForDuration(30000);
     audioPriming_ = true;
-    audio_ = createAudioSink<QAudioSink>(device, format);
-    connect(audio_.get(), &QAudioSink::stateChanged, this, [this](QAudio::State state) {
+    const auto buffer = audioBuffer_;
+    const auto sink = createAudioSink<QAudioSink>(device, format);
+    if (!current() || audioBuffer_ != buffer)
+        return;
+    audio_ = sink;
+    connect(sink.get(), &QAudioSink::stateChanged, this, [this](QAudio::State state) {
         if (state == QAudio::IdleState)
             audioPriming_ = true;
         if (state == QAudio::IdleState && telemetryClock_.isValid() &&
@@ -124,16 +146,26 @@ void MainWindow::setupAudio() {
         if (state == QAudio::StoppedState && audio_ && audio_->error() != QAudio::NoError)
             ++audioErrorEvents_;
     });
-    audio_->setBufferSize(audioQueueLimit_);
-    audio_->setVolume(
+    sink->setBufferSize(audioQueueLimit_);
+    if (!current() || audio_ != sink)
+        return;
+    sink->setVolume(
         muteAction_->isChecked() ? 0.0f : settings_.value("audio/volume", 100).toFloat() / 100);
+    if (!current() || audio_ != sink)
+        return;
     if (audioDeviceFallback_)
         statusBar()->showMessage("Selected audio output is unavailable; using System Default",
                                  5000);
 }
 
 void MainWindow::stopAudio() {
-    QScopedValueRollback<bool> operation(stateOperation_, true);
+    const QPointer<MainWindow> self(this);
+    const bool previousOperation = stateOperation_;
+    stateOperation_ = true;
+    const auto operation = qScopeGuard([self, previousOperation] {
+        if (self)
+            self->stateOperation_ = previousOperation;
+    });
     audioModeResetPending_ = false;
     audioDevice_ = nullptr;
     audioPriming_ = true;

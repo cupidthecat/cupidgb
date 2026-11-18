@@ -10,7 +10,7 @@ Load a native state file through File > Load State File or drop a `.s0` through 
 
 Writes use an atomic file replacement. Loading checks the complete cartridge identity and hardware model. A state captured with an active boot overlay requires the matching local boot binary. Failed validation preserves the running session and its host audio queue. A successful load replaces the emulated state, reapplies current physical input, clears queued host audio, and realigns pacing.
 
-New files use CupidGB native version 22. Versions 2 through 21, including both supported version 19 development layouts, remain loadable when they contain all SRAM required by the receiving cartridge. Desktop loads retain current audio choices and both receiving output owners: ordinary reconstruction/filter history and startup synthesis/queued batches. Saved hardware startup phase, host-only time and command-receiver history still restore. Interoperable BESS state imports remain pending.
+New files use CupidGB native version 23. Cartridge versions 2 through 22, including both supported version 19 development layouts, remain loadable when they contain all SRAM required by the receiving cartridge. GBS programs require version 23 and the matching music file already loaded. Desktop loads retain current audio choices and both receiving output owners: ordinary reconstruction/filter history and startup synthesis/queued batches. Saved hardware startup phase, host-only time and command-receiver history still restore. Interoperable BESS state imports remain pending.
 
 Host camera images and pending device requests stay with the receiving session. Saving a pending host capture writes an idle camera to the file while the live request continues. After full validation, a load into host-camera mode cancels obsolete requests and clears imported busy state while retaining the current image. This also applies to a saved generated countdown. Without a provider, generated captures retain their countdown, while a host-origin snapshot starts idle. The existing 64-byte camera section and strict busy/countdown validator are unchanged. See [Camera cartridges](host-camera.md) for reset, rewind and embedding rules.
 
@@ -24,7 +24,7 @@ Version 1 execution states cannot continue in the changed pixel and audio core. 
 
 ## Connected consoles
 
-A state slot belongs to one cartridge window. Loading it restores that console while retaining its current cable connection, the peer's state and the cable's host-owned outgoing bit history. The shared scheduler rebases the restored clock origin while preserving the relative instruction lead between endpoints. Live infrared input also stays with the receiving session. These host values add no fields to native version 22.
+A state slot belongs to one cartridge window. Loading it restores that console while retaining its current cable connection, the peer's state and the cable's host-owned outgoing bit history. The shared scheduler rebases the restored clock origin while preserving the relative instruction lead between endpoints. Live infrared input also stays with the receiving session. These host values add no fields to the native format.
 
 Two separately saved files are not an atomic snapshot of the pair. Restoring one side during a game's transfer can disrupt its protocol. Rewind and debugger Backstep are unavailable while connected because their history restores only one console. Disconnecting starts a new independent history. See [Link play](link-play.md) for the desktop workflow and [the core API](core-api.md#paired-console-execution) for ownership rules.
 
@@ -56,10 +56,10 @@ The 128-byte header contains:
 | 8 | 4 | Format version |
 | 12 | 4 | Complete encoded length |
 | 16 | 4 | Stable hardware model tag |
-| 20 | 4 | Cartridge byte length |
+| 20 | 4 | Cartridge byte length, or prepared image length for GBS |
 | 24 | 4 | Required boot length, zero when the saved overlay is inactive |
-| 28 | 4 | Flags; bit 0 means an active boot overlay |
-| 32 | 32 | SHA-256 of the complete cartridge |
+| 28 | 4 | Flags; bit 0 means an active boot overlay, bit 1 identifies GBS in version 23 |
+| 32 | 32 | Program identity: cartridge SHA-256 or the version 23 GBS digest below |
 | 64 | 32 | SHA-256 of the required boot binary, otherwise zero |
 | 96 | 32 | SHA-256 of header bytes 0 through 95 followed by the payload |
 
@@ -326,6 +326,24 @@ Other models require an all-zero protocol record. Invalid booleans, noncanonical
 Versions 2 through 21 never stored this latch or cache. Their migration clears the cache and disables reception only when physical SGB/SGB2 had a false saved enhancement declaration. This preserves the old format's receiver eligibility. It cannot reconstruct header packets received before a mapped-firmware checkpoint, determine whether an earlier checksum failed, or recover later cached replacements. New version 22 captures retain those distinctions.
 
 The [boot-header contract](sgb-startup.md#boot-headers-and-command-permission) describes reception, handoff, controller visibility and reset behavior. The protocol and state regression targets exercise the new behavior; their platform and paired-runtime qualification is separate from the historical version 21 results below.
+
+### GBS program identity in version 23
+
+Version 23 retains the version 22 hardware payload and adds a program-kind flag to the existing header. An ordinary cartridge still uses the SHA-256 of its complete ROM bytes. A GBS state sets flag bit 1 and uses SHA-256 over the following bytes, in order:
+
+1. The ASCII domain `cupidgb/gbs-program/v1`, including one terminating NUL.
+2. One byte for the loaded program's effective MBC3 wiring: `00` for seven bank bits or `01` for eight.
+3. The accepted music payload length as an unsigned, eight-byte little-endian value.
+4. All 112 original GBS header bytes.
+5. The complete prepared ROM image, including erased padding and executable entry code.
+
+The receiver must already own the same program kind, header, payload and bank wiring. The file cannot turn a cartridge into a music program or replace the receiver's metadata. Versions 2 through 22 reject the GBS flag; version 23 rejects every flag outside bits 0 and 1. Ordinary older cartridge imports retain their existing identity rules.
+
+GBS timer-control bit 7 permits double-speed execution on the selected hardware, including monochrome and adapter profiles. On non-CGB hardware, a saved double-speed bit grants no permission on its own: the receiving GBS header must already request it. Physical CGB retains its normal saved speed behavior, including guest speed switches. CGB operating mode remains restricted to physical CGB. The effective bank wiring is part of identity because an extended MBC3 cartridge can leave that configuration attached to a later music session; equal music bytes alone do not establish equivalent execution.
+
+The Qt track selector belongs to the current music session. Loading a state restores the saved guest execution while retaining the displayed selection. Restart then starts that selected track; Reset reloads the music file and uses its initial track. Exact core restoration restores saved reconstruction history, while desktop loading retains the receiving audio history under the live contract above. See [GBS music](gbs-music.md).
+
+Trusted state contexts cache this program digest. Successful music loads advance the load generation; starting another track retains it. An embedding host that directly edits the supposedly immutable GBS header, prepared image or bank wiring must discard and recreate its context.
 
 ## Validation scope
 

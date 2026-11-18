@@ -80,9 +80,15 @@ bool MainWindow::prepareResetCandidate(CupidEmulator *candidate, ResetWorkflow w
     }
     // The native operation can reset an attached printer. Keep this candidate
     // detached until the outer cartridge transaction can no longer fail.
-    if (!cupid_gb_reset(&next, workflow == ResetWorkflow::Quick ? CUPID_GB_RESET_QUICK
-                                                                : CUPID_GB_RESET_HARD)) {
-        reportError("The console could not be reset.");
+    CupidGbGbsInfo music{};
+    const bool musicLoaded = cupid_gb_gbs_info(&next, &music);
+    const bool reset =
+        musicLoaded ? cupid_gb_gbs_start_track(&next, music.first_track) == CUPID_GB_GBS_OK
+                    : cupid_gb_reset(&next, workflow == ResetWorkflow::Quick ? CUPID_GB_RESET_QUICK
+                                                                             : CUPID_GB_RESET_HARD);
+    if (!reset) {
+        reportError(musicLoaded ? "The music file could not be reset."
+                                : "The console could not be reset.");
         return false;
     }
     if (cupid_gb_base_clock_hz(&previous) != cupid_gb_base_clock_hz(&next)) {
@@ -90,6 +96,8 @@ bool MainWindow::prepareResetCandidate(CupidEmulator *candidate, ResetWorkflow w
         // rate and history while updating coefficients derived from that oscillator.
         cupid_gb_apu_set_sample_rate(&next, cupid_gb_apu_get_sample_rate(&previous));
     }
+    // Track initialization also resets attached accessories. Finish it while
+    // this candidate owns no live endpoint, then restore host registrations.
     next.serial_output_callback = previous.serial_output_callback;
     next.serial_output_user_data = previous.serial_output_user_data;
     next.serial_link = previous.serial_link;
@@ -105,7 +113,14 @@ bool MainWindow::prepareResetCandidate(CupidEmulator *candidate, ResetWorkflow w
 bool MainWindow::resetCartridge(ResetWorkflow workflow) {
     if (!emulator_)
         return false;
-    QScopedValueRollback<bool> operation(stateOperation_, true);
+    const QPointer<MainWindow> self(this);
+    const bool previousOperation = stateOperation_;
+    stateOperation_ = true;
+    const auto operation = qScopeGuard([self, previousOperation] {
+        if (self)
+            self->stateOperation_ = previousOperation;
+    });
+    const uint64_t resetSession = sessionId_ + 1;
     std::unique_ptr<CupidGbDebugger> symbols;
     const auto cleanup = qScopeGuard([&symbols] {
         if (symbols)
@@ -114,6 +129,8 @@ bool MainWindow::resetCartridge(ResetWorkflow workflow) {
     if (!prepareResetSymbols(symbols) ||
         !openRom(romPath_, workflow != ResetWorkflow::Normal, workflow))
         return false;
+    if (!self || sessionId_ != resetSession)
+        return true;
     if (symbols) {
         std::swap(debugger_->symbols, symbols->symbols);
         std::swap(debugger_->symbol_count, symbols->symbol_count);
@@ -139,7 +156,13 @@ bool MainWindow::quickReset() {
 bool MainWindow::resetConsole(CupidGbResetKind kind) {
     if (!emulator_)
         return false;
-    QScopedValueRollback<bool> operation(stateOperation_, true);
+    const QPointer<MainWindow> self(this);
+    const bool previousOperation = stateOperation_;
+    stateOperation_ = true;
+    const auto operation = qScopeGuard([self, previousOperation] {
+        if (self)
+            self->stateOperation_ = previousOperation;
+    });
     const uint64_t previousCycles = cupid_gb_presentation_cycles(&emulator_->gb);
     if (!cupid_gb_reset(&emulator_->gb, kind)) {
         reportError("The console could not be reset.");
@@ -148,6 +171,7 @@ bool MainWindow::resetConsole(CupidGbResetKind kind) {
     cancelCameraCapture();
     resetControllerRumble();
     ++sessionId_;
+    const uint64_t resetSession = sessionId_;
     rebaseLink();
     rebaseRewindAfterReset(previousCycles);
     resetDebuggerTimeline();
@@ -160,6 +184,8 @@ bool MainWindow::resetConsole(CupidGbResetKind kind) {
     watchBattery();
     resetPacing();
     clearAudio();
+    if (!self || sessionId_ != resetSession)
+        return true;
     present(Presentation::Reset);
     rememberFrame();
     refreshDebugger();

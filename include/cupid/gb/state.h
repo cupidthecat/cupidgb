@@ -41,13 +41,13 @@ typedef enum CupidGbStateResult {
     CUPID_GB_STATE_NO_ROM
 } CupidGbStateResult;
 
-#define CUPID_GB_STATE_VERSION 22u
+#define CUPID_GB_STATE_VERSION 23u
 
 /* Trusted in-memory snapshots may cache the immutable cartridge identity. Initialize
  * once for the current instance and discard the context on cartridge replacement,
  * model changes, or any mutation of ROM bytes, including future cheat/patch features.
- * Binding checks detect successful cartridge loads even when allocation is reused,
- * but cannot detect manually patched ROM bytes without a new context.
+ * Binding checks detect successful program loads even when allocation is reused,
+ * but cannot detect manually patched ROM bytes or music metadata without a new context.
  * Do not use this context to validate untrusted disk files; the ordinary APIs compute
  * the full cartridge digest on every call. Context objects are never serialized.
  */
@@ -78,6 +78,16 @@ CupidGbStateResult cupid_gb_load_state_with_context(CupidGb *gb, const uint8_t *
  * validation, retains the receiving image and rejects older device completions.
  * Generated captures preserve their ordinary countdown when no provider is attached.
  * The camera wire section and its busy/countdown validation remain unchanged.
+ * Version 23 retains the version 22 hardware layout. Header flag bit 1 identifies
+ * a loaded GBS program; bit 0 continues to identify an active boot overlay. GBS
+ * identity hashes the NUL-terminated domain "cupidgb/gbs-program/v1", one byte for
+ * retained MBC3 wiring (0 standard, 1 extended), the accepted payload length as
+ * little-endian uint64, the original 112-byte GBS header, and the complete prepared
+ * ROM image. Cartridge identity remains SHA-256 of ROM bytes.
+ * A GBS load requires version 23 and matching live program kind and identity.
+ * The receiving immutable metadata and host track selection are never restored.
+ * Non-CGB double speed is valid only for loaded GBS with immutable TAC bit 7;
+ * the saved flag alone cannot grant that exception or enable CGB mode.
  * Version 22 appends an 85-byte adapter protocol extension after the variable
  * startup extension and before the accessory descriptor. It contains one strict
  * command-disable boolean and all 84 received-header bytes. Non-adapter models
@@ -101,7 +111,8 @@ CupidGbStateResult cupid_gb_load_state_with_context(CupidGb *gb, const uint8_t *
  * The receiving cartridge determines storage geometry; a file cannot resize its SRAM.
  * Two earlier version 19 layouts remain readable: fetch-byte-only for cartridges up to
  * 128 KiB, and SRAM-size/tail without the fetch byte. Exact lengths and validated accessory
- * descriptors distinguish them. Versions 20 and 21 remain readable; only version 22 is written.
+ * descriptors distinguish them. Cartridge versions 20 through 22 remain readable;
+ * only version 23 is written.
  * Public versions 2 through 18
  * retain their meanings and require cartridge SRAM no larger than 128 KiB.
  * The fetch byte belongs to guest hardware, separate from wave RAM and output reconstruction.

@@ -293,7 +293,8 @@ def check_cartridge(run, root, plain, color):
 
         too_large = root / "too-large.zip"
         oversized_archive(too_large)
-        run(too_large, expected=1, error_contains=b"between 336 bytes and 1024 MiB")
+        run(too_large, expected=1,
+            error_contains=b"The archived Game Boy file has an invalid size.")
 
         corrupt = root / "bad-crc.zip"
         with zipfile.ZipFile(corrupt, "w") as compressed:

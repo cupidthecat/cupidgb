@@ -43,8 +43,8 @@ int main(int argc, char **argv) {
     parser.addHelpOption();
     parser.addVersionOption();
     parser.addOption({"smoke-test", "Run isolated frontend workflow checks and exit."});
-    parser.addOption(
-        {"smoke-workflow", "Select smoke checks: all, desktop, storage, sgb, or link.", "group"});
+    parser.addOption({"smoke-workflow",
+                      "Select smoke checks: all, desktop, storage, sgb, link, or gbs.", "group"});
     parser.addOption({"audio-check", "Require real audio during --smoke-test."});
     parser.addOption(
         {"boot-directory", "Use boot ROMs from this directory for this session.", "path"});
@@ -60,7 +60,8 @@ int main(int argc, char **argv) {
     parser.addOption({"report", "Write bounded frontend measurements as JSON.", "path"});
     parser.addOption(
         {"input-trace", "Apply frame-number and active-low hexadecimal input masks.", "path"});
-    parser.addPositionalArgument("rom", "Optional cartridge or compressed cartridge archive.");
+    parser.addPositionalArgument("file",
+                                 "Optional cartridge, GBS music file, or compressed archive.");
     parser.process(app);
     const bool smoke = parser.isSet("smoke-test");
     const bool audioCheck = parser.isSet("audio-check");
@@ -75,6 +76,8 @@ int main(int argc, char **argv) {
             smokeWorkflow = MainWindow::SmokeWorkflow::Sgb;
         else if (group == "link")
             smokeWorkflow = MainWindow::SmokeWorkflow::Link;
+        else if (group == "gbs")
+            smokeWorkflow = MainWindow::SmokeWorkflow::Gbs;
         else if (group != "all")
             parser.showHelp(1);
         if (!smoke || (audioCheck && smokeWorkflow == MainWindow::SmokeWorkflow::Storage))

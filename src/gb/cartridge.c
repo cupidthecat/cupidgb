@@ -421,7 +421,9 @@ static bool cupid_gb_detect_mbc1_multicart(const uint8_t *rom_data, size_t rom_s
 
 bool cupid_gb_has_extended_mbc3(const CupidGb *gb) {
     return gb->header.mbc_type == CUPID_GB_MBC3 &&
-           (gb->rom_size > 0x200000u || gb->cartridge_ram_size > 0x8000u);
+           (gb->program_kind == CUPID_GB_PROGRAM_GBS
+                ? gb->mbc3_extended_history
+                : gb->rom_size > 0x200000u || gb->cartridge_ram_size > 0x8000u);
 }
 
 void cupid_gb_huc1_write(CupidGb *gb, uint16_t address, uint8_t value) {
@@ -1089,6 +1091,7 @@ bool cupid_gb_load_rom_with_allocator(CupidGb *gb, const uint8_t *rom_data, size
     gb->ram_bank_count = (ram_size + 0x1fffu) / 0x2000u;
     gb->mbc1_multicart = mbc1_multicart;
     gb->mmm01_menu_first = mmm01_menu_first;
+    gb->mbc3_extended_history |= cupid_gb_has_extended_mbc3(gb);
     cupid_gb_cartridge_reset_controls(gb);
     /* Initial cartridge setup precedes a native reset. Its initial TPP1 register
      * profile remains distinct from the zeroed control latches of console reset. */

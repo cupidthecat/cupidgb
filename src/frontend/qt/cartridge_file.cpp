@@ -1,6 +1,6 @@
 /**
  * @file    cartridge_file.cpp
- * @brief   Cartridge file loading and bounded archive extraction.
+ * @brief   Typed cartridge and music loading with bounded archive extraction.
  * @author  cupidthecat
  * @date    2026-11-16
  *
@@ -30,14 +30,18 @@
 #include <QStandardPaths>
 #include <QStringList>
 
+#include <algorithm>
 #include <new>
+#include <utility>
 
 extern "C" {
 #include "cupid/gb/gb.h"
+#include "cupid/gb/gbs.h"
 }
 
 namespace {
 constexpr qint64 minimumRomSize = 0x150;
+constexpr qint64 maximumGbsRead = CUPID_GB_GBS_HEADER_SIZE + CUPID_GB_GBS_FILE_PAYLOAD_LIMIT;
 constexpr qint64 maximumListingSize = 1024 * 1024;
 constexpr int archiveTimeoutMs = 10000;
 
@@ -45,9 +49,19 @@ bool validRomSize(qint64 size) {
     return size >= minimumRomSize && size <= CUPID_GB_MAX_ROM_SIZE;
 }
 
-bool isCartridgeSuffix(const QString &path) {
+bool isMediaSuffix(const QString &path) {
     const QString suffix = QFileInfo(path).suffix().toLower();
-    return suffix == "gb" || suffix == "gbc" || suffix == "sgb";
+    return suffix == "gb" || suffix == "gbc" || suffix == "sgb" || suffix == "gbs";
+}
+
+GameMediaKind mediaKind(const QString &path) {
+    return QFileInfo(path).suffix().compare("gbs", Qt::CaseInsensitive) == 0
+               ? GameMediaKind::Gbs
+               : GameMediaKind::Cartridge;
+}
+
+bool validMediaSize(qint64 size, GameMediaKind kind) {
+    return kind == GameMediaKind::Gbs ? size >= CUPID_GB_GBS_HEADER_SIZE : validRomSize(size);
 }
 
 bool isArchiveSuffix(const QString &suffix) {
@@ -72,7 +86,7 @@ QString archiveTool() {
 }
 
 bool runArchiveTool(const QString &executable, const QStringList &arguments, qint64 limit,
-                    QByteArray &output, QString &error) {
+                    QByteArray &output, QString &error, bool prefixOnly = false) {
     QProcess process;
     QElapsedTimer elapsed;
     elapsed.start();
@@ -84,6 +98,14 @@ bool runArchiveTool(const QString &executable, const QStringList &arguments, qin
     process.closeWriteChannel();
     while (true) {
         output += process.read(limit - output.size() + 1);
+        if (prefixOnly && output.size() >= limit) {
+            // Music file loading has a fixed payload prefix. Stop extraction
+            // after that prefix instead of allocating or draining an ignored tail.
+            output.truncate(qsizetype(limit));
+            process.kill();
+            process.waitForFinished();
+            return true;
+        }
         if (output.size() > limit) {
             error = "Archive output exceeds the expected size.";
             break;
@@ -107,10 +129,10 @@ bool runArchiveTool(const QString &executable, const QStringList &arguments, qin
     return false;
 }
 
-QByteArray readArchive(const QFileInfo &file, QString &error) {
+GameMedia readArchive(const QFileInfo &file, QString &error) {
     const QString executable = archiveTool();
     if (executable.isEmpty()) {
-        error = "Opening compressed cartridges requires 7-Zip (7z or 7zz).";
+        error = "Opening compressed Game Boy files requires 7-Zip (7z or 7zz).";
         return {};
     }
 
@@ -154,10 +176,10 @@ QByteArray readArchive(const QFileInfo &file, QString &error) {
                     regular = false;
             }
         }
-        if (!regular || !isCartridgeSuffix(entry))
+        if (!regular || !isMediaSuffix(entry))
             continue;
         if (!member.isEmpty()) {
-            error = "The archive contains more than one Game Boy cartridge.";
+            error = "The archive contains more than one supported Game Boy file.";
             return {};
         }
         member = entry;
@@ -165,37 +187,38 @@ QByteArray readArchive(const QFileInfo &file, QString &error) {
         encrypted = entryEncrypted;
     }
     if (member.isEmpty()) {
-        error = "The archive contains no Game Boy cartridge (.gb, .gbc, or .sgb).";
+        error = "The archive contains no Game Boy cartridge or music file (.gb, .gbc, .sgb, .gbs).";
         return {};
     }
-    if (encrypted || !validRomSize(size)) {
-        error = QStringLiteral("The archived cartridge must be unencrypted and between 336 bytes "
-                               "and %1 MiB.")
-                    .arg(CUPID_GB_MAX_ROM_SIZE / (1024u * 1024u));
+    const auto kind = mediaKind(member);
+    if (encrypted || !validMediaSize(size, kind)) {
+        error = encrypted ? QStringLiteral("The archived Game Boy file must be unencrypted.")
+                          : QStringLiteral("The archived Game Boy file has an invalid size.");
         return {};
     }
 
     // Select the literal member name and stream its bytes. Nothing is extracted to disk.
-    QByteArray rom;
-    if (!runArchiveTool(executable, {"x", "-so", "-spd", "-bse0", "-i!" + member, "--", path}, size,
-                        rom, error))
+    const qint64 expected = kind == GameMediaKind::Gbs ? std::min(size, maximumGbsRead) : size;
+    QByteArray data;
+    if (!runArchiveTool(executable, {"x", "-so", "-spd", "-bse0", "-i!" + member, "--", path},
+                        expected, data, error, expected < size))
         return {};
-    if (rom.size() != size) {
-        error = "Could not read the complete cartridge from the archive.";
+    if (data.size() != expected) {
+        error = "Could not read the complete Game Boy file from the archive.";
         return {};
     }
-    return rom;
+    return {std::move(data), kind};
 }
 
-QByteArray readCartridge(const QString &path, QString &error) {
+GameMedia readMedia(const QString &path, QString &error) {
     const QFileInfo info(path);
     if (!info.isFile()) {
-        error = "Cannot open ROM. Select a regular cartridge or archive file.";
+        error = "Select a regular cartridge, music, or archive file.";
         return {};
     }
     const QString suffix = info.suffix().toLower();
     if (suffix == "gba" || suffix == "agb") {
-        error = "CupidGB accepts Game Boy and Game Boy Color cartridges.";
+        error = "CupidGB accepts Game Boy and Game Boy Color cartridges and GBS music.";
         return {};
     }
     if (isArchiveSuffix(suffix))
@@ -203,29 +226,33 @@ QByteArray readCartridge(const QString &path, QString &error) {
 
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) {
-        error = "Cannot open ROM: " + file.errorString();
+        error = "Cannot open file: " + file.errorString();
         return {};
     }
     const qint64 size = file.size();
-    if (!validRomSize(size)) {
-        error = QStringLiteral("Cartridge size must be between 336 bytes and %1 MiB.")
-                    .arg(CUPID_GB_MAX_ROM_SIZE / (1024u * 1024u));
+    const auto kind = mediaKind(path);
+    if (!validMediaSize(size, kind)) {
+        error = kind == GameMediaKind::Gbs
+                    ? QStringLiteral("The music file is shorter than its 112-byte header.")
+                    : QStringLiteral("Cartridge size must be between 336 bytes and %1 MiB.")
+                          .arg(CUPID_GB_MAX_ROM_SIZE / (1024u * 1024u));
         return {};
     }
-    const QByteArray data = file.read(size + 1);
-    if (data.size() != size) {
-        error = "Could not read the complete cartridge: " + file.errorString();
+    const qint64 expected = kind == GameMediaKind::Gbs ? std::min(size, maximumGbsRead) : size;
+    QByteArray data = file.read(expected + (expected == size ? 1 : 0));
+    if (data.size() != expected) {
+        error = "Could not read the complete Game Boy file: " + file.errorString();
         return {};
     }
-    return data;
+    return {std::move(data), kind};
 }
 } // namespace
 
-QByteArray readCartridgeFile(const QString &path, QString &error) {
+GameMedia readGameMedia(const QString &path, QString &error) {
     try {
-        return readCartridge(path, error);
+        return readMedia(path, error);
     } catch (const std::bad_alloc &) {
-        error = QStringLiteral("Not enough memory to read the cartridge.");
+        error = QStringLiteral("Not enough memory to read the Game Boy file.");
         return {};
     }
 }

@@ -52,6 +52,10 @@ static void restore_cartridge(CupidGb *next, const CupidGb *previous) {
     next->ram_bank_count = previous->ram_bank_count;
     next->mbc1_multicart = previous->mbc1_multicart;
     next->mmm01_menu_first = previous->mmm01_menu_first;
+    next->program_kind = previous->program_kind;
+    memcpy(next->gbs_header, previous->gbs_header, sizeof(next->gbs_header));
+    next->gbs_payload_size = previous->gbs_payload_size;
+    next->mbc3_extended_history = previous->mbc3_extended_history;
     memcpy(next->save_path, previous->save_path, sizeof(next->save_path));
     memcpy(next->boot_rom, previous->boot_rom, sizeof(next->boot_rom));
     next->boot_rom_size = previous->boot_rom_size;
@@ -144,6 +148,20 @@ bool cupid_gb_reset_with_allocator(CupidGb *gb, CupidGbResetKind kind, void *(*a
     }
 
     next->apu.output = gb->apu.output;
+    cupid_gb_reset_restore_host(next, gb);
+    if (gb->header.mbc_type == CUPID_GB_HUC3 &&
+        (gb->huc3.minutes || gb->huc3.days || gb->huc3.alarm_minutes || gb->huc3.alarm_days ||
+         gb->huc3.alarm_enabled))
+        ++next->battery_write_generation;
+
+    /* Nothing after the time observation can fail. Clock providers must obey the
+     * documented non-reentrant observer contract. Rebase without advancing digits. */
+    cupid_gb_rtc_bind_cartridge(next);
+    cupid_gb_reset_commit(gb, next);
+    return true;
+}
+
+void cupid_gb_reset_restore_host(CupidGb *next, const CupidGb *gb) {
     next->cheats = gb->cheats;
     next->serial_output_callback = gb->serial_output_callback;
     next->serial_output_user_data = gb->serial_output_user_data;
@@ -167,14 +185,9 @@ bool cupid_gb_reset_with_allocator(CupidGb *gb, CupidGbResetKind kind, void *(*a
     next->joyp_sample_pending = gb->joyp_sample_pending;
     next->vblank_events = gb->vblank_events;
     next->battery_write_generation = gb->battery_write_generation;
-    if (gb->header.mbc_type == CUPID_GB_HUC3 &&
-        (gb->huc3.minutes || gb->huc3.days || gb->huc3.alarm_minutes || gb->huc3.alarm_days ||
-         gb->huc3.alarm_enabled))
-        ++next->battery_write_generation;
+}
 
-    /* Nothing after the time observation can fail. Clock providers must obey the
-     * documented non-reentrant observer contract. Rebase without advancing digits. */
-    cupid_gb_rtc_bind_cartridge(next);
+void cupid_gb_reset_commit(CupidGb *gb, CupidGb *next) {
     next->camera_host = gb->camera_host;
     cupid_gb_camera_cancel_request(next);
     uint8_t *const previous_ram = gb->cartridge_ram_heap;
@@ -184,7 +197,6 @@ bool cupid_gb_reset_with_allocator(CupidGb *gb, CupidGbResetKind kind, void *(*a
     CupidGbPrinter *printer = cupid_gb_printer_attached(gb);
     if (printer)
         cupid_gb_printer_state_clear(&printer->state, gb->elapsed_cycles);
-    return true;
 }
 
 bool cupid_gb_reset(CupidGb *gb, CupidGbResetKind kind) {

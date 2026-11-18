@@ -27,5 +27,8 @@
 
 void cupid_gb_startup_memory(CupidGb *gb);
 void cupid_gb_startup_boot_io(CupidGb *gb);
+/* Reset CPU, I/O and hardware clocks before either firmware or a native music
+ * entry point. The caller establishes memory and the final overlay ownership. */
+void cupid_gb_startup_hardware(CupidGb *gb);
 
 #endif

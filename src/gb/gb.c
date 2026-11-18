@@ -266,6 +266,7 @@ void cupid_gb_init(CupidGb *gb) {
     rom = gb->rom;
     rom_capacity = gb->rom_capacity;
     rom_generation = gb->rom_generation;
+    const bool mbc3_extended_history = gb->mbc3_extended_history;
     uint8_t *const cartridge_ram_heap = gb->cartridge_ram_heap;
     const size_t cartridge_ram_capacity = gb->cartridge_ram_capacity;
     serial_output_callback = gb->serial_output_callback;
@@ -299,6 +300,7 @@ void cupid_gb_init(CupidGb *gb) {
     gb->rom = rom;
     gb->rom_capacity = rom_capacity;
     gb->rom_generation = rom_generation;
+    gb->mbc3_extended_history = mbc3_extended_history;
     gb->cartridge_ram_heap = cartridge_ram_heap;
     gb->cartridge_ram_capacity = cartridge_ram_capacity;
     if (cartridge_ram_heap)
@@ -511,6 +513,11 @@ void cupid_gb_enter_boot_rom(CupidGb *gb) {
         return;
     }
 
+    cupid_gb_startup_hardware(gb);
+}
+
+void cupid_gb_startup_hardware(CupidGb *gb) {
+
     /* Zero out CPU registers - boot ROM initializes everything */
     gb->cpu.a = 0u;
     gb->cpu.f = 0u;
@@ -627,6 +634,10 @@ void cupid_gb_cleanup(CupidGb *gb) {
     free(gb->rom);
     gb->rom = 0;
     gb->rom_capacity = 0;
+    gb->program_kind = CUPID_GB_PROGRAM_CARTRIDGE;
+    memset(gb->gbs_header, 0, sizeof(gb->gbs_header));
+    gb->gbs_payload_size = 0;
+    gb->mbc3_extended_history = false;
     free(gb->cartridge_ram_heap);
     gb->cartridge_ram_heap = NULL;
     gb->cartridge_ram_capacity = 0;

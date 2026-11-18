@@ -1,6 +1,6 @@
 /**
  * @file    cartridge_file.h
- * @brief   Cartridge file-loading and storage-name interfaces.
+ * @brief   Typed cartridge and music-file loading with stable storage names.
  * @author  cupidthecat
  * @date    2026-11-16
  *
@@ -27,5 +27,12 @@
 
 class QFileInfo;
 
-QByteArray readCartridgeFile(const QString &path, QString &error);
+enum class GameMediaKind { Cartridge, Gbs };
+
+struct GameMedia {
+    QByteArray data;
+    GameMediaKind kind = GameMediaKind::Cartridge;
+};
+
+GameMedia readGameMedia(const QString &path, QString &error);
 QString cartridgeStorageName(const QFileInfo &file);

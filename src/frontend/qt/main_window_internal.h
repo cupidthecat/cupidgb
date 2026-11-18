@@ -311,7 +311,7 @@ class DisplayWidget final : public QWidget {
         if (image.isNull()) {
             painter.setPen(Qt::white);
             painter.drawText(rect(), Qt::AlignCenter,
-                             "CupidGB\nOpen a Game Boy or Game Boy Color ROM");
+                             "CupidGB\nOpen a Game Boy cartridge or GBS music file");
             return;
         }
         ++paintCount;

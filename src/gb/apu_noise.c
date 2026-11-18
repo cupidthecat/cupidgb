@@ -21,6 +21,8 @@
  */
 #include "apu_noise.h"
 
+#include "audio_output.h"
+
 static void noise_shift(CupidGbApu *apu, bool feedback) {
     CupidGbNoiseTiming *timing = &apu->noise_timing;
     /* Keep the existing complemented LFSR representation. Its feedback is XOR,
@@ -44,6 +46,20 @@ static void color_noise_shift(CupidGbApu *apu) {
 
 static void monochrome_noise_shift(CupidGbApu *apu) {
     noise_shift(apu, !apu->noise_timing.feedback_latch);
+}
+
+static void noise_publish_register_edge(CupidGb *gb) {
+    const CupidGbApu *apu = &gb->apu;
+    if (apu->ch4_on)
+        cupid_gb_audio_update(gb, 3, apu->noise_timing.output_high ? apu->ch4_vol : 0, 0, false);
+}
+
+static void noise_register_shift(CupidGb *gb, bool color) {
+    if (color)
+        color_noise_shift(&gb->apu);
+    else
+        monochrome_noise_shift(&gb->apu);
+    noise_publish_register_edge(gb);
 }
 
 bool cupid_gb_noise_tick(CupidGb *gb) {
@@ -94,12 +110,14 @@ void cupid_gb_noise_prepare(CupidGb *gb, bool active) {
     bool extra_step = false;
     bool shorten = false;
     const bool color = gb->model == CUPID_GB_MODEL_CGB;
+    const bool fast_monochrome = !color && gb->double_speed;
     if (!color)
         timing->feedback_latch = false;
     timing->foreground = apu->ch4_dac;
     timing->background = true;
     timing->started_dac_off = !apu->ch4_dac;
-    if (divisor > 1 && timing->remaining == 1) {
+    if (divisor > 1 &&
+        (timing->remaining == 1 || (fast_monochrome && active && timing->remaining == 2))) {
         timing->divider_counter = (uint16_t)((timing->divider_counter + 1) & 0x3fff);
     } else if (active && timing->remaining == 2 && phase == 0) {
         if (divisor == 0) {
@@ -119,6 +137,8 @@ void cupid_gb_noise_prepare(CupidGb *gb, bool active) {
     if (!divisor) {
         if (phase & 1) {
             delay += color && background ? -1 : 1;
+        } else if (fast_monochrome) {
+            delay += 2;
         }
         if (background && !active && phase == 0 && started_off) {
             delay += 28;
@@ -127,18 +147,25 @@ void cupid_gb_noise_prepare(CupidGb *gb, bool active) {
         static const int8_t inactive_adjustment[] = {0, -1, -2, 1};
         static const int8_t active_adjustment[] = {0, -5, -2, -3};
         delay += active ? active_adjustment[phase] : inactive_adjustment[phase];
+        if (fast_monochrome && phase == 2)
+            delay += 4;
         if (phase == 0 && ((active && apu->ch4_shift == 0) || (background && !active))) {
             delay -= 4;
         }
     } else {
         delay -= (int)phase;
         if (phase == 0) {
-            delay -= 4;
+            /* Fast early-model clocks retain this startup interval; the
+             * ordinary monochrome and color paths bypass four prescaler ticks. */
+            if (!fast_monochrome)
+                delay -= 4;
             if (!apu->ch4_dac) {
                 delay += 4;
             }
         }
     }
+    if (!divisor && fast_monochrome && background && !active)
+        --delay;
     if (shorten) {
         delay -= 4;
     }
@@ -191,7 +218,8 @@ static void color_noise_store_bits(CupidGbApu *apu, uint16_t bits) {
     apu->ch4_lfsr = bits ^ 0x7fffu;
 }
 
-static void color_noise_selector_pulse(CupidGbApu *apu, unsigned from, unsigned to) {
+static void color_noise_selector_pulse(CupidGb *gb, unsigned from, unsigned to) {
+    CupidGbApu *apu = &gb->apu;
     CupidGbNoiseTiming *timing = &apu->noise_timing;
     NoiseSelectorPulse pulse = color_noise_short_pulse(from, to);
     uint16_t before = color_noise_bits(apu);
@@ -206,9 +234,10 @@ static void color_noise_selector_pulse(CupidGbApu *apu, unsigned from, unsigned 
         }
         bits = (uint16_t)((bits & ~1u) | ((bits >> 1) & 1u));
         timing->output_high = (bits & 1u) != 0;
+        noise_publish_register_edge(gb);
         timing->last_shift_narrow = apu->ch4_width7;
     } else {
-        color_noise_shift(apu);
+        noise_register_shift(gb, true);
         bits = color_noise_bits(apu);
         if (pulse == NOISE_PULSE_RETAIN) {
             bits &= before | 1u;
@@ -231,7 +260,8 @@ static void color_noise_selector_pulse(CupidGbApu *apu, unsigned from, unsigned 
     color_noise_store_bits(apu, bits);
 }
 
-static void color_noise_frequency_write(CupidGbApu *apu, uint8_t previous) {
+static void color_noise_frequency_write(CupidGb *gb, uint8_t previous) {
+    CupidGbApu *apu = &gb->apu;
     CupidGbNoiseTiming *timing = &apu->noise_timing;
     if (timing->reload_edge) {
         unsigned divisor = apu->ch4_div_code ? apu->ch4_div_code * 4u : 2u;
@@ -251,18 +281,18 @@ static void color_noise_frequency_write(CupidGbApu *apu, uint8_t previous) {
     bool middle_level = (timing->divider_counter & (1u << middle)) != 0;
     if (old_level != new_level) {
         if (new_level)
-            color_noise_shift(apu);
+            noise_register_shift(gb, true);
         return;
     }
     if (old_level == middle_level)
         return;
     if (!new_level) {
         if (to < 8)
-            color_noise_shift(apu);
+            noise_register_shift(gb, true);
         else
-            color_noise_selector_pulse(apu, from & 7u, to & 7u);
+            color_noise_selector_pulse(gb, from & 7u, to & 7u);
     } else if (to < 8) {
-        color_noise_shift(apu);
+        noise_register_shift(gb, true);
     } else if ((to & 7u) & ~(from & 7u)) {
         uint16_t bits = color_noise_bits(apu);
         bits = (uint16_t)((bits & ~0x80u) | ((bits >> 1) & 0x80u));
@@ -273,6 +303,7 @@ static void color_noise_frequency_write(CupidGbApu *apu, uint8_t previous) {
                 lanes |= 0x10u | (uint16_t)((bits & (bits >> 1) & 0x404u) << 1);
             bits &= (uint16_t)((bits >> 1) | lanes);
             timing->output_high = (bits & 1u) != 0;
+            noise_publish_register_edge(gb);
         }
         /* A wide write can expose the bit overwritten by the preceding narrow
          * edge. Forcing feedback cells does not refresh the held output tap. */
@@ -284,7 +315,8 @@ static void color_noise_frequency_write(CupidGbApu *apu, uint8_t previous) {
     }
 }
 
-static void monochrome_selector_transition(CupidGbApu *apu, uint8_t from, uint8_t to) {
+static void monochrome_selector_transition(CupidGb *gb, uint8_t from, uint8_t to) {
+    CupidGbApu *apu = &gb->apu;
     CupidGbNoiseTiming *timing = &apu->noise_timing;
     apu->ch4_width7 = (to & 8u) != 0;
     if ((from >> 4) == (to >> 4))
@@ -305,20 +337,20 @@ static void monochrome_selector_transition(CupidGbApu *apu, uint8_t from, uint8_
 
     if (before == after && before != between) {
         if (!after)
-            monochrome_noise_shift(apu);
+            noise_register_shift(gb, false);
     } else if (!before && after) {
         const bool narrow = apu->ch4_width7;
         apu->ch4_width7 = true;
-        monochrome_noise_shift(apu);
+        noise_register_shift(gb, false);
         apu->ch4_width7 = narrow;
         if ((to >> 4) <= 2u && between && !(counter & 8u)) {
-            color_noise_shift(apu);
+            noise_register_shift(gb, true);
             const uint16_t cells = narrow ? 0x4040u : 0x4000u;
             apu->ch4_lfsr =
                 (uint16_t)((apu->ch4_lfsr & ~cells) | ((apu->ch4_lfsr & (cells >> 1)) << 1));
         }
     } else if ((to >> 4) <= 2u && !before && !between && !after && (counter & 8u)) {
-        color_noise_shift(apu);
+        noise_register_shift(gb, true);
     }
 
     if (between && !after)
@@ -328,7 +360,7 @@ static void monochrome_selector_transition(CupidGbApu *apu, uint8_t from, uint8_
 void cupid_gb_noise_frequency_write(CupidGb *gb, uint8_t previous) {
     CupidGbApu *apu = &gb->apu;
     if (gb->model == CUPID_GB_MODEL_CGB) {
-        color_noise_frequency_write(apu, previous);
+        color_noise_frequency_write(gb, previous);
         return;
     }
 
@@ -345,12 +377,12 @@ void cupid_gb_noise_frequency_write(CupidGb *gb, uint8_t previous) {
         const unsigned new_mask = 1u << (value >> 4);
         if (!(counter & old_mask) && (counter & new_mask) && (counter & 0x80u) &&
             (prior & old_mask) && !(prior & new_mask) && (prior & 0x80u))
-            color_noise_shift(apu);
+            noise_register_shift(gb, true);
     }
     /* Monochrome register writes briefly expose all selector lines, even when
      * the final value is unchanged. Preserve the order of both transitions. */
-    monochrome_selector_transition(apu, previous, 0xff);
-    monochrome_selector_transition(apu, 0xff, value);
+    monochrome_selector_transition(gb, previous, 0xff);
+    monochrome_selector_transition(gb, 0xff, value);
 }
 
 void cupid_gb_noise_disconnect(CupidGb *gb) {

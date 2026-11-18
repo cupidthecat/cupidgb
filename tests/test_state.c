@@ -1126,7 +1126,14 @@ static void test_rejection(void) {
     update_integrity(damaged, length);
     rejected_unchanged(gb, damaged, length, CUPID_GB_STATE_UNSUPPORTED_VERSION);
     memcpy(damaged, valid, length);
-    damaged[28] |= 2; /* Reserved header flags remain invalid with a correct digest. */
+    damaged[28] |= 4; /* Reserved header flags remain invalid with a correct digest. */
+    update_integrity(damaged, length);
+    rejected_unchanged(gb, damaged, length, CUPID_GB_STATE_INVALID);
+    memcpy(damaged, valid, length);
+    damaged[28] |= 2; /* Recognized music identity cannot replace a loaded cartridge. */
+    update_integrity(damaged, length);
+    rejected_unchanged(gb, damaged, length, CUPID_GB_STATE_WRONG_ROM);
+    put_u32(damaged + 8, 22); /* The same bit remains reserved in the older format. */
     update_integrity(damaged, length);
     rejected_unchanged(gb, damaged, length, CUPID_GB_STATE_INVALID);
     rejected_unchanged(gb, NULL, length, CUPID_GB_STATE_INVALID);

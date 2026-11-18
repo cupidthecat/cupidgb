@@ -397,7 +397,13 @@ QString MainWindow::slotPath(int slot, bool legacy) const {
 bool MainWindow::saveSlot(int slot) {
     if (!emulator_ || slot < 0 || slot > 9)
         return false;
-    QScopedValueRollback<bool> operation(stateOperation_, true);
+    const QPointer<MainWindow> self(this);
+    const bool previousOperation = stateOperation_;
+    stateOperation_ = true;
+    const auto operation = qScopeGuard([self, previousOperation] {
+        if (self)
+            self->stateOperation_ = previousOperation;
+    });
     const QString path = slotPath(slot);
     const QString canonical = QFileInfo(path).canonicalFilePath();
 #ifdef _WIN32
@@ -429,12 +435,16 @@ bool MainWindow::saveSlot(int slot) {
 bool MainWindow::loadSlot(int slot) {
     if (!emulator_ || slot < 0 || slot > 9)
         return false;
+    const QPointer<MainWindow> self(this);
+    const uint64_t session = sessionId_;
     QString path = slotPath(slot);
     // An existing but unreadable or invalid primary file must not select a different state.
     if (!QFileInfo::exists(path))
         path = slotPath(slot, true);
     if (!loadStateFile(path))
         return false;
+    if (!self || sessionId_ != session)
+        return true;
     statusBar()->showMessage(QString("State loaded from slot %1").arg(slot ? slot : 10), 3000);
     notifyOnScreen(QString("State loaded from slot %1").arg(slot ? slot : 10));
     return true;
@@ -445,7 +455,14 @@ bool MainWindow::loadStateFile(const QString &path) {
         reportError("Open a cartridge before loading a state file.");
         return false;
     }
-    QScopedValueRollback<bool> operation(stateOperation_, true);
+    const QPointer<MainWindow> self(this);
+    const bool previousOperation = stateOperation_;
+    stateOperation_ = true;
+    const auto operation = qScopeGuard([self, previousOperation] {
+        if (self)
+            self->stateOperation_ = previousOperation;
+    });
+    const uint64_t session = sessionId_;
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly) || file.size() <= 0 || file.size() > 16 * 1024 * 1024) {
         reportError("Cannot read state file: " + path + "\n" + file.errorString());
@@ -458,12 +475,18 @@ bool MainWindow::loadStateFile(const QString &path) {
     }
     if (!restoreState(bytes, true))
         return false;
+    const uint64_t timeline = timelineId_;
+    const auto current = [self, session, timeline] {
+        return self && self->sessionId_ == session && self->timelineId_ == timeline;
+    };
     resetDebuggerTimeline();
     if (inspectorsWindow_)
         inspectorsWindow_->sessionChanged();
     if (recorder_ && recorder_->active() &&
         recorder_->sampleRate() != cupid_gb_apu_get_sample_rate(&emulator_->gb))
         stopRecording();
+    if (!current())
+        return true;
     // The receiving output history survives a load. Discard its queued frames
     // before resuming guest execution at the restored instruction boundary.
     if (!discardCoreAudio())
@@ -477,6 +500,8 @@ bool MainWindow::loadStateFile(const QString &path) {
     rewind_ = false;
     turbo_ = false;
     clearAudio();
+    if (!current())
+        return true;
     resetPacing();
     resetRewind();
     rememberFrame();

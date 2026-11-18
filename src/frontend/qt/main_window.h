@@ -47,6 +47,7 @@ extern "C" {
 #include "cupid/gb/cartridge.h"
 #include "cupid/gb/cheats.h"
 #include "cupid/gb/debugger.h"
+#include "cupid/gb/gbs.h"
 #include "cupid/gb/reset.h"
 #include "cupid/gb/state.h"
 }
@@ -71,6 +72,7 @@ struct CupidGbPrinter;
 class PaletteLibrary;
 class HostCamera;
 class CoreAudioCollector;
+class GbsPlayer;
 
 class MainWindow final : public QMainWindow {
   public:
@@ -83,7 +85,7 @@ class MainWindow final : public QMainWindow {
     MainWindow *newWindow();
     bool connectLink(MainWindow *partner);
     void disconnectLink();
-    enum class SmokeWorkflow { All, Desktop, Storage, Sgb, Link };
+    enum class SmokeWorkflow { All, Desktop, Storage, Sgb, Link, Gbs };
     bool smokeTest(SmokeWorkflow workflow = SmokeWorkflow::All);
     void beginBoundedRun(double seconds, const QString &reportPath);
     bool loadInputTrace(const QString &path);
@@ -119,6 +121,16 @@ class MainWindow final : public QMainWindow {
     void tickLink();
     void linkedDebuggerSlice();
     bool linkSmokeTest(const QString &directory);
+    bool gbsSmokeTest(const QString &directory);
+    bool prepareMusicCandidate(std::unique_ptr<CupidEmulator> &candidate, const QByteArray &data,
+                               int &model, CupidGbGbsInfo &info);
+    void setMusicSession(const std::optional<CupidGbGbsInfo> &info, uint8_t track);
+    bool startMusicTrack(uint8_t track);
+    void moveMusicTrack(int direction);
+    void refreshMusicControls();
+    void appendMusicSamples(const int16_t *samples, size_t frames);
+    void publishMusicFrame();
+    bool presentMusic();
     void buildColorMenus(QMenu *view);
     void buildPaletteFileMenu(QMenu *palette);
     void importPalette();
@@ -322,6 +334,14 @@ class MainWindow final : public QMainWindow {
     PrinterWindow *printerWindow_ = nullptr;
     CupidGbPrinter *printer_ = nullptr;
     DisplayWidget *display_ = nullptr;
+    GbsPlayer *musicPlayer_ = nullptr;
+    std::optional<CupidGbGbsInfo> musicInfo_;
+    uint8_t musicTrack_ = 0;
+    bool musicPresentation_ = false;
+    bool musicFramePending_ = false;
+    QByteArray gameGeometry_;
+    QSize gameMinimumSize_;
+    QSize gameMaximumSize_;
     std::shared_ptr<AudioBuffer> audioBuffer_;
     std::shared_ptr<QAudioSink> audio_;
     QIODevice *audioDevice_ = nullptr;
@@ -446,6 +466,7 @@ class MainWindow final : public QMainWindow {
     uint64_t telemetryStartCycles_ = 0;
     uint64_t telemetryStartPresentationCycles_ = 0;
     uint64_t presentedImages_ = 0;
+    uint64_t musicWaveformsPublished_ = 0;
     uint64_t generatedAudioFrames_ = 0;
     uint64_t handheldAudioFrames_ = 0;
     uint64_t startupAudioFrames_ = 0;

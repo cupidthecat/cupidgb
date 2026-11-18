@@ -164,24 +164,30 @@ static void update_stat_irq(CupidGb *gb, bool write, bool half_dot, bool stat_wr
     }
 
     const CupidGbPixels *p = &gb->pixels;
+    const bool fast_monochrome = gb->double_speed && gb->model != CUPID_GB_MODEL_CGB;
     bool compare_valid = !p->initialized || gb->ppu_lcd_startup || p->dot != 0 || p->line == 0 ||
                          (stat & 3u) == CUPID_GB_PPU_MODE_OAM;
-    if (p->initialized && p->line < 143 && gb->io_registers[CUPID_GB_IO_LY] == p->line + 1u)
+    /* The final VBlank row exposes the next LY before its comparison settles.
+     * Fast monochrome playback must retain line 152 across that readable edge. */
+    if (p->initialized && (p->line < 143 || (fast_monochrome && p->line == 152)) &&
+        gb->io_registers[CUPID_GB_IO_LY] == p->line + 1u)
         compare_valid = false;
     unsigned compare_line = gb->io_registers[CUPID_GB_IO_LY];
     if (p->initialized && p->line == 143 && p->dot >= 455)
         compare_valid = false;
     if (p->initialized && p->line == 153) {
         unsigned first = gb->model == CUPID_GB_MODEL_CGB ? 1u : 3u;
-        compare_valid = (p->dot >= first && p->dot < 5) || p->dot >= 9;
+        /* Fast monochrome playback retains the line comparison after readable
+         * LY clears. LYC writes in this interval can still raise a new edge. */
+        compare_valid = (p->dot >= first && (p->dot < 5 || fast_monochrome)) || p->dot >= 9;
         compare_line = p->dot < 9 ? 153u : 0u;
     }
     coincidence = compare_valid && compare_line == gb->io_registers[CUPID_GB_IO_LYC];
     if (compare_valid)
         gb->pixels.lyc_irq = coincidence;
-    /* Monochrome hardware clears the readable bit during invalid comparison
-     * phases while retaining the previous comparison input to the IRQ line. */
-    if (compare_valid || gb->model != CUPID_GB_MODEL_CGB) {
+    /* Normal-speed monochrome hardware clears the readable bit during invalid
+     * comparison phases. Fast playback retains both that bit and the IRQ input. */
+    if (compare_valid || (gb->model != CUPID_GB_MODEL_CGB && !gb->double_speed)) {
         if (coincidence)
             stat = (uint8_t)(stat | 0x04u);
         else
@@ -549,7 +555,10 @@ static void tick_ppu(CupidGb *gb, uint32_t dots) {
                 if (!gb->stat_irq_line && (gb->io_registers[CUPID_GB_IO_STAT] & 0x20))
                     cupid_gb_request_interrupt(gb, CUPID_GB_INTERRUPT_LCD_STAT);
                 cupid_gb_update_stat_irq(gb);
-            } else if (p->line == 153 && p->dot == (gb->model == CUPID_GB_MODEL_CGB ? 4 : 2)) {
+            } else if (p->line == 153 &&
+                       p->dot == (gb->model == CUPID_GB_MODEL_CGB || gb->double_speed ? 4 : 2)) {
+                /* The early monochrome clear belongs to normal CPU speed.
+                 * Fast playback uses the later edge without shortening VBlank. */
                 gb->io_registers[CUPID_GB_IO_LY] = 0;
                 cupid_gb_update_stat_irq(gb);
             }

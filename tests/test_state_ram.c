@@ -589,7 +589,7 @@ static void draft_rejections(unsigned code) {
         const size_t descriptor = descriptor_offset(source, valid);
         Blob bad = {malloc(valid.size + 1), valid.size};
         assert(bad.data);
-        for (unsigned scenario = 0; scenario < 14; ++scenario) {
+        for (unsigned scenario = 0; scenario < 15; ++scenario) {
             memcpy(bad.data, valid.data, valid.size);
             bad.size = valid.size;
             CupidGbStateResult expected = CUPID_GB_STATE_INVALID;
@@ -611,9 +611,13 @@ static void draft_rejections(unsigned code) {
             } else if (scenario == 6) {
                 bad.data[32] ^= 1;
                 expected = CUPID_GB_STATE_WRONG_ROM;
-            } else if (scenario == 7)
+            } else if (scenario == 7) {
                 write_u32(bad.data + 28, 2);
-            else if (scenario == 8)
+                /* A current music tag mismatches this cartridge; older formats
+                 * still reject that bit as a reserved header flag. */
+                if (layout == WIRE_CURRENT)
+                    expected = CUPID_GB_STATE_WRONG_ROM;
+            } else if (scenario == 8)
                 bad.data[descriptor + 2] = 1;
             else if (scenario == 9)
                 bad.data[descriptor] = 7;
@@ -623,8 +627,10 @@ static void draft_rejections(unsigned code) {
                 write_u32(bad.data + descriptor + 4, PRINTER_STATE_WIRE_SIZE - 1);
             else if (scenario == 12)
                 bad.data[descriptor + DESCRIPTOR_BYTES] = 7; /* Late printer decode. */
-            else
+            else if (scenario == 13)
                 bad.data[HEADER_BYTES + 1] |= 1; /* Invalid F after candidate SRAM decode. */
+            else
+                write_u32(bad.data + 28, 4); /* Reserved in every supported version. */
             if (scenario != 0)
                 seal(bad);
             reject_all(target, bad, expected);

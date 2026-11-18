@@ -4,7 +4,7 @@ The desktop executable uses the Windows GUI subsystem and includes a CupidGB ico
 
 ## Open With registration
 
-The installed folder contains `Register-CupidGB.ps1`, `Unregister-CupidGB.ps1`, and `CupidGB.FileAssociations.psm1`. Registration adds CupidGB as a per-user opener for `.gb` and `.gbc` cartridges. It preserves extension defaults, Windows `UserChoice` entries, and other applications' Open With entries. Administrator access is not required.
+The installed folder contains `Register-CupidGB.ps1`, `Unregister-CupidGB.ps1`, and `CupidGB.FileAssociations.psm1`. Registration adds CupidGB as a per-user opener for `.gb` and `.gbc` cartridges and `.gbs` music. It preserves extension defaults, Windows `UserChoice` entries, and other applications' Open With entries. Administrator access is not required.
 
 From PowerShell in that folder:
 
