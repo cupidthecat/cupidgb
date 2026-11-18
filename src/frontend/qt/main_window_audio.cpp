@@ -190,13 +190,22 @@ void MainWindow::clearAudio() {
 }
 
 void MainWindow::pumpAudio() {
-    const auto finishModeChange = qScopeGuard([this] {
-        if (audioModeResetPending_ && !stateOperation_) {
-            clearAudio();
-            applyHeldButtons();
+    const QPointer<MainWindow> self(this);
+    const auto finishModeChange = qScopeGuard([self] {
+        if (self && self->audioModeResetPending_ && !self->stateOperation_) {
+            self->clearAudio();
+            if (self)
+                self->applyHeldButtons();
         }
     });
-    QScopedValueRollback<bool> operation(stateOperation_, true);
+    const bool previousOperation = stateOperation_;
+    stateOperation_ = true;
+    const auto operation = qScopeGuard([self, previousOperation] {
+        if (self)
+            self->stateOperation_ = previousOperation;
+    });
+    // The final backend lease can delete its window during retirement. Both
+    // exit guards outlive that lease and must check ownership before cleanup.
     // Backend event dispatch can replace the session queue while a write is active.
     const auto buffer = audioBuffer_;
     const auto sink = audio_;
@@ -211,7 +220,7 @@ void MainWindow::pumpAudio() {
             // with an empty queue can leave the Windows backend idle after a load.
             if (!audioDevice_) {
                 QIODevice *device = sink->start();
-                if (sink != audio_ || buffer != audioBuffer_ || paused_)
+                if (!self || sink != audio_ || buffer != audioBuffer_ || paused_)
                     return;
                 audioDevice_ = device;
             }
@@ -219,14 +228,14 @@ void MainWindow::pumpAudio() {
             const auto state = sink->state();
             // A failed start can leave the backend without a native client.
             // Capacity is only valid for a started, writable stream.
-            if (!device || (state != QAudio::ActiveState && state != QAudio::IdleState))
+            if (!self || !device || (state != QAudio::ActiveState && state != QAudio::IdleState))
                 return;
             const qint64 capacity = sink->bytesFree();
-            if (sink != audio_ || buffer != audioBuffer_ || device != audioDevice_ || paused_ ||
-                menuDepth_ || menuInputSuspended_)
+            if (!self || sink != audio_ || buffer != audioBuffer_ || device != audioDevice_ ||
+                paused_ || menuDepth_ || menuInputSuspended_)
                 return;
             const qint64 written = buffer->writeTo(device, capacity);
-            if (written > 0 && sink == audio_ && buffer == audioBuffer_ && !paused_) {
+            if (self && written > 0 && sink == audio_ && buffer == audioBuffer_ && !paused_) {
                 audioPriming_ = false;
                 ++audioPrimeEvents_;
             }
@@ -235,11 +244,11 @@ void MainWindow::pumpAudio() {
         if (audioDevice_) {
             QIODevice *const device = audioDevice_;
             const auto state = sink->state();
-            if (state != QAudio::ActiveState && state != QAudio::IdleState)
+            if (!self || (state != QAudio::ActiveState && state != QAudio::IdleState))
                 return;
             const qint64 capacity = sink->bytesFree();
-            if (sink != audio_ || buffer != audioBuffer_ || device != audioDevice_ || paused_ ||
-                menuDepth_ || menuInputSuspended_)
+            if (!self || sink != audio_ || buffer != audioBuffer_ || device != audioDevice_ ||
+                paused_ || menuDepth_ || menuInputSuspended_)
                 return;
             buffer->writeTo(device, capacity);
         }

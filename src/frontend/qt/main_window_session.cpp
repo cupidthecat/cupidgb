@@ -72,7 +72,11 @@ void MainWindow::tick() {
         tickLink();
         return;
     }
-    const auto refreshInterval = qScopeGuard([this] { refreshTimerInterval(); });
+    const QPointer<MainWindow> self(this);
+    const auto refreshInterval = qScopeGuard([self] {
+        if (self)
+            self->refreshTimerInterval();
+    });
     refreshControllerGate();
     if (!emulator_ || paused_ || stateOperation_ || menuDepth_ || menuInputSuspended_)
         return;
@@ -81,9 +85,11 @@ void MainWindow::tick() {
     const uint64_t entryPacing = pacingGeneration_;
     if (audioModeResetPending_)
         clearAudio();
+    if (!self)
+        return;
     pumpAudio();
     // Starting a native audio stream may dispatch window/session actions.
-    if (!emulator_ || paused_ || stateOperation_ || menuDepth_ || menuInputSuspended_ ||
+    if (!self || !emulator_ || paused_ || stateOperation_ || menuDepth_ || menuInputSuspended_ ||
         sessionId_ != entrySession || timelineId_ != entryTimeline ||
         pacingGeneration_ != entryPacing)
         return;
@@ -105,8 +111,8 @@ void MainWindow::tick() {
     const unsigned speed = speedSteps_;
     PlaybackResult result;
     const bool ran = rewind ? rewindFrame(&result) : runFrame(Playback::Forward, &result);
-    if (!ran || paused_ || !emulator_ || stateOperation_ || menuDepth_ || menuInputSuspended_ ||
-        sessionId_ != session || timelineId_ != result.timeline)
+    if (!self || !ran || paused_ || !emulator_ || stateOperation_ || menuDepth_ ||
+        menuInputSuspended_ || sessionId_ != session || timelineId_ != result.timeline)
         return;
     // Audio callbacks can dispatch a speed preference or held-key change. Keep
     // the new deadline instead of charging an old-rate quantum to that timeline.

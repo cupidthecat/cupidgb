@@ -88,6 +88,16 @@ The first Windows full-gate command omitted the documented Qt runtime path. Desk
 
 The final lifecycle audit also reproduced three Linux crashes when an audio-sink retirement deleted the window during Open, Reset or Quick Reset. Each original process reached its named operation and exited with signal status 139. The failing executable, frontend source and process logs are retained separately from the repaired build.
 
+## Qt lifetime completion
+
+The final frontend repair makes audio-pump cleanup conditional on the window still existing. Retiring a backend can delete its owning window before the pump's local leases and scope guards finish. The pacing tick now checks the same lifetime boundary before continuing audio work, executing a guest frame or refreshing its timer. Deferred mode cleanup checks ownership again after resetting the audio stream.
+
+A preserved Linux Release control exits with status 139 in the `tick-retirement` case. The repaired build passes that case and the complete GBS workflow on Windows and Linux with Qt 6.8.3. The `pump-retirement` control returns successfully on both hosts, so its return code alone does not detect its dangling cleanup guards. The repair removes those references explicitly.
+
+Both hosts pass seven focused Qt CTests covering command-line model selection, cartridge dispatch, desktop controls, larger storage, SGB, linked windows and GBS. The GBS workflow checks fifteen named deletion cases across Open, both Reset commands, Close, window closure, state loading, console reset, pacing/audio retirement and error dialogs. Its paused track-restart check also deletes the owning window during audio retirement. The test uses the public byte-write API when preparing its battery-error cases.
+
+These are offscreen integration checks. Native output-device playback, visible presentation and acoustic quality retain their separate qualification requirements. The core comparison results above remain bound to their recorded version 6 inputs.
+
 ## Qualification limits
 
 Generated programs establish loading and selected execution contracts, not compatibility with a distributed GBS library. Native waveform activity and a healthy audio backend do not establish audible quality or the absence of glitches. The [Linux host-clock limitation](validation-host-clock.md) remains relevant to sustained playback measurements. Cartridge regression results, actual gameplay scenes and music measurements retain separate input sets and durations.

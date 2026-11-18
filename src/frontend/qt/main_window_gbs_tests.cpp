@@ -732,9 +732,9 @@ bool MainWindow::gbsSmokeTest(const QString &directory) {
             return smokeFailure(__FILE__, __LINE__);
         const QString validSavePath = victim->savePath_;
         if (batteryFailure) {
-            cupid_gb_write(&victim->emulator_->gb, 0x0000, 0x0a);
-            cupid_gb_write(&victim->emulator_->gb, 0xa000,
-                           uint8_t(cupid_gb_debug_peek(&victim->emulator_->gb, 0xa000) ^ 0xff));
+            cupid_gb_write_u8(&victim->emulator_->gb, 0x0000, 0x0a);
+            cupid_gb_write_u8(&victim->emulator_->gb, 0xa000,
+                              uint8_t(cupid_gb_debug_peek(&victim->emulator_->gb, 0xa000) ^ 0xff));
             victim->watchBattery();
             if (!victim->batteryDirty_)
                 return smokeFailure(__FILE__, __LINE__);
