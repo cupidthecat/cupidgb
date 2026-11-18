@@ -38,6 +38,7 @@
 #include "cupid/gb/battery.h"
 #include "cupid/gb/infrared.h"
 #include "display_clock.h"
+#include "oam_bus.h"
 #include "printer_internal.h"
 #include "rtc_internal.h"
 #include "startup_internal.h"
@@ -990,6 +991,8 @@ static uint8_t read_data_bus(const CupidGb *gb, uint16_t address, CupidGb *bus, 
             (gb->ppu_line_boundary_hold ||
              (gb->pixels.initialized && !gb->ppu_lcd_startup && gb->pixels.dot == 0) ||
              mode == CUPID_GB_PPU_MODE_OAM || mode == CUPID_GB_PPU_MODE_TRANSFER)) {
+            if (bus)
+                cupid_gb_trigger_oam_bug_read_access(bus, address);
             return 0xffu;
         }
         if (address < 0xfea0u)

@@ -45,6 +45,7 @@
 #include "cupid/gb/timer.h"
 #include "cupid/gbc/cgb.h"
 #include "display_clock.h"
+#include "oam_bus.h"
 
 // Register helpers
 
@@ -122,212 +123,6 @@ static void cupid_gb_set_hl(CupidGbCpu *cpu, uint16_t value) {
 static void cupid_gb_set_af(CupidGbCpu *cpu, uint16_t value) {
     cpu->a = (uint8_t)(value >> 8u);
     cpu->f = (uint8_t)(value & 0x00f0u);
-}
-
-// DMG OAM corruption bug
-
-/**
- * @brief Checks whether a DMG OAM corruption glitch would be triggered.
- *
- * Monochrome hardware exposes OAM row conflicts while an actual search is
- * active and the address falls in 0xFE00–0xFEFF. The initial LCD scanline has
- * no OAM search. Physical color hardware stays unaffected in compatibility mode.
- *
- * @param gb          Pointer to the Game Boy state.
- * @param address     The address being accessed.
- * @param row_offset  If non-NULL and the bug is active, receives the byte
- *                    offset of the current OAM row being scanned.
- *
- * @return `true` if the OAM bug is active for this access, `false` otherwise.
- *
- * @note Always returns `false` on color hardware or when the LCD is disabled.
- */
-static bool cupid_gb_oam_bug_active(CupidGb *gb, uint16_t address, uint16_t *row_offset) {
-    uint8_t ly;
-
-    /* Increment and decrement bus pulses can synchronize OAM without an
-     * ordinary memory access, including when no corruption follows. */
-    if (gb && gb->model != CUPID_GB_MODEL_CGB && address >= 0xfe00u && address < 0xff00u)
-        cupid_gb_display_clock_sync(gb);
-
-    if (gb == 0 || gb->model == CUPID_GB_MODEL_CGB || !cupid_gb_lcd_enabled(gb) ||
-        gb->ppu_lcd_startup) {
-        return false;
-    }
-
-    if (address < 0xfe00u || address >= 0xff00u) {
-        return false;
-    }
-
-    ly = gb->pixels.initialized ? gb->pixels.line : gb->io_registers[CUPID_GB_IO_LY];
-    const unsigned dot = gb->pixels.initialized ? gb->pixels.dot : gb->ppu_counter * 4u;
-    if (ly >= CUPID_GB_PPU_VISIBLE_SCANLINES || dot >= 80u) {
-        return false;
-    }
-
-    if (row_offset != 0) {
-        /* Two objects share one eight-byte row. The search word is sampled
-         * halfway through the four-dot row slot, independently of STAT. */
-        *row_offset = (uint16_t)(((dot + 1u) / 4u) * 8u);
-    }
-    return true;
-}
-
-/**
- * @brief Reads a 16-bit word from OAM at a given row and word index.
- *
- * @param gb         Pointer to the Game Boy state.
- * @param row_offset Byte offset of the OAM row.
- * @param word_index 0-based index of the 16-bit word within the row.
- *
- * @return The 16-bit little-endian value at that position.
- */
-static uint16_t cupid_gb_oam_bug_get_word(const CupidGb *gb, uint16_t row_offset,
-                                          uint8_t word_index) {
-    size_t offset = (size_t)row_offset + (size_t)word_index * 2u;
-
-    return (uint16_t)((uint16_t)gb->object_attribute_memory[offset] |
-                      (uint16_t)((uint16_t)gb->object_attribute_memory[offset + 1u] << 8u));
-}
-
-/**
- * @brief Writes a 16-bit word into OAM at a given row and word index.
- *
- * @param gb         Pointer to the Game Boy state.
- * @param row_offset Byte offset of the OAM row.
- * @param word_index 0-based index of the 16-bit word within the row.
- * @param value      The value to write (little-endian).
- */
-static void cupid_gb_oam_bug_set_word(CupidGb *gb, uint16_t row_offset, uint8_t word_index,
-                                      uint16_t value) {
-    size_t offset = (size_t)row_offset + (size_t)word_index * 2u;
-
-    gb->object_attribute_memory[offset] = (uint8_t)(value & 0x00ffu);
-    gb->object_attribute_memory[offset + 1u] = (uint8_t)(value >> 8u);
-}
-
-/**
- * @brief Copies 8 bytes from one OAM row to another.
- *
- * @param gb             Pointer to the Game Boy state.
- * @param dst_row_offset Byte offset of the destination row.
- * @param src_row_offset Byte offset of the source row.
- */
-static void cupid_gb_oam_bug_copy_row(CupidGb *gb, uint16_t dst_row_offset,
-                                      uint16_t src_row_offset) {
-    size_t index;
-
-    for (index = 0u; index < 8u; ++index) {
-        gb->object_attribute_memory[(size_t)dst_row_offset + index] =
-            gb->object_attribute_memory[(size_t)src_row_offset + index];
-    }
-}
-
-/**
- * @brief Applies the DMG OAM corruption pattern for a write access.
- *
- * When triggered, corrupts the current OAM scan row using a bitwise
- * combination of the current, previous, and two-rows-back row data,
- * then copies a portion of the prior row into the current row.
- *
- * @param gb      Pointer to the Game Boy state.
- * @param address The address involved in the write.
- */
-static void cupid_gb_trigger_oam_bug_write(CupidGb *gb, uint16_t address) {
-    uint16_t row_offset;
-    uint16_t a;
-    uint16_t b;
-    uint16_t c;
-    size_t index;
-
-    if (!cupid_gb_oam_bug_active(gb, address, &row_offset) || row_offset < 8u ||
-        row_offset >= 0x00a0u) {
-        return;
-    }
-
-    a = cupid_gb_oam_bug_get_word(gb, row_offset, 0u);
-    b = cupid_gb_oam_bug_get_word(gb, (uint16_t)(row_offset - 8u), 0u);
-    c = cupid_gb_oam_bug_get_word(gb, (uint16_t)(row_offset - 4u), 0u);
-
-    cupid_gb_oam_bug_set_word(gb, row_offset, 0u, (uint16_t)(((a ^ c) & (b ^ c)) ^ c));
-    for (index = 0u; index < 6u; ++index) {
-        gb->object_attribute_memory[(size_t)row_offset + 2u + index] =
-            gb->object_attribute_memory[(size_t)row_offset - 6u + index];
-    }
-}
-
-/**
- * @brief Public wrapper for the DMG OAM write corruption bug.
- *
- * Called by the memory subsystem when a write to the OAM region occurs
- * during Mode 2 (OAM scan) on DMG hardware.
- *
- * @param gb      Pointer to the Game Boy state.
- * @param address The address being written.
- */
-void cupid_gb_trigger_oam_bug_write_access(CupidGb *gb, uint16_t address) {
-    cupid_gb_trigger_oam_bug_write(gb, address);
-}
-
-/**
- * @brief Applies the DMG OAM corruption pattern for a read access.
- *
- * Copies the previous OAM row into the current row, then overwrites the
- * first word with a bitwise combination of current and previous row data.
- *
- * @param gb      Pointer to the Game Boy state.
- * @param address The address involved in the read.
- */
-static void cupid_gb_trigger_oam_bug_read(CupidGb *gb, uint16_t address) {
-    uint16_t row_offset;
-    uint16_t a;
-    uint16_t b;
-    uint16_t c;
-
-    if (!cupid_gb_oam_bug_active(gb, address, &row_offset) || row_offset < 8u ||
-        row_offset >= 0x00a0u) {
-        return;
-    }
-
-    a = cupid_gb_oam_bug_get_word(gb, row_offset, 0u);
-    b = cupid_gb_oam_bug_get_word(gb, (uint16_t)(row_offset - 8u), 0u);
-    c = cupid_gb_oam_bug_get_word(gb, (uint16_t)(row_offset - 8u), 2u);
-
-    cupid_gb_oam_bug_copy_row(gb, row_offset, (uint16_t)(row_offset - 8u));
-    cupid_gb_oam_bug_set_word(gb, row_offset, 0u, (uint16_t)(b | (a & c)));
-}
-
-/**
- * @brief Applies the DMG OAM corruption pattern for a read-with-increment access.
- *
- * Handles the glitch pattern produced by 16-bit read-increment instructions
- * (e.g. POP, LD A,(HL+)). Corrupts up to three OAM rows then falls through
- * to the plain read corruption.
- *
- * @param gb      Pointer to the Game Boy state.
- * @param address The address involved in the read.
- */
-static void cupid_gb_trigger_oam_bug_read_increment(CupidGb *gb, uint16_t address) {
-    uint16_t row_offset;
-
-    if (!cupid_gb_oam_bug_active(gb, address, &row_offset) || row_offset < 8u ||
-        row_offset >= 0x00a0u) {
-        return;
-    }
-
-    if (row_offset >= 16u && row_offset < 0x0098u) {
-        uint16_t a = cupid_gb_oam_bug_get_word(gb, (uint16_t)(row_offset - 16u), 0u);
-        uint16_t b = cupid_gb_oam_bug_get_word(gb, (uint16_t)(row_offset - 8u), 0u);
-        uint16_t c = cupid_gb_oam_bug_get_word(gb, row_offset, 0u);
-        uint16_t d = cupid_gb_oam_bug_get_word(gb, (uint16_t)(row_offset - 8u), 2u);
-        uint16_t glitch = (uint16_t)((b & (a | c | d)) | (a & c & d));
-
-        cupid_gb_oam_bug_set_word(gb, (uint16_t)(row_offset - 8u), 0u, glitch);
-        cupid_gb_oam_bug_copy_row(gb, row_offset, (uint16_t)(row_offset - 8u));
-        cupid_gb_oam_bug_copy_row(gb, (uint16_t)(row_offset - 16u), (uint16_t)(row_offset - 8u));
-    }
-
-    cupid_gb_trigger_oam_bug_read(gb, address);
 }
 
 // Fetch / push / pop
@@ -1456,7 +1251,6 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode, CupidGbCpuBus *
             uint16_t hl = cupid_gb_get_hl(&gb->cpu);
             cupid_gb_deliver_cpu_cycles(gb, 1u);
             gb->cpu.a = cupid_gb_read_bus_u8(gb, hl);
-            cupid_gb_trigger_oam_bug_read_increment(gb, hl);
             cupid_gb_set_hl(&gb->cpu, (uint16_t)(hl + 1u));
             return 1u;
         }
@@ -1480,7 +1274,6 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode, CupidGbCpuBus *
             uint16_t hl = cupid_gb_get_hl(&gb->cpu);
             cupid_gb_deliver_cpu_cycles(gb, 1u);
             gb->cpu.a = cupid_gb_read_bus_u8(gb, hl);
-            cupid_gb_trigger_oam_bug_read_increment(gb, hl);
             cupid_gb_set_hl(&gb->cpu, (uint16_t)(hl - 1u));
             return 1u;
         }
@@ -1511,11 +1304,9 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode, CupidGbCpuBus *
             /* POP BC: M1=opcode M2=read_lo M3=read_hi */
             uint8_t lo, hi;
             cupid_gb_deliver_cpu_cycles(gb, 1u); /* M1 */
-            cupid_gb_trigger_oam_bug_read_increment(gb, gb->cpu.sp);
             lo = cupid_gb_read_bus_u8(gb, gb->cpu.sp);
             gb->cpu.sp = (uint16_t)(gb->cpu.sp + 1u);
             cupid_gb_deliver_cpu_cycles(gb, 1u); /* M2 */
-            cupid_gb_trigger_oam_bug_read_increment(gb, gb->cpu.sp);
             hi = cupid_gb_read_bus_u8(gb, gb->cpu.sp);
             gb->cpu.sp = (uint16_t)(gb->cpu.sp + 1u);
             cupid_gb_set_bc(&gb->cpu, (uint16_t)((uint16_t)lo | (uint16_t)(hi << 8u)));
@@ -1611,11 +1402,9 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode, CupidGbCpuBus *
             /* RET: M1=opcode M2=read_lo M3=read_hi M4=internal */
             uint8_t lo, hi;
             cupid_gb_deliver_cpu_cycles(gb, 1u); /* M1 */
-            cupid_gb_trigger_oam_bug_read_increment(gb, gb->cpu.sp);
             lo = cupid_gb_read_bus_u8(gb, gb->cpu.sp);
             gb->cpu.sp = (uint16_t)(gb->cpu.sp + 1u);
             cupid_gb_deliver_cpu_cycles(gb, 1u); /* M2 */
-            cupid_gb_trigger_oam_bug_read_increment(gb, gb->cpu.sp);
             hi = cupid_gb_read_bus_u8(gb, gb->cpu.sp);
             gb->cpu.sp = (uint16_t)(gb->cpu.sp + 1u);
             gb->cpu.pc = (uint16_t)((uint16_t)lo | (uint16_t)(hi << 8u));
@@ -1651,11 +1440,9 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode, CupidGbCpuBus *
             /* POP DE: M1=opcode M2=read_lo M3=read_hi */
             uint8_t lo, hi;
             cupid_gb_deliver_cpu_cycles(gb, 1u); /* M1 */
-            cupid_gb_trigger_oam_bug_read_increment(gb, gb->cpu.sp);
             lo = cupid_gb_read_bus_u8(gb, gb->cpu.sp);
             gb->cpu.sp = (uint16_t)(gb->cpu.sp + 1u);
             cupid_gb_deliver_cpu_cycles(gb, 1u); /* M2 */
-            cupid_gb_trigger_oam_bug_read_increment(gb, gb->cpu.sp);
             hi = cupid_gb_read_bus_u8(gb, gb->cpu.sp);
             gb->cpu.sp = (uint16_t)(gb->cpu.sp + 1u);
             cupid_gb_set_de(&gb->cpu, (uint16_t)((uint16_t)lo | (uint16_t)(hi << 8u)));
@@ -1690,11 +1477,9 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode, CupidGbCpuBus *
             /* RETI: M1=opcode M2=read_lo M3=read_hi M4=internal */
             uint8_t lo, hi;
             cupid_gb_deliver_cpu_cycles(gb, 1u); /* M1 */
-            cupid_gb_trigger_oam_bug_read_increment(gb, gb->cpu.sp);
             lo = cupid_gb_read_bus_u8(gb, gb->cpu.sp);
             gb->cpu.sp = (uint16_t)(gb->cpu.sp + 1u);
             cupid_gb_deliver_cpu_cycles(gb, 1u); /* M2 */
-            cupid_gb_trigger_oam_bug_read_increment(gb, gb->cpu.sp);
             hi = cupid_gb_read_bus_u8(gb, gb->cpu.sp);
             gb->cpu.sp = (uint16_t)(gb->cpu.sp + 1u);
             gb->cpu.pc = (uint16_t)((uint16_t)lo | (uint16_t)(hi << 8u));
@@ -1716,11 +1501,9 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode, CupidGbCpuBus *
             /* POP HL: M1=opcode M2=read_lo M3=read_hi */
             uint8_t lo, hi;
             cupid_gb_deliver_cpu_cycles(gb, 1u); /* M1 */
-            cupid_gb_trigger_oam_bug_read_increment(gb, gb->cpu.sp);
             lo = cupid_gb_read_bus_u8(gb, gb->cpu.sp);
             gb->cpu.sp = (uint16_t)(gb->cpu.sp + 1u);
             cupid_gb_deliver_cpu_cycles(gb, 1u); /* M2 */
-            cupid_gb_trigger_oam_bug_read_increment(gb, gb->cpu.sp);
             hi = cupid_gb_read_bus_u8(gb, gb->cpu.sp);
             gb->cpu.sp = (uint16_t)(gb->cpu.sp + 1u);
             cupid_gb_set_hl(&gb->cpu, (uint16_t)((uint16_t)lo | (uint16_t)(hi << 8u)));
@@ -1773,11 +1556,9 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode, CupidGbCpuBus *
             /* POP AF: M1=opcode M2=read_lo M3=read_hi */
             uint8_t lo, hi;
             cupid_gb_deliver_cpu_cycles(gb, 1u); /* M1 */
-            cupid_gb_trigger_oam_bug_read_increment(gb, gb->cpu.sp);
             lo = cupid_gb_read_bus_u8(gb, gb->cpu.sp);
             gb->cpu.sp = (uint16_t)(gb->cpu.sp + 1u);
             cupid_gb_deliver_cpu_cycles(gb, 1u); /* M2 */
-            cupid_gb_trigger_oam_bug_read_increment(gb, gb->cpu.sp);
             hi = cupid_gb_read_bus_u8(gb, gb->cpu.sp);
             gb->cpu.sp = (uint16_t)(gb->cpu.sp + 1u);
             cupid_gb_set_af(&gb->cpu, (uint16_t)((uint16_t)lo | (uint16_t)(hi << 8u)));

@@ -749,9 +749,12 @@ static void test_dmg_oam_bug_pop_bc_fdff(void) {
 
     assert(gb.cpu.sp == 0xfe01u);
     for (index = 0u; index < 8u; ++index) {
-        assert(gb.object_attribute_memory[24u + index] == gb.object_attribute_memory[32u + index]);
+        /* The FDFF read is outside OAM. Only the second stack read drives
+         * the scan conflict, without a separate increment-side corruption. */
+        assert(gb.object_attribute_memory[24u + index] == original_row24[index]);
+        assert(gb.object_attribute_memory[32u + index] == original_row32[index]);
+        assert(gb.object_attribute_memory[40u + index] == original_row32[index]);
     }
-    assert(memcmp(&gb.object_attribute_memory[24], original_row24, sizeof(original_row24)) != 0);
     cupid_gb_cleanup(&gb);
 }
 
