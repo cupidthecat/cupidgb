@@ -142,7 +142,20 @@ void cupid_gb_set_ppu_mode(CupidGb *gb, uint8_t mode) {
         (uint8_t)((gb->io_registers[CUPID_GB_IO_STAT] & 0xfc) | (mode & 3));
 }
 
-static void update_stat_irq(CupidGb *gb, bool write, bool half_dot, bool stat_write, int forced) {
+typedef enum StatUpdate {
+    STAT_CLOCK,
+    STAT_REGISTER_WRITE,
+    STAT_LYC_WRITE,
+    STAT_PREVIOUS_LYC
+} StatUpdate;
+
+enum { CGB_LYC_ZERO_PHASE = 10, CGB_LYC_REPLAY_END_PHASE = 22 };
+
+static bool early_color_lcd(const CupidGb *gb) {
+    return gb->model >= CUPID_GB_MODEL_CGB_0 && gb->model <= CUPID_GB_MODEL_CGB_C;
+}
+
+static void update_stat_irq(CupidGb *gb, StatUpdate update, bool half_dot, int forced) {
     bool coincidence;
     bool irq_signal;
     uint8_t stat;
@@ -164,7 +177,9 @@ static void update_stat_irq(CupidGb *gb, bool write, bool half_dot, bool stat_wr
     }
 
     const CupidGbPixels *p = &gb->pixels;
-    const bool fast_monochrome = gb->double_speed && !cupid_gb_model_is_cgb(gb->model);
+    const bool write = update != STAT_CLOCK;
+    const bool color = cupid_gb_model_is_cgb(gb->model);
+    const bool fast_monochrome = gb->double_speed && !color;
     bool compare_valid = !p->initialized || gb->ppu_lcd_startup || p->dot != 0 || p->line == 0 ||
                          (stat & 3u) == CUPID_GB_PPU_MODE_OAM;
     /* The final VBlank row exposes the next LY before its comparison settles.
@@ -175,11 +190,40 @@ static void update_stat_irq(CupidGb *gb, bool write, bool half_dot, bool stat_wr
     unsigned compare_line = gb->io_registers[CUPID_GB_IO_LY];
     if (p->initialized && p->line == 143 && p->dot >= 455)
         compare_valid = false;
-    if (p->initialized && p->line == 153) {
-        unsigned first = cupid_gb_model_is_cgb(gb->model) ? 1u : 3u;
+    bool clear_visible_match = false;
+    const bool color_line_tail = color && p->line == 152 && p->dot == 455;
+    if (p->initialized && color && (color_line_tail || p->line == 153)) {
+        /* Phase zero is the first readable LY=153, one dot before the line counter advances.
+         * The readable LY, coincidence bit, and IRQ input advance separately. */
+        const unsigned phase = color_line_tail ? 0u : p->dot + 1u;
+        const bool early = early_color_lcd(gb);
+        const bool early_normal = early && !gb->double_speed;
+        const unsigned first_sample = early ? 4u : 2u;
+        if (update == STAT_PREVIOUS_LYC) {
+            compare_line = 153;
+            compare_valid = true;
+        } else if (phase >= CGB_LYC_ZERO_PHASE) {
+            compare_line = 0;
+            compare_valid = true;
+        } else {
+            compare_line = 153;
+            if (update == STAT_LYC_WRITE) {
+                /* A write during either compare transition waits for the LCD
+                 * clock. A write before the first sample can compare immediately. */
+                compare_valid = phase < first_sample;
+            } else if (update == STAT_REGISTER_WRITE) {
+                compare_valid = phase >= first_sample && (!early_normal || phase < 6);
+            } else {
+                compare_valid = phase == first_sample || (phase == 6 && !early_normal);
+            }
+            clear_visible_match = early_normal && update != STAT_LYC_WRITE &&
+                                  (phase == 0 || phase >= 6 ||
+                                   (phase < first_sample && update == STAT_REGISTER_WRITE));
+        }
+    } else if (p->initialized && p->line == 153) {
         /* Fast monochrome playback retains the line comparison after readable
          * LY clears. LYC writes in this interval can still raise a new edge. */
-        compare_valid = (p->dot >= first && (p->dot < 5 || fast_monochrome)) || p->dot >= 9;
+        compare_valid = (p->dot >= 3 && (p->dot < 5 || fast_monochrome)) || p->dot >= 9;
         compare_line = p->dot < 9 ? 153u : 0u;
     }
     coincidence = compare_valid && compare_line == gb->io_registers[CUPID_GB_IO_LYC];
@@ -187,7 +231,7 @@ static void update_stat_irq(CupidGb *gb, bool write, bool half_dot, bool stat_wr
         gb->pixels.lyc_irq = coincidence;
     /* Normal-speed monochrome hardware clears the readable bit during invalid
      * comparison phases. Fast playback retains both that bit and the IRQ input. */
-    if (compare_valid || (!cupid_gb_model_is_cgb(gb->model) && !gb->double_speed)) {
+    if (compare_valid || clear_visible_match || (!color && !gb->double_speed)) {
         if (coincidence)
             stat = (uint8_t)(stat | 0x04u);
         else
@@ -214,8 +258,8 @@ static void update_stat_irq(CupidGb *gb, bool write, bool half_dot, bool stat_wr
         if (write && p->line < 143 && !p->active && p->x == CUPID_GB_SCREEN_WIDTH &&
             (p->dot >= length - 3 || (half_dot && gb->double_speed && p->dot == length - 4)))
             irq_mode = CUPID_GB_PPU_MODE_OAM;
-        if (write && stat_write && cupid_gb_model_is_cgb(gb->model) && gb->double_speed &&
-            p->line < 144 && p->dot == 2 && mode == CUPID_GB_PPU_MODE_OAM && !half_dot)
+        if (update == STAT_REGISTER_WRITE && color && gb->double_speed && p->line < 144 &&
+            p->dot == 2 && mode == CUPID_GB_PPU_MODE_OAM && !half_dot)
             irq_mode = CUPID_GB_PPU_MODE_OAM;
     } else if (write && gb->ppu_lcd_startup) {
         unsigned length = cupid_gb_model_is_cgb(gb->model) ? 452 : 453;
@@ -245,11 +289,24 @@ static void update_stat_irq(CupidGb *gb, bool write, bool half_dot, bool stat_wr
 }
 
 void cupid_gb_update_stat_irq(CupidGb *gb) {
-    update_stat_irq(gb, false, false, false, -2);
+    update_stat_irq(gb, STAT_CLOCK, false, -2);
 }
 
 void cupid_gb_update_stat_write(CupidGb *gb, bool half_dot, bool stat_write) {
-    update_stat_irq(gb, true, half_dot, stat_write, -2);
+    update_stat_irq(gb, stat_write ? STAT_REGISTER_WRITE : STAT_LYC_WRITE, half_dot, -2);
+}
+
+void cupid_gb_ppu_write_lyc(CupidGb *gb, uint8_t value, bool half_dot) {
+    const CupidGbPixels *p = &gb->pixels;
+    const unsigned phase = p->dot + 1u;
+    /* After the comparison switches to zero, a write can briefly feed line 153
+     * and the old LYC into STAT. Feed both comparisons through the IRQ latch so
+     * that an already asserted mode source can mask the transient edge. */
+    if (p->initialized && p->line == 153 && phase >= CGB_LYC_ZERO_PHASE &&
+        phase < CGB_LYC_REPLAY_END_PHASE && cupid_gb_model_is_cgb(gb->model))
+        update_stat_irq(gb, STAT_PREVIOUS_LYC, half_dot, -2);
+    gb->io_registers[CUPID_GB_IO_LYC] = value;
+    update_stat_irq(gb, STAT_LYC_WRITE, half_dot, -2);
 }
 
 bool cupid_gb_stat_boundary(const CupidGb *gb) {
@@ -271,12 +328,12 @@ void cupid_gb_sync_stat_half(CupidGb *gb) {
          * dot still owns the line-counter and fetch-pipeline transition. */
         gb->io_registers[CUPID_GB_IO_LY] = (uint8_t)(p->line + 1u);
         cupid_gb_set_ppu_mode(gb, CUPID_GB_PPU_MODE_HBLANK);
-        update_stat_irq(gb, false, true, false, 2);
+        update_stat_irq(gb, STAT_CLOCK, true, 2);
     } else if (!gb->ppu_lcd_startup && p->line < 144 && p->dot == 0 &&
                (gb->io_registers[CUPID_GB_IO_STAT] & 3u) != CUPID_GB_PPU_MODE_OAM) {
         cupid_gb_set_ppu_mode(gb, CUPID_GB_PPU_MODE_OAM);
-        update_stat_irq(gb, false, true, false, 2);
-        update_stat_irq(gb, false, true, false, -1);
+        update_stat_irq(gb, STAT_CLOCK, true, 2);
+        update_stat_irq(gb, STAT_CLOCK, true, -1);
     } else if (p->line < 144) {
         const unsigned transfer = gb->ppu_lcd_startup ? 78u : 80u;
         const unsigned mode = gb->io_registers[CUPID_GB_IO_STAT] & 3u;
@@ -513,8 +570,8 @@ static void tick_ppu(CupidGb *gb, uint32_t dots) {
                             (gb->io_registers[CUPID_GB_IO_STAT] & 3u) == CUPID_GB_PPU_MODE_OAM;
                         cupid_gb_set_ppu_mode(gb, CUPID_GB_PPU_MODE_OAM);
                         if (!already_visible)
-                            update_stat_irq(gb, false, false, false, 2);
-                        update_stat_irq(gb, false, false, false, -1);
+                            update_stat_irq(gb, STAT_CLOCK, false, 2);
+                        update_stat_irq(gb, STAT_CLOCK, false, -1);
                     }
                 }
                 if (!gb->ppu_lcd_startup && p->dot < 80 && (p->dot & 1))
@@ -556,9 +613,12 @@ static void tick_ppu(CupidGb *gb, uint32_t dots) {
                     cupid_gb_request_interrupt(gb, CUPID_GB_INTERRUPT_LCD_STAT);
                 cupid_gb_update_stat_irq(gb);
             } else if (p->line == 153 &&
-                       p->dot == (cupid_gb_model_is_cgb(gb->model) || gb->double_speed ? 4 : 2)) {
-                /* The early monochrome clear belongs to normal CPU speed.
-                 * Fast playback uses the later edge without shortening VBlank. */
+                       p->dot == (gb->double_speed ||
+                                          (cupid_gb_model_is_cgb(gb->model) && !early_color_lcd(gb))
+                                      ? 4
+                                      : 2)) {
+                /* Color revisions 0 through C share the early normal-speed LY
+                 * clear. The comparison and frame restart have their own edges. */
                 gb->io_registers[CUPID_GB_IO_LY] = 0;
                 cupid_gb_update_stat_irq(gb);
             }

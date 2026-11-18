@@ -29,3 +29,9 @@ The profiles share much of the existing color implementation. They still need re
 Revisions 0 through C sample the current vertical coordinate at the low and high tile-data address phases. Revisions D and E use the coordinate selected at the tile-map address phase for both reads. The tile-map lookup itself continues to sample the current scroll.
 
 A 96-case comparison varied the revision, normal or double speed, color or compatibility mode, vertical flip, and whether the guest scroll value changed between fetch phases. Before the correction, all 32 cases with a changed scroll value on revisions 0 through C differed on the tile-data addresses and bytes. Afterward, all 96 matched the observed map address, data addresses, bytes and phase clocks. The comparison drove hardware writes directly. CPU-timed scroll writes and collisions with window, object and DMA activity require separate checks.
+
+## Line 153 and STAT interrupts
+
+Revisions 0 through C clear the readable LY earlier at normal speed. The LCD can carry the previous equality result into the combined STAT interrupt while the visible coincidence bit is clear. During the 12-dot LYC write interval after the zero comparison begins, the previous LYC can briefly match line 153 before the new value is compared with zero. The mode 1 interrupt input can hold the combined line high across that write.
+
+The comparison matched 3,600 direct LYC traces across all six revisions and both speeds, including writes at the edges of that interval. All 252 CPU-timed write cases matched the guest's final interrupt flag. A separate 2,592-sample comparison exercised STAT enable changes, overlap with the mode 1 input, and the visible coincidence bit. The regression suite also reloads a native state immediately before the affected write and compares the continuation.

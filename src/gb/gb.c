@@ -1569,8 +1569,7 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
              * already synchronized deferred display work; the byte is ignored. */
             return;
         } else if (address == 0xff45u) {
-            gb->io_registers[CUPID_GB_IO_LYC] = value;
-            cupid_gb_update_stat_write(gb, half_dot, false);
+            cupid_gb_ppu_write_lyc(gb, value, half_dot);
         } else if (address == 0xff46u) {
             gb->io_registers[CUPID_GB_IO_DMA] = value;
             cupid_gb_run_dma_transfer(gb, value);

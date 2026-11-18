@@ -42,7 +42,7 @@ static CupidGb *prepare(CupidGbModel model, bool double_speed, const uint8_t *pr
     uint8_t rom[32768] = {0};
     assert(gb);
     memcpy(rom + 0x100, program, count);
-    rom[0x143] = model == CUPID_GB_MODEL_CGB ? 0x80 : 0;
+    rom[0x143] = cupid_gb_model_is_cgb(model) ? 0x80 : 0;
     for (unsigned i = 0x134; i <= 0x14c; ++i)
         rom[0x14d] = (uint8_t)(rom[0x14d] - rom[i] - 1);
     cupid_gb_set_model(gb, model);
@@ -57,7 +57,7 @@ static CupidGb *prepare(CupidGbModel model, bool double_speed, const uint8_t *pr
     cupid_gb_write_u8(gb, 0xff45, lyc);
     cupid_gb_write_u8(gb, 0xff41, old_mask);
     cupid_gb_write_u8(gb, 0xff40, 0x91);
-    unsigned edge = (model == CUPID_GB_MODEL_CGB ? 452u : 453u) + (line - 1u) * 456u;
+    unsigned edge = (cupid_gb_model_is_cgb(model) ? 452u : 453u) + (line - 1u) * 456u;
     cupid_gb_tick_ppu_dots(gb, (uint16_t)(edge - boundary / (double_speed ? 2u : 1u)));
     gb->cpu.pc = 0x100;
     gb->cpu.sp = 0xc100;
@@ -371,7 +371,171 @@ static void test_ly_ignores_all_host_values(void) {
     }
 }
 
+static const CupidGbModel color_revisions[] = {
+    CUPID_GB_MODEL_CGB_0, CUPID_GB_MODEL_CGB_A, CUPID_GB_MODEL_CGB_B,
+    CUPID_GB_MODEL_CGB_C, CUPID_GB_MODEL_CGB_D, CUPID_GB_MODEL_CGB_E,
+};
+
+static CupidGb *prepare_color_last_line(CupidGbModel model, bool fast, uint8_t lyc) {
+    const uint8_t program[] = {0};
+    CupidGb *gb = prepare(model, fast, program, sizeof(program), 0, lyc, 1, 0);
+    for (unsigned dot = 0; dot < 70000; ++dot) {
+        if (cupid_gb_read_u8(gb, 0xff44) == 153)
+            return gb;
+        cupid_gb_tick_ppu_dots(gb, 1);
+    }
+    assert(!"LY never reached the last scanline");
+    return gb;
+}
+
+static void test_color_last_line_stat_writes(void) {
+    /* Each bit is one dot after the first readable LY=153. The visible flag
+     * and the retained interrupt input have independent measured intervals. */
+    static const uint32_t visible[3][3] = {
+        {0xfffc00u, 0x000000u, 0x000030u},
+        {0xfffc00u, 0x00000fu, 0x0003f0u},
+        {0xfffc00u, 0x000003u, 0x0003fcu},
+    };
+    static const uint32_t latched[3][3] = {
+        {0xfffc00u, 0x00000fu, 0x0003f0u},
+        {0xfffc00u, 0x00000fu, 0x0003f0u},
+        {0xfffc00u, 0x000003u, 0x0003fcu},
+    };
+    static const uint8_t lycs[] = {0, 152, 153};
+    static const uint8_t before_masks[] = {0, 0x40, 0x40, 0x10, 0x50, 0};
+    static const uint8_t after_masks[] = {0x40, 0x40, 0, 0x50, 0x40, 0x10};
+    CupidGb *written = malloc(sizeof(*written));
+    assert(written);
+    for (unsigned model = 0; model < sizeof(color_revisions) / sizeof(color_revisions[0]);
+         ++model) {
+        for (unsigned speed = 0; speed < 2; ++speed) {
+            const unsigned group = model < 4 ? speed : 2;
+            for (unsigned value = 0; value < sizeof(lycs); ++value) {
+                CupidGb *gb =
+                    prepare_color_last_line(color_revisions[model], speed != 0, lycs[value]);
+                for (unsigned phase = 0; phase < 24; ++phase) {
+                    const bool flag = ((visible[group][value] >> phase) & 1u) != 0;
+                    const bool input = ((latched[group][value] >> phase) & 1u) != 0;
+                    for (unsigned route = 0; route < sizeof(before_masks); ++route) {
+                        /* These probes only write inline LCD/IF registers. The
+                         * baseline retains ownership of every borrowed input. */
+                        *written = *gb;
+                        cupid_gb_write_u8(written, 0xff41, before_masks[route]);
+                        cupid_gb_write_u8(written, 0xff0f, 0);
+                        assert(((cupid_gb_read_u8(written, 0xff41) & 4u) != 0) == flag);
+                        const bool previous = (before_masks[route] & 0x10u) != 0 ||
+                                              (input && (before_masks[route] & 0x40u) != 0);
+                        const bool next = (after_masks[route] & 0x10u) != 0 ||
+                                          (input && (after_masks[route] & 0x40u) != 0);
+                        cupid_gb_write_u8(written, 0xff41, after_masks[route]);
+                        assert(((cupid_gb_read_u8(written, 0xff41) & 4u) != 0) == flag);
+                        assert(((cupid_gb_read_u8(written, 0xff0f) & 2u) != 0) ==
+                               (next && !previous));
+                    }
+                    cupid_gb_tick_ppu_dots(gb, 1);
+                }
+                destroy(gb);
+            }
+        }
+    }
+    free(written);
+}
+
+static void test_color_last_line_lyc_writes(void) {
+    static const uint8_t values[] = {0, 152, 153, 200};
+    static const uint8_t phases[] = {10, 21, 22};
+    CupidGb *written = malloc(sizeof(*written));
+    assert(written);
+    for (unsigned model = 0; model < sizeof(color_revisions) / sizeof(color_revisions[0]);
+         ++model) {
+        for (unsigned speed = 0; speed < 2; ++speed) {
+            for (unsigned old = 0; old < sizeof(values); ++old) {
+                CupidGb *gb =
+                    prepare_color_last_line(color_revisions[model], speed != 0, values[old]);
+                unsigned elapsed = 0;
+                for (unsigned phase = 0; phase < sizeof(phases); ++phase) {
+                    cupid_gb_tick_ppu_dots(gb, (uint16_t)(phases[phase] - elapsed));
+                    elapsed = phases[phase];
+                    for (unsigned overlap = 0; overlap < 2; ++overlap) {
+                        for (unsigned next = 0; next < sizeof(values); ++next) {
+                            *written = *gb;
+                            cupid_gb_write_u8(written, 0xff41, overlap ? 0x50 : 0x40);
+                            cupid_gb_write_u8(written, 0xff0f, 0);
+                            cupid_gb_write_u8(written, 0xff45, values[next]);
+                            const bool flag = values[next] == 0;
+                            /* During the twelve-dot conflict window, the old
+                             * LYC=153 can produce an edge before the new byte. */
+                            const bool conflict = phases[phase] < 22;
+                            const bool edge =
+                                conflict ? values[old] == 153 || flag : flag && values[old] != 0;
+                            assert(((cupid_gb_read_u8(written, 0xff41) & 4u) != 0) == flag);
+                            assert(((cupid_gb_read_u8(written, 0xff0f) & 2u) != 0) ==
+                                   (edge && !overlap));
+                        }
+                    }
+                }
+                destroy(gb);
+            }
+        }
+    }
+    free(written);
+}
+
+static void test_color_lyc_conflict_restore(void) {
+    const CupidGbModel models[] = {CUPID_GB_MODEL_CGB_0, CUPID_GB_MODEL_CGB_E};
+    for (unsigned model = 0; model < sizeof(models) / sizeof(models[0]); ++model) {
+        for (unsigned speed = 0; speed < 2; ++speed) {
+            CupidGb *gb = prepare_color_last_line(models[model], speed != 0, 153);
+            cupid_gb_tick_ppu_dots(gb, 21);
+            cupid_gb_write_u8(gb, 0xff41, 0x40);
+            cupid_gb_write_u8(gb, 0xff0f, 0);
+            const size_t size = cupid_gb_state_size(gb);
+            uint8_t *before = malloc(size), *after = malloc(size), *restored = malloc(size);
+            size_t written = 0;
+            assert(before && after && restored);
+            assert(cupid_gb_save_state(gb, before, size, &written) == CUPID_GB_STATE_OK);
+            assert(written == size);
+            cupid_gb_write_u8(gb, 0xff45, 152);
+            assert(cupid_gb_read_u8(gb, 0xff0f) & 2u);
+            cupid_gb_tick_ppu_dots(gb, 10);
+            assert(cupid_gb_save_state(gb, after, size, &written) == CUPID_GB_STATE_OK);
+            assert(cupid_gb_load_state(gb, before, size) == CUPID_GB_STATE_OK);
+            cupid_gb_write_u8(gb, 0xff45, 152);
+            assert(cupid_gb_read_u8(gb, 0xff0f) & 2u);
+            cupid_gb_tick_ppu_dots(gb, 10);
+            assert(cupid_gb_save_state(gb, restored, size, &written) == CUPID_GB_STATE_OK);
+            assert(!memcmp(after, restored, size));
+            free(restored);
+            free(after);
+            free(before);
+            destroy(gb);
+        }
+    }
+}
+
+static void test_early_color_lyc_then_stat(void) {
+    for (unsigned model = 0; model < 4; ++model) {
+        for (unsigned phase = 1; phase < 4; ++phase) {
+            CupidGb *gb = prepare_color_last_line(color_revisions[model], false, 200);
+            cupid_gb_tick_ppu_dots(gb, (uint16_t)phase);
+            cupid_gb_write_u8(gb, 0xff45, 153);
+            assert(cupid_gb_read_u8(gb, 0xff41) & 4u);
+            cupid_gb_write_u8(gb, 0xff0f, 0);
+            /* STAT resamples the visible bit while the comparator is invalid.
+             * The match from the LYC write continues to feed the IRQ input. */
+            cupid_gb_write_u8(gb, 0xff41, 0x40);
+            assert(!(cupid_gb_read_u8(gb, 0xff41) & 4u));
+            assert(cupid_gb_read_u8(gb, 0xff0f) & 2u);
+            destroy(gb);
+        }
+    }
+}
+
 int main(void) {
+    test_early_color_lyc_then_stat();
+    test_color_last_line_stat_writes();
+    test_color_last_line_lyc_writes();
+    test_color_lyc_conflict_restore();
     test_ly_ignores_all_host_values();
     test_ly_ignores_cpu_stores();
     test_cpu_store_routes();

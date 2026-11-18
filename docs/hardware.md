@@ -9,12 +9,12 @@ CupidGB implements Game Boy and Game Boy Color execution in the same C core, wit
 | Game Boy | `CUPID_GB_MODEL_DMG_ABC` | Grouped monochrome profile |
 | Game Boy (DMG0) | `CUPID_GB_MODEL_DMG0` | Early monochrome startup profile |
 | Game Boy Pocket / Light | `CUPID_GB_MODEL_MGB` | Pocket-family profile |
-| Game Boy Color | `CUPID_GB_MODEL_CGB` | One color profile with monochrome compatibility mode |
+| Game Boy Color 0, A, B, C, D, E | `CUPID_GB_MODEL_CGB_0` through `CUPID_GB_MODEL_CGB_E` | Six selectable revisions with monochrome compatibility mode |
 | Super Game Boy (NTSC) | `CUPID_GB_MODEL_SGB` | First-generation adapter with the NTSC clock |
 | Super Game Boy (PAL) | `CUPID_GB_MODEL_SGB_PAL` | First-generation adapter with the PAL clock |
 | Super Game Boy 2 | `CUPID_GB_MODEL_SGB2` | Separate SGB2 startup profile |
 
-Individual CGB revisions and the variants that integrate with an external SGB host remain pending. The cartridge header describes the program's color capability. Selecting monochrome hardware keeps the machine monochrome.
+Automatic color selection uses CGB-E. The [CGB revision validation](validation-cgb-revisions.md) records what differs by revision and what still needs qualification. Variants that integrate with an external SGB host remain pending. The cartridge header describes the program's color capability. Selecting monochrome hardware keeps the machine monochrome.
 
 SGB NTSC uses a 4,295,454 Hz base clock, and SGB PAL uses 4,256,274 Hz. SGB2 and the handheld profiles use 4,194,304 Hz. A regular LCD frame spans 70,224 base T-cycles. CPU, display, audio sampling and host pacing all use the selected model's clock.
 
