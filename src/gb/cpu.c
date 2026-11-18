@@ -4,6 +4,10 @@
  * @author  cupidthecat
  * @date    2026-11-16
  *
+ * Instruction handlers deliver machine cycles at bus access boundaries.
+ * The decoder also handles CB-prefixed operations, interrupt entry, and
+ * monochrome OAM corruption caused by CPU bus activity.
+ *
  * Copyright (C) 2026 cupidthecat
  *
  * This program is free software: you can redistribute it and/or modify
@@ -18,23 +22,6 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://gnu.org>.
- */
-
-/**
- * @file cpu.c
- * @brief SM83 CPU emulation, shared between Game Boy (DMG) and Game Boy Color (CGB).
- *
- * Implements the full SM83 instruction set, including:
- *   - Register file helpers (8-bit and 16-bit register pairs)
- *   - ALU operations (add, sub, adc, sbc, and, or, xor, cp, inc, dec, daa)
- *   - Shift, rotate, and bit operations (CB-prefixed)
- *   - Instruction fetch, decode, and execute (unprefixed and 0xCB-prefixed)
- *   - Interrupt request and service routine (ISR)
- *   - DMG OAM corruption bug emulation
- *
- * Cycle timing is driven by @ref cupid_gb_tick, called inline during
- * instruction execution to advance the PPU, APU, and timer subsystems
- * at machine-cycle granularity.
  */
 
 #include "cupid/gb/cpu.h"

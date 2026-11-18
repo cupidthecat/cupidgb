@@ -4,6 +4,9 @@
  * @author  cupidthecat
  * @date    2026-11-16
  *
+ * Game Boy and Game Boy Color use the same cartridge header format.
+ * The loader configures mapper wiring and allocates cartridge storage.
+ *
  * Copyright (C) 2026 cupidthecat
  *
  * This program is free software: you can redistribute it and/or modify
@@ -18,19 +21,6 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://gnu.org>.
- */
-
-/**
- * @file cartridge.c
- * @brief ROM/RAM parsing, MBC bank-switching, and save-RAM persistence.
- *
- * Handles cartridge header parsing, ROM/RAM loading, MBC bank-switching
- * logic, and save-RAM (.sav) persistence. Shared between Game Boy (DMG)
- * and Game Boy Color (CGB) — both use the same cartridge header format
- * and MBC controllers.
- *
- * Implements ROM-only, MBC1 (including multicart), MBC2, MBC3/MBC30,
- * MBC5, MBC6, MBC7, MMM01, HuC1, and HuC3 banking.
  */
 
 #include "cupid/gb/cartridge.h"

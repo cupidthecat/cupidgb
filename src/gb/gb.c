@@ -4,6 +4,10 @@
  * @author  cupidthecat
  * @date    2026-11-16
  *
+ * The core selects the hardware model, maps the optional boot ROM, and
+ * coordinates address decoding, real-time clock access, and instruction
+ * stepping across the hardware subsystems.
+ *
  * Copyright (C) 2026 cupidthecat
  *
  * This program is free software: you can redistribute it and/or modify
@@ -18,20 +22,6 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program. If not, see <https://gnu.org>.
- */
-/**
- * @file gb.c
- * @brief Game Boy system glue — initialization, step loop, and memory map.
- *
- * Ties together all Game Boy subsystems (CPU, PPU, APU, timer, cartridge,
- * SGB, CGB). This file owns:
- *   - Hardware model selection and HLE boot-profile setup
- *   - Optional external boot ROM loading and overlay
- *   - The full 0x0000–0xFFFF memory map (reads and writes)
- *   - MBC3 real-time clock helpers
- *   - The per-instruction step function
- *
- * All subsystem implementations live in their own translation units.
  */
 
 #include "cupid/gb/gb.h"

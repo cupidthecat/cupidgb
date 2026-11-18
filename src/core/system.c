@@ -20,13 +20,6 @@
  * along with this program.  If not, see <https://gnu.org>.
  */
 
-/**
- * @file system.c
- * @brief System identification utilities for supported emulation targets.
- *
- * Provides helper functions for querying metadata about supported
- * target systems (e.g., GB, GBC).
- */
 #include "cupid/core/system.h"
 
 /**

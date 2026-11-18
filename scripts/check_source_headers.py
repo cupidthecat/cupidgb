@@ -1,5 +1,5 @@
 # @file    check_source_headers.py
-# @brief   Check owned source inventory, purpose and license headers, and file sizes.
+# @brief   Check owned source inventory, unique file headers, and file sizes.
 # @author  cupidthecat
 # @date    2026-11-16
 #
@@ -99,6 +99,10 @@ def check(path, kind):
     file_field = re.search(r"^@file[ \t]+(\S+)[ \t]*$", header, re.MULTILINE)
     if not file_field or file_field.group(1) != path.name:
         errors.append("@file must name this file")
+    comment = r"(?:/\*+|//[!/]*|\*)" if kind == "c" else "#"
+    file_markers = re.findall(rf"^[ \t]*{comment}[ \t]*@file\b", text, re.MULTILINE)
+    if len(file_markers) > 1:
+        errors.append("duplicate @file header")
     brief = re.search(r"^@brief[ \t]+(.+\S)[ \t]*$", header, re.MULTILINE)
     if not brief:
         errors.append("missing @brief purpose")

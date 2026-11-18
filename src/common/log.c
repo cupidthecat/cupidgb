@@ -4,6 +4,9 @@
  * @author  cupidthecat
  * @date    2026-11-16
  *
+ * Both informational and error messages support plain strings and printf-style
+ * formatting.
+ *
  * Copyright (C) 2026 cupidthecat
  *
  * This program is free software: you can redistribute it and/or modify
@@ -20,14 +23,6 @@
  * along with this program.  If not, see <https://gnu.org>.
  */
 
-/**
- * @file log.c
- * @brief Logging utilities for emulator messages and errors.
- *
- * Provides functions for logging informational messages and errors to the
- * console. Supports both plain string and printf-style formatted variants
- * for each log level (INFO, ERROR).
- */
 #include "cupid/common/log.h"
 
 #include <stdarg.h>

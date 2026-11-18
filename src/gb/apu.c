@@ -4,6 +4,12 @@
  * @author  cupidthecat
  * @date    2026-11-16
  *
+ * The DIV-driven sequencer clocks channel lengths, volume envelopes, and
+ * the first pulse channel's sweep unit. Band-limited reconstruction and DC
+ * blocking feed the bounded stereo output buffer, which defaults to 44100 Hz.
+ * The hardware model selects quirks such as monochrome wave RAM corruption
+ * on an active wave-channel retrigger.
+ *
  * Copyright (C) 2026 cupidthecat
  *
  * This program is free software: you can redistribute it and/or modify
@@ -18,24 +24,6 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program. If not, see <https://gnu.org>.
- */
-/**
- * @file apu.c
- * @brief Audio Processing Unit (APU) emulation for Game Boy (DMG) and Game Boy Color (CGB).
- *
- * Emulates all four Game Boy audio channels:
- *   - CH1: Pulse with frequency sweep
- *   - CH2: Pulse (no sweep)
- *   - CH3: Wave (4-bit PCM playback from wave RAM)
- *   - CH4: Noise (Linear Feedback Shift Register)
- *
- * The frame sequencer advances every 8192 T-cycles (512 Hz at the handheld clock) and drives
- * length counters, volume envelopes, and the CH1 frequency sweep unit.
- * Audio samples default to @ref CUPID_GB_APU_SAMPLE_RATE (44100 Hz).
- * Band-limited reconstruction and DC blocking feed a bounded stereo output buffer.
- *
- * @note DMG-specific hardware bugs (e.g. CH3 wave RAM corruption on retrigger)
- *       are selected by the hardware model, including cartridge compatibility mode.
  */
 #include "cupid/gb/apu.h"
 #include "apu_noise.h"

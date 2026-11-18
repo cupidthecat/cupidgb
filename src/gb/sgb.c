@@ -4,6 +4,10 @@
  * @author  cupidthecat
  * @date    2026-11-16
  *
+ * The packet receiver clocks commands from JOYP writes while SGB hardware
+ * accepts commands. The command handlers manage palettes, tile attributes,
+ * borders, screen masks, and multiplayer controller selection.
+ *
  * Copyright (C) 2026 cupidthecat
  *
  * This program is free software: you can redistribute it and/or modify
@@ -18,26 +22,6 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program.  If not, see <https://gnu.org>.
- */
-
-/**
- * @file sgb.c
- * @brief Super Game Boy (SGB/SGB2) enhancement emulation.
- *
- * Implements the SGB command protocol, attribute/palette management,
- * border rendering, and the JOYP-based serial packet interface.
- *
- * Supported SGB commands:
- *   - PAL01/23/03/12, PAL_SET, PAL_TRN  – palette programming
- *   - ATTR_BLK, ATTR_LIN, ATTR_DIV, ATTR_CHR, ATTR_TRN, ATTR_SET
- *                                         – per-tile attribute map editing
- *   - CHR_TRN, PCT_TRN                   – border tile and tilemap upload
- *   - MLT_REQ                            – multi-player controller select
- *   - MASK_EN                            – screen mask control
- *
- * The SGB command stream is clocked in via writes to the P1/JOYP register
- * (0xFF00). @ref cupid_gb_sgb_write_joyp should be called on every JOYP
- * write on physical SGB/SGB2 hardware while its receiver accepts commands.
  */
 
 #include "cupid/gb/sgb.h"

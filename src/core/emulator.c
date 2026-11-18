@@ -4,6 +4,9 @@
  * @author  cupidthecat
  * @date    2026-11-16
  *
+ * The public entry points operate on a CupidEmulator instance and delegate
+ * Game Boy and Game Boy Color hardware operations to the core.
+ *
  * Copyright (C) 2026 cupidthecat
  *
  * This program is free software: you can redistribute it and/or modify
@@ -20,14 +23,6 @@
  * along with this program.  If not, see <https://gnu.org>.
  */
 
-/**
- * @file emulator.c
- * @brief Emulator core for managing system state, ROM loading, and stepping.
- *
- * Provides a unified interface for different target systems (e.g., GB, GBC).
- * All public functions operate on a `CupidEmulator` instance and delegate
- * system-specific logic to the appropriate subsystem (e.g., `cupid_gb_*`).
- */
 #include "cupid/core/emulator.h"
 
 #include "cupid/common/log.h"
