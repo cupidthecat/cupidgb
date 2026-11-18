@@ -469,6 +469,21 @@ static void tick_ppu(CupidGb *gb, uint32_t dots) {
                     p->active = false;
         }
     }
+    /* Within a blanking interval, no fetches, port transitions or callbacks
+     * occur. Refresh STAT once at the end of the span, before returning to the
+     * CPU. The line tails, VBlank entry and line 153 comparison still run
+     * dot by dot, as do pending DMA or STAT edges. */
+    const unsigned end_dot = p->dot + dots;
+    if (dots > 1 && !gb->ppu_lcd_startup && !gb->stat_irq_delay && !gb->hdma_hblank_delay &&
+        !p->active &&
+        ((p->line < 143 && gb->ppu_transfer_end_dot && p->dot >= gb->ppu_transfer_end_dot &&
+          end_dot < 453) ||
+         (p->line >= 144 && p->line < 153 && p->dot >= 2 && end_dot < 455))) {
+        p->dot = (uint16_t)end_dot;
+        gb->ppu_counter = p->dot / 4u;
+        cupid_gb_update_stat_irq(gb);
+        return;
+    }
     while (dots) {
         for (unsigned subcycle = 0; subcycle < 4 && dots; ++subcycle, --dots) {
             cupid_cgb_advance_hdma(gb);

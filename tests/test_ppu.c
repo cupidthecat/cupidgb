@@ -667,6 +667,32 @@ static void test_presentation_chunk_invariance(void) {
     }
 }
 
+static void test_blanking_span_edges(void) {
+    static const uint16_t positions[][2] = {{1, 255}, {1, 441},  {1, 453},  {143, 445},
+                                            {144, 0}, {144, 2},  {152, 444}, {152, 455},
+                                            {153, 0}, {153, 5},  {153, 8},  {153, 440}};
+    static const uint16_t lengths[] = {2, 4, 11, 41};
+    static CupidGb original, span, single;
+    for (unsigned speed = 0; speed < 3; ++speed) {
+        for (unsigned index = 0; index < sizeof(positions) / sizeof(positions[0]); ++index) {
+            prepare(&original, speed != 0, 1);
+            original.double_speed = speed == 2;
+            const uint16_t line = positions[index][0];
+            const uint16_t dot = positions[index][1];
+            advance_dots(&original, line * 456u + dot);
+            cupid_gb_write_u8(&original, 0xff45, original.io_registers[CUPID_GB_IO_LY]);
+            cupid_gb_write_u8(&original, 0xff41, 0x78);
+            for (unsigned size = 0; size < sizeof(lengths) / sizeof(lengths[0]); ++size) {
+                span = single = original;
+                cupid_gb_tick_ppu_dots(&span, lengths[size]);
+                for (uint16_t tick = 0; tick < lengths[size]; ++tick)
+                    cupid_gb_tick_ppu_dots(&single, 1);
+                assert(memcmp(&span, &single, sizeof(span)) == 0);
+            }
+        }
+    }
+}
+
 static void test_color_port_ownership_edges(void) {
     /* Each row records an observed port-ownership transition after LCD enable:
      * bit 0 = OAM, bit 1 = VRAM, bit 2 = palette. STAT alone misses these edges. */
@@ -874,6 +900,7 @@ int main(void) {
     test_first_frame_presentation(false);
     test_first_frame_presentation(true);
     test_presentation_chunk_invariance();
+    test_blanking_span_edges();
     test_color_port_ownership_edges();
     test_stop_oam_and_palette_ports();
     test_physical_color_attributes_in_compatibility_mode();
