@@ -1501,14 +1501,9 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
                 (uint8_t)(0x80u | (value & 0x78u) | (gb->io_registers[CUPID_GB_IO_STAT] & 0x07u));
             cupid_gb_update_stat_write(gb, half_dot, true);
         } else if (address == 0xff44u) {
-            gb->ppu_counter = 0u;
-            gb->io_registers[CUPID_GB_IO_LY] = 0u;
-            if (cupid_gb_lcd_enabled(gb)) {
-                cupid_gb_set_ppu_mode(gb, CUPID_GB_PPU_MODE_OAM);
-            } else {
-                cupid_gb_set_ppu_mode(gb, CUPID_GB_PPU_MODE_HBLANK);
-            }
-            cupid_gb_update_stat_irq(gb);
+            /* LY is driven by the LCD on every model. The bus access has
+             * already synchronized deferred display work; the byte is ignored. */
+            return;
         } else if (address == 0xff45u) {
             gb->io_registers[CUPID_GB_IO_LYC] = value;
             cupid_gb_update_stat_write(gb, half_dot, false);

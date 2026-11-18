@@ -42,6 +42,12 @@ The CGB WRAM selector retains its raw register value separately from the effecti
 
 Palette data ports FF69 and FF6B are accessible while the boot overlay is mapped, including on the current monochrome profiles. Monochrome palette storage starts at zero, but its index ports remain unavailable: index writes are ignored, so data writes address byte zero without auto-increment. Removing the overlay hides the data ports and ignores further writes in monochrome mode. Physical CGB retains its separate index, compatibility-mode, and PPU access rules.
 
+## LCD line register
+
+LY at `FF44` is read-only. Writes leave the line counter, display mode and coincidence interrupt logic unchanged apart from normal progress during the bus access. The access still reaches memory observers and settles deferred display work before the byte is ignored. This applies to all six current profiles, including color double speed and LCD-off operation.
+
+The STAT regression checks every written byte and actual CPU store and read/modify/write instructions across visible lines, VBlank, the shortened LY=153 interval and LCD-off. It also continues execution after the write to detect a disturbed line counter or interrupt latch.
+
 ## Cartridge controllers
 
 The core decodes ROM-only, MBC1, MBC2, MBC3, MBC5, MMM01, MBC6, MBC7, HuC1, HuC3, Camera, and TPP1 cartridges. Coverage differs by controller.

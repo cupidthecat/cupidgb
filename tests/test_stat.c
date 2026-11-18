@@ -280,7 +280,100 @@ static void test_double_speed_ly_half_edge(void) {
     destroy(gb);
 }
 
+static void compare_lcd_progress(CupidGb *written, CupidGb *control) {
+    /* Reading the display registers settles deferred work on both machines. */
+    assert(cupid_gb_read_u8(written, 0xff44) == cupid_gb_read_u8(control, 0xff44));
+    assert(cupid_gb_read_u8(written, 0xff41) == cupid_gb_read_u8(control, 0xff41));
+    assert(cupid_gb_read_u8(written, 0xff0f) == cupid_gb_read_u8(control, 0xff0f));
+    assert(written->elapsed_cycles == control->elapsed_cycles);
+    assert(written->vblank_events == control->vblank_events);
+}
+
+static void advance_lcd_dots(CupidGb *gb, unsigned dots) {
+    while (dots) {
+        const unsigned count = dots > UINT16_MAX ? UINT16_MAX : dots;
+        cupid_gb_tick_ppu_dots(gb, (uint16_t)count);
+        dots -= count;
+    }
+}
+
+static void test_ly_ignores_cpu_stores(void) {
+    const Store stores[] = {
+        {{0xe0, 0x44}, 0, 12, false}, {{0xe2}, 0, 8, false},  {{0xea, 0x44, 0xff}, 0, 16, false},
+        {{0x77}, 0, 8, false},        {{0x02}, 0, 8, false},  {{0x12}, 0, 8, false},
+        {{0x22}, 0, 8, false},        {{0x32}, 0, 8, false},  {{0x36, 0xff}, 0, 12, false},
+        {{0x34}, 0, 12, false},       {{0x35}, 0, 12, false}, {{0xcb, 0x86}, 0, 16, false},
+        {{0xcb, 0xc6}, 0, 16, false},
+    };
+    const CupidGbModel models[] = {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_DMG0, CUPID_GB_MODEL_MGB,
+                                   CUPID_GB_MODEL_SGB,     CUPID_GB_MODEL_SGB2, CUPID_GB_MODEL_CGB};
+    /* Begin on line 2, then cover OAM, transfer, HBlank, line boundaries,
+     * VBlank and the shortened LY=153 interval. The final case disables LCD. */
+    const unsigned phases[] = {
+        0, 76, 80, 172, 248, 448, 452, 456, 142u * 456u + 8u, 151u * 456u + 4u, 0};
+    for (unsigned model = 0; model < sizeof(models) / sizeof(models[0]); ++model) {
+        for (unsigned speed = 0; speed <= (models[model] == CUPID_GB_MODEL_CGB); ++speed) {
+            for (unsigned phase = 0; phase < sizeof(phases) / sizeof(phases[0]); ++phase) {
+                for (unsigned route = 0; route < sizeof(stores) / sizeof(stores[0]); ++route) {
+                    uint8_t control_program[3];
+                    memcpy(control_program, stores[route].bytes, sizeof(control_program));
+                    if (control_program[0] == 0xe0 || control_program[0] == 0xea)
+                        control_program[1] = 0x7f;
+                    CupidGb *written =
+                        prepare(models[model], speed != 0, stores[route].bytes, 3, 0x78, 2, 2, 0);
+                    CupidGb *control =
+                        prepare(models[model], speed != 0, control_program, 3, 0x78, 2, 2, 0);
+                    written->cpu.a = control->cpu.a = 0xff;
+                    written->cpu.c = written->cpu.e = written->cpu.l = 0x44;
+                    control->cpu.c = control->cpu.e = control->cpu.l = 0x7f;
+                    advance_lcd_dots(written, phases[phase]);
+                    advance_lcd_dots(control, phases[phase]);
+                    if (phase == sizeof(phases) / sizeof(phases[0]) - 1) {
+                        cupid_gb_write_u8(written, 0xff40, 0);
+                        cupid_gb_write_u8(control, 0xff40, 0);
+                    }
+                    const uint64_t start = written->elapsed_cycles;
+                    assert(cupid_gb_step(written) && cupid_gb_step(control));
+                    assert(written->elapsed_cycles - start ==
+                           stores[route].cycles / (speed ? 2u : 1u));
+                    compare_lcd_progress(written, control);
+                    /* NOP continuation exposes a disturbed line counter or
+                     * interrupt latch even when LY readback was already zero. */
+                    written->cpu.pc = control->cpu.pc = 0x200;
+                    for (unsigned step = 0; step < 128; ++step) {
+                        assert(cupid_gb_step(written) && cupid_gb_step(control));
+                        compare_lcd_progress(written, control);
+                    }
+                    destroy(control);
+                    destroy(written);
+                }
+            }
+        }
+    }
+}
+
+static void test_ly_ignores_all_host_values(void) {
+    const uint8_t program[] = {0};
+    for (unsigned model = CUPID_GB_MODEL_DMG_ABC; model <= CUPID_GB_MODEL_SGB2; ++model) {
+        CupidGb *gb = prepare((CupidGbModel)model, false, program, sizeof(program), 0x78, 2, 2, 0);
+        const uint8_t ly = cupid_gb_read_u8(gb, 0xff44);
+        const uint8_t stat = cupid_gb_read_u8(gb, 0xff41);
+        const uint8_t requests = cupid_gb_read_u8(gb, 0xff0f);
+        const uint64_t elapsed = gb->elapsed_cycles;
+        for (unsigned value = 0; value <= 0xff; ++value) {
+            cupid_gb_write_u8(gb, 0xff44, (uint8_t)value);
+            assert(cupid_gb_read_u8(gb, 0xff44) == ly);
+            assert(cupid_gb_read_u8(gb, 0xff41) == stat);
+            assert(cupid_gb_read_u8(gb, 0xff0f) == requests);
+            assert(gb->elapsed_cycles == elapsed);
+        }
+        destroy(gb);
+    }
+}
+
 int main(void) {
+    test_ly_ignores_all_host_values();
+    test_ly_ignores_cpu_stores();
     test_cpu_store_routes();
     test_interrupt_matching_coincidence();
     test_stack_and_word_stores();
