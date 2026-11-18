@@ -141,7 +141,7 @@ void MainWindow::applyDisplaySettings() {
     const bool borderChanged = emulator_ && cupid_gb_sgb_host_present(&emulator_->gb) &&
                                !image_.isNull() &&
                                (image_.width() == CUPID_SGB_SCREEN_WIDTH) != showBorder;
-    const bool colorHardware = emulator_ && (emulator_->gb.model == CUPID_GB_MODEL_CGB ||
+    const bool colorHardware = emulator_ && (cupid_gb_model_is_cgb(emulator_->gb.model) ||
                                              cupid_gb_sgb_host_present(&emulator_->gb));
     const bool resetHistory = displayPalette_ != colors || displayOffColor_ != offColor ||
                               borderChanged || (colorChanged && colorHardware);
@@ -260,9 +260,9 @@ void MainWindow::present(Presentation presentation) {
         const bool offImage = gb.display_frame_type == CUPID_GB_FRAME_LCD_OFF ||
                               gb.display_frame_type == CUPID_GB_FRAME_BLANK_FIRST;
         if (offImage || gb.display_frame_type == CUPID_GB_FRAME_ARTIFICIAL) {
-            image_.fill(gb.model == CUPID_GB_MODEL_CGB ? (*cgbColorTable_)[0x7fff]
-                        : offImage                     ? displayOffColor_
-                                                       : displayPalette_[0]);
+            image_.fill(cupid_gb_model_is_cgb(gb.model) ? (*cgbColorTable_)[0x7fff]
+                        : offImage                      ? displayOffColor_
+                                                        : displayPalette_[0]);
         } else {
             auto *pixels = reinterpret_cast<QRgb *>(image_.bits());
             // Hardware mode stays fixed while this framebuffer is converted.
@@ -333,7 +333,12 @@ void MainWindow::configure() {
     model->addItem("Game Boy", CUPID_GB_MODEL_DMG_ABC);
     model->addItem("Game Boy (DMG0)", CUPID_GB_MODEL_DMG0);
     model->addItem("Game Boy Pocket / Light", CUPID_GB_MODEL_MGB);
-    model->addItem("Game Boy Color", CUPID_GB_MODEL_CGB);
+    model->addItem("Game Boy Color (CPU 0)", CUPID_GB_MODEL_CGB_0);
+    model->addItem("Game Boy Color (CPU A)", CUPID_GB_MODEL_CGB_A);
+    model->addItem("Game Boy Color (CPU B)", CUPID_GB_MODEL_CGB_B);
+    model->addItem("Game Boy Color (CPU C)", CUPID_GB_MODEL_CGB_C);
+    model->addItem("Game Boy Color (CPU D)", CUPID_GB_MODEL_CGB_D);
+    model->addItem("Game Boy Color (CPU E)", CUPID_GB_MODEL_CGB);
     model->addItem("Super Game Boy NTSC", CUPID_GB_MODEL_SGB);
     model->addItem("Super Game Boy PAL", CUPID_GB_MODEL_SGB_PAL);
     model->addItem("Super Game Boy 2", CUPID_GB_MODEL_SGB2);
@@ -351,6 +356,9 @@ void MainWindow::configure() {
     bootLayout->setContentsMargins(0, 0, 0, 0);
     auto *boot = new QLineEdit(bootDirectory());
     boot->setObjectName("bootDirectory");
+    boot->setToolTip("Color CPU 0 uses cgb0_boot.bin. CPUs A through D use cgb_boot.bin. "
+                     "CPU E uses cgbE_boot.bin when present, then cgb_boot.bin. "
+                     "Color firmware files must contain 2304 bytes.");
     boot->setPlaceholderText("Empty: start from post-boot state");
     auto *browse = new QPushButton("Browse…");
     bootLayout->addWidget(boot);

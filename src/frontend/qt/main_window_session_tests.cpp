@@ -20,6 +20,7 @@
  * along with this program.  If not, see <https://gnu.org>.
  */
 
+#include "inspector_renderer.h"
 #include "main_window_internal.h"
 
 #include <QDebug>
@@ -111,6 +112,94 @@ bool MainWindow::modelSmokeTest(const QString &directory) {
         if (!saved.openRom(plain) || saved.emulator_->gb.model != CUPID_GB_MODEL_CGB)
             return smokeFailure(__FILE__, __LINE__);
     }
+    const std::array<CupidGbModel, 6> revisions = {CUPID_GB_MODEL_CGB_0, CUPID_GB_MODEL_CGB_A,
+                                                   CUPID_GB_MODEL_CGB_B, CUPID_GB_MODEL_CGB_C,
+                                                   CUPID_GB_MODEL_CGB_D, CUPID_GB_MODEL_CGB};
+    for (const auto revision : revisions) {
+        settings_.setValue("emulation/model", int(revision));
+        MainWindow selected(true, true);
+        if (!selected.openRom(colorOnly) || selected.emulator_->gb.model != revision ||
+            selected.emulator_->target_system != CUPID_SYSTEM_GBC ||
+            !selected.emulator_->gb.cgb_mode || !selected.runFrame() || !selected.restart() ||
+            selected.emulator_->gb.model != revision || !selected.openRom(colorOnly, true) ||
+            selected.emulator_->gb.model != revision || !selected.openRom(plain) ||
+            selected.emulator_->gb.model != revision || selected.emulator_->gb.cgb_mode ||
+            inspectorMemoryBankCount(selected.emulator_->gb, InspectorMemoryRegion::WorkRam) != 8 ||
+            inspectorMemoryBankCount(selected.emulator_->gb, InspectorMemoryRegion::VideoRam) != 2)
+            return smokeFailure(__FILE__, __LINE__);
+        selected.emulator_->gb.display_frame_type = CUPID_GB_FRAME_LCD_OFF;
+        selected.present(Presentation::Reset);
+        if (selected.image_.pixel(0, 0) != (*selected.cgbColorTable_)[0x7fff])
+            return smokeFailure(__FILE__, __LINE__);
+        bool checked = false;
+        const auto nextRevision =
+            revision == CUPID_GB_MODEL_CGB_0 ? CUPID_GB_MODEL_CGB : CUPID_GB_MODEL_CGB_0;
+        QTimer driver;
+        driver.setInterval(1);
+        connect(&driver, &QTimer::timeout, &selected, [&] {
+            auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+            if (!dialog || dialog->objectName() != "settings")
+                return;
+            driver.stop();
+            auto *choice = dialog->findChild<QComboBox *>("hardwareModel");
+            checked = choice && choice->isEnabled() && choice->currentData().toInt() == revision;
+            for (const auto available : revisions)
+                checked = checked && choice->findData(int(available)) >= 0;
+            if (checked) {
+                choice->setCurrentIndex(choice->findData(int(nextRevision)));
+                dialog->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Ok)->click();
+            } else {
+                dialog->reject();
+            }
+        });
+        driver.start();
+        selected.configure();
+        if (!checked || selected.emulator_->gb.model != revision ||
+            settings_.value("emulation/model").toInt() != nextRevision || !selected.restart() ||
+            selected.emulator_->gb.model != nextRevision || !selected.closeRom() ||
+            !selected.openRom(colorOnly) || selected.emulator_->gb.model != nextRevision)
+            return smokeFailure(__FILE__, __LINE__);
+    }
+    // Firmware identity is a session input. A failed revision-specific lookup
+    // must preserve the currently loaded cartridge and its state.
+    QTemporaryDir firmware(QDir(directory).filePath("color-firmware-XXXXXX"));
+    const auto writeFirmware = [&](const QString &name, uint8_t marker) {
+        QByteArray bytes(0x900, char(0));
+        bytes[0x200] = char(marker);
+        QFile file(firmware.filePath(name));
+        return file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size();
+    };
+    if (!firmware.isValid() || !writeFirmware("cgb_boot.bin", 0x31))
+        return smokeFailure(__FILE__, __LINE__);
+    MainWindow firstRevision(true, true, false, firmware.path(), CUPID_GB_MODEL_CGB_0);
+    if (firstRevision.openRom(colorOnly) || firstRevision.emulator_ ||
+        !writeFirmware("cgb0_boot.bin", 0x40) || !firstRevision.openRom(colorOnly) ||
+        firstRevision.emulator_->gb.boot_rom_size != 0x900 ||
+        firstRevision.emulator_->gb.boot_rom[0x200] != 0x40)
+        return smokeFailure(__FILE__, __LINE__);
+    firstRevision.failed_ = false;
+    const auto originalFirmwareState = firstRevision.captureState();
+    if (originalFirmwareState.isEmpty() || !QFile::remove(firmware.filePath("cgb0_boot.bin")) ||
+        firstRevision.openRom(colorOnly, true) ||
+        firstRevision.captureState() != originalFirmwareState ||
+        !writeFirmware("cgb0_boot.bin", 0x40))
+        return smokeFailure(__FILE__, __LINE__);
+    firstRevision.failed_ = false;
+    if (!firstRevision.closeRom())
+        return smokeFailure(__FILE__, __LINE__);
+    for (const auto revision : revisions) {
+        MainWindow booted(true, true, false, firmware.path(), revision);
+        if (!booted.openRom(colorOnly) || !booted.emulator_->gb.boot_rom_enabled ||
+            booted.emulator_->gb.cpu.pc != 0 || booted.emulator_->gb.model != revision ||
+            booted.emulator_->gb.boot_rom[0x200] !=
+                (revision == CUPID_GB_MODEL_CGB_0 ? 0x40 : 0x31))
+            return smokeFailure(__FILE__, __LINE__);
+    }
+    if (!writeFirmware("cgbE_boot.bin", 0x45))
+        return smokeFailure(__FILE__, __LINE__);
+    MainWindow latestRevision(true, true, false, firmware.path(), CUPID_GB_MODEL_CGB);
+    if (!latestRevision.openRom(colorOnly) || latestRevision.emulator_->gb.boot_rom[0x200] != 0x45)
+        return smokeFailure(__FILE__, __LINE__);
     const QVariant savedScale = settings_.value("video/defaultScale", 2);
     const QVariant savedBorder = settings_.value("video/sgbBorder", true);
     settings_.setValue("video/defaultScale", 2);

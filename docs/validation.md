@@ -22,6 +22,8 @@ The later [linked-window checkpoint](validation-link.md) records the paired-cloc
 
 The [GBS player checkpoint](validation-gbs.md) records music execution, reconstruction-history corrections, double-speed display boundaries, version 23 program identity and native player workflows. Its generated music inputs and listening-history comparisons remain separate from cartridge gameplay qualification.
 
+The [Game Boy Color revision checkpoint](validation-cgb-revisions.md) records the generated OAM, infrared and audio checks, version 27 continuation, and the remaining divider and firmware coverage.
+
 | Environment | Configuration | Result |
 | --- | --- | --- |
 | Windows x64, MSVC 19.43, Qt 6.8.3 | Release desktop/core | Nine CTest checks, visible frontend workflow smoke, local deployed executable |

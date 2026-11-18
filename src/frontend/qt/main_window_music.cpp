@@ -36,8 +36,9 @@ bool MainWindow::prepareMusicCandidate(std::unique_ptr<CupidEmulator> &candidate
         else
             cupid_gb_clear_power_on_seed(&candidate->gb);
         cupid_gb_set_rtc_mode(&candidate->gb, configuredRtcMode(settings_));
-        cupid_emulator_init(candidate.get(),
-                            selected == CUPID_GB_MODEL_CGB ? CUPID_SYSTEM_GBC : CUPID_SYSTEM_GB);
+        cupid_emulator_init(candidate.get(), cupid_gb_model_is_cgb(CupidGbModel(selected))
+                                                 ? CUPID_SYSTEM_GBC
+                                                 : CUPID_SYSTEM_GB);
         cupid_gb_set_model(&candidate->gb, CupidGbModel(selected));
         // Banking history belongs to the document even when its active program
         // is replaced or Automatic prepares the image again for another model.

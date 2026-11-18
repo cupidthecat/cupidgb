@@ -270,10 +270,25 @@ typedef enum CupidGbModel {
     CUPID_GB_MODEL_DMG0 = 1,
     CUPID_GB_MODEL_MGB = 2,
     CUPID_GB_MODEL_CGB = 3,
+    CUPID_GB_MODEL_CGB_E = CUPID_GB_MODEL_CGB,
     CUPID_GB_MODEL_SGB = 4,
     CUPID_GB_MODEL_SGB2 = 5,
-    CUPID_GB_MODEL_SGB_PAL = 6
+    CUPID_GB_MODEL_SGB_PAL = 6,
+    CUPID_GB_MODEL_CGB_0 = 7,
+    CUPID_GB_MODEL_CGB_A = 8,
+    CUPID_GB_MODEL_CGB_B = 9,
+    CUPID_GB_MODEL_CGB_C = 10,
+    CUPID_GB_MODEL_CGB_D = 11
 } CupidGbModel;
+
+static inline bool cupid_gb_model_is_valid(CupidGbModel model) {
+    return (unsigned)model <= CUPID_GB_MODEL_CGB_D;
+}
+
+static inline bool cupid_gb_model_is_cgb(CupidGbModel model) {
+    return model == CUPID_GB_MODEL_CGB_E ||
+           (model >= CUPID_GB_MODEL_CGB_0 && model <= CUPID_GB_MODEL_CGB_D);
+}
 
 typedef enum CupidGbProgramKind {
     CUPID_GB_PROGRAM_CARTRIDGE = 0,
@@ -444,6 +459,7 @@ typedef struct CupidGb {
     uint8_t *mbc6_flash;        /* MBC6 array and hidden bytes. Separate from battery SRAM. */
     uint8_t work_ram[0x8000];
     uint8_t object_attribute_memory[0x00a0];
+    uint8_t extra_oam[48]; /* Writable cells behind FEA0–FEFF on color revisions 0–D. */
     uint8_t io_registers[0x0080];
     uint8_t high_ram[0x007f];
     uint8_t frame_buffer[CUPID_GB_SCREEN_WIDTH * CUPID_GB_SCREEN_HEIGHT];

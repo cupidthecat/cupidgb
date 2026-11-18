@@ -36,7 +36,7 @@ uint8_t cupid_cgb_dma_status(const CupidGb *gb) {
 }
 
 void cupid_cgb_run_pending_dma(CupidGb *gb) {
-    if (!gb || gb->model != CUPID_GB_MODEL_CGB || !gb->hdma_pending)
+    if (!gb || !cupid_gb_model_is_cgb(gb->model) || !gb->hdma_pending)
         return;
 
     const size_t bank = gb->cgb_vram_bank ? 0x2000u : 0;

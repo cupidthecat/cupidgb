@@ -250,7 +250,8 @@ int main(int argc, char **argv) {
     CupidGbModel model = CUPID_GB_MODEL_DMG_ABC;
     for (int i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "--help")) {
-            puts("CupidGB ROM runner: [--model dmg|mgb|cgb|sgb|sgbpal|sgb2] [--frames N] "
+            puts("CupidGB ROM runner: [--model dmg|dmg0|mgb|cgb|cgb-0|cgb-a|cgb-b|cgb-c|"
+                 "cgb-d|cgb-e|sgb|sgbpal|sgb2] [--frames N] "
                  "[--max-steps N] [--protocol none|serial|register|fibonacci|memory] [--boot FILE] "
                  "[--image FILE.ppm] [--audio FILE.pcm] [--input-trace FILE] "
                  "[--power-on-seed auto|UINT64] [--serial-output] ROM\n"
@@ -304,14 +305,14 @@ int main(int argc, char **argv) {
             rom = argv[i];
         }
     }
-    const char *models[] = {"dmg", "mgb", "cgb", "sgb", "sgb2", "sgbpal"};
-    const CupidGbModel model_ids[] = {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_MGB,
-                                      CUPID_GB_MODEL_CGB,     CUPID_GB_MODEL_SGB,
-                                      CUPID_GB_MODEL_SGB2,    CUPID_GB_MODEL_SGB_PAL};
-    bool known_model = false;
-    for (size_t i = 0; i < sizeof(model_ids) / sizeof(model_ids[0]); ++i) {
-        if (!strcmp(model_name, models[i])) {
-            model = model_ids[i];
+    bool known_model = !strcmp(model_name, "dmg");
+    if (!strcmp(model_name, "cgb-e")) {
+        model = CUPID_GB_MODEL_CGB_E;
+        known_model = true;
+    }
+    for (int id = CUPID_GB_MODEL_DMG_ABC; !known_model && id <= CUPID_GB_MODEL_CGB_D; ++id) {
+        if (!strcmp(model_name, cupid_gb_model_name((CupidGbModel)id))) {
+            model = (CupidGbModel)id;
             known_model = true;
         }
     }

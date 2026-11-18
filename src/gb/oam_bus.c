@@ -25,6 +25,27 @@
 #include "display_clock.h"
 #include <string.h>
 
+static size_t extra_oam_index(CupidGbModel model, uint8_t address) {
+    const unsigned offset = address - 0xa0u;
+    if (model == CUPID_GB_MODEL_CGB_D)
+        return offset < 32u ? offset : 32u + (offset & 15u);
+    /* Each 32-address block on revisions 0 through C selects eight cells. */
+    return (offset >> 5) * 8u + (offset & 7u);
+}
+
+uint8_t cupid_gb_extra_oam_read(const CupidGb *gb, uint8_t address) {
+    if (gb->model == CUPID_GB_MODEL_CGB_E)
+        return (uint8_t)((address & 0xf0u) | (address >> 4));
+    if (cupid_gb_extra_oam_size(gb->model))
+        return gb->extra_oam[extra_oam_index(gb->model, address)];
+    return 0;
+}
+
+void cupid_gb_extra_oam_write(CupidGb *gb, uint8_t address, uint8_t value) {
+    if (cupid_gb_extra_oam_size(gb->model))
+        gb->extra_oam[extra_oam_index(gb->model, address)] = value;
+}
+
 // DMG OAM corruption bug
 
 /**
@@ -48,10 +69,10 @@ static bool cupid_gb_oam_bug_active(CupidGb *gb, uint16_t address, uint16_t *row
 
     /* Increment and decrement bus pulses can synchronize OAM without an
      * ordinary memory access, including when no corruption follows. */
-    if (gb && gb->model != CUPID_GB_MODEL_CGB && address >= 0xfe00u && address < 0xff00u)
+    if (gb && !cupid_gb_model_is_cgb(gb->model) && address >= 0xfe00u && address < 0xff00u)
         cupid_gb_display_clock_sync(gb);
 
-    if (gb == 0 || gb->model == CUPID_GB_MODEL_CGB || !cupid_gb_lcd_enabled(gb) ||
+    if (gb == 0 || cupid_gb_model_is_cgb(gb->model) || !cupid_gb_lcd_enabled(gb) ||
         gb->ppu_lcd_startup) {
         return false;
     }

@@ -1157,7 +1157,7 @@ uint8_t cupid_gb_execute_unprefixed(CupidGb *gb, uint8_t opcode, CupidGbCpuBus *
             (void)cupid_gb_read_bus_u8(gb, gb->cpu.pc);
             const bool held = (cupid_gb_read_bus_u8(gb, 0xff00u) & 0x0fu) != 0x0fu;
             const bool switching =
-                gb->model == CUPID_GB_MODEL_CGB && gb->speed_switch_armed && !held;
+                cupid_gb_model_is_cgb(gb->model) && gb->speed_switch_armed && !held;
             const bool pending = (gb->interrupt_enable & gb->interrupt_flags & 0x1fu) != 0;
             if (!held) {
                 cupid_gb_timer_apply_div_reset(gb);

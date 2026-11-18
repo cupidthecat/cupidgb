@@ -10,7 +10,7 @@ Load a native state file through File > Load State File or drop a `.s0` through 
 
 Writes use an atomic file replacement. Loading checks the complete cartridge identity and hardware model. A state captured with an active boot overlay requires the matching local boot binary. Failed validation preserves the running session and its host audio queue. A successful load replaces the emulated state, reapplies current physical input, clears queued host audio, and realigns pacing.
 
-New files use CupidGB native version 26. Cartridge versions 2 through 25, including both supported version 19 development layouts, remain loadable when they contain all SRAM required by the receiving cartridge. GBS programs require version 23 or newer and the matching music file already loaded. Desktop loads retain current audio choices and both receiving output owners: ordinary reconstruction/filter history and startup synthesis/queued batches. Saved hardware startup phase, host-only time and command-receiver history still restore. Interoperable BESS state imports remain pending.
+New files use CupidGB native version 27. Cartridge versions 2 through 26, including both supported version 19 development layouts, remain loadable on the original hardware profiles when they contain all SRAM required by the receiving cartridge. GBS programs require version 23 or newer and the matching music file already loaded. Desktop loads retain current listening settings, reconstruction and filter history, and the receiving startup synthesis and queued batches. Saved hardware startup phase, host-only time and command-receiver history still restore. Interoperable BESS state imports remain pending.
 
 Host camera images and pending device requests stay with the receiving session. Saving a pending host capture writes an idle camera to the file while the live request continues. After full validation, a load into host-camera mode cancels obsolete requests and clears imported busy state while retaining the current image. This also applies to a saved generated countdown. Without a provider, generated captures retain their countdown, while a host-origin snapshot starts idle. The existing 64-byte camera section and strict busy/countdown validator are unchanged. See [Camera cartridges](host-camera.md) for reset, rewind and embedding rules.
 
@@ -358,6 +358,12 @@ GBS timer-control bit 7 permits double-speed execution on the selected hardware,
 The Qt track selector belongs to the current music session. Loading a state restores the saved guest execution while retaining the displayed selection. Restart then starts that selected track; Reset reloads the music file and uses its initial track. Exact core restoration restores saved reconstruction history, while desktop loading retains the receiving audio history under the live contract above. See [GBS music](gbs-music.md).
 
 Trusted state contexts cache this program digest. Successful music loads advance the load generation; starting another track retains it. An embedding host that directly edits the supposedly immutable GBS header, prepared image or bank wiring must discard and recreate its context.
+
+### CGB revision memory in version 27
+
+States for CGB revisions 0 through C store 24 bytes of extra OAM. Revision D stores 48. The bytes follow any mapper extension and precede the serial accessory descriptor. Each byte stores one writable cell, including cells shared by multiple addresses.
+
+The model field identifies the exact revision. Existing CGB states use model ID 3, which selects revision E. Cells on revisions 0 through D survive Quick Reset and both exact and desktop state loads.
 
 ## Validation scope
 

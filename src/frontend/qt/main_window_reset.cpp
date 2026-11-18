@@ -76,6 +76,7 @@ bool MainWindow::prepareResetCandidate(CupidEmulator *candidate, ResetWorkflow w
         std::memcpy(next.high_ram, previous.high_ram, sizeof(next.high_ram));
         std::memcpy(next.object_attribute_memory, previous.object_attribute_memory,
                     sizeof(next.object_attribute_memory));
+        std::memcpy(next.extra_oam, previous.extra_oam, sizeof(next.extra_oam));
         std::memcpy(next.cgb_bg_palette_ram, previous.cgb_bg_palette_ram,
                     sizeof(next.cgb_bg_palette_ram));
         std::memcpy(next.cgb_obj_palette_ram, previous.cgb_obj_palette_ram,

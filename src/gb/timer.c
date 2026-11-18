@@ -445,7 +445,7 @@ uint8_t cupid_gb_tick_halt(CupidGb *gb) {
     const uint8_t before = (uint8_t)(gb->interrupt_enable & gb->interrupt_flags & 0x1fu);
     const bool first_cycle = gb->cpu.just_halted;
     gb->cpu.just_halted = false;
-    if (gb->model == CUPID_GB_MODEL_CGB || first_cycle) {
+    if (cupid_gb_model_is_cgb(gb->model) || first_cycle) {
         /* Color hardware and the first cycle after HALT poll before the cycle. */
         cupid_gb_deliver_cpu_cycles(gb, 1u);
         return before;
@@ -521,7 +521,7 @@ void cupid_gb_acknowledge_interrupt(CupidGb *gb, uint8_t mask) {
 
 static uint8_t stat_transient(const CupidGb *gb, uint8_t value, uint8_t previous,
                               bool double_speed) {
-    if (gb->model != CUPID_GB_MODEL_CGB) {
+    if (!cupid_gb_model_is_cgb(gb->model)) {
         bool hblank_only = (previous & 8u) && !(previous & 32u);
         /* On the LY boundary, an existing HBlank source masks the transient
          * OAM enable. Other interrupt enables still receive their pulse. */
@@ -678,9 +678,9 @@ static CpuWrite cpu_write_plan(CupidGb *gb, uint16_t address, uint8_t value, uns
         /* Monochrome LCDC pulses sample the old value before their leading clocks.
          * The bus read also resolves retained display work; a raw register read
          * would shift the receiver's first threshold crossing during this write. */
-        write.previous = gb->model == CUPID_GB_MODEL_CGB ? gb->io_registers[CUPID_GB_IO_LCDC]
-                                                         : cupid_gb_read_bus_u8(gb, address);
-        if (gb->model != CUPID_GB_MODEL_CGB) {
+        write.previous = cupid_gb_model_is_cgb(gb->model) ? gb->io_registers[CUPID_GB_IO_LCDC]
+                                                          : cupid_gb_read_bus_u8(gb, address);
+        if (!cupid_gb_model_is_cgb(gb->model)) {
             write.kind = CPU_WRITE_LCDC;
             write.early = boundary - 2;
             write.commit = write.sample = boundary - 1;
@@ -696,7 +696,7 @@ static CpuWrite cpu_write_plan(CupidGb *gb, uint16_t address, uint8_t value, uns
          * The second stack write to IF has its separate old-value sample. */
         write.commit = write.sample = boundary + 1;
     } else if (address >= 0xff47u && address <= 0xff49u) {
-        if (gb->model == CUPID_GB_MODEL_CGB) {
+        if (cupid_gb_model_is_cgb(gb->model)) {
             if (!gb->double_speed)
                 write.commit = write.sample = boundary - 2;
         } else if (cupid_gb_model_is_sgb(gb->model)) {
@@ -707,20 +707,20 @@ static CpuWrite cpu_write_plan(CupidGb *gb, uint16_t address, uint8_t value, uns
             write.commit = write.sample = boundary - 1;
         }
     } else if (address == 0xff4bu) {
-        if (gb->model != CUPID_GB_MODEL_CGB)
+        if (!cupid_gb_model_is_cgb(gb->model))
             write.sample = boundary + 1;
         else if (!gb->double_speed)
             write.commit = write.sample = boundary + 1;
-    } else if (address == 0xff10u && gb->model == CUPID_GB_MODEL_CGB && gb->double_speed) {
+    } else if (address == 0xff10u && cupid_gb_model_is_cgb(gb->model) && gb->double_speed) {
         /* The sweep register has a separate final T-cycle even on revisions
          * without the older sweep-disable conflict. */
         write.kind = CPU_WRITE_SWEEP;
         write.early = boundary - 1;
-    } else if (address == 0xff42u && gb->model != CUPID_GB_MODEL_CGB) {
+    } else if (address == 0xff42u && !cupid_gb_model_is_cgb(gb->model)) {
         write.commit = write.sample = boundary - 1;
-    } else if (address == 0xff43u && (gb->model != CUPID_GB_MODEL_CGB || gb->double_speed)) {
+    } else if (address == 0xff43u && (!cupid_gb_model_is_cgb(gb->model) || gb->double_speed)) {
         write.commit = write.sample = boundary - 2;
-    } else if (address == 0xff45u && gb->model == CUPID_GB_MODEL_CGB && !gb->double_speed) {
+    } else if (address == 0xff45u && cupid_gb_model_is_cgb(gb->model) && !gb->double_speed) {
         write.commit = write.sample = boundary + 1;
     }
     return write;

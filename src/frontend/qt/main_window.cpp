@@ -622,11 +622,12 @@ bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflo
                     : modelOverride_.value_or(settings_.value("emulation/model", -1).toInt());
     if (!music && model < 0)
         model = automaticModel(data);
-    if (model > CUPID_GB_MODEL_SGB_PAL || (!music && model < CUPID_GB_MODEL_DMG_ABC)) {
+    if ((model >= 0 && !cupid_gb_model_is_valid(CupidGbModel(model))) || (!music && model < 0)) {
         reportError("The configured hardware model is invalid.");
         return false;
     }
-    if (!music && (uint8_t(data[0x143]) & 0xc0) == 0xc0 && model != CUPID_GB_MODEL_CGB) {
+    if (!music && (uint8_t(data[0x143]) & 0xc0) == 0xc0 &&
+        !cupid_gb_model_is_cgb(CupidGbModel(model))) {
         reportError("This cartridge requires Game Boy Color. Select Automatic or Game Boy Color.");
         return false;
     }
@@ -643,8 +644,9 @@ bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflo
             cupid_gb_clear_power_on_seed(&candidate->gb);
         // Select host policy before initialization and battery import establish clock history.
         cupid_gb_set_rtc_mode(&candidate->gb, configuredRtcMode(settings_));
-        cupid_emulator_init(candidate.get(),
-                            model == CUPID_GB_MODEL_CGB ? CUPID_SYSTEM_GBC : CUPID_SYSTEM_GB);
+        cupid_emulator_init(candidate.get(), cupid_gb_model_is_cgb(CupidGbModel(model))
+                                                 ? CUPID_SYSTEM_GBC
+                                                 : CUPID_SYSTEM_GB);
         cupid_gb_set_model(&candidate->gb, CupidGbModel(model));
         if (emulator_)
             candidate->gb.mbc3_extended_history = emulator_->gb.mbc3_extended_history;
@@ -679,9 +681,16 @@ bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflo
     const QString bootFolder = music ? QString() : bootDirectory();
     if (!bootFolder.isEmpty()) {
         QString name = "dmg_boot.bin";
-        if (model == CUPID_GB_MODEL_CGB)
+        if (model == CUPID_GB_MODEL_CGB_0)
+            name = "cgb0_boot.bin";
+        else if (cupid_gb_model_is_cgb(CupidGbModel(model))) {
             name = "cgb_boot.bin";
-        else if (model == CUPID_GB_MODEL_MGB)
+            // Revision E firmware is optional. Existing shared color firmware
+            // remains the fallback for configurations created before revision selection.
+            if (model == CUPID_GB_MODEL_CGB &&
+                QFileInfo::exists(QDir(bootFolder).filePath("cgbE_boot.bin")))
+                name = "cgbE_boot.bin";
+        } else if (model == CUPID_GB_MODEL_MGB)
             name = "mgb_boot.bin";
         else if (model == CUPID_GB_MODEL_SGB || model == CUPID_GB_MODEL_SGB_PAL)
             name = "sgb_boot.bin";
@@ -689,7 +698,7 @@ bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflo
             name = "sgb2_boot.bin";
         QFile boot(QDir(bootFolder).filePath(name));
         if (!boot.open(QIODevice::ReadOnly) ||
-            boot.size() != (model == CUPID_GB_MODEL_CGB ? 0x900 : 0x100)) {
+            boot.size() != (cupid_gb_model_is_cgb(CupidGbModel(model)) ? 0x900 : 0x100)) {
             cupid_emulator_shutdown(candidate.get());
             reportError("Missing boot ROM or invalid size: " + boot.fileName());
             return false;

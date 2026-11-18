@@ -38,11 +38,11 @@
 static bool valid_request(const CupidGb *gb, CupidGbResetKind kind) {
     if (!gb || !gb->loaded || !gb->rom || !gb->rom_size || gb->rom_size > CUPID_GB_MAX_ROM_SIZE ||
         gb->rom_size > gb->rom_capacity || !cupid_gb_cartridge_storage_valid(gb) ||
-        gb->model < CUPID_GB_MODEL_DMG_ABC || gb->model > CUPID_GB_MODEL_SGB_PAL ||
+        !cupid_gb_model_is_valid(gb->model) ||
         (kind != CUPID_GB_RESET_HARD && kind != CUPID_GB_RESET_QUICK))
         return false;
     return !gb->boot_rom_size ||
-           gb->boot_rom_size == (gb->model == CUPID_GB_MODEL_CGB ? 0x900u : 0x100u);
+           gb->boot_rom_size == (cupid_gb_model_is_cgb(gb->model) ? 0x900u : 0x100u);
 }
 
 static void restore_cartridge(CupidGb *next, const CupidGb *previous) {
@@ -68,6 +68,7 @@ static void restore_retained_memory(CupidGb *next, const CupidGb *previous) {
     memcpy(next->high_ram, previous->high_ram, sizeof(next->high_ram));
     memcpy(next->object_attribute_memory, previous->object_attribute_memory,
            sizeof(next->object_attribute_memory));
+    memcpy(next->extra_oam, previous->extra_oam, sizeof(next->extra_oam));
     memcpy(next->cgb_bg_palette_ram, previous->cgb_bg_palette_ram,
            sizeof(next->cgb_bg_palette_ram));
     memcpy(next->cgb_obj_palette_ram, previous->cgb_obj_palette_ram,
@@ -145,7 +146,7 @@ bool cupid_gb_reset_with_allocator(CupidGb *gb, CupidGbResetKind kind, void *(*a
         if (next->boot_rom_size) {
             /* Wave storage belongs to I/O, not to the retained physical RAM. */
             memset(next->io_registers + 0x30, 0, 16);
-        } else if (next->model == CUPID_GB_MODEL_CGB) {
+        } else if (cupid_gb_model_is_cgb(next->model)) {
             /* The approximate handoff includes the color firmware's clearing work.
              * This is a post-boot effect, separate from native boundary retention. */
             memset(next->work_ram + 0x2000, 0, 0x1000);

@@ -84,6 +84,16 @@ const char *cupid_gb_model_name(CupidGbModel model) {
             return "mgb";
         case CUPID_GB_MODEL_CGB:
             return "cgb";
+        case CUPID_GB_MODEL_CGB_0:
+            return "cgb-0";
+        case CUPID_GB_MODEL_CGB_A:
+            return "cgb-a";
+        case CUPID_GB_MODEL_CGB_B:
+            return "cgb-b";
+        case CUPID_GB_MODEL_CGB_C:
+            return "cgb-c";
+        case CUPID_GB_MODEL_CGB_D:
+            return "cgb-d";
         case CUPID_GB_MODEL_SGB:
             return "sgb";
         case CUPID_GB_MODEL_SGB2:
@@ -152,7 +162,7 @@ static void cupid_gb_apply_boot_profile(CupidGb *gb) {
         gb->io_registers[CUPID_GB_IO_LY] = 0x91u;
         gb->div_counter = 12u;
         gb->ppu_counter = 0x29u;
-    } else if (gb->model == CUPID_GB_MODEL_CGB) {
+    } else if (cupid_gb_model_is_cgb(gb->model)) {
         gb->cpu.a = 0x11u;
         gb->cpu.f = 0x80u;
         gb->cpu.b = 0x00u;
@@ -354,7 +364,7 @@ void cupid_gb_init(CupidGb *gb) {
         gb->rom_capacity = CUPID_GB_MIN_ROM_CAPACITY;
     }
 
-    gb->cgb_mode = gb->model == CUPID_GB_MODEL_CGB;
+    gb->cgb_mode = cupid_gb_model_is_cgb(gb->model);
     memset(gb->io_registers, 0xff, sizeof(gb->io_registers));
     cupid_gb_apply_boot_profile(gb);
     gb->io_registers[CUPID_GB_IO_LCDC] = 0x91u;
@@ -562,7 +572,7 @@ void cupid_gb_startup_hardware(CupidGb *gb) {
     /* Reset IO to power-on defaults */
     /* Color boot firmware selects cartridge compatibility later through KEY0.
      * The cartridge header governs the post-boot profile only when no firmware runs. */
-    gb->cgb_mode = gb->model == CUPID_GB_MODEL_CGB;
+    gb->cgb_mode = cupid_gb_model_is_cgb(gb->model);
     gb->hdma_pending = false;
     gb->hdma_active = false;
     gb->hdma_hblank_delay = 0;
@@ -848,13 +858,13 @@ static bool on_main_bus(const CupidGb *gb, uint16_t address) {
         return false;
     // Color hardware separates WRAM/OAM from the cartridge bus. Monochrome
     // hardware shares those drivers, but VRAM and internal I/O stay separate.
-    return gb->model != CUPID_GB_MODEL_CGB || address < 0xc000u;
+    return !cupid_gb_model_is_cgb(gb->model) || address < 0xc000u;
 }
 
 static unsigned memory_bus(const CupidGb *gb, uint16_t address) {
     if (address >= 0x8000u && address < 0xa000u)
         return 1; // The video bus is separate on every model.
-    if (gb->model == CUPID_GB_MODEL_CGB && address >= 0xc000u)
+    if (cupid_gb_model_is_cgb(gb->model) && address >= 0xc000u)
         return 2; // Color hardware also separates work RAM.
     return 0;
 }
@@ -865,7 +875,7 @@ static bool oam_dma_conflict(const CupidGb *gb, uint16_t address, uint16_t *sour
         return false;
     *source = (uint16_t)(gb->dma_source_base + gb->dma_index);
     const unsigned page = gb->io_registers[CUPID_GB_IO_DMA];
-    if (gb->model != CUPID_GB_MODEL_CGB && page >= 0xe0u &&
+    if (!cupid_gb_model_is_cgb(gb->model) && page >= 0xe0u &&
         gb->dma_source_base == (page - 0x20u) * 0x100u) {
         // FF46 retains the original page while the copy engine stores its
         // decoded WRAM mirror. Both next-source aliases bypass contention.
@@ -876,7 +886,7 @@ static bool oam_dma_conflict(const CupidGb *gb, uint16_t address, uint16_t *sour
     if (address == *source || (*source >= 0xe000u && address == (*source & ~0x2000u)))
         return false;
     const unsigned source_bus = memory_bus(gb, *source);
-    if (gb->model == CUPID_GB_MODEL_CGB) {
+    if (cupid_gb_model_is_cgb(gb->model)) {
         if (address >= 0xc000u)
             return source_bus != 1;
         if (*source >= 0xe000u)
@@ -889,7 +899,7 @@ static bool resolve_dma_access(CupidGb *gb, uint16_t *address, bool write, uint8
     uint16_t source;
     if (!oam_dma_conflict(gb, *address, &source))
         return true;
-    const bool color = gb->model == CUPID_GB_MODEL_CGB;
+    const bool color = cupid_gb_model_is_cgb(gb->model);
     if (color && !memory_bus(gb, *address) && source >= 0xe000u)
         return false;
     if (color && *address >= 0xc000u && (source < 0xc000u || source >= 0xe000u)) {
@@ -956,7 +966,7 @@ static uint8_t read_data_bus(const CupidGb *gb, uint16_t address, CupidGb *bus, 
     /* Guest audio reads force pending clocks. Passive debugger reads leave
      * execution and output delivery untouched. */
     if (bus && ((address >= 0xff10u && address <= 0xff3fu) ||
-                (gb->model == CUPID_GB_MODEL_CGB && (address == 0xff76u || address == 0xff77u))))
+                (cupid_gb_model_is_cgb(gb->model) && (address == 0xff76u || address == 0xff77u))))
         cupid_gb_apu_run(bus, true);
     /* DMA's VRAM source path bypasses display synchronization. Guest accesses
      * otherwise force the display wait even when its device rejects the read. */
@@ -1020,13 +1030,7 @@ static uint8_t read_data_bus(const CupidGb *gb, uint16_t address, CupidGb *bus, 
                 cupid_gb_trigger_oam_bug_read_access(bus, address);
             return 0xffu;
         }
-        if (address < 0xfea0u)
-            return gb->object_attribute_memory[address - 0xfe00u];
-        // The unused OAM tail still has a model-specific readback circuit.
-        // The current color profile repeats the upper address nibble.
-        return gb->model == CUPID_GB_MODEL_CGB
-                   ? (uint8_t)((address & 0xf0u) | ((address >> 4u) & 0x0fu))
-                   : 0;
+        return cupid_gb_oam_read_raw(gb, (uint8_t)address);
     }
 
     if (address == 0xff26u) {
@@ -1052,7 +1056,7 @@ static uint8_t read_data_bus(const CupidGb *gb, uint16_t address, CupidGb *bus, 
     if (address == 0xff02u) {
         /* On color hardware, KEY0 does not rewrite the retained speed bit.
          * Compatibility mode affects the next SC write, not this readback. */
-        uint8_t writable = gb->model == CUPID_GB_MODEL_CGB ? 0x83u : 0x81u;
+        uint8_t writable = cupid_gb_model_is_cgb(gb->model) ? 0x83u : 0x81u;
         return (uint8_t)(gb->io_registers[2] | (uint8_t)~writable);
     }
 
@@ -1084,7 +1088,7 @@ static uint8_t read_data_bus(const CupidGb *gb, uint16_t address, CupidGb *bus, 
 
     if (address >= 0xff30u && address <= 0xff3fu) {
         if (gb->apu.apu_on && gb->apu.ch3_on) {
-            if (gb->model != CUPID_GB_MODEL_CGB) {
+            if (!cupid_gb_model_is_cgb(gb->model)) {
                 if (gb->apu.ch3_wave_access_ticks == 0u) {
                     return 0xffu;
                 }
@@ -1498,6 +1502,7 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
     }
 
     if (address >= 0xfea0u && address <= 0xfeffu) {
+        cupid_gb_extra_oam_write(gb, (uint8_t)address, value);
         return;
     }
 

@@ -22,6 +22,7 @@
 
 #include "cupid/gb/startup.h"
 
+#include "oam_bus.h"
 #include "startup_internal.h"
 
 #include <stddef.h>
@@ -73,7 +74,7 @@ static uint64_t fresh_seed(const CupidGb *gb) {
 
 static StartupNoise fill_memory(CupidGb *gb) {
     StartupNoise noise = {gb->power_on.generation_seed, 0, 0};
-    const bool color = gb->model == CUPID_GB_MODEL_CGB;
+    const bool color = cupid_gb_model_is_cgb(gb->model);
     const bool pocket = gb->model == CUPID_GB_MODEL_MGB;
     const bool sgb2 = gb->model == CUPID_GB_MODEL_SGB2;
     const size_t work_bytes = color ? sizeof(gb->work_ram) : 0x2000u;
@@ -97,16 +98,21 @@ static StartupNoise fill_memory(CupidGb *gb) {
     else
         for (size_t address = 0; address < sizeof(gb->object_attribute_memory); ++address)
             gb->object_attribute_memory[address] = biased_byte(&noise, 3, (address & 2u) == 0);
+    const size_t extra_cells = cupid_gb_extra_oam_size(gb->model);
+    memset(gb->extra_oam, 0, sizeof(gb->extra_oam));
+    for (size_t address = 0; address < extra_cells; ++address)
+        gb->extra_oam[address] = next_byte(&noise);
     return noise;
 }
 
 static StartupNoise noise_after_memory(const CupidGb *gb) {
-    const bool color = gb->model == CUPID_GB_MODEL_CGB;
+    const bool color = cupid_gb_model_is_cgb(gb->model);
     const bool pocket = gb->model == CUPID_GB_MODEL_MGB;
     const unsigned work_draws = color || pocket ? 1 : gb->model == CUPID_GB_MODEL_SGB2 ? 3 : 2;
     const size_t work_bytes = color ? sizeof(gb->work_ram) : 0x2000u;
-    const size_t bytes = work_bytes * work_draws + sizeof(gb->high_ram) * (color ? 1u : 3u) +
-                         (color ? 0 : sizeof(gb->object_attribute_memory) * 3u);
+    const size_t bytes =
+        work_bytes * work_draws + sizeof(gb->high_ram) * (color ? 1u : 3u) +
+        (color ? cupid_gb_extra_oam_size(gb->model) : sizeof(gb->object_attribute_memory) * 3u);
     /* Re-entry reaches the same IO portion without rewriting or walking live RAM.
      * The stream counter advances once per eight bytes, independently of host endian. */
     StartupNoise noise = {gb->power_on.generation_seed + STARTUP_NOISE_STRIDE * (bytes / 8u), 0, 0};
@@ -116,7 +122,7 @@ static StartupNoise noise_after_memory(const CupidGb *gb) {
 }
 
 static void fill_wave(CupidGb *gb, StartupNoise *noise, bool firmware) {
-    const bool color = gb->model == CUPID_GB_MODEL_CGB;
+    const bool color = cupid_gb_model_is_cgb(gb->model);
     /* Monochrome power-on noise ends at FF3E; FF3F starts at zero. Color
      * firmware initializes wave RAM itself, while HLE supplies its 00/FF ramp. */
     for (unsigned address = 0; address < 16; ++address) {
@@ -136,14 +142,14 @@ void cupid_gb_startup_memory(CupidGb *gb) {
     fill_wave(gb, &noise, false);
     /* The HLE handoff represents firmware that already cleared physical WRAM
      * bank 2. Initial firmware execution reconstructs the raw generation first. */
-    if (gb->model == CUPID_GB_MODEL_CGB)
+    if (cupid_gb_model_is_cgb(gb->model))
         memset(gb->work_ram + 0x2000u, 0, 0x1000u);
 }
 
 void cupid_gb_startup_boot_io(CupidGb *gb) {
     StartupNoise noise = noise_after_memory(gb);
     fill_wave(gb, &noise, true);
-    if (gb->model == CUPID_GB_MODEL_CGB) {
+    if (cupid_gb_model_is_cgb(gb->model)) {
         for (size_t address = 0; address < sizeof(gb->cgb_bg_palette_ram); ++address) {
             gb->cgb_bg_palette_ram[address] = next_byte(&noise);
             gb->cgb_obj_palette_ram[address] = next_byte(&noise);

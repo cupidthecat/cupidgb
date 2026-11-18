@@ -192,7 +192,7 @@ static uint8_t dac_gain(CupidGbAudioOutput *output, unsigned channel, bool enabl
 void cupid_gb_audio_render(CupidGb *gb) {
     CupidGbAudioOutput *output = &gb->apu.output;
     const uint32_t rate = cupid_gb_apu_get_sample_rate(gb);
-    const bool color = gb->model == CUPID_GB_MODEL_CGB;
+    const bool color = cupid_gb_model_is_cgb(gb->model);
     const bool delay = !color && output->max_span != 2;
     uint8_t enabled = cupid_gb_audio_dac_mask(gb);
     int32_t left = 0, right = 0;

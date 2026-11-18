@@ -39,7 +39,7 @@ QRgb gray(unsigned shade) {
 }
 
 bool colorHardware(const CupidGb &gb) {
-    return gb.model == CUPID_GB_MODEL_CGB;
+    return cupid_gb_model_is_cgb(gb.model);
 }
 
 unsigned mapOffset(const CupidGb &gb, InspectorMap map) {
@@ -285,9 +285,9 @@ size_t inspectorMemoryBankCount(const CupidGb &gb, InspectorMemoryRegion region)
         case InspectorMemoryRegion::Rom:
             return (gb.rom_size + 0x3fff) / 0x4000;
         case InspectorMemoryRegion::VideoRam:
-            return gb.model == CUPID_GB_MODEL_CGB ? 2 : 1;
+            return cupid_gb_model_is_cgb(gb.model) ? 2 : 1;
         case InspectorMemoryRegion::WorkRam:
-            return gb.model == CUPID_GB_MODEL_CGB ? 8 : 2;
+            return cupid_gb_model_is_cgb(gb.model) ? 8 : 2;
         case InspectorMemoryRegion::CartridgeRam:
             return (gb.cartridge_ram_size + 0x1fff) / 0x2000;
     }

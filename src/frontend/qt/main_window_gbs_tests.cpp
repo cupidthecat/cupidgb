@@ -461,6 +461,15 @@ bool MainWindow::gbsSmokeTest(const QString &directory) {
         automatic.emulator_->gb.model != CUPID_GB_MODEL_CGB)
         return smokeFailure(__FILE__, __LINE__);
 
+    for (const auto revision : {CUPID_GB_MODEL_CGB_0, CUPID_GB_MODEL_CGB_A, CUPID_GB_MODEL_CGB_B,
+                                CUPID_GB_MODEL_CGB_C, CUPID_GB_MODEL_CGB_D, CUPID_GB_MODEL_CGB}) {
+        MainWindow revised(true, true, false, QStringLiteral(""), revision, uint64_t(1));
+        if (!revised.openRom(path) || revised.emulator_->gb.model != revision ||
+            revised.emulator_->target_system != CUPID_SYSTEM_GBC || !revised.musicInfo_ ||
+            !revised.runFrame() || !revised.restart() || revised.emulator_->gb.model != revision)
+            return smokeFailure(__FILE__, __LINE__);
+    }
+
     // Music keeps the shared serial timeline and both windows' independent audio.
     if (!session.openRom(path) || !session.connectLink(&automatic))
         return smokeFailure(__FILE__, __LINE__);

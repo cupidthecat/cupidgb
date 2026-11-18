@@ -331,7 +331,7 @@ static void test_transactions_and_host_state(void) {
     assert(cupid_gb_gbs_start_track(gb, 254) == CUPID_GB_GBS_OK);
     assert_output_prefix(output, &gb->apu.output);
 
-    gb->model = (CupidGbModel)(CUPID_GB_MODEL_SGB_PAL + 1);
+    gb->model = (CupidGbModel)255;
     *snapshot = *gb;
     assert(cupid_gb_gbs_start_track(gb, 0) == CUPID_GB_GBS_INVALID_ARGUMENT);
     assert(!memcmp(gb, snapshot, sizeof(*gb)));

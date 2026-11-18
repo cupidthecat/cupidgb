@@ -677,7 +677,7 @@ void cupid_cgb_apply_compatibility_palette(CupidGb *gb) {
  * @return `true` if CGB compatibility mode is active.
  */
 bool cupid_cgb_compat_active(const CupidGb *gb) {
-    return gb != 0 && gb->model == CUPID_GB_MODEL_CGB && !gb->cgb_mode;
+    return gb != 0 && cupid_gb_model_is_cgb(gb->model) && !gb->cgb_mode;
 }
 
 /**
@@ -745,7 +745,7 @@ uint16_t cupid_cgb_compat_obj_color(const CupidGb *gb, unsigned int palette, uin
  * @return `true` if palette RAM reads/writes should be blocked.
  */
 bool cupid_cgb_palettes_cpu_blocked(const CupidGb *gb) {
-    if (gb == 0 || gb->model != CUPID_GB_MODEL_CGB || !cupid_gb_lcd_enabled(gb) ||
+    if (gb == 0 || !cupid_gb_model_is_cgb(gb->model) || !cupid_gb_lcd_enabled(gb) ||
         gb->io_registers[CUPID_GB_IO_LY] >= CUPID_GB_PPU_VISIBLE_SCANLINES) {
         return false;
     }

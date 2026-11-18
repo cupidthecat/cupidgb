@@ -90,7 +90,7 @@ void cupid_cgb_init_state(CupidGb *gb) {
 size_t cupid_cgb_vram_offset(const CupidGb *gb, uint16_t address) {
     size_t bank = 0u;
 
-    if (gb != 0 && gb->model == CUPID_GB_MODEL_CGB) {
+    if (gb != 0 && cupid_gb_model_is_cgb(gb->model)) {
         bank = (size_t)(gb->cgb_vram_bank & 0x01u);
     }
 
@@ -115,7 +115,7 @@ size_t cupid_cgb_wram_offset(const CupidGb *gb, uint16_t address) {
         return (size_t)(address - 0xc000u);
     }
 
-    if (gb != 0 && gb->model == CUPID_GB_MODEL_CGB) {
+    if (gb != 0 && cupid_gb_model_is_cgb(gb->model)) {
         uint8_t bank = gb->cgb_wram_bank & 0x07u;
 
         if (bank == 0u) {
@@ -164,14 +164,17 @@ bool cupid_cgb_handle_read_register(const CupidGb *gb, uint16_t address, uint8_t
             /* Control and DMA address registers are write-only on the bus. */
             *value = 0xffu;
             return true;
-        case 0xff56u:
-            *value = gb != 0 && gb->cgb_mode ? (uint8_t)(0x2eu | (gb->io_registers[0x56u] & 0xc1u))
-                                             : 0xffu;
-            if (gb != 0 && gb->cgb_mode && (gb->io_registers[0x56u] & 0xc0u) == 0xc0u &&
-                cupid_gb_infrared_detected(gb)) {
+        case 0xff56u: {
+            *value = 0xffu;
+            if (gb == 0 || !gb->cgb_mode)
+                return true;
+            const uint8_t port = gb->io_registers[0x56u];
+            const unsigned fixed_bits = gb->model == CUPID_GB_MODEL_CGB_E ? 0x2eu : 0x3eu;
+            *value = (uint8_t)(fixed_bits | (port & 0xc1u));
+            if ((port & 0xc0u) == 0xc0u && cupid_gb_infrared_detected(gb))
                 *value &= 0xfdu;
-            }
             return true;
+        }
         case 0xff4du:
             if (gb == 0 || !gb->cgb_mode) {
                 *value = 0xffu;
@@ -181,7 +184,7 @@ bool cupid_cgb_handle_read_register(const CupidGb *gb, uint16_t address, uint8_t
             }
             return true;
         case 0xff4fu:
-            *value = gb != 0 && gb->model == CUPID_GB_MODEL_CGB
+            *value = gb != 0 && cupid_gb_model_is_cgb(gb->model)
                          ? (uint8_t)(0xfeu | (gb->cgb_vram_bank & 0x01u))
                          : 0xffu;
             return true;
@@ -189,7 +192,7 @@ bool cupid_cgb_handle_read_register(const CupidGb *gb, uint16_t address, uint8_t
             *value = gb != 0 && gb->cgb_mode ? cupid_cgb_dma_status(gb) : 0xffu;
             return true;
         case 0xff68u:
-            *value = gb != 0 && gb->model == CUPID_GB_MODEL_CGB
+            *value = gb != 0 && cupid_gb_model_is_cgb(gb->model)
                          ? (uint8_t)(0x40u | gb->io_registers[0x68u])
                          : 0xffu;
             return true;
@@ -197,7 +200,7 @@ bool cupid_cgb_handle_read_register(const CupidGb *gb, uint16_t address, uint8_t
             *value = cupid_cgb_palette_read(gb, false);
             return true;
         case 0xff6au:
-            *value = gb != 0 && gb->model == CUPID_GB_MODEL_CGB
+            *value = gb != 0 && cupid_gb_model_is_cgb(gb->model)
                          ? (uint8_t)(0x40u | gb->io_registers[0x6au])
                          : 0xffu;
             return true;
@@ -205,7 +208,7 @@ bool cupid_cgb_handle_read_register(const CupidGb *gb, uint16_t address, uint8_t
             *value = cupid_cgb_palette_read(gb, true);
             return true;
         case 0xff6cu:
-            *value = gb != 0 && gb->model == CUPID_GB_MODEL_CGB
+            *value = gb != 0 && cupid_gb_model_is_cgb(gb->model)
                          ? (uint8_t)(0xfeu | (gb->io_registers[0x6cu] & 0x01u))
                          : 0xffu;
             return true;
@@ -215,7 +218,7 @@ bool cupid_cgb_handle_read_register(const CupidGb *gb, uint16_t address, uint8_t
             return true;
         case 0xff72u:
         case 0xff73u:
-            *value = gb != 0 && gb->model == CUPID_GB_MODEL_CGB
+            *value = gb != 0 && cupid_gb_model_is_cgb(gb->model)
                          ? gb->io_registers[address - 0xff00u]
                          : 0xffu;
             return true;
@@ -223,7 +226,7 @@ bool cupid_cgb_handle_read_register(const CupidGb *gb, uint16_t address, uint8_t
             *value = gb != 0 && gb->cgb_mode ? gb->io_registers[0x74u] : 0xffu;
             return true;
         case 0xff75u:
-            *value = gb != 0 && gb->model == CUPID_GB_MODEL_CGB
+            *value = gb != 0 && cupid_gb_model_is_cgb(gb->model)
                          ? (uint8_t)(0x8fu | gb->io_registers[0x75u])
                          : 0xffu;
             return true;
@@ -270,7 +273,7 @@ bool cupid_cgb_handle_write_register(CupidGb *gb, uint16_t address, uint8_t valu
 
     switch (address) {
         case 0xff4cu:
-            if (gb->model == CUPID_GB_MODEL_CGB && gb->boot_rom_enabled) {
+            if (cupid_gb_model_is_cgb(gb->model) && gb->boot_rom_enabled) {
                 gb->io_registers[0x4cu] = value;
                 gb->cgb_mode = (value & 0x0cu) == 0;
             }
@@ -332,7 +335,7 @@ bool cupid_cgb_handle_write_register(CupidGb *gb, uint16_t address, uint8_t valu
             }
             return true;
         case 0xff68u:
-            if (gb->model == CUPID_GB_MODEL_CGB) {
+            if (cupid_gb_model_is_cgb(gb->model)) {
                 gb->io_registers[0x68u] = (uint8_t)(value & 0xbfu);
             }
             return true;
@@ -340,7 +343,7 @@ bool cupid_cgb_handle_write_register(CupidGb *gb, uint16_t address, uint8_t valu
             cupid_cgb_palette_write(gb, false, value);
             return true;
         case 0xff6au:
-            if (gb->model == CUPID_GB_MODEL_CGB) {
+            if (cupid_gb_model_is_cgb(gb->model)) {
                 gb->io_registers[0x6au] = (uint8_t)(value & 0xbfu);
             }
             return true;
@@ -348,7 +351,7 @@ bool cupid_cgb_handle_write_register(CupidGb *gb, uint16_t address, uint8_t valu
             cupid_cgb_palette_write(gb, true, value);
             return true;
         case 0xff6cu:
-            if (gb->model == CUPID_GB_MODEL_CGB) {
+            if (cupid_gb_model_is_cgb(gb->model)) {
                 /* Boot firmware can select X priority. Normal color software
                  * can change readback but cannot change the selected ordering. */
                 bool writable = gb->boot_rom_enabled || (gb->io_registers[0x4cu] & 8u);
@@ -361,7 +364,7 @@ bool cupid_cgb_handle_write_register(CupidGb *gb, uint16_t address, uint8_t valu
             }
             return true;
         case 0xff70u:
-            if (gb->cgb_mode || (gb->model == CUPID_GB_MODEL_CGB && gb->boot_rom_enabled)) {
+            if (gb->cgb_mode || (cupid_gb_model_is_cgb(gb->model) && gb->boot_rom_enabled)) {
                 gb->cgb_wram_bank = (uint8_t)(value & 0x07u);
                 if (gb->cgb_wram_bank == 0u) {
                     gb->cgb_wram_bank = 1u;

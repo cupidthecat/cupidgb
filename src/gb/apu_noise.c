@@ -84,7 +84,7 @@ bool cupid_gb_noise_tick(CupidGb *gb) {
     timing->counter_stepped = true;
     timing->reload_edge = true;
     const bool next = (timing->divider_counter & mask) != 0;
-    const bool color = gb->model == CUPID_GB_MODEL_CGB;
+    const bool color = cupid_gb_model_is_cgb(gb->model);
     /* Monochrome hardware captures feedback on the falling selector edge. The
      * following rising edge shifts that held value, so the first rise after
      * reset cannot generate new feedback by itself. */
@@ -109,7 +109,7 @@ void cupid_gb_noise_prepare(CupidGb *gb, bool active) {
     bool started_off = timing->started_dac_off;
     bool extra_step = false;
     bool shorten = false;
-    const bool color = gb->model == CUPID_GB_MODEL_CGB;
+    const bool color = cupid_gb_model_is_cgb(gb->model);
     const bool fast_monochrome = !color && gb->double_speed;
     if (!color)
         timing->feedback_latch = false;
@@ -359,7 +359,7 @@ static void monochrome_selector_transition(CupidGb *gb, uint8_t from, uint8_t to
 
 void cupid_gb_noise_frequency_write(CupidGb *gb, uint8_t previous) {
     CupidGbApu *apu = &gb->apu;
-    if (gb->model == CUPID_GB_MODEL_CGB) {
+    if (cupid_gb_model_is_cgb(gb->model)) {
         color_noise_frequency_write(gb, previous);
         return;
     }
@@ -395,7 +395,7 @@ void cupid_gb_noise_disconnect(CupidGb *gb) {
             ++timing->divider_counter;
         timing->background = false;
     }
-    if (gb->model != CUPID_GB_MODEL_CGB)
+    if (!cupid_gb_model_is_cgb(gb->model))
         timing->background = false;
     timing->foreground = false;
     timing->output_high = false;

@@ -25,6 +25,21 @@
 
 #include "cupid/gb/gb.h"
 
+static inline size_t cupid_gb_extra_oam_size(CupidGbModel model) {
+    if (model == CUPID_GB_MODEL_CGB_D)
+        return 48u;
+    return model >= CUPID_GB_MODEL_CGB_0 && model <= CUPID_GB_MODEL_CGB_C ? 24u : 0u;
+}
+
+uint8_t cupid_gb_extra_oam_read(const CupidGb *gb, uint8_t address);
+void cupid_gb_extra_oam_write(CupidGb *gb, uint8_t address, uint8_t value);
+
+static inline uint8_t cupid_gb_oam_read_raw(const CupidGb *gb, uint8_t address) {
+    if (address < sizeof(gb->object_attribute_memory))
+        return gb->object_attribute_memory[address];
+    return cupid_gb_extra_oam_read(gb, address);
+}
+
 void cupid_gb_trigger_oam_bug_write(CupidGb *gb, uint16_t address);
 void cupid_gb_trigger_oam_bug_read_access(CupidGb *gb, uint16_t address);
 

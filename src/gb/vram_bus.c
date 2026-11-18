@@ -40,7 +40,7 @@ uint8_t cupid_gb_vram_bus_read(const CupidGb *gb, CupidGb *bus, uint16_t address
     bool held_read = false;
     if (first_hblank_dot(gb)) {
         const CupidGbVramBus *history = &gb->vram_bus;
-        if (gb->model != CUPID_GB_MODEL_CGB) {
+        if (!cupid_gb_model_is_cgb(gb->model)) {
             /* The departing tile fetch can keep address line 12 low. */
             if (!(history->data_address & 0x1000u))
                 selected &= 0x0fffu;

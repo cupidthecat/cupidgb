@@ -84,6 +84,38 @@ void setColor(CupidGb &gb, bool object, unsigned index, unsigned entry, uint16_t
     bytes[offset + 1] = uint8_t(color >> 8u);
 }
 
+void testColorRevisionCapabilities() {
+    auto gb = machine(true);
+    InspectorsWindow window;
+    window.setSession([&] { return gb.get(); },
+                      [&](uint16_t address, uint8_t value) {
+                          return cupid_gb_debug_poke(gb.get(), address, value);
+                      });
+    for (const auto revision : {CUPID_GB_MODEL_CGB_0, CUPID_GB_MODEL_CGB_A, CUPID_GB_MODEL_CGB_B,
+                                CUPID_GB_MODEL_CGB_C, CUPID_GB_MODEL_CGB_D, CUPID_GB_MODEL_CGB}) {
+        cupid_gb_set_model(gb.get(), revision);
+        assert(inspectorMemoryBankCount(*gb, InspectorMemoryRegion::VideoRam) == 2);
+        assert(inspectorMemoryBankCount(*gb, InspectorMemoryRegion::WorkRam) == 8);
+        setColor(*gb, false, 7, 3, 0x1234);
+        assert(inspectorPaletteValues(*gb, false, 7)[3] == 0x1234);
+        assert(inspectorTiles(*gb, 1).size() == QSize(128, 192));
+        window.sessionChanged();
+        window.selectTab(4);
+        window.refresh();
+        assert(window.findChild<QTableWidget *>("inspectorPalettes")->rowCount() == 16);
+        window.selectTab(0);
+        window.findChild<QLineEdit *>("inspectorAddress")->setText("FE00");
+        window.findChild<QPushButton *>("inspectorGo")->click();
+        const bool extra = revision != CUPID_GB_MODEL_CGB;
+        const auto *cell = window.findChild<QTableWidget *>("inspectorMemory")->item(10, 0);
+        assert(bool(cell->flags() & Qt::ItemIsEditable) == extra);
+        assert(window.writeByte(0xfea0, 0x6c) == extra);
+        if (extra)
+            assert(cupid_gb_debug_peek(gb.get(), 0xfea0) == 0x6c);
+    }
+    cupid_gb_cleanup(gb.get());
+}
+
 void testTilePlanes() {
     auto gb = machine(true);
     for (unsigned bank = 0; bank < 2; ++bank)
@@ -650,6 +682,7 @@ void testWriteLifetime() {
 
 int main(int argc, char **argv) {
     QApplication application(argc, argv);
+    testColorRevisionCapabilities();
     testTilePlanes();
     testMapsAndAttributes();
     testObjectsAndPalettes();

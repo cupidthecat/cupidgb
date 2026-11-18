@@ -31,7 +31,7 @@
 enum { FRAME_DOTS = 70224, ROW_HALF_DOTS = 912 };
 
 bool cupid_gb_display_clock_capable(const CupidGb *gb) {
-    return gb && (unsigned)gb->model <= CUPID_GB_MODEL_SGB_PAL;
+    return gb && cupid_gb_model_is_valid(gb->model);
 }
 
 static bool lcd_on(const CupidGb *gb) {
@@ -128,7 +128,7 @@ static unsigned transfer_budget(const CupidGb *gb) {
         gb->hdma_running || (clock->flags & CUPID_GB_DISPLAY_CLOCK_WINDOW_ACTIVE))
         return 0;
     if (window && ((lcdc & 0x20u) ? (wx < 7u || wx == 166u || wx == 167u)
-                                  : (wx < 167u && gb->model != CUPID_GB_MODEL_CGB)))
+                                  : (wx < 167u && !cupid_gb_model_is_cgb(gb->model))))
         return 0;
     if (!gb->pixels.object_count && !(window && (lcdc & 0x20u)))
         return 2u * (167u + (gb->io_registers[0x43] & 7u));
@@ -190,7 +190,7 @@ static void run_schedule(CupidGb *gb, bool force) {
                                            CUPID_GB_DISPLAY_CLOCK_WINDOW_ACTIVE);
                 clock->phase = CUPID_GB_DISPLAY_CLOCK_STARTUP;
                 clock->cursor = 0;
-                if (gb->model != CUPID_GB_MODEL_CGB)
+                if (!cupid_gb_model_is_cgb(gb->model))
                     clock->credit_half_dots -= 2;
                 break;
             case CUPID_GB_DISPLAY_CLOCK_IDLE_FRAME:
@@ -314,8 +314,8 @@ static void run_schedule(CupidGb *gb, bool force) {
                 break;
             case CUPID_GB_DISPLAY_CLOCK_VBLANK_LAST: {
                 const unsigned delays[] = {2,
-                                           gb->model == CUPID_GB_MODEL_CGB ? 2u : 4u,
-                                           gb->model == CUPID_GB_MODEL_CGB ? 4u : 2u,
+                                           cupid_gb_model_is_cgb(gb->model) ? 2u : 4u,
+                                           cupid_gb_model_is_cgb(gb->model) ? 4u : 2u,
                                            4,
                                            12,
                                            432};
@@ -341,7 +341,7 @@ static void advance_clock(CupidGb *gb, unsigned half_dots, bool force) {
     CupidGbDisplayClock *clock = &gb->display_clock;
     clock->frame_age_dots += half_dots / 2u;
     clock->window_alignment = (uint8_t)((clock->window_alignment + half_dots) & 7u);
-    if (gb->cpu.stopped && gb->model != CUPID_GB_MODEL_CGB) {
+    if (gb->cpu.stopped && !cupid_gb_model_is_cgb(gb->model)) {
         if (clock->frame_age_dots >= FRAME_DOTS)
             clock->frame_age_dots = 0;
         return;
@@ -359,14 +359,14 @@ static void deliver_clock(CupidGb *gb, unsigned half_dots, bool force) {
         clock->flags &= (uint8_t)~CUPID_GB_DISPLAY_CLOCK_WINDOW_PENDING;
     if (clock->flags & CUPID_GB_DISPLAY_CLOCK_WINDOW_PENDING) {
         force = true;
-        const unsigned offset = gb->double_speed ? 6u : gb->model == CUPID_GB_MODEL_CGB ? 0u : 2u;
+        const unsigned offset = gb->double_speed ? 6u : cupid_gb_model_is_cgb(gb->model) ? 0u : 2u;
         const unsigned until_check = 8u - ((clock->window_alignment + offset) & 7u);
         if (half_dots >= until_check) {
             clock->flags &= (uint8_t)~CUPID_GB_DISPLAY_CLOCK_WINDOW_PENDING;
             advance_clock(gb, until_check, true);
             window_compare(gb);
             if (clock->phase == CUPID_GB_DISPLAY_CLOCK_TRANSFER_FINE &&
-                gb->model == CUPID_GB_MODEL_CGB && !gb->double_speed)
+                cupid_gb_model_is_cgb(gb->model) && !gb->double_speed)
                 clock->flags |= CUPID_GB_DISPLAY_CLOCK_WINDOW_JUST_CHECKED;
             half_dots -= until_check;
         }

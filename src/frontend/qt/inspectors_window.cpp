@@ -60,6 +60,14 @@ class InspectorMemoryTable final : public QTableWidget {
     }
 };
 
+bool mappedMemoryWritable(const CupidGb &gb, uint16_t address) {
+    if (address < 0x8000u)
+        return false;
+    if (address >= 0xfea0u && address < 0xff00u)
+        return gb.model >= CUPID_GB_MODEL_CGB_0 && gb.model <= CUPID_GB_MODEL_CGB_D;
+    return true;
+}
+
 QString hex(unsigned value, int width) {
     return QString::number(value, 16).rightJustified(width, QLatin1Char('0')).toUpper();
 }
@@ -512,9 +520,8 @@ void InspectorsWindow::refreshMemory(const CupidGb &gb) {
                               2)
                         : "--");
             const bool writable =
-                present &&
-                (mapped ? address >= 0x8000u && !(address >= 0xfea0u && address < 0xff00u)
-                        : region != InspectorMemoryRegion::Rom && bool(physicalWriter_));
+                present && (mapped ? mappedMemoryWritable(gb, uint16_t(address))
+                                   : region != InspectorMemoryRegion::Rom && bool(physicalWriter_));
             item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable |
                            (writable ? Qt::ItemIsEditable : Qt::NoItemFlags));
             memory_->setItem(int(row), int(column), item);
@@ -595,7 +602,7 @@ void InspectorsWindow::showObject() {
 }
 
 void InspectorsWindow::refreshPalettes(const CupidGb &gb) {
-    const bool cgb = gb.model == CUPID_GB_MODEL_CGB;
+    const bool cgb = cupid_gb_model_is_cgb(gb.model);
     palettes_->setRowCount(cgb ? 16 : 3);
     for (unsigned row = 0; row < unsigned(palettes_->rowCount()); ++row) {
         const QString name =
@@ -639,7 +646,8 @@ void InspectorsWindow::jumpToAddress() {
 }
 
 bool InspectorsWindow::writeByte(uint16_t address, uint8_t value) {
-    if (!state() || !writer_ || address < 0x8000u || (address >= 0xfea0u && address < 0xff00u)) {
+    const auto *gb = state();
+    if (!gb || !writer_ || !mappedMemoryWritable(*gb, address)) {
         status_->setText("This address is read-only or no cartridge is loaded.");
         return false;
     }

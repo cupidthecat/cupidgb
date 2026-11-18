@@ -54,6 +54,7 @@ QByteArray resetPhysicalMemory(const CupidGb &gb) {
     append(gb.work_ram, sizeof(gb.work_ram));
     append(gb.high_ram, sizeof(gb.high_ram));
     append(gb.object_attribute_memory, sizeof(gb.object_attribute_memory));
+    append(gb.extra_oam, sizeof(gb.extra_oam));
     append(gb.cgb_bg_palette_ram, sizeof(gb.cgb_bg_palette_ram));
     append(gb.cgb_obj_palette_ram, sizeof(gb.cgb_obj_palette_ram));
     for (const unsigned port : {0x46u, 0x48u, 0x49u})
@@ -65,6 +66,7 @@ void fillResetMemory(CupidGb &gb) {
     std::memset(gb.work_ram, 0x63, sizeof(gb.work_ram));
     std::memset(gb.high_ram, 0x74, sizeof(gb.high_ram));
     std::memset(gb.object_attribute_memory, 0x85, sizeof(gb.object_attribute_memory));
+    std::memset(gb.extra_oam, 0x52, sizeof(gb.extra_oam));
     std::memset(gb.cgb_bg_palette_ram, 0x96, sizeof(gb.cgb_bg_palette_ram));
     std::memset(gb.cgb_obj_palette_ram, 0xa7, sizeof(gb.cgb_obj_palette_ram));
     gb.io_registers[0x46] = 0xb8;
@@ -215,15 +217,19 @@ bool MainWindow::resetSmokeTest(const QString &directory) {
 
     // Independently authored firmware changes one RAM byte then releases its
     // overlay. Inspect native entry before running any of those instructions.
-    for (const auto model : {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_CGB}) {
-        const bool color = model == CUPID_GB_MODEL_CGB;
+    for (const auto model :
+         {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_CGB_0, CUPID_GB_MODEL_CGB_A, CUPID_GB_MODEL_CGB_B,
+          CUPID_GB_MODEL_CGB_C, CUPID_GB_MODEL_CGB_D, CUPID_GB_MODEL_CGB}) {
+        const bool color = cupid_gb_model_is_cgb(model);
         QByteArray firmware(color ? 0x900 : 0x100, char(0));
         const QByteArray begin = QByteArray::fromHex("3e31ea00c0c3fc00");
         std::memcpy(firmware.data(), begin.constData(), size_t(begin.size()));
         const QByteArray finish = QByteArray::fromHex("3e01e050");
         std::memcpy(firmware.data() + 0xfc, finish.constData(), size_t(finish.size()));
         const QString boot =
-            fixtures.filePath(color ? "firmware/cgb_boot.bin" : "firmware/dmg_boot.bin");
+            fixtures.filePath(model == CUPID_GB_MODEL_CGB_0 ? "firmware/cgb0_boot.bin"
+                              : color                       ? "firmware/cgb_boot.bin"
+                                                            : "firmware/dmg_boot.bin");
         if (!writeResetFixture(boot, firmware))
             return smokeFailure(__FILE__, __LINE__);
         MainWindow session(true, true, false, fixtures.filePath("firmware"), int(model), 0);
@@ -249,7 +255,9 @@ bool MainWindow::resetSmokeTest(const QString &directory) {
             session.emulator_->gb.cpu.pc != 0x100 || session.rewindStates_.size() != 1 ||
             session.emulator_->gb.work_ram[0] != 0x63 ||
             session.emulator_->gb.work_ram[0x2000] != (color ? 0 : 0x63) ||
-            session.emulator_->gb.object_attribute_memory[0] != (color ? 0 : 0x85))
+            session.emulator_->gb.object_attribute_memory[0] != (color ? 0 : 0x85) ||
+            session.emulator_->gb.extra_oam[0] != 0x52 ||
+            session.emulator_->gb.extra_oam[sizeof(session.emulator_->gb.extra_oam) - 1] != 0x52)
             return smokeFailure(__FILE__, __LINE__);
     }
 

@@ -38,7 +38,7 @@ bool cupid_gb_ppu_vram_read_blocked(const CupidGb *gb) {
     const unsigned line = p->initialized ? p->line : gb->io_registers[CUPID_GB_IO_LY];
     if (!cupid_gb_lcd_enabled(gb) || line >= 144u)
         return false;
-    const bool color = gb->model == CUPID_GB_MODEL_CGB;
+    const bool color = cupid_gb_model_is_cgb(gb->model);
     /* A monochrome STOP freezes the last CPU-port latch, including an OAM
      * batch that had not yet reached its deferred read-claim event. */
     if (gb->cpu.stopped && !color)
@@ -69,7 +69,7 @@ bool cupid_gb_ppu_vram_write_blocked(const CupidGb *gb) {
     /* Normal-speed color startup exposes STAT3 before claiming the write port.
      * Ordinary monochrome OAM reads close earlier than writes, so their read
      * predicate cannot determine CPU writes or color-DMA bank mirroring. */
-    if (p->initialized && gb->ppu_lcd_startup && gb->model == CUPID_GB_MODEL_CGB &&
+    if (p->initialized && gb->ppu_lcd_startup && cupid_gb_model_is_cgb(gb->model) &&
         !gb->double_speed && p->dot < 84u)
         return false;
     return (gb->io_registers[CUPID_GB_IO_STAT] & 3u) == CUPID_GB_PPU_MODE_TRANSFER;
@@ -78,7 +78,7 @@ bool cupid_gb_ppu_vram_write_blocked(const CupidGb *gb) {
 static bool retained_vram_read_blocked(const CupidGb *gb) {
     const CupidGbDisplayClock *clock = &gb->display_clock;
     if (cupid_gb_lcd_enabled(gb) && clock->row < CUPID_GB_PPU_VISIBLE_SCANLINES) {
-        const bool color = gb->model == CUPID_GB_MODEL_CGB;
+        const bool color = cupid_gb_model_is_cgb(gb->model);
         /* A fast half-dot can cross the claim before readable STAT changes. */
         if (clock->phase == CUPID_GB_DISPLAY_CLOCK_STARTUP)
             return clock->cursor >= 3u && (!color || gb->double_speed);
@@ -164,7 +164,7 @@ static void update_stat_irq(CupidGb *gb, bool write, bool half_dot, bool stat_wr
     }
 
     const CupidGbPixels *p = &gb->pixels;
-    const bool fast_monochrome = gb->double_speed && gb->model != CUPID_GB_MODEL_CGB;
+    const bool fast_monochrome = gb->double_speed && !cupid_gb_model_is_cgb(gb->model);
     bool compare_valid = !p->initialized || gb->ppu_lcd_startup || p->dot != 0 || p->line == 0 ||
                          (stat & 3u) == CUPID_GB_PPU_MODE_OAM;
     /* The final VBlank row exposes the next LY before its comparison settles.
@@ -176,7 +176,7 @@ static void update_stat_irq(CupidGb *gb, bool write, bool half_dot, bool stat_wr
     if (p->initialized && p->line == 143 && p->dot >= 455)
         compare_valid = false;
     if (p->initialized && p->line == 153) {
-        unsigned first = gb->model == CUPID_GB_MODEL_CGB ? 1u : 3u;
+        unsigned first = cupid_gb_model_is_cgb(gb->model) ? 1u : 3u;
         /* Fast monochrome playback retains the line comparison after readable
          * LY clears. LYC writes in this interval can still raise a new edge. */
         compare_valid = (p->dot >= first && (p->dot < 5 || fast_monochrome)) || p->dot >= 9;
@@ -187,7 +187,7 @@ static void update_stat_irq(CupidGb *gb, bool write, bool half_dot, bool stat_wr
         gb->pixels.lyc_irq = coincidence;
     /* Normal-speed monochrome hardware clears the readable bit during invalid
      * comparison phases. Fast playback retains both that bit and the IRQ input. */
-    if (compare_valid || (gb->model != CUPID_GB_MODEL_CGB && !gb->double_speed)) {
+    if (compare_valid || (!cupid_gb_model_is_cgb(gb->model) && !gb->double_speed)) {
         if (coincidence)
             stat = (uint8_t)(stat | 0x04u);
         else
@@ -199,7 +199,7 @@ static void update_stat_irq(CupidGb *gb, bool write, bool half_dot, bool stat_wr
      * next automatic latch edge. Recomputing that latch on every intervening
      * dot would fabricate a new HBlank edge after a STAT write. */
     unsigned line_length =
-        gb->ppu_lcd_startup ? (gb->model == CUPID_GB_MODEL_CGB ? 452u : 453u) : 456u;
+        gb->ppu_lcd_startup ? (cupid_gb_model_is_cgb(gb->model) ? 452u : 453u) : 456u;
     if (!write && forced == -2 && p->initialized && p->line < 143 && !p->active &&
         p->x == CUPID_GB_SCREEN_WIDTH && p->dot >= line_length - 3 && p->dot < line_length)
         return;
@@ -214,11 +214,11 @@ static void update_stat_irq(CupidGb *gb, bool write, bool half_dot, bool stat_wr
         if (write && p->line < 143 && !p->active && p->x == CUPID_GB_SCREEN_WIDTH &&
             (p->dot >= length - 3 || (half_dot && gb->double_speed && p->dot == length - 4)))
             irq_mode = CUPID_GB_PPU_MODE_OAM;
-        if (write && stat_write && gb->model == CUPID_GB_MODEL_CGB && gb->double_speed &&
+        if (write && stat_write && cupid_gb_model_is_cgb(gb->model) && gb->double_speed &&
             p->line < 144 && p->dot == 2 && mode == CUPID_GB_PPU_MODE_OAM && !half_dot)
             irq_mode = CUPID_GB_PPU_MODE_OAM;
     } else if (write && gb->ppu_lcd_startup) {
-        unsigned length = gb->model == CUPID_GB_MODEL_CGB ? 452 : 453;
+        unsigned length = cupid_gb_model_is_cgb(gb->model) ? 452 : 453;
         if (!p->active && p->x == CUPID_GB_SCREEN_WIDTH &&
             (p->dot >= length - 3 || (half_dot && gb->double_speed && p->dot == length - 4)))
             irq_mode = CUPID_GB_PPU_MODE_OAM;
@@ -260,7 +260,7 @@ bool cupid_gb_stat_boundary(const CupidGb *gb) {
 
 void cupid_gb_sync_stat_half(CupidGb *gb) {
     cupid_gb_sync_lcd_startup(gb);
-    if (gb->model != CUPID_GB_MODEL_CGB || !gb->double_speed || !cupid_gb_lcd_enabled(gb) ||
+    if (!cupid_gb_model_is_cgb(gb->model) || !gb->double_speed || !cupid_gb_lcd_enabled(gb) ||
         !gb->pixels.initialized)
         return;
     const CupidGbPixels *p = &gb->pixels;
@@ -336,7 +336,7 @@ void cupid_gb_reset_ppu(CupidGb *gb) {
 }
 
 void cupid_gb_sync_lcd_startup(CupidGb *gb) {
-    if (gb && gb->model == CUPID_GB_MODEL_CGB && cupid_gb_lcd_enabled(gb) && gb->ppu_lcd_startup &&
+    if (gb && cupid_gb_model_is_cgb(gb->model) && cupid_gb_lcd_enabled(gb) && gb->ppu_lcd_startup &&
         gb->pixels.dot == 0)
         cupid_gb_update_stat_irq(gb);
 }
@@ -350,7 +350,7 @@ void cupid_gb_run_dma_transfer(CupidGb *gb, uint8_t source_high) {
     const bool restarting =
         (gb->dma_active && gb->dma_index < sizeof(gb->object_attribute_memory)) ||
         gb->dma_start_delay;
-    if (source_high >= 0xe0u && gb->model != CUPID_GB_MODEL_CGB)
+    if (source_high >= 0xe0u && !cupid_gb_model_is_cgb(gb->model))
         source_high = (uint8_t)(source_high - 0x20u);
     gb->dma_source_base = (uint16_t)((unsigned)source_high << 8u);
     gb->dma_restart_source_base = gb->dma_source_base;
@@ -393,7 +393,7 @@ void cupid_gb_tick_dma_tcycles(CupidGb *gb, unsigned cycles) {
         if (!color_owns_bus) {
             const uint16_t source = (uint16_t)(gb->dma_source_base + gb->dma_index);
             uint8_t value;
-            if (source >= 0xe000u && gb->model == CUPID_GB_MODEL_CGB)
+            if (source >= 0xe000u && cupid_gb_model_is_cgb(gb->model))
                 value = 0xffu;
             else if (source >= 0x8000u && source < 0xa000u) {
                 /* VRAM DMA sources use the independent video port. Preserve
@@ -423,7 +423,7 @@ static void tick_ppu(CupidGb *gb, uint32_t dots) {
         return;
     CupidGbPixels *p = &gb->pixels;
     const bool lcd_enabled = cupid_gb_lcd_enabled(gb);
-    const bool stopped = gb->cpu.stopped && gb->model != CUPID_GB_MODEL_CGB;
+    const bool stopped = gb->cpu.stopped && !cupid_gb_model_is_cgb(gb->model);
     const bool sgb = cupid_gb_sgb_host_present(gb);
     const uint32_t initial_dots = dots;
     const uint32_t initial_repeat = gb->lcd_repeat_countdown;
@@ -504,7 +504,7 @@ static void tick_ppu(CupidGb *gb, uint32_t dots) {
                 cupid_gb_update_stat_irq(gb);
             }
             unsigned transfer =
-                gb->ppu_lcd_startup ? (gb->model == CUPID_GB_MODEL_CGB ? 78u : 79u) : 80u;
+                gb->ppu_lcd_startup ? (cupid_gb_model_is_cgb(gb->model) ? 78u : 79u) : 80u;
             if (p->line < 144) {
                 if (p->dot == 0) {
                     cupid_gb_pixels_begin_line(gb);
@@ -542,11 +542,11 @@ static void tick_ppu(CupidGb *gb, uint32_t dots) {
                 uint8_t type = CUPID_GB_FRAME_NORMAL;
                 if (gb->lcd_first_frame && !sgb) {
                     const uint32_t consumed = initial_dots - dots + 1u;
-                    type = gb->model == CUPID_GB_MODEL_CGB && initial_repeat > consumed
+                    type = cupid_gb_model_is_cgb(gb->model) && initial_repeat > consumed
                                ? CUPID_GB_FRAME_REPEAT
                                : CUPID_GB_FRAME_BLANK_FIRST;
                 }
-                if (!sgb && !(gb->model == CUPID_GB_MODEL_CGB && gb->lcd_first_frame))
+                if (!sgb && !(cupid_gb_model_is_cgb(gb->model) && gb->lcd_first_frame))
                     gb->lcd_frame_odd = !gb->lcd_frame_odd;
                 gb->lcd_first_frame = false;
                 publish_frame(gb, type, dots - 1u);
@@ -556,13 +556,13 @@ static void tick_ppu(CupidGb *gb, uint32_t dots) {
                     cupid_gb_request_interrupt(gb, CUPID_GB_INTERRUPT_LCD_STAT);
                 cupid_gb_update_stat_irq(gb);
             } else if (p->line == 153 &&
-                       p->dot == (gb->model == CUPID_GB_MODEL_CGB || gb->double_speed ? 4 : 2)) {
+                       p->dot == (cupid_gb_model_is_cgb(gb->model) || gb->double_speed ? 4 : 2)) {
                 /* The early monochrome clear belongs to normal CPU speed.
                  * Fast playback uses the later edge without shortening VBlank. */
                 gb->io_registers[CUPID_GB_IO_LY] = 0;
                 cupid_gb_update_stat_irq(gb);
             }
-            if (gb->model == CUPID_GB_MODEL_CGB && p->line >= 144 && p->line <= 152 &&
+            if (cupid_gb_model_is_cgb(gb->model) && p->line >= 144 && p->line <= 152 &&
                 p->dot == 1) {
                 // Each early VBlank scanline refreshes the startup-repeat window.
                 // Charge the dot already consumed at this edge and the remainder
@@ -578,7 +578,7 @@ static void tick_ppu(CupidGb *gb, uint32_t dots) {
                     cupid_gb_request_interrupt(gb, CUPID_GB_INTERRUPT_LCD_STAT);
             }
             unsigned length =
-                gb->ppu_lcd_startup ? (gb->model == CUPID_GB_MODEL_CGB ? 452u : 453u) : 456u;
+                gb->ppu_lcd_startup ? (cupid_gb_model_is_cgb(gb->model) ? 452u : 453u) : 456u;
             if (p->dot == length) {
                 p->dot = 0;
                 gb->ppu_transfer_end_dot = 0;
@@ -588,7 +588,7 @@ static void tick_ppu(CupidGb *gb, uint32_t dots) {
                 gb->ppu_line_boundary_hold = false;
                 if (p->line == 154) {
                     p->line = 0;
-                    if (gb->model != CUPID_GB_MODEL_CGB)
+                    if (!cupid_gb_model_is_cgb(gb->model))
                         cupid_gb_set_ppu_mode(gb, CUPID_GB_PPU_MODE_HBLANK);
                     p->window_armed = false;
                     p->window_active = false;
@@ -600,7 +600,7 @@ static void tick_ppu(CupidGb *gb, uint32_t dots) {
             gb->ppu_counter = p->dot / 4;
             /* Monochrome startup holds the frozen comparison through the first
              * dot. CGB starts refreshing on its first advancing clock edge. */
-            if (!gb->ppu_lcd_startup || gb->model == CUPID_GB_MODEL_CGB || p->dot != 1)
+            if (!gb->ppu_lcd_startup || cupid_gb_model_is_cgb(gb->model) || p->dot != 1)
                 cupid_gb_update_stat_irq(gb);
         }
     }

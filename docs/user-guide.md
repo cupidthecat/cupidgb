@@ -14,7 +14,9 @@ Open a `.gb`, `.gbc`, or `.sgb` cartridge, or a `.gbs` music file, directly. Wit
 
 Automatic hardware selection uses the cartridge header. It selects color hardware for color-capable cartridges, SGB for SGB-enhanced monochrome cartridges, and may select color hardware for licensed monochrome cartridges to provide their compatibility palette. Select a specific model in Emulation > Settings when reproducing model-dependent behavior. A color-only cartridge cannot open under a selected monochrome model.
 
-For a hardware choice that lasts only until the application exits, pass `--model auto|dmg|dmgabc|dmg0|mgb|cgb|sgb|sgbpal|sgb2`. Here `dmg` and `dmgabc` select the same grouped Game Boy profile. An omitted option uses the saved preference; explicit `auto` performs automatic selection for every cartridge even when a fixed preference is saved. A fixed override applies on reset, close/reopen, and opening another cartridge. Settings displays the session choice in a disabled hardware selector and does not overwrite the saved model when accepted.
+Pass `--model` to choose hardware for one session. Accepted values include `auto`, `dmg`, `dmgabc`, `dmg0`, `mgb`, `cgb-0`, `cgb-a`, `cgb-b`, `cgb-c`, `cgb-d`, `cgb-e`, `cgb`, `sgb`, `sgbpal`, and `sgb2`. The names `dmg` and `dmgabc` select the same Game Boy profile. Both `cgb` and `cgb-e` select revision E, which is also the default color profile for automatic selection.
+
+Omit the option to use the saved preference. Explicit `auto` applies automatic selection to each cartridge. A fixed override applies on reset, close and reopen, and opening another cartridge. Settings shows the session choice in a disabled selector and preserves the saved preference.
 
 The SGB NTSC profile uses 4,295,454 Hz, and SGB PAL uses 4,256,274 Hz. Select PAL in Emulation > Settings or pass `--model sgbpal`. Both first-generation profiles load `sgb_boot.bin` from the configured boot folder. SGB2 and the other current profiles use 4,194,304 Hz. Normal-speed playback, audio delivery and rewind duration follow the selected clock. Each regular LCD frame spans 70,224 base clocks.
 
@@ -85,7 +87,9 @@ cupidgb --boot-directory /path/to/boot-roms /path/to/cartridge.gb
 | --- | --- | --- |
 | Game Boy or Game Boy (DMG0) | `dmg_boot.bin` | 256 |
 | Game Boy Pocket / Light | `mgb_boot.bin` | 256 |
-| Game Boy Color | `cgb_boot.bin` | 2,304 |
+| Game Boy Color revision 0 | `cgb0_boot.bin` | 2,304 |
+| Game Boy Color revisions A through D | `cgb_boot.bin` | 2,304 |
+| Game Boy Color revision E | `cgbE_boot.bin` if present, otherwise `cgb_boot.bin` | 2,304 |
 | Super Game Boy NTSC / PAL | `sgb_boot.bin` | 256 |
 | Super Game Boy 2 | `sgb2_boot.bin` | 256 |
 

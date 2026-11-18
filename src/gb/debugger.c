@@ -31,6 +31,7 @@
 #include "cupid/gb/cartridge.h"
 #include "cupid/gbc/cgb.h"
 #include "mbc6_internal.h"
+#include "oam_bus.h"
 
 static bool ordinary_cartridge_ram(const CupidGb *gb) {
     if (!gb->cartridge_ram_size || gb->cartridge_ram_size > CUPID_GB_INLINE_RAM_SIZE)
@@ -64,6 +65,8 @@ uint8_t cupid_gb_debug_peek(const CupidGb *gb, uint16_t address) {
     }
     if (address >= 0xfe00u && address < 0xfea0u)
         return gb->object_attribute_memory[address - 0xfe00u];
+    if (address >= 0xfea0u && address < 0xff00u && cupid_gb_extra_oam_size(gb->model))
+        return cupid_gb_extra_oam_read(gb, (uint8_t)address);
     if (address >= 0xff30u && address <= 0xff3fu)
         return gb->io_registers[address - 0xff00u];
     if (gb->cgb_mode && address == 0xff69u)
@@ -74,7 +77,7 @@ uint8_t cupid_gb_debug_peek(const CupidGb *gb, uint16_t address) {
 }
 
 bool cupid_gb_debug_poke(CupidGb *gb, uint16_t address, uint8_t value) {
-    if (!gb || !gb->loaded || address < 0x8000u || (address >= 0xfea0u && address < 0xff00u))
+    if (!gb || !gb->loaded || address < 0x8000u)
         return false;
     if (address < 0xa000u) {
         gb->video_ram[cupid_cgb_vram_offset(gb, address)] = value;
@@ -97,6 +100,10 @@ bool cupid_gb_debug_poke(CupidGb *gb, uint16_t address, uint8_t value) {
         gb->work_ram[cupid_cgb_wram_offset(gb, (uint16_t)(address - 0x2000u))] = value;
     } else if (address < 0xfea0u) {
         gb->object_attribute_memory[address - 0xfe00u] = value;
+    } else if (address < 0xff00u) {
+        if (!cupid_gb_extra_oam_size(gb->model))
+            return false;
+        cupid_gb_extra_oam_write(gb, (uint8_t)address, value);
     } else if (address >= 0xff30u && address <= 0xff3fu) {
         gb->io_registers[address - 0xff00u] = value;
     } else {
@@ -807,7 +814,7 @@ static uint8_t expression_peek(const CupidGb *gb, int bank, uint16_t address) {
     if (address < 0x8000u) {
         /* A qualified address selects a ROM bank without changing the
          * mapper's latches. Firmware remains visible while its overlay is on. */
-        if (gb->boot_rom_enabled && (address < 0x100u || (gb->model == CUPID_GB_MODEL_CGB &&
+        if (gb->boot_rom_enabled && (address < 0x100u || (cupid_gb_model_is_cgb(gb->model) &&
                                                           address >= 0x200u && address < 0x900u)))
             return cupid_gb_debug_peek(gb, address);
         if (!gb->rom_size || !gb->rom_bank_count)
@@ -819,7 +826,7 @@ static uint8_t expression_peek(const CupidGb *gb, int bank, uint16_t address) {
         return offset < gb->rom_size ? gb->rom[offset] : 0xff;
     }
     if (address < 0xa000u) {
-        const unsigned selected = gb->model == CUPID_GB_MODEL_CGB ? (unsigned)bank & 1u : 0;
+        const unsigned selected = cupid_gb_model_is_cgb(gb->model) ? (unsigned)bank & 1u : 0;
         return gb->video_ram[selected * 0x2000u + address - 0x8000u];
     }
     if (address < 0xc000u && ordinary_cartridge_ram(gb)) {
@@ -830,7 +837,7 @@ static uint8_t expression_peek(const CupidGb *gb, int bank, uint16_t address) {
     }
     if (address >= 0xe000u && address < 0xfe00u)
         return expression_peek(gb, bank, (uint16_t)(address - 0x2000u));
-    if (address >= 0xd000u && address < 0xe000u && gb->model == CUPID_GB_MODEL_CGB) {
+    if (address >= 0xd000u && address < 0xe000u && cupid_gb_model_is_cgb(gb->model)) {
         unsigned selected = (unsigned)bank & 7u;
         if (!selected)
             selected = 1;

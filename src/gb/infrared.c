@@ -29,7 +29,7 @@ static bool cartridge_sensor(const CupidGb *gb) {
 }
 
 static bool sensor_available(const CupidGb *gb) {
-    return (gb->model == CUPID_GB_MODEL_CGB && gb->cgb_mode) || cartridge_sensor(gb);
+    return (cupid_gb_model_is_cgb(gb->model) && gb->cgb_mode) || cartridge_sensor(gb);
 }
 
 void cupid_gb_set_infrared_callback(CupidGb *gb, CupidGbInfraredCallback callback,
@@ -47,7 +47,7 @@ void cupid_gb_set_infrared_input(CupidGb *gb, bool active) {
 
 bool cupid_gb_infrared_output(const CupidGb *gb) {
     return gb && ((cartridge_sensor(gb) && gb->huc3.ir_output) ||
-                  (gb->model == CUPID_GB_MODEL_CGB && (gb->io_registers[0x56] & 1u)));
+                  (cupid_gb_model_is_cgb(gb->model) && (gb->io_registers[0x56] & 1u)));
 }
 
 bool cupid_gb_infrared_detected(const CupidGb *gb) {
@@ -70,7 +70,7 @@ void cupid_gb_infrared_write_cartridge(CupidGb *gb, uint8_t value) {
 }
 
 void cupid_gb_infrared_write_port(CupidGb *gb, uint8_t value) {
-    if (!gb || gb->model != CUPID_GB_MODEL_CGB)
+    if (!gb || !cupid_gb_model_is_cgb(gb->model))
         return;
     const uint8_t changed = gb->io_registers[0x56] ^ value;
     /* This port exposes its old latch during the output-edge callback. */

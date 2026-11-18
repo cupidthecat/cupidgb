@@ -23,6 +23,7 @@
 #include "cupid/gb/ppu.h"
 
 #include "cupid/gbc/cgb.h"
+#include "oam_bus.h"
 #include "vram_bus.h"
 
 #include <limits.h>
@@ -45,13 +46,6 @@ void cupid_gb_pixels_begin_line(CupidGb *gb) {
         p->window_armed = true;
 }
 
-static uint8_t raw_oam_read(const CupidGb *gb, uint8_t address) {
-    /* Unused OAM addresses use a hardware readback circuit, not storage. */
-    if (address < sizeof gb->object_attribute_memory)
-        return gb->object_attribute_memory[address];
-    return gb->model == CUPID_GB_MODEL_CGB ? (uint8_t)((address & 0xf0u) | (address >> 4)) : 0;
-}
-
 static uint8_t ppu_oam_read(const CupidGb *gb, uint8_t requested) {
     if (gb->cpu.stopped && gb->stop_ppu_oam_blocked)
         return 0xff;
@@ -62,7 +56,7 @@ static uint8_t ppu_oam_read(const CupidGb *gb, uint8_t requested) {
         else if (gb->dma_index != 160u)
             address = (uint8_t)((gb->dma_index & ~1u) | (requested & 1u));
     }
-    return raw_oam_read(gb, address);
+    return cupid_gb_oam_read_raw(gb, address);
 }
 
 static uint16_t read_oam_word(const CupidGb *gb, unsigned requested) {
@@ -77,7 +71,7 @@ void cupid_gb_pixels_scan_object(CupidGb *gb, unsigned index) {
     bool stationary = gb->cpu.halted || gb->cpu.stopped;
     if (!dma || stationary)
         gb->oam_search_word = read_oam_word(gb, index * 4);
-    if (dma && stationary && gb->model != CUPID_GB_MODEL_CGB)
+    if (dma && stationary && !cupid_gb_model_is_cgb(gb->model))
         return;
     if (gb->cpu.stopped && gb->stop_ppu_oam_blocked)
         return;
@@ -118,7 +112,7 @@ static uint16_t tile_address(CupidGb *gb, bool upper) {
     CupidGbPixels *p = &gb->pixels;
     uint8_t lcdc = gb->io_registers[CUPID_GB_IO_LCDC];
     unsigned row;
-    if (gb->model == CUPID_GB_MODEL_CGB)
+    if (cupid_gb_model_is_cgb(gb->model))
         row = gb->pixel_timing.fetch_y;
     else
         row = p->window_active ? gb->window_line_counter
@@ -140,7 +134,7 @@ static uint8_t fetch_vram(CupidGb *gb, uint16_t address) {
     if (!shared)
         return gb->video_ram[address];
 
-    const bool color = gb->model == CUPID_GB_MODEL_CGB;
+    const bool color = cupid_gb_model_is_cgb(gb->model);
     const bool stationary = gb->cpu.halted || gb->cpu.stopped;
     const unsigned destination = gb->dma_index - (stationary ? 0u : 1u);
     const unsigned sourceRow = (gb->dma_source_base + destination) & 0x1fffu;
@@ -180,7 +174,7 @@ void cupid_gb_pixels_window_write(CupidGb *gb) {
     const int position = timing->logical_x;
     const unsigned wx = gb->io_registers[CUPID_GB_IO_WX];
     bool glitch = false;
-    if (gb->model == CUPID_GB_MODEL_CGB && gb->pixels.window_armed &&
+    if (cupid_gb_model_is_cgb(gb->model) && gb->pixels.window_armed &&
         (gb->io_registers[CUPID_GB_IO_LCDC] & 0x20)) {
         if (wx == 0)
             glitch =
@@ -204,7 +198,7 @@ static void fetch_background(CupidGb *gb) {
             }
             unsigned y = p->window_active ? gb->window_line_counter
                                           : (uint8_t)(p->line + gb->io_registers[CUPID_GB_IO_SCY]);
-            if (gb->model == CUPID_GB_MODEL_CGB)
+            if (cupid_gb_model_is_cgb(gb->model))
                 gb->pixel_timing.fetch_y = (uint8_t)y;
             unsigned column = p->column;
             if (!p->window_active) {
@@ -213,7 +207,7 @@ static void fetch_background(CupidGb *gb) {
                     gb->object_fetch_stage == CUPID_GB_OBJECT_WAIT_BACKGROUND ||
                     gb->object_fetch_stage == CUPID_GB_OBJECT_READ_WORD;
                 const unsigned ahead =
-                    gb->model == CUPID_GB_MODEL_CGB && !fetching_object ? 7u : 8u;
+                    cupid_gb_model_is_cgb(gb->model) && !fetching_object ? 7u : 8u;
                 column = position < -8
                              ? gb->io_registers[CUPID_GB_IO_SCX] >> 3
                              : (uint8_t)(gb->io_registers[CUPID_GB_IO_SCX] + position + ahead) / 8u;
@@ -229,7 +223,7 @@ static void fetch_background(CupidGb *gb) {
                 p->tile = fetch_vram(gb, p->address);
                 /* Physical color hardware reads both banks in compatibility mode. */
                 p->attributes =
-                    gb->model == CUPID_GB_MODEL_CGB ? fetch_vram(gb, p->address + 0x2000u) : 0;
+                    cupid_gb_model_is_cgb(gb->model) ? fetch_vram(gb, p->address + 0x2000u) : 0;
             }
             ++p->phase;
             break;
@@ -281,7 +275,7 @@ static int due_object(CupidGb *gb) {
     CupidGbPixels *p = &gb->pixels;
     if (!p->object_count)
         return -1;
-    if (!(gb->io_registers[CUPID_GB_IO_LCDC] & 2) && gb->model != CUPID_GB_MODEL_CGB)
+    if (!(gb->io_registers[CUPID_GB_IO_LCDC] & 2) && !cupid_gb_model_is_cgb(gb->model))
         return -1;
     /* Older snapshots may retain fetched bits above the selected slot count. */
     const unsigned selected_mask = (1u << p->object_count) - 1u;
@@ -428,7 +422,7 @@ static bool start_window(CupidGb *gb) {
     CupidGbPixelTiming *timing = &gb->pixel_timing;
     const unsigned wx = gb->io_registers[CUPID_GB_IO_WX];
     const unsigned scroll = gb->io_registers[CUPID_GB_IO_SCX] & 7u;
-    const bool color = gb->model == CUPID_GB_MODEL_CGB;
+    const bool color = cupid_gb_model_is_cgb(gb->model);
     const int position = timing->logical_x;
     if (p->window_active || !p->window_armed || !(gb->io_registers[CUPID_GB_IO_LCDC] & 0x20))
         return false;
@@ -490,7 +484,7 @@ static void pop_background(CupidGb *gb) {
 
 bool cupid_gb_pixels_abort_object(CupidGb *gb) {
     const CupidGbObjectFetchStage stage = gb->object_fetch_stage;
-    if (gb->model == CUPID_GB_MODEL_CGB ||
+    if (cupid_gb_model_is_cgb(gb->model) ||
         (stage != CUPID_GB_OBJECT_WAIT_BACKGROUND && stage != CUPID_GB_OBJECT_READ_WORD &&
          !(stage == CUPID_GB_OBJECT_IDLE && gb->pixels.object_delay >= 2)))
         return false;
@@ -503,7 +497,7 @@ bool cupid_gb_pixels_abort_object(CupidGb *gb) {
 
 void cupid_gb_pixels_finish_line(CupidGb *gb) {
     CupidGbPixels *p = &gb->pixels;
-    const bool carry_window = gb->model != CUPID_GB_MODEL_CGB && p->window_armed &&
+    const bool carry_window = !cupid_gb_model_is_cgb(gb->model) && p->window_armed &&
                               (gb->io_registers[CUPID_GB_IO_LCDC] & 0x20) &&
                               gb->io_registers[CUPID_GB_IO_WX] == 166;
     if (p->window_used || carry_window)
@@ -531,7 +525,7 @@ bool cupid_gb_pixels_tick(CupidGb *gb) {
     if (!aborted && gb->object_fetch_stage == CUPID_GB_OBJECT_IDLE && !p->object_delay &&
         p->window_active && !(gb->pixel_timing.flags & CUPID_GB_PIXEL_WINDOW_FIRST) && !p->phase &&
         p->count == 8 &&
-        (gb->model != CUPID_GB_MODEL_CGB || gb->io_registers[CUPID_GB_IO_WX] == 0) &&
+        (!cupid_gb_model_is_cgb(gb->model) || gb->io_registers[CUPID_GB_IO_WX] == 0) &&
         gb->pixel_timing.logical_x + 7 == gb->io_registers[CUPID_GB_IO_WX])
         gb->pixel_timing.flags |= CUPID_GB_PIXEL_BG_INSERT;
     /* Older imported transactions finish using their captured tile address. */
@@ -598,10 +592,10 @@ bool cupid_gb_pixels_timing_valid(const CupidGb *gb) {
     const CupidGbPixels *p = &gb->pixels;
     if (timing->logical_x < -16 || timing->logical_x > 160 ||
         (timing->flags & ~CUPID_GB_PIXEL_TIMING_FLAGS) ||
-        ((timing->flags & CUPID_GB_PIXEL_WX_GLITCH) && gb->model != CUPID_GB_MODEL_CGB))
+        ((timing->flags & CUPID_GB_PIXEL_WX_GLITCH) && !cupid_gb_model_is_cgb(gb->model)))
         return false;
     if (timing->flags & CUPID_GB_PIXEL_WINDOW_HOLD)
-        return gb->model != CUPID_GB_MODEL_CGB && p->active && p->window_active &&
+        return !cupid_gb_model_is_cgb(gb->model) && p->active && p->window_active &&
                (timing->flags & CUPID_GB_PIXEL_WINDOW_FIRST) && !p->count && !p->phase &&
                !p->delay && !p->object_delay && gb->object_fetch_stage == CUPID_GB_OBJECT_IDLE &&
                timing->logical_x <= -7 && !(timing->flags & CUPID_GB_PIXEL_BG_INSERT);

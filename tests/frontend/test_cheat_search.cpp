@@ -128,6 +128,19 @@ void testConditions() {
     }
 }
 
+void testColorRevisionMemory() {
+    auto gb = machine(true, 0);
+    for (const auto revision : {CUPID_GB_MODEL_CGB_0, CUPID_GB_MODEL_CGB_A, CUPID_GB_MODEL_CGB_B,
+                                CUPID_GB_MODEL_CGB_C, CUPID_GB_MODEL_CGB_D, CUPID_GB_MODEL_CGB}) {
+        gb->model = revision;
+        CheatSearch search;
+        search.filter(*gb, CheatSearchType::Byte, CheatSearchCondition::Any, 0);
+        assert(search.count() == 0x8000 + 127);
+        const auto last = atOffset(search, 0x7000);
+        assert(last.address == 0xd000 && last.bank == 7);
+    }
+}
+
 void testPhysicalEnumeration() {
     for (bool color : {false, true}) {
         for (size_t cartridgeSize : {size_t(0), size_t(512), size_t(0x8000)}) {
@@ -387,6 +400,7 @@ void testLargeCartridgeRam() {
 
 int main() {
     testConditions();
+    testColorRevisionMemory();
     testPhysicalEnumeration();
     testOverlappingWordsAndRegionEnds();
     testInitialZeroAndEmptyRestart();

@@ -133,7 +133,10 @@ def check_selection(run, binary, environment, root, plain, licensed, color):
 
     for requested, actual in (("dmg", "dmgabc"), ("dmgabc", "dmgabc"),
                               ("dmg0", "dmg0"), ("mgb", "mgb"),
-                              ("cgb", "cgb"), ("sgb", "sgb"), ("sgb2", "sgb2"),
+                              ("cgb", "cgb"), ("cgb-e", "cgb"),
+                              ("cgb-0", "cgb-0"), ("cgb-a", "cgb-a"), ("cgb-b", "cgb-b"),
+                              ("cgb-c", "cgb-c"), ("cgb-d", "cgb-d"),
+                              ("sgb", "sgb"), ("sgb2", "sgb2"),
                               ("sgbpal", "sgbpal")):
         result = run(plain, "--model", requested)
         assert result["requested_model"] == actual, result
@@ -160,7 +163,7 @@ def check_selection(run, binary, environment, root, plain, licensed, color):
         assert post_warmup["reason"] == "warmup_sample_unavailable"
     for requested in ("dmg", "dmg0", "mgb", "sgb", "sgb2", "sgbpal"):
         run(color, "--model", requested, expected=1)
-    for options in (("--model", "invalid"), ("--model", "cgb-e"),
+    for options in (("--model", "invalid"), ("--model", "cgb-f"),
                     ("--model", "cgb", "--smoke-test"),
                     ("--smoke-workflow", "storage"),
                     ("--smoke-test", "--smoke-workflow", "invalid"),

@@ -36,7 +36,7 @@ void CheatSearch::reset() {
 
 void CheatSearch::filter(const CupidGb &gb, CheatSearchType type, CheatSearchCondition condition,
                          uint16_t operand) {
-    const size_t workSize = gb.model == CUPID_GB_MODEL_CGB ? 0x8000 : 0x2000;
+    const size_t workSize = cupid_gb_model_is_cgb(gb.model) ? 0x8000 : 0x2000;
     if (candidates_.empty() || workSize != workRamSize_ ||
         gb.cartridge_ram_size != cartridgeRamSize_) {
         reset();
@@ -121,7 +121,7 @@ uint16_t CheatSearch::currentValue(const CupidGb &gb, size_t index) const {
 
 bool CheatSearch::writeValue(CupidGb &gb, size_t index, uint16_t number) const {
     if (index >= candidates_.size() ||
-        workRamSize_ != (gb.model == CUPID_GB_MODEL_CGB ? 0x8000u : 0x2000u) ||
+        workRamSize_ != (cupid_gb_model_is_cgb(gb.model) ? 0x8000u : 0x2000u) ||
         cartridgeRamSize_ != gb.cartridge_ram_size)
         return false;
     auto *destination = const_cast<uint8_t *>(address(gb, candidates_[index]));

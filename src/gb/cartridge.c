@@ -850,7 +850,7 @@ void cupid_gb_cartridge_post_boot(CupidGb *gb) {
      * Establish a canonical phase for this new cartridge session. */
     cupid_gb_display_clock_import_legacy(gb);
     /* Cartridge requirements cannot change the selected physical model. */
-    gb->cgb_mode = gb->model == CUPID_GB_MODEL_CGB && (gb->header.cgb_flag & 0x80u) != 0;
+    gb->cgb_mode = cupid_gb_model_is_cgb(gb->model) && (gb->header.cgb_flag & 0x80u) != 0;
     gb->sgb.enabled = cupid_gb_model_is_sgb(gb->model) && gb->header.sgb_flag == 3;
     /* Without executed firmware, project the two header permission bytes into
      * the post-boot latch. No received packet history is invented. */
@@ -870,7 +870,7 @@ void cupid_gb_cartridge_post_boot(CupidGb *gb) {
     }
     if (gb->cgb_mode)
         gb->cpu.a = 0x11;
-    else if (gb->model == CUPID_GB_MODEL_CGB)
+    else if (cupid_gb_model_is_cgb(gb->model))
         cupid_cgb_apply_compatibility_palette(gb);
     else if (gb->sgb.enabled)
         cupid_gb_sgb_apply_compatibility_palette(gb);

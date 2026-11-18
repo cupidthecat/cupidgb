@@ -105,7 +105,7 @@ void cupid_gb_input_select(CupidGb *gb, uint8_t value) {
     uint8_t active = gb->io_registers[0] & 0x30u;
     if (active == selected)
         return;
-    if (gb->model != CUPID_GB_MODEL_CGB && !cupid_gb_model_is_sgb(gb->model)) {
+    if (!cupid_gb_model_is_cgb(gb->model) && !cupid_gb_model_is_sgb(gb->model)) {
         /* A second write starts from the previous requested row but cannot
          * shorten an outstanding release. Newly selected rows pull low at
          * once; deselected rows take longer to float high. */
