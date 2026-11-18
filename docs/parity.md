@@ -72,6 +72,8 @@ ROM+RAM cartridge headers `08` and `09` retain direct RAM read/write support. Th
 
 [SGB PAL validation](validation-sgb-pal.md) records the regional clock, paired startup boundary, native model identity and targeted regression coverage. Wider PAL firmware and commercial playback qualification remain open.
 
+[Hardware and playback validation](validation-accuracy-playback.md) records the corrected monochrome OAM reads, quiet LCD blanking, 99 external verdicts per host and the combined Windows, Linux and sanitizer results. The [MMM01 matrix](validation-mmm01.md) covers upper ROM bank bits and locked guest selection in both layouts. Two commercial titles pass version 23 state exchange. Their sustained WSLg playback reaches about 98% guest speed with no post-warmup audio idle or error events.
+
 Frontend requirements come from actual menus, settings, shortcuts, debugger commands, and accessory workflows. Audio-device selection is an additional Qt convenience; the audited desktop output backends use the system default. The current guides describe the implemented Qt controls, while the pending entries above remain part of the parity goal.
 
 ## Evidence rules

@@ -668,9 +668,9 @@ static void test_presentation_chunk_invariance(void) {
 }
 
 static void test_blanking_span_edges(void) {
-    static const uint16_t positions[][2] = {{1, 255}, {1, 441},  {1, 453},  {143, 445},
-                                            {144, 0}, {144, 2},  {152, 444}, {152, 455},
-                                            {153, 0}, {153, 5},  {153, 8},  {153, 440}};
+    static const uint16_t positions[][2] = {{1, 255}, {1, 441}, {1, 453},   {143, 445},
+                                            {144, 0}, {144, 2}, {152, 444}, {152, 455},
+                                            {153, 0}, {153, 5}, {153, 8},   {153, 440}};
     static const uint16_t lengths[] = {2, 4, 11, 41};
     static CupidGb original, span, single;
     for (unsigned speed = 0; speed < 3; ++speed) {

@@ -35,7 +35,7 @@ The caller retains both the queue and the sink during a backend call. Pausing or
 
 | Clock | Implemented relationship |
 | --- | --- |
-| Base clock | `cupid_gb_base_clock_hz(gb)`: 4,295,454 Hz for SGB; 4,194,304 Hz for the other current models |
+| Base clock | `cupid_gb_base_clock_hz(gb)` returns 4,295,454 Hz for SGB NTSC, 4,256,274 Hz for SGB PAL and 4,194,304 Hz for the other models |
 | CPU machine cycle | Four base T-cycles normally; two in CGB double speed |
 | Pulse and sweep timing phases | Retained phase modulo four base T-cycles |
 | Noise prescaler | One tick per two base T-cycles, with a separate phase modulo eight |

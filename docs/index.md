@@ -42,5 +42,8 @@ CupidGB emulates Game Boy and Game Boy Color hardware with a C core and a Qt des
 | [SGB protocol validation](validation-sgb-protocol.md) | Boot-header permission, version 22 continuation, paired observations and bounded gameplay |
 | [Link and LY validation](validation-link.md) | Two-window cable workflows, ignored LY writes, mapper tests, library scan and native paired gameplay |
 | [GBS player validation](validation-gbs.md) | Music loading, audio history, double-speed timing, version 23 states and native player workflows |
+| [SGB PAL validation](validation-sgb-pal.md) | Regional clock, startup timing, protocol state and desktop selection |
+| [MMM01 validation](validation-mmm01.md) | Upper ROM bank bits, locked selection, both dump layouts and native continuation |
+| [Hardware and playback validation](validation-accuracy-playback.md) | OAM read conflicts, quiet blanking, combined checks and commercial playback |
 
 Start with the build guide if you have a source checkout. For an executable that already runs, use the user guide. A result in the validation record applies to the stated revision, inputs, settings, and duration; it does not qualify every later build.

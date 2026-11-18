@@ -10,12 +10,13 @@ CupidGB implements Game Boy and Game Boy Color execution in the same C core, wit
 | Game Boy (DMG0) | `CUPID_GB_MODEL_DMG0` | Early monochrome startup profile |
 | Game Boy Pocket / Light | `CUPID_GB_MODEL_MGB` | Pocket-family profile |
 | Game Boy Color | `CUPID_GB_MODEL_CGB` | One color profile with monochrome compatibility mode |
-| Super Game Boy | `CUPID_GB_MODEL_SGB` | SGB NTSC clock, command, palette, attribute, mask, and border behavior |
+| Super Game Boy (NTSC) | `CUPID_GB_MODEL_SGB` | First-generation adapter with the NTSC clock |
+| Super Game Boy (PAL) | `CUPID_GB_MODEL_SGB_PAL` | First-generation adapter with the PAL clock |
 | Super Game Boy 2 | `CUPID_GB_MODEL_SGB2` | Separate SGB2 startup profile |
 
-These are the six current profile tags. Individual CGB hardware revisions, separate SGB regional/host variants, and every model-specific startup or bus difference have not been qualified. Keep the physical hardware model separate from the cartridge's color capability: a header must not turn selected monochrome hardware into color hardware.
+Individual CGB revisions and the variants that integrate with an external SGB host remain pending. The cartridge header describes the program's color capability. Selecting monochrome hardware keeps the machine monochrome.
 
-The SGB profile uses a 4,295,454 Hz base clock. The other five profiles, including SGB2, use 4,194,304 Hz. A regular LCD frame still spans 70,224 base T-cycles; converting those cycles to wall time must use the selected clock. CPU, display, audio sample scheduling, and host pacing share that model choice. SGB PAL and separate SGB host-integration profiles remain unimplemented.
+SGB NTSC uses a 4,295,454 Hz base clock, and SGB PAL uses 4,256,274 Hz. SGB2 and the handheld profiles use 4,194,304 Hz. A regular LCD frame spans 70,224 base T-cycles. CPU, display, audio sampling and host pacing all use the selected model's clock.
 
 Automatic desktop selection is a convenience policy, not a new hardware profile. Reproducible comparisons should select the model explicitly and record whether startup used a boot binary or the approximate post-boot profile.
 
@@ -44,7 +45,7 @@ Palette data ports FF69 and FF6B are accessible while the boot overlay is mapped
 
 ## LCD line register
 
-LY at `FF44` is read-only. Writes leave the line counter, display mode and coincidence interrupt logic unchanged apart from normal progress during the bus access. The access still reaches memory observers and settles deferred display work before the byte is ignored. This applies to all six current profiles, including color double speed and LCD-off operation.
+LY at `FF44` is read-only. Writes leave the line counter, display mode and coincidence interrupt logic unchanged apart from normal progress during the bus access. The access still reaches memory observers and settles deferred display work before the byte is ignored. This applies to all profiles, including color double speed and LCD-off operation.
 
 The STAT regression checks every written byte and actual CPU store and read/modify/write instructions across visible lines, VBlank, the shortened LY=153 interval and LCD-off. It also continues execution after the write to detect a disturbed line counter or interrupt latch.
 
@@ -118,7 +119,7 @@ VRAM reads at the first HBlank edge use retained fetch addresses and a separate 
 
 Coincidence and mode sources feed one combined STAT interrupt line. A rising coincidence source must preserve a pending HBlank transition; suppressing a second interrupt edge does not cancel the display's mode change. LCD power cycling preserves the comparison and combined-line latches until startup refreshes them. Automatic refresh follows the measured model-specific startup edge, while explicit STAT and LYC writes can update the comparison earlier.
 
-SGB behavior includes packet reception, palette and attribute commands, screen masking, and four player input masks. Transfers capture rendered shades on the third host frame. Character and map uploads stage the next border while the active border transitions. Actual presentations advance startup and transfer state together, including modeled LCD-off and STOP intervals. Redraws leave both unchanged. Cartridge sound commands, PAL timing, header-packet eligibility and remaining display phase differences are still open.
+SGB behavior includes packet reception, palette and attribute commands, screen masking, and four player input masks. Transfers capture rendered shades on the third host frame. Character and map uploads stage the next border while the active border transitions. Actual presentations advance startup and transfer state together, including modeled LCD-off and STOP intervals. Redraws leave both unchanged. Cartridge sound commands and wider PAL display and commercial firmware comparisons remain open.
 
 Complete fetcher timing, mid-scanline conflicts, broad pixel comparisons, model-specific startup, and hardware color response remain active accuracy work. Host scaling, optional blending, and palette presentation do not change those requirements.
 
