@@ -394,7 +394,7 @@ typedef enum CupidGbObjectFetchStage {
 
 /* The fetcher's horizontal position includes the discarded pixels before LCD
  * output starts. Window byte reads retain their own half-fetch history.
- * The supported CGB model retains the row selected at the tile-map address half. */
+ * CGB D and E use the row selected at the tile-map address half. */
 typedef struct CupidGbPixelTiming {
     int16_t logical_x;
     uint8_t flags;

@@ -112,7 +112,7 @@ static uint16_t tile_address(CupidGb *gb, bool upper) {
     CupidGbPixels *p = &gb->pixels;
     uint8_t lcdc = gb->io_registers[CUPID_GB_IO_LCDC];
     unsigned row;
-    if (cupid_gb_model_is_cgb(gb->model))
+    if (gb->model == CUPID_GB_MODEL_CGB_D || gb->model == CUPID_GB_MODEL_CGB_E)
         row = gb->pixel_timing.fetch_y;
     else
         row = p->window_active ? gb->window_line_counter

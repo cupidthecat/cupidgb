@@ -23,3 +23,9 @@ Windows and Linux wrote matching native snapshots for each of the six revisions.
 Using a local color firmware image for A through E, both builds passed the boot register and divider tests at matching terminal cycle counts. With a generated revision-0 firmware image, both passed the register test and failed the divider test, with matching counts for both results. A second run with generated firmware on A through E likewise passed the register tests and failed the divider tests on CupidGB. The available fixtures leave revision-0 divider behavior and accurate per-revision startup unqualified.
 
 The profiles share much of the existing color implementation. They still need revision-specific display, DMA, oscillator, startup-memory and audio qualification, and broader infrared measurements. The generated tests cover the stated behavior and leave physical verification open.
+
+## Vertical scroll during a tile fetch
+
+Revisions 0 through C sample the current vertical coordinate at the low and high tile-data address phases. Revisions D and E use the coordinate selected at the tile-map address phase for both reads. The tile-map lookup itself continues to sample the current scroll.
+
+A 96-case comparison varied the revision, normal or double speed, color or compatibility mode, vertical flip, and whether the guest scroll value changed between fetch phases. Before the correction, all 32 cases with a changed scroll value on revisions 0 through C differed on the tile-data addresses and bytes. Afterward, all 96 matched the observed map address, data addresses, bytes and phase clocks. The comparison drove hardware writes directly. CPU-timed scroll writes and collisions with window, object and DMA activity require separate checks.

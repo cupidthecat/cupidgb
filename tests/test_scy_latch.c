@@ -47,21 +47,26 @@ typedef struct Fixture {
     uint8_t rom[32768];
 } Fixture;
 
-static Fixture *new_fixture(bool color, bool compatibility, bool fast) {
+static Fixture *new_fixture_model(CupidGbModel model, bool compatibility, bool fast) {
     Fixture *fixture = calloc(1, sizeof(*fixture));
     assert(fixture);
     fixture->gb = calloc(1, sizeof(*fixture->gb));
     assert(fixture->gb);
-    fixture->rom[0x143] = compatibility ? 0 : color ? 0x80 : 0;
+    fixture->rom[0x143] = !compatibility && cupid_gb_model_is_cgb(model) ? 0x80 : 0;
     fixture->rom[0x147] = 0;
     for (unsigned i = 0x134; i <= 0x14c; ++i)
         fixture->rom[0x14d] = (uint8_t)(fixture->rom[0x14d] - fixture->rom[i] - 1u);
     cupid_gb_set_power_on_seed(fixture->gb, 0);
-    cupid_gb_set_model(fixture->gb, color ? CUPID_GB_MODEL_CGB : CUPID_GB_MODEL_DMG_ABC);
+    cupid_gb_set_model(fixture->gb, model);
     assert(cupid_gb_load_rom(fixture->gb, fixture->rom, sizeof(fixture->rom)));
     cupid_gb_write_u8(fixture->gb, 0xff40, 0);
     fixture->gb->double_speed = fast;
     return fixture;
+}
+
+static Fixture *new_fixture(bool color, bool compatibility, bool fast) {
+    return new_fixture_model(color ? CUPID_GB_MODEL_CGB : CUPID_GB_MODEL_DMG_ABC, compatibility,
+                             fast);
 }
 
 static void free_fixture(Fixture *fixture) {
@@ -228,6 +233,90 @@ static void advance_guest_dot(CupidGb *gb) {
     (void)cupid_gb_read_bus_u8(gb, 0xff41);
 }
 
+static void test_revision_sampling(CupidGbModel model, bool compatibility, bool fast,
+                                   bool changed) {
+    Fixture *source = new_fixture_model(model, compatibility, fast);
+    Fixture *restored = new_fixture_model(model, compatibility, fast);
+    CupidGb *a = source->gb, *b = restored->gb;
+    for (unsigned row = 0; row < 8; ++row) {
+        cupid_gb_write_u8(a, (uint16_t)(0x8010u + row * 2u), (uint8_t)(0x80u | row));
+        cupid_gb_write_u8(a, (uint16_t)(0x8011u + row * 2u), (uint8_t)(0x40u | row));
+    }
+    for (unsigned index = 0; index < 1024; ++index)
+        cupid_gb_write_u8(a, (uint16_t)(0x9800u + index), 1);
+    cupid_gb_write_u8(a, 0xff42, 6);
+    cupid_gb_write_u8(a, 0xff43, 0);
+    cupid_gb_write_u8(a, 0xff4b, 200);
+    cupid_gb_write_u8(a, 0xff40, 0x91);
+    unsigned dots = 0;
+    while (!(a->pixels.initialized && a->pixels.active && a->pixels.line == 1 &&
+             a->pixels.phase == 1) &&
+           dots++ < 1000)
+        advance_guest_dot(a);
+    assert(dots < 1000);
+    assert(a->vram_bus.fetch_map_address == 0x1800);
+    if (changed)
+        cupid_gb_write_u8(a, 0xff42, 7);
+
+    /* The low and high fetches straddle separate SCY writes. Only D/E retain
+     * the row selected with the map address. Earlier models sample each plane. */
+    const bool latched = model == CUPID_GB_MODEL_CGB_D || model == CUPID_GB_MODEL_CGB_E;
+    const unsigned low_row = changed && !latched ? 0u : 7u;
+    const unsigned high_row = changed && !latched ? 1u : 7u;
+    const size_t size = cupid_gb_state_size(a);
+    uint8_t *snapshot = malloc(size);
+    size_t written = 0;
+    assert(snapshot);
+    assert(cupid_gb_save_state(a, snapshot, size, &written) == CUPID_GB_STATE_OK);
+    assert(written == size);
+    assert(cupid_gb_load_state(b, snapshot, size) == CUPID_GB_STATE_OK);
+
+    bool low_address_seen = false, low_byte_seen = false;
+    bool high_address_seen = false, high_byte_seen = false, next_map_seen = false;
+    for (unsigned dot = 0; dot < 40; ++dot) {
+        assert(a->elapsed_cycles == b->elapsed_cycles);
+        assert(a->pixels.phase == b->pixels.phase);
+        assert(a->pixels.low == b->pixels.low && a->pixels.high == b->pixels.high);
+        assert(a->vram_bus.fetch_data_address == b->vram_bus.fetch_data_address);
+        assert(a->vram_bus.fetch_map_address == b->vram_bus.fetch_map_address);
+        if (!low_address_seen && a->pixels.phase == 3) {
+            assert(a->vram_bus.fetch_data_address == 16u + low_row * 2u);
+            low_address_seen = true;
+        }
+        if (!low_byte_seen && a->pixels.phase == 4) {
+            assert(a->pixels.low == (0x80u | low_row));
+            low_byte_seen = true;
+            if (changed) {
+                cupid_gb_write_u8(a, 0xff42, 8);
+                cupid_gb_write_u8(b, 0xff42, 8);
+            }
+            /* Restore again after the low byte, with the high-plane write pending. */
+            assert(cupid_gb_save_state(a, snapshot, size, &written) == CUPID_GB_STATE_OK);
+            assert(written == size);
+            assert(cupid_gb_load_state(b, snapshot, size) == CUPID_GB_STATE_OK);
+        }
+        if (!high_address_seen && a->pixels.phase == 5) {
+            assert(a->vram_bus.fetch_data_address == 17u + high_row * 2u);
+            high_address_seen = true;
+        }
+        if (!high_byte_seen && a->pixels.phase == 6) {
+            assert(a->pixels.high == (0x40u | high_row));
+            high_byte_seen = true;
+        }
+        if (!next_map_seen && high_byte_seen && a->pixels.phase == 1) {
+            assert((a->vram_bus.fetch_map_address & ~31u) == (changed ? 0x1820u : 0x1800u));
+            next_map_seen = true;
+        }
+        advance_guest_dot(a);
+        advance_guest_dot(b);
+    }
+    assert(low_address_seen && low_byte_seen && high_address_seen && high_byte_seen &&
+           next_map_seen);
+    free(snapshot);
+    free_fixture(source);
+    free_fixture(restored);
+}
+
 static void test_scheduled_snapshot(bool compatibility, bool fast) {
     Fixture *source = new_fixture(true, compatibility, fast);
     Fixture *restored = new_fixture(true, compatibility, fast);
@@ -285,6 +374,21 @@ static void test_scheduled_snapshot(bool compatibility, bool fast) {
 }
 
 int main(void) {
+    static const CupidGbModel color_models[] = {CUPID_GB_MODEL_CGB_0, CUPID_GB_MODEL_CGB_A,
+                                                CUPID_GB_MODEL_CGB_B, CUPID_GB_MODEL_CGB_C,
+                                                CUPID_GB_MODEL_CGB_D, CUPID_GB_MODEL_CGB_E};
+    static const CupidGbModel monochrome_models[] = {CUPID_GB_MODEL_DMG0, CUPID_GB_MODEL_DMG_ABC,
+                                                     CUPID_GB_MODEL_MGB};
+    for (unsigned model = 0; model < sizeof(color_models) / sizeof(color_models[0]); ++model)
+        for (unsigned fast = 0; fast < 2; ++fast)
+            for (unsigned compatibility = 0; compatibility < 2; ++compatibility)
+                for (unsigned changed = 0; changed < 2; ++changed)
+                    test_revision_sampling(color_models[model], compatibility != 0, fast != 0,
+                                           changed != 0);
+    for (unsigned model = 0; model < sizeof(monochrome_models) / sizeof(monochrome_models[0]);
+         ++model)
+        for (unsigned changed = 0; changed < 2; ++changed)
+            test_revision_sampling(monochrome_models[model], false, false, changed != 0);
     for (unsigned fast = 0; fast < 2; ++fast) {
         for (unsigned compatibility = 0; compatibility < 2; ++compatibility)
             for (unsigned flip = 0; flip < 2; ++flip)
