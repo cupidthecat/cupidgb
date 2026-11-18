@@ -49,6 +49,7 @@
 #include "cupid/gb/mbc7.h"
 #include "display_clock.h"
 #include "rtc_internal.h"
+#include "tama5_internal.h"
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -155,6 +156,8 @@ static size_t cartridge_storage_size(const CupidGbCartridgeHeader *header, size_
             return 512u;
         case CUPID_GB_MBC6:
             return CUPID_GB_MBC6_RAM_SIZE;
+        case CUPID_GB_TAMA5:
+            return CUPID_GB_TAMA5_RAM_SIZE;
         case CUPID_GB_MBC7:
             return CUPID_GB_MBC7_EEPROM_SIZE;
         case CUPID_GB_TPP1:
@@ -341,6 +344,8 @@ static CupidGbMbcType cupid_gb_detect_mbc_type(uint8_t cartridge_type) {
             return CUPID_GB_MBC7;
         case 0xfcu:
             return CUPID_GB_CAMERA;
+        case 0xfdu:
+            return CUPID_GB_TAMA5;
         case 0xfeu:
             return CUPID_GB_HUC3;
         case 0xffu:
@@ -728,6 +733,7 @@ bool cupid_gb_parse_header(const uint8_t *rom_data, size_t rom_size,
         case 0x20u: /* MBC6+RAM+FLASH */
         case 0x22u: /* MBC7+SENSOR+EEPROM */
         case 0xfcu: /* Camera */
+        case 0xfdu: /* TAMA5 */
         case 0xfeu: /* HuC3 (battery-backed RTC/RAM) */
         case 0xffu: /* HuC1+RAM+BATTERY */
             header->has_battery = true;
@@ -741,6 +747,7 @@ bool cupid_gb_parse_header(const uint8_t *rom_data, size_t rom_size,
     switch (header->cartridge_type) {
         case 0x0fu: /* MBC3+TIMER+BATTERY */
         case 0x10u: /* MBC3+TIMER+RAM+BATTERY */
+        case 0xfdu: /* TAMA5 */
         case 0xfeu: /* HuC3 */
             header->has_timer = true;
             break;
@@ -908,6 +915,8 @@ void cupid_gb_cartridge_reset_controls(CupidGb *gb) {
         gb->current_rom_bank = 0;
         cupid_gb_mbc7_reset(gb);
     }
+    if (gb->header.mbc_type == CUPID_GB_TAMA5)
+        cupid_gb_tama5_init(gb);
 }
 
 /* A source strictly inside this instance's owned storage must fit before any
@@ -1220,6 +1229,8 @@ const char *cupid_gb_cartridge_type_name(uint8_t cartridge_type) {
             return "MBC7+SENSOR+EEPROM";
         case 0xfcu:
             return "Game Boy Camera";
+        case 0xfdu:
+            return "TAMA5";
         case 0xfeu:
             return "HuC3";
         case 0xffu:
@@ -1265,6 +1276,8 @@ const char *cupid_gb_mbc_name(CupidGbMbcType mbc_type) {
             return "Camera";
         case CUPID_GB_TPP1:
             return "TPP1";
+        case CUPID_GB_TAMA5:
+            return "TAMA5";
         default:
             return "UNKNOWN";
     }

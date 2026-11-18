@@ -141,6 +141,10 @@ void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
                 cupid_gb_presentation_cycles(&emulator_->gb) - telemetryStartPresentationCycles_;
             QJsonObject report{
                 {"host_clock", QString::fromLatin1(HostElapsedTimer::sourceName())},
+                {"host_audio_clock_ratio", audioClockDrift_.ratio()},
+                {"host_audio_conversion_ratio",
+                 audioConverter_ ? audioConverter_->hostClockRatio() : 1.0},
+                {"host_audio_clock_updates", double(audioClockDrift_.updates())},
                 {"requested_duration_seconds", seconds},
                 {"elapsed_seconds", elapsed},
                 {"guest_base_speed_t_cycles", double(cycles)},

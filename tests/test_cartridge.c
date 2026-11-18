@@ -139,12 +139,19 @@ static size_t expected_header_storage(unsigned type, unsigned ram_code) {
         return 256;
     if (type == 0x20)
         return 0x8000;
+    if (type == 0xfd)
+        return 32;
     return external_ram[type] && ram_code < sizeof(sizes) / sizeof(sizes[0]) ? sizes[ram_code] : 0;
 }
 
 static void check_storage_window(CupidGb *gb, size_t expected_size) {
     assert(gb->cartridge_ram_size == expected_size);
     assert(gb->ram_bank_count == (expected_size + 0x1fff) / 0x2000);
+    if (gb->header.mbc_type == CUPID_GB_TAMA5) {
+        /* The 32 bytes are accessed through a nibble protocol. */
+        assert(gb->cartridge_ram[31] == 0xff);
+        return;
+    }
     if (gb->header.mbc_type == CUPID_GB_MBC7) {
         /* EEPROM uses its serial protocol; it never becomes ordinary SRAM. */
         assert(gb->cartridge_ram[0x31] == 0xff);

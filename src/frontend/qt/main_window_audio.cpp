@@ -93,6 +93,8 @@ void MainWindow::setupAudio() {
     if (!current())
         return;
     audioConverter_.reset();
+    audioClockDrift_.reset();
+    hostAudioBytesWritten_ = 0;
     audioBuffer_ = std::make_shared<AudioBuffer>();
     const QByteArray requested = settings_.value("audio/outputDevice").toByteArray();
     QAudioDevice device = QMediaDevices::defaultAudioOutput();
@@ -169,6 +171,10 @@ void MainWindow::stopAudio() {
     audioModeResetPending_ = false;
     audioDevice_ = nullptr;
     audioPriming_ = true;
+    audioClockDrift_.reset();
+    hostAudioBytesWritten_ = 0;
+    if (audioConverter_)
+        audioConverter_->setHostClockRatio(1);
     // Detach immediately, but retain the old backend while a reentrant start/write
     // still uses its device. The final lease resets the obsolete stream, not drains it.
     retireAudioSink(audio_, this);
@@ -185,6 +191,8 @@ void MainWindow::clearAudio() {
     }
     if (audioConverter_)
         audioConverter_->reset();
+    audioClockDrift_.reset();
+    hostAudioBytesWritten_ = 0;
     if (audioBuffer_)
         audioBuffer_->clear();
 }
@@ -214,6 +222,9 @@ void MainWindow::pumpAudio() {
         // before starting the sink so frame-sized writes tolerate host scheduling jitter.
         // The 30 ms target stays below the 50 ms execution-backpressure limit.
         if (audioPriming_) {
+            audioClockDrift_.interrupt(clock_.nsecsElapsed());
+            if (audioConverter_)
+                audioConverter_->setHostClockRatio(audioClockDrift_.ratio());
             if (buffer->bytesAvailable() < audioPrimeBytes_)
                 return;
             // Start only when generated audio is ready. Repeated reset/start calls
@@ -236,6 +247,7 @@ void MainWindow::pumpAudio() {
                 return;
             const qint64 written = buffer->writeTo(device, capacity);
             if (self && written > 0 && sink == audio_ && buffer == audioBuffer_ && !paused_) {
+                hostAudioBytesWritten_ += uint64_t(written);
                 audioPriming_ = false;
                 ++audioPrimeEvents_;
             }
@@ -247,10 +259,35 @@ void MainWindow::pumpAudio() {
             if (!self || (state != QAudio::ActiveState && state != QAudio::IdleState))
                 return;
             const qint64 capacity = sink->bytesFree();
+            const qint64 nativeBytes = sink->bufferSize();
             if (!self || sink != audio_ || buffer != audioBuffer_ || device != audioDevice_ ||
                 paused_ || menuDepth_ || menuInputSuspended_)
                 return;
-            buffer->writeTo(device, capacity);
+            const auto format = sink->format();
+            const bool normalRate = !playbackTurbo() &&
+                                    playbackSpeed() == GuestClockPacer::normalSpeedSteps &&
+                                    !rewind_;
+            const int frameBytes = format.bytesPerFrame();
+            const unsigned sampleRate = unsigned(std::max(format.sampleRate(), 0));
+            const qint64 now = clock_.nsecsElapsed();
+            qint64 queuedFrames = -1;
+            if (!normalRate) {
+                audioClockDrift_.reset();
+            } else if (state == QAudio::ActiveState && frameBytes > 0 && capacity >= 0) {
+                audioClockDrift_.observe(now, hostAudioBytesWritten_ / uint64_t(frameBytes),
+                                         capacity / frameBytes, sampleRate);
+                if (nativeBytes > 0 && capacity <= nativeBytes)
+                    queuedFrames = (nativeBytes - capacity + buffer->bytesAvailable()) / frameBytes;
+            } else {
+                audioClockDrift_.interrupt(now);
+            }
+            if (audioConverter_)
+                audioConverter_->setHostClockRatio(
+                    audioClockDrift_.playbackRatio(queuedFrames, sampleRate));
+            const qint64 written = buffer->writeTo(device, capacity);
+            if (self && written > 0 && sink == audio_ && buffer == audioBuffer_ &&
+                device == audioDevice_ && format.bytesPerFrame() > 0)
+                hostAudioBytesWritten_ += uint64_t(written);
         }
     }
 }

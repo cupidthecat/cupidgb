@@ -37,7 +37,8 @@ static bool ordinary_cartridge_ram(const CupidGb *gb) {
         return false;
     /* These cartridge windows can expose device registers or generated data. */
     if (gb->header.mbc_type == CUPID_GB_MBC7 || gb->header.mbc_type == CUPID_GB_HUC3 ||
-        gb->header.mbc_type == CUPID_GB_CAMERA || gb->header.mbc_type == CUPID_GB_TPP1)
+        gb->header.mbc_type == CUPID_GB_CAMERA || gb->header.mbc_type == CUPID_GB_TPP1 ||
+        gb->header.mbc_type == CUPID_GB_TAMA5)
         return false;
     if (gb->header.mbc_type == CUPID_GB_HUC1 && gb->huc1_ir_mode)
         return false;

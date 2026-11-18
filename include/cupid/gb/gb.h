@@ -34,6 +34,7 @@
 #include "cupid/gb/sgb.h"
 #include "cupid/gb/sgb_startup.h"
 #include "cupid/gb/startup.h"
+#include "cupid/gb/tama5.h"
 
 /* Full 16-bit TPP1 bank span: 65536 physical banks of 16 KiB each.
  * This bounds input size, not the memory reserved for an unloaded machine. */
@@ -193,7 +194,8 @@ typedef enum CupidGbMbcType {
     CUPID_GB_HUC3,
     CUPID_GB_MBC_UNKNOWN,
     CUPID_GB_CAMERA,
-    CUPID_GB_TPP1
+    CUPID_GB_TPP1,
+    CUPID_GB_TAMA5
 } CupidGbMbcType;
 
 typedef struct CupidGbCamera {
@@ -470,6 +472,7 @@ typedef struct CupidGb {
     bool mbc7_latch;
     CupidGbMbc7 mbc7;
     CupidGbMbc6 mbc6;
+    CupidGbTama5 tama5;
     /* MMM01 */
     bool mmm01_locked;
     uint8_t mmm01_bank_base; /* Retained for the legacy native state prefix. */

@@ -25,6 +25,7 @@
 #include "cupid/gb/battery.h"
 #include "cupid/gb/huc3.h"
 #include "cupid/gb/tpp1.h"
+#include "tama5_internal.h"
 
 #include <math.h>
 #include <time.h>
@@ -184,6 +185,8 @@ static int64_t *active_baseline(CupidGb *gb) {
             return &gb->huc3.rtc_base_time;
         case CUPID_GB_TPP1:
             return &gb->tpp1.rtc_base_time;
+        case CUPID_GB_TAMA5:
+            return &gb->tama5.clock.base_time;
         default:
             return NULL;
     }
@@ -247,6 +250,9 @@ void cupid_gb_rtc_update_at(CupidGb *gb, int64_t now) {
         case CUPID_GB_TPP1:
             cupid_gb_tpp1_advance(&gb->tpp1, now);
             break;
+        case CUPID_GB_TAMA5:
+            cupid_gb_tama5_advance(&gb->tama5, now);
+            break;
         default:
             break;
     }
@@ -258,9 +264,10 @@ void cupid_gb_rtc_tick(CupidGb *gb, uint32_t half_cycles) {
     const bool minute_clock = gb->header.mbc_type == CUPID_GB_HUC3;
     const bool second_clock = gb->header.has_timer && (gb->header.mbc_type == CUPID_GB_MBC3 ||
                                                        gb->header.mbc_type == CUPID_GB_TPP1);
-    if (!minute_clock && !second_clock)
+    const bool calendar = gb->header.mbc_type == CUPID_GB_TAMA5;
+    if (!minute_clock && !second_clock && !calendar)
         return;
-    if (gb->rtc_policy.mode == CUPID_GB_RTC_ACCURATE && !minute_clock && (gb->rtc.dh & 0x40u))
+    if (gb->rtc_policy.mode == CUPID_GB_RTC_ACCURATE && second_clock && (gb->rtc.dh & 0x40u))
         return;
     gb->rtc_cycles += half_cycles;
     const uint32_t frequency = cupid_gb_base_clock_hz(gb);

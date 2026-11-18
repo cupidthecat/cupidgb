@@ -201,23 +201,49 @@ bool MainWindow::displayFilesSmokeTest(const QString &directory) {
                   ownedDialog ? qPrintable(ownedDialog->selectedFiles().join('|')) : "<none>");
         };
         QTimer driver, watchdog;
-        driver.setInterval(1);
+        driver.setInterval(10);
         QObject::connect(&driver, &QTimer::timeout, &session, [&] {
             auto *dialog = qobject_cast<QFileDialog *>(QApplication::activeModalWidget());
             if (!dialog || dialog->parentWidget() != &session)
                 return;
             ownedDialog = dialog;
-            driver.stop();
             checked = session.paused_;
             if (path.isEmpty()) {
+                driver.stop();
                 reportDialog("before reject");
                 dialog->reject();
                 reportDialog("after reject");
             } else {
-                dialog->selectFile(path);
+                // A visible Qt picker can ignore selectFile while the filename
+                // editor has focus. Enter the path in that editor as a user would.
+                const auto matchesTarget = [&] {
+                    const auto selection = dialog->selectedFiles();
+                    return selection.size() == 1 &&
+                           QFileInfo(selection.front()).absoluteFilePath() ==
+                               QFileInfo(path).absoluteFilePath();
+                };
+                if (!matchesTarget()) {
+                    dialog->selectFile(path);
+                    auto *editor = dialog->findChild<QLineEdit *>("fileNameEdit");
+                    if (!editor)
+                        return;
+                    editor->setText(path);
+                    if (!matchesTarget())
+                        return;
+                }
+                auto *buttons = dialog->findChild<QDialogButtonBox *>();
+                auto *accept = buttons
+                                   ? buttons->button(dialog->acceptMode() == QFileDialog::AcceptOpen
+                                                         ? QDialogButtonBox::Open
+                                                         : QDialogButtonBox::Save)
+                                   : nullptr;
+                if (!accept || !accept->isEnabled())
+                    return;
                 reportDialog("before accept");
-                QMetaObject::invokeMethod(dialog, "accept", Qt::DirectConnection);
+                accept->click();
                 reportDialog("after accept");
+                if (!ownedDialog || !ownedDialog->isVisible())
+                    driver.stop();
             }
         });
         watchdog.setSingleShot(true);

@@ -22,6 +22,7 @@
 
 #pragma once
 
+#include "audio_clock_drift.h"
 #include "color_pipeline.h"
 #include "controller_manager.h"
 #include "display_pipeline.h"
@@ -351,6 +352,8 @@ class MainWindow final : public QMainWindow {
     std::shared_ptr<QAudioSink> audio_;
     QIODevice *audioDevice_ = nullptr;
     std::unique_ptr<AudioConverter> audioConverter_;
+    AudioClockDrift audioClockDrift_;
+    uint64_t hostAudioBytesWritten_ = 0;
     TurboAudioWindow turboAudioWindow_;
     std::unique_ptr<WaveRecorder> recorder_;
     QMediaDevices *mediaDevices_ = nullptr;

@@ -43,6 +43,7 @@
 #include "printer_internal.h"
 #include "rtc_internal.h"
 #include "startup_internal.h"
+#include "tama5_internal.h"
 #include "vram_bus.h"
 
 #include <stdio.h>
@@ -968,6 +969,14 @@ static uint8_t read_data_bus(const CupidGb *gb, uint16_t address, CupidGb *bus, 
     }
 
     if (address >= 0xa000u && address <= 0xbfffu) {
+        if (gb->header.mbc_type == CUPID_GB_TAMA5) {
+            uint8_t digit;
+            const bool driven = cupid_gb_tama5_read(gb, address, &digit);
+            const uint8_t held = bus ? cupid_gb_sample_cartridge_bus(gb) : 0xffu;
+            if (floating)
+                *floating = !driven;
+            return driven ? (uint8_t)((held & 0xf0u) | digit) : held;
+        }
         const uint16_t value = read_cartridge_window(gb, address);
         if (floating)
             *floating = value == CARTRIDGE_WINDOW_FLOATING;
@@ -1299,11 +1308,6 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
             case CUPID_GB_MBC7:
                 gb->current_rom_bank = value;
                 break;
-                gb->current_rom_bank = (size_t)(value & 0x7fu);
-                if (gb->current_rom_bank == 0u) {
-                    gb->current_rom_bank = 1u;
-                }
-                break;
             default:
                 break;
         }
@@ -1346,8 +1350,6 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
             case CUPID_GB_MBC7:
                 gb->mbc7.registers_enabled = value == 0x40u;
                 break;
-                gb->current_ram_bank = (size_t)(value & 0x03u);
-                break;
             default:
                 break;
         }
@@ -1382,6 +1384,10 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
     }
 
     if (address >= 0xa000u && address <= 0xbfffu) {
+        if (gb->header.mbc_type == CUPID_GB_TAMA5) {
+            cupid_gb_tama5_write(gb, address, value);
+            return;
+        }
         if (gb->header.mbc_type == CUPID_GB_TPP1) {
             cupid_gb_tpp1_write_window(gb, address, value);
             return;

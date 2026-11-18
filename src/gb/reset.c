@@ -30,6 +30,7 @@
 #include "cupid/gb/startup.h"
 #include "printer_internal.h"
 #include "rtc_internal.h"
+#include "tama5_internal.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -84,6 +85,7 @@ static void restore_clocks(CupidGb *next, const CupidGb *previous) {
     memcpy(next->tpp1.live, previous->tpp1.live, sizeof(next->tpp1.live));
     memcpy(next->tpp1.latched, previous->tpp1.latched, sizeof(next->tpp1.latched));
     next->tpp1.rtc_base_time = previous->tpp1.rtc_base_time;
+    next->tama5.clock = previous->tama5.clock;
     /* HuC3 stores time and alarm digits in its controller domain. Those reset;
      * only the host timestamp is established again after all fallible preparation. */
 }
@@ -160,7 +162,12 @@ bool cupid_gb_reset_with_allocator(CupidGb *gb, CupidGbResetKind kind, void *(*a
 
     /* Nothing after the time observation can fail. Clock providers must obey the
      * documented non-reentrant observer contract. Rebase without advancing digits. */
-    cupid_gb_rtc_bind_cartridge(next);
+    if (next->header.mbc_type == CUPID_GB_TAMA5) {
+        if (next->rtc_policy.mode == CUPID_GB_RTC_SYNC_TO_HOST)
+            cupid_gb_tama5_advance(&next->tama5, cupid_gb_rtc_now(next));
+    } else {
+        cupid_gb_rtc_bind_cartridge(next);
+    }
     cupid_gb_reset_commit(gb, next);
     return true;
 }

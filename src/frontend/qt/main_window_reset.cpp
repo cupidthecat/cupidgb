@@ -55,6 +55,7 @@ bool MainWindow::prepareResetCandidate(CupidEmulator *candidate, ResetWorkflow w
         std::memcpy(next.tpp1.latched, previous.tpp1.latched, sizeof(next.tpp1.latched));
         next.tpp1.rtc_base_time = previous.tpp1.rtc_base_time;
         next.huc3 = previous.huc3;
+        next.tama5.clock = previous.tama5.clock;
         next.rtc_cycles = configuredMode == previous.rtc_policy.mode ? previous.rtc_cycles : 0;
         // The native prefix retains the complete inline span, including bytes
         // beyond a smaller cartridge's connected RAM population.

@@ -42,6 +42,7 @@
 #include "state_io.h"
 #include "state_sgb_protocol.h"
 #include "state_startup.h"
+#include "tama5_internal.h"
 #include "vram_bus.h"
 
 #include <limits.h>
@@ -50,7 +51,8 @@
 
 enum {
     STATE_HEADER_SIZE = 128,
-    STATE_VERSION_V25 = CUPID_GB_STATE_VERSION,
+    STATE_VERSION_V26 = CUPID_GB_STATE_VERSION,
+    STATE_VERSION_V25 = 25,
     STATE_VERSION_V24 = 24,
     STATE_VERSION_V23 = 23,
     STATE_VERSION_V22 = 22,
@@ -940,7 +942,8 @@ static size_t current_hardware_size(const CupidGb *gb, size_t *startup_length) {
            CUPID_GB_DISPLAY_CLOCK_STATE_SIZE + CUPID_GB_PIXEL_TIMING_STATE_SIZE +
            CUPID_GB_VRAM_BUS_STATE_SIZE + STATE_INPUT_SAMPLE_SIZE + STATE_SERIAL_CLOCK_SIZE +
            STATE_WAVE_HISTORY_SIZE + ram_extension_size(gb) + startup +
-           CUPID_GB_SGB_PROTOCOL_STATE_SIZE + (gb->mbc6_flash ? CUPID_GB_MBC6_STATE_SIZE : 0u);
+           CUPID_GB_SGB_PROTOCOL_STATE_SIZE + (gb->mbc6_flash ? CUPID_GB_MBC6_STATE_SIZE : 0u) +
+           (gb->header.mbc_type == CUPID_GB_TAMA5 ? CUPID_GB_TAMA5_STATE_SIZE : 0u);
 }
 
 size_t cupid_gb_state_size(const CupidGb *gb) {
@@ -1047,12 +1050,13 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
         ((sections & STATE_SECTION_CAMERA) && !camera_for_snapshot(gb, &camera)) ||
         !valid_hardware(gb, sections, &camera) ||
         (gb->mbc6_flash && !cupid_gb_mbc6_state_valid(gb)) ||
+        (gb->header.mbc_type == CUPID_GB_TAMA5 && !cupid_gb_tama5_state_valid(gb)) ||
         (printer && !cupid_gb_printer_state_valid(&printer->state, gb))) {
         return CUPID_GB_STATE_INVALID;
     }
     memset(data, 0, STATE_HEADER_SIZE);
     memcpy(data, state_magic, sizeof(state_magic));
-    put_u32(data + 8, STATE_VERSION_V25);
+    put_u32(data + 8, STATE_VERSION_V26);
     put_u32(data + 12, (uint32_t)size);
     put_u32(data + 16, (uint32_t)gb->model);
     put_u32(data + 20, (uint32_t)gb->rom_size);
@@ -1116,6 +1120,8 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
     io.offset += CUPID_GB_SGB_PROTOCOL_STATE_SIZE;
     if (gb->mbc6_flash)
         cupid_gb_mbc6_state(&io, (CupidGb *)gb);
+    if (gb->header.mbc_type == CUPID_GB_TAMA5)
+        cupid_gb_tama5_state(&io, (CupidGb *)gb);
     if (io.invalid || io.offset != hardware_size) {
         return CUPID_GB_STATE_INVALID;
     }
@@ -1193,7 +1199,8 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
         return CUPID_GB_STATE_INVALID;
     }
     const uint32_t version = get_u32(data + 8);
-    if (version < STATE_VERSION_V2 || version > STATE_VERSION_V25 ||
+    if (version < STATE_VERSION_V2 || version > STATE_VERSION_V26 ||
+        (gb->header.mbc_type == CUPID_GB_TAMA5 && version < STATE_VERSION_V26) ||
         (version < STATE_VERSION_V19 && gb->cartridge_ram_size > CUPID_GB_INLINE_RAM_SIZE)) {
         return CUPID_GB_STATE_UNSUPPORTED_VERSION;
     }
@@ -1220,6 +1227,7 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
         version >= STATE_VERSION_V22 ? CUPID_GB_SGB_PROTOCOL_STATE_SIZE : 0;
     const size_t mbc6_size =
         version >= STATE_VERSION_V25 && gb->mbc6_flash ? CUPID_GB_MBC6_STATE_SIZE : 0;
+    const size_t tama5_size = gb->header.mbc_type == CUPID_GB_TAMA5 ? CUPID_GB_TAMA5_STATE_SIZE : 0;
     /* Version 19 had two complete layouts. Bound the input before hashing, then
      * choose one by exact geometry and descriptor validation below. */
     const size_t minimum_history =
@@ -1320,7 +1328,7 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
             (protocol_size &&
              !cupid_gb_sgb_protocol_wire_valid(gb, data + protocol_offset, protocol_size)))
             return CUPID_GB_STATE_INVALID;
-        const size_t accessory_offset = protocol_offset + protocol_size + mbc6_size;
+        const size_t accessory_offset = protocol_offset + protocol_size + mbc6_size + tama5_size;
         accessory_size = accessory_wire_size(data, length, accessory_offset, &printer_payload);
         if (!accessory_size)
             return CUPID_GB_STATE_INVALID;
@@ -1549,6 +1557,8 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
         candidate->mbc6.ram_bank[1] = ram + 1u;
         memset(candidate->mbc6_flash, 0xff, CUPID_GB_MBC6_STORAGE_SIZE);
     }
+    if (tama5_size)
+        cupid_gb_tama5_state(&io, candidate);
     if (io.invalid || io.offset != hardware_length ||
         candidate->boot_rom_enabled != ((flags & 1u) != 0) ||
         !valid_hardware_prefix(candidate, version) ||

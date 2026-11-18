@@ -20,11 +20,13 @@
  * along with this program.  If not, see <https://gnu.org>.
  */
 
+#include "audio_clock_drift.h"
 #include "audio_converter.h"
 
 #include <cmath>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <vector>
 
 namespace {
@@ -44,6 +46,61 @@ QAudioFormat format(int rate, int channels, QAudioFormat::SampleFormat sampleFor
 } // namespace
 
 int main() {
+    // Native writes contain both new audio and buffer filling. Only the sum
+    // of accepted frames and writable capacity isolates actual consumption.
+    AudioClockDrift drift;
+    for (int tick = 0; tick <= 5000; ++tick) {
+        const auto now = int64_t(tick) * 10000000;
+        const auto consumed = uint64_t(double(now) * 48000 * 0.972 / 1e9);
+        const int64_t queued = 100 + tick % 17 * 11;
+        drift.observe(now, consumed + uint64_t(queued), 10000 - queued, 48000);
+    }
+    if (!check(drift.updates() == 50 && std::abs(drift.ratio() - 0.972) < 0.00005,
+               "Host clock estimate followed buffer filling or missed drift"))
+        return 1;
+    const double honestRate = drift.ratio();
+    if (!check(drift.playbackRatio(2160, 48000) == honestRate &&
+                   drift.playbackRatio(0, 48000) > honestRate &&
+                   drift.playbackRatio(4800, 48000) < honestRate,
+               "Queue feedback did not stabilize playback lead"))
+        return 1;
+    drift.interrupt(INT64_C(50001000000));
+    if (!check(drift.ratio() == honestRate && drift.updates() == 50,
+               "A transient underrun discarded the clock estimate"))
+        return 1;
+    drift.interrupt(INT64_C(56000000000));
+    if (!check(drift.ratio() == 1 && !drift.updates(),
+               "A long underrun retained a stale clock estimate"))
+        return 1;
+    drift.reset();
+    drift.observe(INT64_C(50000000000), 2300000, 10000, 48000);
+    drift.observe(INT64_C(50010000000), 0, 10000, 48000);
+    if (!check(drift.ratio() == 1 && !drift.updates(), "Reset sink retained old drift"))
+        return 1;
+    drift.observe(INT64_C(56020000000), 300000, 10000, 48000);
+    if (!check(drift.ratio() == 1 && !drift.updates(), "Host stall became a drift sample"))
+        return 1;
+    drift.observe(INT64_C(57020000000), 900000, 10000, 48000);
+    if (!check(drift.ratio() == 1 && !drift.updates(), "Invalid sink rate changed playback"))
+        return 1;
+    drift.reset();
+    for (int tick = 0; tick <= 200; ++tick)
+        drift.observe(int64_t(tick) * 10000000, uint64_t(tick) * 480, 2000, 48000);
+    if (!check(drift.ratio() == 1 && drift.updates() == 2,
+               "Nominal host audio changed the converter ratio"))
+        return 1;
+    drift.reset();
+    uint64_t consumedFrames = 0;
+    for (int second = 0; second <= 40; ++second) {
+        drift.observe(int64_t(second) * 1000000000, consumedFrames + 1000, 1000, 48000);
+        consumedFrames += second < 20 ? 46656u : 48960u;
+        if (second == 19 &&
+            !check(std::abs(drift.ratio() - 0.972) < 0.00001, "Initial host rate did not settle"))
+            return 1;
+    }
+    if (!check(std::abs(drift.ratio() - 1.02) < 0.00001,
+               "Host rate recovery retained an old clock estimate"))
+        return 1;
     std::vector<int16_t> sine(44100 * 2);
     for (size_t i = 0; i < 44100; ++i) {
         sine[i * 2] = int16_t(std::sin(double(i) * 6.283185307179586 * 1000 / 44100) * 16000);
@@ -77,6 +134,41 @@ int main() {
         previous = samples[0];
     }
     if (!check(crossings >= 999 && crossings <= 1001, "Resampling changed sine frequency"))
+        return 1;
+    AudioConverter adjusted(output);
+    adjusted.setHostClockRatio(0.972);
+    const auto adjustedBytes = adjusted.convert(sine.data(), 44100);
+    if (!check(std::abs(double(adjustedBytes.size() / 8) - 48000 * 0.972) <= 2,
+               "Host drift correction produced an incorrect playback duration"))
+        return 1;
+    crossings = 0;
+    previous = 0;
+    for (qsizetype frame = 0; frame < adjustedBytes.size() / 8; ++frame) {
+        float sample;
+        std::memcpy(&sample, adjustedBytes.constData() + frame * 8, sizeof(sample));
+        if (previous <= 0 && sample > 0)
+            ++crossings;
+        previous = sample;
+    }
+    if (!check(crossings >= 999 && crossings <= 1001,
+               "Host drift correction lost source waveform cycles"))
+        return 1;
+    AudioConverter adjustedBlocks(output);
+    adjustedBlocks.setHostClockRatio(0.972);
+    QByteArray adjustedParts;
+    for (size_t start = 0; start < 44100; start += 137)
+        adjustedParts += adjustedBlocks.convert(sine.data() + start * 2,
+                                                std::min(size_t(137), size_t(44100) - start));
+    if (!check(adjustedParts == adjustedBytes, "Adjusted converter changed across block splits"))
+        return 1;
+    adjusted.reset();
+    if (!check(adjusted.convert(sine.data(), 44100) == expected,
+               "Converter reset retained a previous host clock"))
+        return 1;
+    adjusted.reset();
+    adjusted.setHostClockRatio(std::numeric_limits<double>::quiet_NaN());
+    if (!check(adjusted.convert(sine.data(), 44100) == expected,
+               "Invalid host clock changed nominal conversion"))
         return 1;
     AudioConverter slow(output);
     slow.setInputRate(22050);

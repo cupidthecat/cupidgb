@@ -26,6 +26,8 @@ HuC3 files append 17 bytes to SRAM for the stored clock baseline, current minute
 
 MBC6 stores 32 KiB of SRAM, an eight-byte header, the 1 MiB flash array and its 256 hidden bytes. The header contains the four ASCII bytes `MBC6`, version byte 1, a sector-zero protection byte (0 or 1), and two zero bytes. Loading a raw 32 KiB MBC6 SRAM file updates SRAM while keeping the current flash contents.
 
+TAMA5 stores 32 save bytes followed by the signature `TAMA`, version byte 1, three zero bytes, and the calendar. The calendar record stores a little-endian 64-bit Unix timestamp, one control byte and all 52 calendar digits in page order. A running timer advances for elapsed wall time when importing the file. A raw 32-byte import updates only cartridge storage. The loader checks the tag and every calendar field before replacing the live bytes.
+
 The frontend bounds imports by the selected cartridge's storage and accepted controller formats, including the older padded MBC7 layout. An archive keeps its extension in the save name, such as `game.zip.sav`, separately from `game.sav`.
 
 Core callers must provide valid complete input ranges. A range beginning inside owned cartridge storage cannot extend beyond that allocation. Export buffers and written-count pointers must not overlap the live core or its full owned ROM, SRAM and flash allocations. See [the core API](core-api.md#cartridge-storage) for allocation lifetime and borrowed pointers.

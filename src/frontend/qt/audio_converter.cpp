@@ -33,11 +33,16 @@ void AudioConverter::reset() {
     inputFrames_ = 0;
     nextPosition_ = 0;
     previous_[0] = previous_[1] = 0;
+    hostClockRatio_ = 1;
 }
 
 void AudioConverter::setInputRate(double rate) {
     if (std::isfinite(rate) && rate >= 4000 && rate <= 384000)
         inputRate_ = rate;
+}
+
+void AudioConverter::setHostClockRatio(double ratio) {
+    hostClockRatio_ = std::isfinite(ratio) && ratio >= 0.9 && ratio <= 1.1 ? ratio : 1;
 }
 
 void AudioConverter::append(QByteArray &bytes, float sample) const {
@@ -72,7 +77,7 @@ QByteArray AudioConverter::convert(const int16_t *samples, size_t frames) {
     if (!samples || !frames || !output_.isValid())
         return bytes;
     const uint64_t end = inputFrames_ + frames;
-    const double step = inputRate_ / output_.sampleRate();
+    const double step = inputRate_ / (output_.sampleRate() * hostClockRatio_);
     // Delay the final fractional sample until its right neighbor is available.
     while (nextPosition_ < double(end - 1)) {
         const auto first = uint64_t(nextPosition_);

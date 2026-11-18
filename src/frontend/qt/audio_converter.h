@@ -34,12 +34,19 @@ class AudioConverter {
     explicit AudioConverter(QAudioFormat output);
     QByteArray convert(const int16_t *samples, size_t frames);
     void setInputRate(double rate);
+    void setHostClockRatio(double ratio);
+
+    double hostClockRatio() const {
+        return hostClockRatio_;
+    }
+
     void reset();
 
   private:
     void append(QByteArray &bytes, float sample) const;
     QAudioFormat output_;
     double inputRate_ = 44100;
+    double hostClockRatio_ = 1;
     uint64_t inputFrames_ = 0;
     double nextPosition_ = 0;
     float previous_[2] = {};
