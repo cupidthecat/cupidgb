@@ -536,8 +536,8 @@ static void test_late_noise_selector(CupidGbModel model) {
     if (model != CUPID_GB_MODEL_CGB_D && model != CUPID_GB_MODEL_CGB_E)
         return;
 
-    /* Include a feedback-only write, a gated shift, and a transition that
-     * retains feedback on D when the write selects narrow mode. */
+    /* Include a feedback-only write, a gated shift, and transitions that
+     * retain the prior feedback cells in both widths on D. */
     static const struct {
         uint8_t old_control;
         uint8_t new_control;
@@ -552,6 +552,7 @@ static void test_late_noise_selector(CupidGbModel model) {
         {0x01, 0x91, 0x0201, 0x47c7, 0x63e3, 0x47c7, true},
         {0x01, 0xc1, 0x1001, 0x0002, 0x4000, 0x4002, false},
         {0x81, 0x11, 0x0102, 0x0041, 0x0020, 0x0020, false},
+        {0x81, 0x11, 0x0102, 0x4041, 0x6020, 0x2020, false},
         {0x81, 0x19, 0x0102, 0x0041, 0x0060, 0x0020, false},
     };
 

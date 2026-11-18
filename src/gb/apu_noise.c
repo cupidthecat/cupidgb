@@ -268,7 +268,7 @@ typedef enum CgbDNoiseAction {
     CGB_D_NOISE_SHIFT,
     CGB_D_NOISE_SET_FEEDBACK_WITHOUT_SHIFT,
     CGB_D_NOISE_SHIFT_SET_FEEDBACK,
-    CGB_D_NOISE_SHIFT_RETAIN_NARROW_FEEDBACK,
+    CGB_D_NOISE_SHIFT_RETAIN_FEEDBACK,
     CGB_D_NOISE_SHIFT_INTERSECT_PRIOR,
     CGB_D_NOISE_SHIFT_CLEAR_NEIGHBOR_IF_BIT6_LOW,
     CGB_D_NOISE_SHIFT_CLEAR_NEIGHBOR_UNLESS_BIT6_ONLY,
@@ -355,9 +355,8 @@ static void cgb_d_noise_selector_write(CupidGb *gb, unsigned from, unsigned to, 
         case CGB_D_NOISE_SHIFT_CLEAR_NEIGHBOR:
             after |= cells;
             break;
-        case CGB_D_NOISE_SHIFT_RETAIN_NARROW_FEEDBACK:
-            if (apu->ch4_width7)
-                after |= before & cells;
+        case CGB_D_NOISE_SHIFT_RETAIN_FEEDBACK:
+            after |= before & cells;
             break;
         case CGB_D_NOISE_SHIFT_INTERSECT_PRIOR:
             after = (after & before) | (before & 1u) | cells;
