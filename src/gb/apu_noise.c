@@ -62,7 +62,7 @@ static void noise_register_shift(CupidGb *gb, bool color) {
     noise_publish_register_edge(gb);
 }
 
-bool cupid_gb_noise_tick(CupidGb *gb) {
+bool cupid_gb_noise_tick(CupidGb *gb, bool sample_pcm) {
     CupidGbApu *apu = &gb->apu;
     CupidGbNoiseTiming *timing = &apu->noise_timing;
     timing->clock_phase = (uint8_t)((timing->clock_phase + 1) & 7);
@@ -91,6 +91,8 @@ bool cupid_gb_noise_tick(CupidGb *gb) {
     if (!color && previous && !next && apu->ch4_on)
         timing->feedback_latch = !noise_feedback(apu);
     if (!previous && next && apu->ch4_on) {
+        if (sample_pcm && (!timing->output_high || !apu->ch4_vol))
+            apu->pcm_read_inhibit |= 0xf000u;
         if (color)
             color_noise_shift(apu);
         else
@@ -110,14 +112,15 @@ void cupid_gb_noise_prepare(CupidGb *gb, bool active) {
     bool extra_step = false;
     bool shorten = false;
     const bool color = cupid_gb_model_is_cgb(gb->model);
-    const bool fast_monochrome = !color && gb->double_speed;
+    const bool early_clock = !color || cupid_gb_model_is_early_cgb(gb->model);
+    const bool fast_early_clock = early_clock && gb->double_speed;
     if (!color)
         timing->feedback_latch = false;
     timing->foreground = apu->ch4_dac;
     timing->background = true;
     timing->started_dac_off = !apu->ch4_dac;
     if (divisor > 1 &&
-        (timing->remaining == 1 || (fast_monochrome && active && timing->remaining == 2))) {
+        (timing->remaining == 1 || (fast_early_clock && active && timing->remaining == 2))) {
         timing->divider_counter = (uint16_t)((timing->divider_counter + 1) & 0x3fff);
     } else if (active && timing->remaining == 2 && phase == 0) {
         if (divisor == 0) {
@@ -136,8 +139,8 @@ void cupid_gb_noise_prepare(CupidGb *gb, bool active) {
     int delay = divisor ? (int)(divisor * 4 + 6) : 6;
     if (!divisor) {
         if (phase & 1) {
-            delay += color && background ? -1 : 1;
-        } else if (gb->double_speed && (!color || cupid_gb_model_is_early_cgb(gb->model))) {
+            delay += !early_clock && background ? -1 : 1;
+        } else if (fast_early_clock) {
             delay += 2;
         }
         if (background && !active && phase == 0 && started_off) {
@@ -147,7 +150,7 @@ void cupid_gb_noise_prepare(CupidGb *gb, bool active) {
         static const int8_t inactive_adjustment[] = {0, -1, -2, 1};
         static const int8_t active_adjustment[] = {0, -5, -2, -3};
         delay += active ? active_adjustment[phase] : inactive_adjustment[phase];
-        if (fast_monochrome && phase == 2)
+        if (fast_early_clock && phase == 2)
             delay += 4;
         if (phase == 0 && ((active && apu->ch4_shift == 0) || (background && !active))) {
             delay -= 4;
@@ -157,14 +160,14 @@ void cupid_gb_noise_prepare(CupidGb *gb, bool active) {
         if (phase == 0) {
             /* Fast early-model clocks retain this startup interval; the
              * ordinary monochrome and color paths bypass four prescaler ticks. */
-            if (!fast_monochrome)
+            if (!fast_early_clock)
                 delay -= 4;
             if (!apu->ch4_dac) {
                 delay += 4;
             }
         }
     }
-    if (!divisor && fast_monochrome && background && !active)
+    if (!divisor && fast_early_clock && background && !active)
         --delay;
     if (shorten) {
         delay -= 4;

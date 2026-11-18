@@ -222,7 +222,7 @@ static void color_pulse_trigger(CupidGb *gb, unsigned channel, bool was_active,
     }
 }
 
-static bool pulse_tick(CupidGbApu *apu, unsigned channel, bool color) {
+static bool pulse_tick(CupidGbApu *apu, unsigned channel, bool color, bool sample_pcm) {
     CupidGbPulseTiming *timing = &apu->pulse_timing[channel];
     uint16_t *timer = channel ? &apu->ch2_timer : &apu->ch1_timer;
     uint8_t *index = channel ? &apu->ch2_duty_pos : &apu->ch1_duty_pos;
@@ -245,6 +245,9 @@ static bool pulse_tick(CupidGbApu *apu, unsigned channel, bool color) {
     if (*timer) {
         return false;
     }
+    if (sample_pcm && (!timing->output_high || timing->output_blocked ||
+                       !(channel ? apu->ch2_vol : apu->ch1_vol)))
+        apu->pcm_read_inhibit |= channel ? 0x00f0u : 0x000fu;
     *timer = (uint16_t)((2048u - frequency) * 4u);
     *index = (uint8_t)((*index + 1u) & 7u);
     timing->edge_age = 0;
@@ -1450,7 +1453,11 @@ void cupid_gb_apu_on_write(CupidGb *gb, uint8_t off, uint8_t val) {
 static void execute_audio_cycles(CupidGb *gb, uint16_t cycles, bool run_end) {
     CupidGbApu *apu = &gb->apu;
     const bool color = cupid_gb_model_is_cgb(gb->model);
-    const bool latch_pcm_edge = run_end && cupid_gb_model_is_early_cgb(gb->model);
+    /* Earlier color revisions latch a held zero only on the final oscillator
+     * step of an audio run. Observe it at the step, independently of output. */
+    const unsigned pcm_tick =
+        run_end && cupid_gb_model_is_early_cgb(gb->model) ? cycles - 1u : UINT16_MAX;
+    const unsigned noise_pcm_tick = gb->double_speed ? UINT16_MAX : pcm_tick;
     uint16_t c;
     for (c = 0u; c < cycles; ++c) {
         uint8_t changed = 0;
@@ -1462,34 +1469,21 @@ static void execute_audio_cycles(CupidGb *gb, uint16_t cycles, bool run_end) {
         }
 
         if (apu->apu_on && oscillator_running) {
-            /* The early read taps can hold a zero code across the last
-             * oscillator step at the bus boundary. Internal output spans
-             * and repeated reads do not reset that delivery's latch. */
-            const bool sample_pcm = latch_pcm_edge && c + 1u == cycles;
-            uint8_t previous_pcm[4];
-            if (sample_pcm)
-                cupid_gb_apu_digital_samples(gb, previous_pcm);
             apu->clock_phase = (uint8_t)((apu->clock_phase + 1u) & 3u);
             if (color) {
                 if (color_sweep_tick(gb))
                     changed |= 1;
-                if (pulse_tick(apu, 0, true)) {
+                if (pulse_tick(apu, 0, true, c == pcm_tick))
                     changed |= 1;
-                    if (sample_pcm && !previous_pcm[0])
-                        apu->pcm_read_inhibit |= 0x000fu;
-                }
-                if (pulse_tick(apu, 1, true)) {
+                if (pulse_tick(apu, 1, true, c == pcm_tick))
                     changed |= 2;
-                    if (sample_pcm && !previous_pcm[1])
-                        apu->pcm_read_inhibit |= 0x00f0u;
-                }
                 if (apu->envelope_delay && !--apu->envelope_delay) {
                     envelope_due = true;
                 }
             } else {
-                if (pulse_tick(apu, 0, false))
+                if (pulse_tick(apu, 0, false, false))
                     changed |= 1;
-                if (pulse_tick(apu, 1, false))
+                if (pulse_tick(apu, 1, false, false))
                     changed |= 2;
             }
 
@@ -1532,11 +1526,8 @@ static void execute_audio_cycles(CupidGb *gb, uint16_t cycles, bool run_end) {
                 }
             }
 
-            if (cupid_gb_noise_tick(gb)) {
+            if (cupid_gb_noise_tick(gb, c == noise_pcm_tick))
                 changed |= 8;
-                if (sample_pcm && !gb->double_speed && !previous_pcm[3])
-                    apu->pcm_read_inhibit |= 0xf000u;
-            }
             if (apu->noise_timing.start_delay && !--apu->noise_timing.start_delay)
                 noise_restart_due = true;
         }

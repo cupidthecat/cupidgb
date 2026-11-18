@@ -325,6 +325,36 @@ static void test_pcm_noise(CupidGbModel model, bool fast) {
     destroy(gb);
 }
 
+static void test_fast_noise_restart(CupidGbModel model) {
+    CupidGb *first = machine(model), *second = machine(model);
+    const bool early = cupid_gb_model_is_early_cgb(model);
+    first->double_speed = true;
+
+    for (unsigned divisor = 0; divisor <= 7; divisor += 7) {
+        cupid_gb_write_u8(first, 0xff26, 0);
+        cupid_gb_write_u8(first, 0xff26, 0x80);
+        cupid_gb_write_u8(first, 0xff22, (uint8_t)divisor);
+        cupid_gb_write_u8(first, 0xff23, 0x80);
+        if (!divisor)
+            cupid_gb_write_u8(first, 0xff23, 0x80);
+
+        /* The zero-code DAC-off restart extends the background countdown.
+         * Code seven has the longest inactive start on early fast clocks. */
+        unsigned expected = early ? (divisor ? 38u : 35u) : 34u;
+        assert(first->apu.noise_timing.remaining == expected);
+        size_t length;
+        uint8_t *state = snapshot(first, &length);
+        assert(cupid_gb_load_state(second, state, length) == CUPID_GB_STATE_OK);
+        assert(second->apu.noise_timing.remaining == expected);
+        cupid_gb_tick_apu(second, 2);
+        assert(second->apu.noise_timing.remaining == expected - 1u);
+        free(state);
+    }
+
+    destroy(second);
+    destroy(first);
+}
+
 int main(void) {
     for (unsigned i = 0; i < COUNT_OF(models); ++i) {
         test_tail_aliases(models[i]);
@@ -336,6 +366,7 @@ int main(void) {
         test_pcm_delivery(models[i], true);
         test_pcm_noise(models[i], false);
         test_pcm_noise(models[i], true);
+        test_fast_noise_restart(models[i]);
     }
     return 0;
 }

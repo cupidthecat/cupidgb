@@ -878,6 +878,7 @@ static bool valid_hardware_prefix(const CupidGb *gb, unsigned version) {
 static bool valid_hardware_extension(const CupidGb *gb) {
     const bool early_cgb = cupid_gb_model_is_early_cgb(gb->model);
     const unsigned pulse_delay_limit = early_cgb ? 14u : 12u;
+    const unsigned noise_delay_limit = early_cgb || !cupid_gb_model_is_cgb(gb->model) ? 38u : 34u;
     const bool rumble_cartridge = gb->header.mbc_type == CUPID_GB_MBC5 && gb->header.has_rumble;
     if ((rumble_cartridge && gb->current_ram_bank > 7u) ||
         (gb->mbc5_rumble_on && !rumble_cartridge)) {
@@ -889,10 +890,10 @@ static bool valid_hardware_extension(const CupidGb *gb) {
         gb->apu.sweep_timing.startup_ticks > 3 || gb->apu.sweep_timing.shift_ticks > 7 ||
         gb->apu.sweep_timing.restart_hold > 8 || gb->apu.sweep_timing.delta > 2047 ||
         gb->apu.sweep_timing.completed_delta > 2047 || gb->apu.noise_timing.clock_phase > 7 ||
-        gb->apu.noise_timing.remaining > 34 || gb->speed_switch_halt_cycles > 131080 ||
-        gb->speed_switch_toggle_cycles > 6 || gb->speed_switch_freeze_cycles > 5 ||
-        gb->stop_divider_hold_cycles > 4 || gb->speed_switch_alignment > 7 ||
-        (gb->hdma_hblank_delay && !gb->hdma_active) ||
+        gb->apu.noise_timing.remaining > noise_delay_limit ||
+        gb->speed_switch_halt_cycles > 131080 || gb->speed_switch_toggle_cycles > 6 ||
+        gb->speed_switch_freeze_cycles > 5 || gb->stop_divider_hold_cycles > 4 ||
+        gb->speed_switch_alignment > 7 || (gb->hdma_hblank_delay && !gb->hdma_active) ||
         ((gb->hdma_pending || gb->hdma_active) && !gb->hdma_blocks_remaining)) {
         return false;
     }

@@ -24,7 +24,7 @@
 
 #include "cupid/gb/gb.h"
 
-bool cupid_gb_noise_tick(CupidGb *gb);
+bool cupid_gb_noise_tick(CupidGb *gb, bool sample_pcm);
 void cupid_gb_noise_prepare(CupidGb *gb, bool active);
 void cupid_gb_noise_frequency_write(CupidGb *gb, uint8_t previous);
 void cupid_gb_noise_disconnect(CupidGb *gb);
