@@ -32,7 +32,8 @@ enum {
     PROTOCOL_BYTES = 85,
     SELECTOR_BYTES = 1,
     WAVE_HISTORY_BYTES = 1,
-    SRAM_LENGTH_BYTES = 4
+    SRAM_LENGTH_BYTES = 4,
+    MBC7_BUS_HOLD_OFFSET = 300582
 };
 
 typedef struct Blob {
@@ -201,6 +202,8 @@ static Blob legacy_blob(const Blob *current, unsigned version) {
     assert(legacy.bytes);
     const size_t hardware = legacy.size - (version >= 12 ? ACCESSORY_BYTES : 0);
     memcpy(legacy.bytes, current->bytes, hardware);
+    if (version >= 6 && legacy.bytes[MBC7_BUS_HOLD_OFFSET] == 0)
+        legacy.bytes[MBC7_BUS_HOLD_OFFSET + 1] = 0xff; /* Legacy idle bus encoding. */
     if (version == 19) {
         /* This fixture selects the SRAM-only draft, whose size is fixed above. */
         const size_t wave = current->size - ACCESSORY_BYTES - PROTOCOL_BYTES - SRAM_LENGTH_BYTES -
@@ -237,6 +240,8 @@ static void test_legacy_projection(void) {
         source->serial_bits_remaining = source->io_registers[2] & 0x80 ? 3 : 0;
         source->serial_tx_latch = 0xa5;
         const bool projected_fast = source->cgb_mode && (source->io_registers[2] & 2u);
+        /* The legacy format treated the undriven reset bus as expired. */
+        source->cartridge_bus_data = 0xff;
         Blob current = capture(source);
         for (unsigned version = 2; version <= 18; ++version) {
             Blob legacy = legacy_blob(&current, version);
@@ -311,6 +316,12 @@ static void test_invalid_selector(void) {
         for (unsigned version = 18; version <= CUPID_GB_STATE_VERSION; ++version) {
             Blob current = capture(source);
             Blob blob = version <= 21 ? legacy_blob(&current, version) : current;
+            if (version == 22 || version == 23) {
+                /* Versions 22 and 23 share this fixture's layout. */
+                put_u32(blob.bytes + 8, version);
+                if (blob.bytes[MBC7_BUS_HOLD_OFFSET] == 0)
+                    blob.bytes[MBC7_BUS_HOLD_OFFSET + 1] = 0xff;
+            }
             const size_t selector = selector_offset(&blob);
             const uint8_t invalid[] = {2, 0x80, 0xff};
             for (unsigned index = 0; index < sizeof(invalid); ++index) {

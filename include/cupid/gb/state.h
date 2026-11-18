@@ -41,7 +41,7 @@ typedef enum CupidGbStateResult {
     CUPID_GB_STATE_NO_ROM
 } CupidGbStateResult;
 
-#define CUPID_GB_STATE_VERSION 23u
+#define CUPID_GB_STATE_VERSION 24u
 
 /* Trusted in-memory snapshots may cache the immutable cartridge identity. Initialize
  * once for the current instance and discard the context on cartridge replacement,

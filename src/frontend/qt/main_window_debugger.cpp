@@ -90,7 +90,10 @@ void MainWindow::openInspectors() {
         inspectorsWindow_ = new InspectorsWindow(this);
         inspectorsWindow_->setSession(
             [this] { return emulator_ ? &emulator_->gb : nullptr; },
-            [this](uint16_t address, uint8_t value) { return debuggerWrite(address, value); });
+            [this](uint16_t address, uint8_t value) { return debuggerWrite(address, value); },
+            [this](InspectorMemoryRegion region, size_t bank, uint16_t offset, uint8_t value) {
+                return debuggerWritePhysical(region, bank, offset, value);
+            });
         inspectorsWindow_->setColorTable(cgbColorTable_.get());
     }
     inspectorsWindow_->refresh();
@@ -117,6 +120,7 @@ void MainWindow::resetDebuggerTimeline(bool clearSession) {
 }
 
 void MainWindow::pauseDebugger() {
+    const QPointer<MainWindow> self(this);
     if (!debuggerInputPaused_)
         debuggerPlayerButtons_ = livePlayerButtons();
     if (linkSession_ && emulator_)
@@ -131,6 +135,8 @@ void MainWindow::pauseDebugger() {
         // paused tools inspect the guest input at the stopped boundary.
         setPaused(true);
     }
+    if (!self)
+        return;
     // The pause transition also resets execution, so retain the stopped reason
     // after it completes. Errors must remain inspectable without skipping a hit.
     if (debugger_ && (previousStop == CUPID_GB_DEBUG_STOP_BREAKPOINT ||
@@ -421,9 +427,43 @@ bool MainWindow::debuggerBackstep() {
 bool MainWindow::debuggerWrite(uint16_t address, uint8_t value) {
     if (!emulator_)
         return false;
+    const QPointer<MainWindow> self(this);
+    const uint64_t session = sessionId_;
+    const uint64_t timeline = timelineId_;
     pauseDebugger();
-    if (!cupid_gb_debug_poke(&emulator_->gb, address, value))
+    if (!self || !emulator_ || sessionId_ != session || timelineId_ != timeline ||
+        !cupid_gb_debug_poke(&emulator_->gb, address, value))
         return false;
+    finishDebuggerEdit();
+    return true;
+}
+
+bool MainWindow::debuggerWritePhysical(InspectorMemoryRegion region, size_t bank, uint16_t offset,
+                                       uint8_t value) {
+    if (!emulator_ || region == InspectorMemoryRegion::Mapped ||
+        region == InspectorMemoryRegion::Rom)
+        return false;
+    if (offset >= inspectorMemoryBank(emulator_->gb, region, bank).size)
+        return false;
+    const QPointer<MainWindow> self(this);
+    const uint64_t session = sessionId_;
+    const uint64_t timeline = timelineId_;
+    pauseDebugger();
+    if (!self || !emulator_ || sessionId_ != session || timelineId_ != timeline)
+        return false;
+    const auto bytes = inspectorMemoryBank(emulator_->gb, region, bank);
+    if (offset >= bytes.size)
+        return false;
+    // The selected physical bank bypasses guest mapper and LCD access gates.
+    // Host storage observers still need the same dirty signal as a guest write.
+    const_cast<uint8_t *>(bytes.data)[offset] = value;
+    if (region == InspectorMemoryRegion::CartridgeRam)
+        ++emulator_->gb.battery_write_generation;
+    finishDebuggerEdit();
+    return true;
+}
+
+void MainWindow::finishDebuggerEdit() {
     ++timelineId_;
     cancelCameraCapture();
     resetDebuggerTimeline();
@@ -432,7 +472,6 @@ bool MainWindow::debuggerWrite(uint16_t address, uint8_t value) {
     watchBattery();
     present(Presentation::Reset);
     refreshDebugger();
-    return true;
 }
 
 void MainWindow::debuggerCommand(const QString &input) {

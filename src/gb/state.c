@@ -49,7 +49,8 @@
 
 enum {
     STATE_HEADER_SIZE = 128,
-    STATE_VERSION_V23 = CUPID_GB_STATE_VERSION,
+    STATE_VERSION_V24 = CUPID_GB_STATE_VERSION,
+    STATE_VERSION_V23 = 23,
     STATE_VERSION_V22 = 22,
     STATE_VERSION_V21 = 21,
     STATE_VERSION_V20 = 20,
@@ -680,7 +681,7 @@ static void state_lcd_phase(StateIo *io, CupidGb *gb) {
     boolean(io, &gb->lcd_first_frame);
 }
 
-static void state_dma_bus(StateIo *io, CupidGb *gb) {
+static void state_dma_bus(StateIo *io, CupidGb *gb, uint32_t version) {
     const uint64_t now = gb->elapsed_cycles * 2u;
     const uint64_t remaining = gb->cartridge_bus_expiry > now ? gb->cartridge_bus_expiry - now : 0;
     if (!io->input && remaining > CUPID_GB_CARTRIDGE_BUS_HALF_DOTS) {
@@ -689,11 +690,12 @@ static void state_dma_bus(StateIo *io, CupidGb *gb) {
     }
 
     uint8_t half_dots = (uint8_t)remaining;
-    uint8_t data = half_dots ? gb->cartridge_bus_data : 0xffu;
+    uint8_t data = cupid_gb_sample_cartridge_bus(gb);
     bytes(io, &half_dots, 1);
     bytes(io, &data, 1);
     if (io->input) {
-        if (half_dots > CUPID_GB_CARTRIDGE_BUS_HALF_DOTS || (!half_dots && data != 0xffu)) {
+        const bool valid_stable = data == 0xffu || (version >= STATE_VERSION_V24 && data == 0);
+        if (half_dots > CUPID_GB_CARTRIDGE_BUS_HALF_DOTS || (!half_dots && !valid_stable)) {
             io->invalid = true;
             return;
         }
@@ -897,7 +899,7 @@ static bool valid_hardware_extension(const CupidGb *gb) {
 }
 
 static bool valid_hardware(const CupidGb *gb, unsigned sections, const CupidGbCamera *camera) {
-    return valid_hardware_prefix(gb, STATE_VERSION_V23) && valid_hardware_extension(gb) &&
+    return valid_hardware_prefix(gb, STATE_VERSION_V24) && valid_hardware_extension(gb) &&
            cupid_gb_audio_state_valid(gb) && cupid_gb_sgb_startup_state_valid(gb) &&
            cupid_gb_sgb_protocol_state_valid(gb) && valid_v5_sections(gb, sections, camera) &&
            valid_infrared(gb) && cupid_gb_display_clock_state_valid(gb) &&
@@ -1046,7 +1048,7 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
     }
     memset(data, 0, STATE_HEADER_SIZE);
     memcpy(data, state_magic, sizeof(state_magic));
-    put_u32(data + 8, STATE_VERSION_V23);
+    put_u32(data + 8, STATE_VERSION_V24);
     put_u32(data + 12, (uint32_t)size);
     put_u32(data + 16, (uint32_t)gb->model);
     put_u32(data + 20, (uint32_t)gb->rom_size);
@@ -1062,18 +1064,18 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
         cupid_sha256(gb->boot_rom, gb->boot_rom_size, data + 64);
     }
     StateIo io = {NULL, data, STATE_HEADER_SIZE, hardware_size, false};
-    state_fields(&io, (CupidGb *)gb, STATE_VERSION_V23);
+    state_fields(&io, (CupidGb *)gb, STATE_VERSION_V24);
     state_extension_v3(&io, (CupidGb *)gb);
     state_extension_v4(&io, (CupidGb *)gb);
     state_extension_v5(&io, (CupidGb *)gb, sections, &camera);
     state_lcd_phase(&io, (CupidGb *)gb);
-    state_dma_bus(&io, (CupidGb *)gb);
+    state_dma_bus(&io, (CupidGb *)gb, STATE_VERSION_V24);
     uint8_t dma_phase = gb->dma_active || gb->dma_start_delay ? gb->dma_phase : 0;
     bytes(&io, &dma_phase, 1);
     if (gb->dma_phase > 3u)
         io.invalid = true;
     state_input_and_display(&io, (CupidGb *)gb);
-    state_video_bus(&io, (CupidGb *)gb, STATE_VERSION_V23);
+    state_video_bus(&io, (CupidGb *)gb, STATE_VERSION_V24);
     state_stop_ports(&io, (CupidGb *)gb);
     bytes(&io, ((CupidGb *)gb)->apu.pulse_dac_hold, 2);
     if (!(sections & STATE_SECTION_HUC3))
@@ -1184,7 +1186,7 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
         return CUPID_GB_STATE_INVALID;
     }
     const uint32_t version = get_u32(data + 8);
-    if (version < STATE_VERSION_V2 || version > STATE_VERSION_V23 ||
+    if (version < STATE_VERSION_V2 || version > STATE_VERSION_V24 ||
         (version < STATE_VERSION_V19 && gb->cartridge_ram_size > CUPID_GB_INLINE_RAM_SIZE)) {
         return CUPID_GB_STATE_UNSUPPORTED_VERSION;
     }
@@ -1385,7 +1387,7 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
     state_extension_v5(&io, candidate, sections, &candidate->camera);
     if (version >= STATE_VERSION_V6) {
         state_lcd_phase(&io, candidate);
-        state_dma_bus(&io, candidate);
+        state_dma_bus(&io, candidate, version);
         if (version < STATE_VERSION_V8 && candidate->model != CUPID_GB_MODEL_CGB &&
             candidate->cartridge_bus_expiry)
             io.invalid = true;

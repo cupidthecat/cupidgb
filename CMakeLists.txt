@@ -245,7 +245,7 @@ if(CUPIDGB_ENABLE_TESTS)
         audio_synthesis audio_filter audio_state audio_publication audio_clock cpu_timing cpu_lockup
         dma oam_bus video_bus vram_bus vram_quiet bus state state_ram battery native_v1_recovery
         sgb sgb_protocol sgb_protocol_state sgb_startup sgb_startup_audio sgb_startup_state
-        input input_sampling cartridge mmm01 mbc3_bus camera camera_host camera_state mbc7
+        input input_sampling cartridge mapper_guest mmm01 mbc3_bus camera camera_host camera_state mbc7
         tpp1 rumble rumble_sampling presentation_observer huc3 infrared infrared_state
         infrared_guest cheats debugger debugger_watchpoints sha256)
         add_executable(cupidgb_${test_name} tests/test_${test_name}.c)

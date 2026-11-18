@@ -1,6 +1,6 @@
 /**
  * @file    inspector_renderer.cpp
- * @brief   Memory-inspector tile, map, sprite, palette, and overlay rendering.
+ * @brief   Physical memory banks and tile, map, sprite, palette, and overlay rendering.
  * @author  cupidthecat
  * @date    2026-11-16
  *
@@ -28,6 +28,7 @@
 #include <utility>
 
 extern "C" {
+#include "cupid/gb/cartridge.h"
 #include "cupid/gbc/cgb.h"
 }
 
@@ -275,4 +276,44 @@ void paintInspectorOverlays(QPainter &painter, const QRectF &target, const QSize
         painter.strokePath(visible, outline);
     }
     painter.restore();
+}
+
+size_t inspectorMemoryBankCount(const CupidGb &gb, InspectorMemoryRegion region) {
+    switch (region) {
+        case InspectorMemoryRegion::Mapped:
+            return 0;
+        case InspectorMemoryRegion::Rom:
+            return (gb.rom_size + 0x3fff) / 0x4000;
+        case InspectorMemoryRegion::VideoRam:
+            return gb.model == CUPID_GB_MODEL_CGB ? 2 : 1;
+        case InspectorMemoryRegion::WorkRam:
+            return gb.model == CUPID_GB_MODEL_CGB ? 8 : 2;
+        case InspectorMemoryRegion::CartridgeRam:
+            return (gb.cartridge_ram_size + 0x1fff) / 0x2000;
+    }
+    return 0;
+}
+
+InspectorMemoryBank inspectorMemoryBank(const CupidGb &gb, InspectorMemoryRegion region,
+                                        size_t bank) {
+    if (!gb.loaded || bank >= inspectorMemoryBankCount(gb, region))
+        return {};
+    switch (region) {
+        case InspectorMemoryRegion::Mapped:
+            return {};
+        case InspectorMemoryRegion::Rom: {
+            const size_t offset = bank * 0x4000;
+            return {gb.rom + offset, std::min(size_t(0x4000), gb.rom_size - offset)};
+        }
+        case InspectorMemoryRegion::VideoRam:
+            return {gb.video_ram + bank * 0x2000, 0x2000};
+        case InspectorMemoryRegion::WorkRam:
+            return {gb.work_ram + bank * 0x1000, 0x1000};
+        case InspectorMemoryRegion::CartridgeRam: {
+            const size_t offset = bank * 0x2000;
+            return {cupid_gb_cartridge_ram_const(&gb) + offset,
+                    std::min(size_t(0x2000), gb.cartridge_ram_size - offset)};
+        }
+    }
+    return {};
 }

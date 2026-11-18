@@ -289,6 +289,9 @@ static void pulse_continuations(unsigned version) {
                 CupidGb *source = create((CupidGbModel)model, enhanced != 0, true, false);
                 uint8_t writes[PACKET_WRITES];
                 const unsigned cursor = checkpoint(source, stage, writes);
+                /* Pre-v24 files projected a never-driven bus as expired. */
+                if (version < 24 && !source->cartridge_bus_expiry)
+                    source->cartridge_bus_data = 0xff;
                 Blob saved = capture(source);
                 /* Version 22 uses the same cartridge payload and digest. Give
                  * that importer its own header and integrity hash explicitly. */
@@ -528,6 +531,8 @@ static void legacy_partial_header(void) {
     CupidGb *source = create(CUPID_GB_MODEL_SGB, true, true, false);
     uint8_t writes[PACKET_WRITES];
     const unsigned cursor = checkpoint(source, 0, writes);
+    if (!source->cartridge_bus_expiry)
+        source->cartridge_bus_data = 0xff;
     Blob current = capture(source);
     const size_t offset = protocol_offset(source, current);
     Blob old = {malloc(current.size - PROTOCOL_BYTES), current.size - PROTOCOL_BYTES};

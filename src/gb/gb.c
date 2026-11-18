@@ -302,6 +302,8 @@ void cupid_gb_init(CupidGb *gb) {
     const CupidGbRtcPolicy rtc_policy = gb->rtc_policy;
     const CupidGbCameraHost camera_host = gb->camera_host;
     memset(gb, 0, sizeof(*gb));
+    /* Approximate boot starts after firmware has already driven the bus. */
+    gb->cartridge_bus_data = 0xffu;
     gb->oam_vram_row = UINT16_MAX;
     gb->oam_search_word = 0;
     cupid_gb_ppu_leave_stop(gb);
@@ -535,7 +537,7 @@ void cupid_gb_startup_hardware(CupidGb *gb) {
     gb->cpu.l = 0u;
     gb->cpu.sp = 0u;
     gb->cartridge_bus_expiry = 0;
-    gb->cartridge_bus_data = 0xffu;
+    gb->cartridge_bus_data = 0;
     gb->cpu.pc = 0x0000u; /* start executing boot ROM from address 0 */
     gb->oam_vram_row = UINT16_MAX;
     gb->oam_search_word = 0;
@@ -908,7 +910,9 @@ static void drive_cartridge_bus(CupidGb *gb, uint8_t value, bool half_dot) {
 }
 
 uint8_t cupid_gb_sample_cartridge_bus(const CupidGb *gb) {
-    return gb->elapsed_cycles * 2u < gb->cartridge_bus_expiry ? gb->cartridge_bus_data : 0xffu;
+    /* Reset has no decay in progress. The first driven access starts the timer. */
+    const uint64_t expiry = gb->cartridge_bus_expiry;
+    return !expiry || gb->elapsed_cycles * 2u < expiry ? gb->cartridge_bus_data : 0xffu;
 }
 
 /**

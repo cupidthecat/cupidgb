@@ -1,6 +1,6 @@
 /**
  * @file    inspectors_window.h
- * @brief   Qt mapped-memory and graphics-inspector window interface.
+ * @brief   Qt mapped/physical memory and graphics-inspector window interface.
  * @author  cupidthecat
  * @date    2026-11-16
  *
@@ -22,7 +22,7 @@
 
 #pragma once
 
-#include "color_pipeline.h"
+#include "inspector_renderer.h"
 
 #include <QMainWindow>
 #include <QTimer>
@@ -46,8 +46,10 @@ class InspectorsWindow final : public QMainWindow {
     // The writer pauses emulation and invalidates debugger history before editing.
     using Writer = std::function<bool(uint16_t, uint8_t)>;
 
+    using PhysicalWriter = std::function<bool(InspectorMemoryRegion, size_t, uint16_t, uint8_t)>;
+
     explicit InspectorsWindow(QWidget *parent = nullptr);
-    void setSession(Getter getter, Writer writer);
+    void setSession(Getter getter, Writer writer, PhysicalWriter physicalWriter = {});
     void setColorTable(const ColorTable *colors);
     // Cancel uncommitted edits when the host replaces or restores hardware state.
     void sessionChanged();
@@ -58,6 +60,12 @@ class InspectorsWindow final : public QMainWindow {
   private:
     CupidGb *state() const;
     void refreshMemory(const CupidGb &gb);
+    void changeMemoryRegion();
+    void changeMemoryBank();
+    bool writeSelectedByte(uint16_t address, uint8_t value);
+    InspectorMemoryRegion memoryRegion() const;
+    uint16_t memoryBase() const;
+    unsigned memorySize() const;
     void refreshTiles(const CupidGb &gb);
     void refreshMap(const CupidGb &gb);
     void refreshObjects(const CupidGb &gb);
@@ -70,6 +78,7 @@ class InspectorsWindow final : public QMainWindow {
 
     Getter getter_;
     Writer writer_;
+    PhysicalWriter physicalWriter_;
     const ColorTable *colorTable_ = nullptr;
     QTimer timer_;
     QTabWidget *tabs_ = nullptr;
@@ -78,6 +87,8 @@ class InspectorsWindow final : public QMainWindow {
     QCheckBox *live_ = nullptr;
     QCheckBox *grid_ = nullptr;
     QCheckBox *scrolling_ = nullptr;
+    QComboBox *memoryRegion_ = nullptr;
+    QComboBox *memoryBank_ = nullptr;
     QLineEdit *address_ = nullptr;
     QLineEdit *editAddress_ = nullptr;
     QLineEdit *editValue_ = nullptr;

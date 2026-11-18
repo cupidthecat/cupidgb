@@ -42,11 +42,15 @@ The `audio_publication` target restores saved guest routing into a receiving str
 
 The standalone `cupidgb_turbo_audio_window` target checks complete-frame selection, phase and block boundaries, every cap, normal bypass, host-rate changes, capacity drops and transactional rejection. It has no Qt dependency. Integrated playback workflows check history consumption and forward replay, exhaustion/release, current input, recording isolation, invalid snapshots, combined pacing, integer/float host formats, queue boundaries and focus-loss resets. These checks do not establish audible output or total device latency.
 
+The `mapper_guest` target runs 60 CPU-executed banking cases on DMG and CGB. It covers 27 supported cartridge type headers, MBC1 multicart, and extended MBC3. Each case checks both ROM windows and restores a checkpoint into a quick-reset machine before replaying the remaining guest instructions. The peripheral targets cover RAM, clocks, camera and EEPROM separately.
+
+The `bus` target covers firmware entry, hard and quick reset, driven and floating reads, decay and an undriven CGB DMA source. It also checks version 24 continuation and the expired-bus encoding used by version 23.
+
 Run the generated mapper, persistence, and SGB continuation checks together:
 
 ```sh
 ctest --test-dir build --output-on-failure \
-    -R 'cupidgb_(gb|cartridge|rtc|rtc_timing|rtc_dma|rtc_state|divider_phase|battery|camera|mbc3_bus|mbc7|huc3|infrared|tpp1|sgb|state|state_ram|printer_state)$'
+    -R 'cupidgb_(gb|cartridge|mapper_guest|rtc|rtc_timing|rtc_dma|rtc_state|divider_phase|battery|camera|mbc3_bus|mbc7|huc3|infrared|tpp1|sgb|state|state_ram|printer_state)$'
 ```
 
 For a library scan, inventory cartridge type bytes separately from the selected hardware model. Give each ROM a fixed guest-clock budget and retain its exact result, including an execution error or incomplete boot. Run banking and peripheral probes for hardware absent from the library. Use separate gameplay and persistence checks before claiming compatibility for a title.

@@ -125,7 +125,9 @@ The inspector has Memory, Tiles, Maps, OAM, and Palettes tabs. Refresh updates t
 
 Memory displays a 256-byte page with hexadecimal navigation, byte editing, and mapped-bank context. It reads underlying VRAM, OAM, wave RAM, and ordinary cartridge RAM even when the CPU cannot currently access those bytes. A bank context describes the selected mapping; it is not a physical-bank selection control.
 
-Writes require a loaded session and pause execution. ROM and unusable address ranges are rejected. Writable RAM, VRAM, OAM, and wave RAM can be edited directly; I/O writes use device semantics, so an edit can reset DIV, change banking/register state, or start DMA. Battery-backed edits participate in dirty tracking. Register and memory edits clear instruction/frame history and pending host playback as appropriate.
+The memory region selector opens the mapped address space or a physical ROM, VRAM, WRAM, or cartridge RAM bank. Choose a hexadecimal bank number with the Bank control. ROM banks are read-only and follow file order. CGB exposes both VRAM banks and all eight WRAM banks, including banks that are currently unmapped. Cartridge RAM covers its allocated storage, including all 256 banks of a 2 MiB cartridge. Short banks expose only their populated bytes. Bank selection leaves guest bank registers unchanged. Switching banks or replacing the session cancels an unfinished cell edit.
+
+Writes require a loaded session and pause execution. In the mapped view, ROM and unusable address ranges are rejected. Writable RAM, VRAM, OAM, and wave RAM can be edited directly. I/O writes use device semantics, so an edit can reset DIV, change banking/register state, or start DMA. Physical RAM views edit the selected backing bytes independently of guest banking and LCD access gates. Battery-backed edits participate in dirty tracking and persist through the normal save workflow. Register and memory edits clear instruction/frame history and pending host playback as appropriate.
 
 Tiles shows the 384 tiles in either physical VRAM bank or both banks. Maps selects the background/window map, either map address explicitly, and signed/unsigned tile addressing. CGB attributes control bank selection, flips, palettes, and displayed metadata. The map cell readout identifies its address and attributes.
 
@@ -139,4 +141,4 @@ Inspector raw grayscale mode bypasses color correction. Palette-selected color p
 
 Use Audio > Audio Channels or Alt+1 through Alt+4 to listen to individual channel combinations. Muting changes output mixing while the emulated channel continues running. These choices persist through state loading, rewind and Backstep for the current session.
 
-A full expression language, saved debugger sessions, continuous-playback instruction replay, arbitrary physical-bank memory editing, ROM patching, interactive palette editing, and graphics layer toggles remain pending. Inspector rendering and the bounded instruction history are useful diagnostic tools, not complete debugger or hardware parity.
+A full expression language, saved debugger sessions, continuous-playback instruction replay, ROM patching, interactive palette editing, and graphics layer toggles remain pending. Inspector rendering and the bounded instruction history are useful diagnostic tools, not complete debugger or hardware parity.

@@ -52,6 +52,8 @@ extern "C" {
 #include "cupid/gb/state.h"
 }
 
+enum class InspectorMemoryRegion;
+
 class QAction;
 class QAudioSink;
 class QAudioFormat;
@@ -274,6 +276,9 @@ class MainWindow final : public QMainWindow {
     bool rememberDebuggerStep();
     bool debuggerBackstep();
     bool debuggerWrite(uint16_t address, uint8_t value);
+    bool debuggerWritePhysical(InspectorMemoryRegion region, size_t bank, uint16_t offset,
+                               uint8_t value);
+    void finishDebuggerEdit();
     bool drainDebuggerAudio();
     bool debuggerSmokeTest(const QString &directory);
     bool watchpointSmokeTest(const QString &directory);

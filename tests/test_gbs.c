@@ -417,7 +417,8 @@ static void test_state_continuation(void) {
             execute_init(gb, 1);
             size_t size;
             uint8_t *checkpoint = save(gb, &size);
-            assert(checkpoint[8] == 23 && checkpoint[28] == 2 && checkpoint[24] == 0);
+            assert(checkpoint[8] == CUPID_GB_STATE_VERSION && checkpoint[28] == 2 &&
+                   checkpoint[24] == 0);
             assert(all_bytes(checkpoint + 64, 32, 0));
             CupidGbStateContext context;
             assert(cupid_gb_state_context_init(&context, gb) == CUPID_GB_STATE_OK);

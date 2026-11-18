@@ -1,6 +1,6 @@
 /**
  * @file    test_inspectors.cpp
- * @brief   Qt tests for mapped-memory editing and graphics inspection.
+ * @brief   Qt tests for mapped/physical memory editing and graphics inspection.
  * @author  cupidthecat
  * @date    2026-11-16
  *
@@ -41,6 +41,7 @@
 #include <vector>
 
 extern "C" {
+#include "cupid/gb/cartridge.h"
 #include "cupid/gb/debugger.h"
 #include "cupid/gb/state.h"
 }
@@ -508,6 +509,143 @@ void testWindowWorkflows() {
     cupid_gb_cleanup(other.get());
     cupid_gb_cleanup(gb.get());
 }
+
+void testPhysicalMemoryWorkflows() {
+    auto gb = machine(true);
+    std::vector<uint8_t> rom(0x8000);
+    rom[0x143] = 0x80;
+    rom[0x147] = 0xbc;
+    rom[0x149] = 0xc1;
+    rom[0x14a] = 0x65;
+    rom[0x152] = 9;
+    rom[0x153] = 8;
+    uint8_t checksum = 0;
+    for (unsigned address = 0x134; address < 0x14d; ++address)
+        checksum = uint8_t(checksum - rom[address] - 1);
+    rom[0x14d] = checksum;
+    assert(cupid_gb_load_rom(gb.get(), rom.data(), rom.size()));
+    assert(gb->cartridge_ram_size == 0x200000);
+    CupidGb *session = gb.get();
+    unsigned writes = 0;
+    InspectorsWindow window;
+    window.setSession(
+        [&] { return session; }, {},
+        [&](InspectorMemoryRegion region, size_t bank, uint16_t offset, uint8_t value) {
+            const auto bytes = inspectorMemoryBank(*session, region, bank);
+            if (offset >= bytes.size || region == InspectorMemoryRegion::Rom)
+                return false;
+            const_cast<uint8_t *>(bytes.data)[offset] = value;
+            ++writes;
+            return true;
+        });
+    window.show();
+    window.findChild<QCheckBox *>("inspectorLive")->setChecked(false);
+    auto *region = window.findChild<QComboBox *>("inspectorMemoryRegion");
+    auto *bank = window.findChild<QComboBox *>("inspectorMemoryBank");
+    auto *address = window.findChild<QLineEdit *>("inspectorAddress");
+    auto *go = window.findChild<QPushButton *>("inspectorGo");
+    auto *memory = window.findChild<QTableWidget *>("inspectorMemory");
+    auto *writeAddress = window.findChild<QLineEdit *>("inspectorWriteAddress");
+    auto *writeValue = window.findChild<QLineEdit *>("inspectorWriteValue");
+    auto *write = window.findChild<QPushButton *>("inspectorWrite");
+    assert(region && bank && memory && !bank->isEnabled());
+    gb->cgb_vram_bank = 0;
+    gb->video_ram[0x2000] = 0x91;
+    region->setCurrentIndex(int(InspectorMemoryRegion::VideoRam));
+    bank->setCurrentIndex(1);
+    assert(bank->count() == 2 && memory->item(0, 0)->text() == "91");
+    memory->item(0, 0)->setText("25");
+    assert(gb->video_ram[0x2000] == 0x25 && gb->cgb_vram_bank == 0 && writes == 1);
+    region->setCurrentIndex(int(InspectorMemoryRegion::WorkRam));
+    bank->setCurrentIndex(7);
+    assert(bank->count() == 8 && memory->verticalHeaderItem(0)->text() == "D000");
+    writeAddress->setText("DFFF");
+    writeValue->setText("73");
+    write->click();
+    assert(gb->work_ram[0x7fff] == 0x73 && writes == 2);
+    address->setText("C000");
+    go->click();
+    assert(memory->verticalHeaderItem(0)->text() == "D000");
+    region->setCurrentIndex(int(InspectorMemoryRegion::CartridgeRam));
+    bank->setCurrentIndex(255);
+    assert(bank->count() == 256);
+    writeAddress->setText("BFFF");
+    writeValue->setText("A9");
+    write->click();
+    assert(cupid_gb_cartridge_ram(gb.get())[0x1fffff] == 0xa9 && writes == 3);
+    assert(!inspectorMemoryBank(*gb, InspectorMemoryRegion::CartridgeRam, 256).data);
+    region->setCurrentIndex(int(InspectorMemoryRegion::Rom));
+    bank->setCurrentIndex(1);
+    assert(memory->verticalHeaderItem(0)->text() == "4000");
+    assert(!(memory->item(0, 0)->flags() & Qt::ItemIsEditable));
+    writeAddress->setText("4000");
+    write->click();
+    assert(writes == 3);
+
+    region->setCurrentIndex(int(InspectorMemoryRegion::VideoRam));
+    bank->setCurrentIndex(1);
+    memory->editItem(memory->item(0, 0));
+    QApplication::processEvents();
+    QPointer<QLineEdit> stale = memory->findChild<QLineEdit *>();
+    assert(stale);
+    stale->setText("FF");
+    bank->setCurrentIndex(0);
+    QApplication::processEvents();
+    QApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    assert(!stale && gb->video_ram[0x2000] == 0x25 && writes == 3);
+    auto monochrome = machine(false);
+    session = monochrome.get();
+    window.sessionChanged();
+    assert(bank->count() == 1 && bank->currentIndex() == 0);
+    region->setCurrentIndex(int(InspectorMemoryRegion::WorkRam));
+    assert(bank->count() == 2);
+    region->setCurrentIndex(int(InspectorMemoryRegion::CartridgeRam));
+    assert(bank->count() == 0 && !bank->isEnabled() && memory->item(0, 0)->text() == "--");
+    writeAddress->setText("A000");
+    write->click();
+    assert(writes == 3);
+    // A 2 KiB storage bank exposes only the populated address span.
+    monochrome->cartridge_ram_size = 0x800;
+    window.refresh();
+    assert(bank->count() == 1);
+    address->setText("A700");
+    go->click();
+    assert(memory->verticalHeaderItem(0)->text() == "A700");
+    writeAddress->setText("A800");
+    write->click();
+    assert(writes == 3);
+    session = nullptr;
+    window.sessionChanged();
+    write->click();
+    assert(writes == 3);
+    window.close();
+    cupid_gb_cleanup(monochrome.get());
+    cupid_gb_cleanup(gb.get());
+}
+
+void testWriteLifetime() {
+    auto gb = machine(true);
+    QPointer<InspectorsWindow> mapped = new InspectorsWindow;
+    mapped->setSession([&] { return gb.get(); },
+                       [&](uint16_t, uint8_t) {
+                           delete mapped.data();
+                           return true;
+                       });
+    assert(!mapped->writeByte(0xc000, 0x45) && !mapped);
+    QPointer<InspectorsWindow> physical = new InspectorsWindow;
+    physical->setSession([&] { return gb.get(); }, {},
+                         [&](InspectorMemoryRegion, size_t, uint16_t, uint8_t) {
+                             delete physical.data();
+                             return true;
+                         });
+    physical->findChild<QComboBox *>("inspectorMemoryRegion")
+        ->setCurrentIndex(int(InspectorMemoryRegion::VideoRam));
+    physical->findChild<QLineEdit *>("inspectorWriteAddress")->setText("8000");
+    physical->findChild<QPushButton *>("inspectorWrite")->click();
+    assert(!physical);
+    cupid_gb_cleanup(gb.get());
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -518,5 +656,7 @@ int main(int argc, char **argv) {
     testViewportAndGrids();
     testOverlayWorkflows();
     testWindowWorkflows();
+    testPhysicalMemoryWorkflows();
+    testWriteLifetime();
     return 0;
 }

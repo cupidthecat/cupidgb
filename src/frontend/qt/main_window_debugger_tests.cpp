@@ -24,6 +24,7 @@
 #include "main_window_state_test_helpers.h"
 
 #include <QScopeGuard>
+#include <QTableWidget>
 
 bool MainWindow::debuggerSmokeTest(const QString &directory) {
     settings_.setValue("emulation/model", int(CUPID_GB_MODEL_DMG_ABC));
@@ -363,6 +364,68 @@ bool MainWindow::debuggerSmokeTest(const QString &directory) {
         cupid_gb_debug_peek(&emulator_->gb, 0xc000) != 0x5a ||
         inspectorsWindow_->writeByte(0x100, 0) || !debuggerHistory_.empty())
         return smokeFailure(__FILE__, __LINE__);
+    if (!rememberDebuggerStep() ||
+        !debuggerWritePhysical(InspectorMemoryRegion::WorkRam, 1, 0xfff, 0xb7) ||
+        emulator_->gb.work_ram[0x1fff] != 0xb7 || !debuggerHistory_.empty() || !paused_)
+        return smokeFailure(__FILE__, __LINE__);
+    const QByteArray physicalBoundary = captureState();
+    const uint64_t physicalTimeline = timelineId_;
+    if (debuggerWritePhysical(InspectorMemoryRegion::WorkRam, 2, 0, 0) ||
+        debuggerWritePhysical(InspectorMemoryRegion::VideoRam, 1, 0, 0) ||
+        debuggerWritePhysical(InspectorMemoryRegion::Rom, 0, 0x100, 0) ||
+        debuggerWritePhysical(InspectorMemoryRegion::CartridgeRam, 0, 0, 0) ||
+        captureState() != physicalBoundary || timelineId_ != physicalTimeline)
+        return smokeFailure(__FILE__, __LINE__);
+    {
+        QByteArray bankedRom = rom;
+        bankedRom[0x143] = char(0x80);
+        bankedRom[0x147] = char(0x1b);
+        bankedRom[0x149] = char(4);
+        uint8_t sum = 0;
+        for (int i = 0x134; i <= 0x14c; ++i)
+            sum = uint8_t(sum - uint8_t(bankedRom[i]) - 1);
+        bankedRom[0x14d] = char(sum);
+        const QString bankedPath = QDir(directory).filePath("physical-debugger.gbc");
+        QFile file(bankedPath);
+        if (!file.open(QIODevice::WriteOnly) || file.write(bankedRom) != bankedRom.size())
+            return smokeFailure(__FILE__, __LINE__);
+        file.close();
+        MainWindow physical(true, true, false, QStringLiteral(""), CUPID_GB_MODEL_CGB);
+        physical.timer_.stop();
+        if (!physical.openRom(bankedPath))
+            return smokeFailure(__FILE__, __LINE__);
+        physical.openInspectors();
+        auto *region = physical.inspectorsWindow_->findChild<QComboBox *>("inspectorMemoryRegion");
+        auto *bank = physical.inspectorsWindow_->findChild<QComboBox *>("inspectorMemoryBank");
+        auto *memory = physical.inspectorsWindow_->findChild<QTableWidget *>("inspectorMemory");
+        if (!region || !bank || !memory)
+            return smokeFailure(__FILE__, __LINE__);
+        region->setCurrentIndex(int(InspectorMemoryRegion::VideoRam));
+        bank->setCurrentIndex(1);
+        memory->item(0, 0)->setText("37");
+        if (physical.emulator_->gb.video_ram[0x2000] != 0x37 || !physical.paused_ ||
+            !physical.debuggerWritePhysical(InspectorMemoryRegion::WorkRam, 7, 0xfff, 0x81) ||
+            physical.emulator_->gb.work_ram[0x7fff] != 0x81)
+            return smokeFailure(__FILE__, __LINE__);
+        const uint64_t generation = physical.emulator_->gb.battery_write_generation;
+        if (!physical.rememberDebuggerStep() ||
+            !physical.debuggerWritePhysical(InspectorMemoryRegion::CartridgeRam, 15, 0x1fff,
+                                            0x69) ||
+            physical.emulator_->gb.battery_write_generation != generation + 1 ||
+            !physical.debuggerHistory_.empty() || !physical.flushBattery(true))
+            return smokeFailure(__FILE__, __LINE__);
+        QFile saved(physical.savePath_);
+        if (!saved.open(QIODevice::ReadOnly))
+            return smokeFailure(__FILE__, __LINE__);
+        const QByteArray battery = saved.readAll();
+        if (battery.size() < 0x20000 || battery[0x1ffff] != char(0x69))
+            return smokeFailure(__FILE__, __LINE__);
+        saved.close();
+        if (!physical.closeRom() || !physical.openRom(bankedPath) ||
+            cupid_gb_cartridge_ram(&physical.emulator_->gb)[0x1ffff] != 0x69 ||
+            !physical.closeRom())
+            return smokeFailure(__FILE__, __LINE__);
+    }
     for (int tab = 0; tab < 5; ++tab)
         inspectorsWindow_->selectTab(tab);
     debuggerWindow_->submitCommand("finish");
@@ -670,6 +733,22 @@ bool MainWindow::debuggerSmokeTest(const QString &directory) {
             if (!inspectorsWindow_->grab().save(captures.filePath(names[size_t(tab)])))
                 return smokeFailure(__FILE__, __LINE__);
         }
+        inspectorsWindow_->selectTab(0);
+        auto *memoryRegion = inspectorsWindow_->findChild<QComboBox *>("inspectorMemoryRegion");
+        auto *memoryBank = inspectorsWindow_->findChild<QComboBox *>("inspectorMemoryBank");
+        const QByteArray beforeBanks = captureState();
+        memoryRegion->setCurrentIndex(int(InspectorMemoryRegion::WorkRam));
+        memoryBank->setCurrentIndex(7);
+        QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+        if (!inspectorsWindow_->grab().save(captures.filePath("memory-wram-bank7.png")))
+            return smokeFailure(__FILE__, __LINE__);
+        memoryRegion->setCurrentIndex(int(InspectorMemoryRegion::VideoRam));
+        memoryBank->setCurrentIndex(1);
+        QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+        if (!inspectorsWindow_->grab().save(captures.filePath("memory-vram-bank1.png")) ||
+            captureState() != beforeBanks)
+            return smokeFailure(__FILE__, __LINE__);
+        memoryRegion->setCurrentIndex(int(InspectorMemoryRegion::Mapped));
         auto *grid = inspectorsWindow_->findChild<QCheckBox *>("inspectorGrid");
         auto *scrolling = inspectorsWindow_->findChild<QCheckBox *>("inspectorScrolling");
         if (!grid || !scrolling)

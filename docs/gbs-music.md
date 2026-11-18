@@ -33,7 +33,7 @@ The music window uses a fixed compact size. Game display capture actions do not 
 
 Automatic model selection examines the prepared program's capability bytes. A fixed model preference or command-line override remains available. Music starts at its format-defined entry point without executing a boot ROM. SGB and SGB2 skip their introduction and disable cartridge command reception for music. Timer settings come from the GBS header, including its double-speed request.
 
-Native states use version 23 and require the same loaded music program and effective bank wiring. States contain guest execution, not the source file or the track selector. Loading a state restores its saved execution while retaining the current selected track. Pressing Restart afterward starts the displayed track; Reset returns to the freshly loaded file's initial track. Older cartridge states cannot be imported as music states. See [save states and rewind](save-states.md#gbs-program-identity-in-version-23).
+Native states require version 23 or newer and the same loaded music program and effective bank wiring. States contain guest execution, not the source file or the track selector. Loading a state restores its saved execution while retaining the current selected track. Pressing Restart afterward starts the displayed track; Reset returns to the freshly loaded file's initial track. Older cartridge states cannot be imported as music states. See [save states and rewind](save-states.md#gbs-program-identity-in-version-23).
 
 ## File limits and qualification
 

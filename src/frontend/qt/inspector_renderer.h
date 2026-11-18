@@ -1,6 +1,6 @@
 /**
  * @file    inspector_renderer.h
- * @brief   Graphics-inspector render options, images, and overlay interfaces.
+ * @brief   Physical memory views and graphics-inspector rendering interfaces.
  * @author  cupidthecat
  * @date    2026-11-16
  *
@@ -36,6 +36,17 @@ class QPainter;
 extern "C" {
 #include "cupid/gb/gb.h"
 }
+
+enum class InspectorMemoryRegion { Mapped, Rom, VideoRam, WorkRam, CartridgeRam };
+
+struct InspectorMemoryBank {
+    const uint8_t *data = nullptr;
+    size_t size = 0;
+};
+
+size_t inspectorMemoryBankCount(const CupidGb &gb, InspectorMemoryRegion region);
+InspectorMemoryBank inspectorMemoryBank(const CupidGb &gb, InspectorMemoryRegion region,
+                                        size_t bank);
 
 enum class InspectorPalette { Raw, Automatic, Background, Object };
 enum class InspectorMap { Background, Window, Low, High };

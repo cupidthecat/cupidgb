@@ -1,6 +1,6 @@
 /**
  * @file    inspectors_window.cpp
- * @brief   Qt mapped-memory editing and graphics inspection windows.
+ * @brief   Qt mapped/physical memory editing and graphics inspection windows.
  * @author  cupidthecat
  * @date    2026-11-16
  *
@@ -33,8 +33,10 @@
 #include <QLineEdit>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPointer>
 #include <QPushButton>
 #include <QScopedValueRollback>
+#include <QSignalBlocker>
 #include <QSplitter>
 #include <QTabWidget>
 #include <QTableWidget>
@@ -191,6 +193,18 @@ InspectorsWindow::InspectorsWindow(QWidget *parent) : QMainWindow(parent, Qt::Wi
     auto *memoryPage = new QWidget;
     auto *memoryLayout = new QVBoxLayout(memoryPage);
     auto *navigation = new QHBoxLayout;
+    memoryRegion_ = new QComboBox;
+    memoryRegion_->setObjectName("inspectorMemoryRegion");
+    memoryRegion_->setToolTip(
+        "Physical banks use backing-storage offsets. ROM banks follow file order.");
+    memoryRegion_->addItems(
+        {"Mapped address space", "ROM banks", "VRAM banks", "WRAM banks", "Cartridge RAM banks"});
+    memoryBank_ = new QComboBox;
+    memoryBank_->setObjectName("inspectorMemoryBank");
+    memoryBank_->setMinimumContentsLength(6);
+    navigation->addWidget(memoryRegion_);
+    navigation->addWidget(new QLabel("Bank"));
+    navigation->addWidget(memoryBank_);
     address_ = new QLineEdit("0000");
     address_->setObjectName("inspectorAddress");
     address_->setMaximumWidth(100);
@@ -227,8 +241,8 @@ InspectorsWindow::InspectorsWindow(QWidget *parent) : QMainWindow(parent, Qt::Wi
     edit->addWidget(editValue_);
     edit->addWidget(write);
     memoryLayout->addLayout(edit);
-    memoryLayout->addWidget(
-        new QLabel("ROM and unusable memory are read-only. I/O writes can change hardware state."));
+    memoryLayout->addWidget(new QLabel(
+        "Physical RAM edits bypass banking and access gates. Mapped I/O writes affect hardware."));
     tabs_->addTab(memoryPage, "Memory");
 
     auto *tilesPage = new QWidget;
@@ -339,15 +353,19 @@ InspectorsWindow::InspectorsWindow(QWidget *parent) : QMainWindow(parent, Qt::Wi
     connect(go, &QPushButton::clicked, this, [this] { jumpToAddress(); });
     connect(address_, &QLineEdit::returnPressed, this, [this] { jumpToAddress(); });
     connect(previous, &QPushButton::clicked, this, [this] {
-        page_ = uint16_t(page_ - 0x100u);
+        const unsigned span = std::max(0x100u, (memorySize() + 0xffu) & ~0xffu);
+        page_ = uint16_t(memoryBase() + (unsigned(page_ - memoryBase()) + span - 0x100u) % span);
         address_->setText(hex(page_, 4));
         refresh();
     });
     connect(next, &QPushButton::clicked, this, [this] {
-        page_ = uint16_t(page_ + 0x100u);
+        const unsigned span = std::max(0x100u, (memorySize() + 0xffu) & ~0xffu);
+        page_ = uint16_t(memoryBase() + (unsigned(page_ - memoryBase()) + 0x100u) % span);
         address_->setText(hex(page_, 4));
         refresh();
     });
+    connect(memoryRegion_, &QComboBox::currentIndexChanged, this, [this] { changeMemoryRegion(); });
+    connect(memoryBank_, &QComboBox::currentIndexChanged, this, [this] { changeMemoryBank(); });
     connect(write, &QPushButton::clicked, this, [this] { writeFromFields(); });
     connect(memory_, &QTableWidget::cellChanged, this,
             [this](int row, int column) { memoryEdited(row, column); });
@@ -372,10 +390,11 @@ InspectorsWindow::InspectorsWindow(QWidget *parent) : QMainWindow(parent, Qt::Wi
     clearViews();
 }
 
-void InspectorsWindow::setSession(Getter getter, Writer writer) {
+void InspectorsWindow::setSession(Getter getter, Writer writer, PhysicalWriter physicalWriter) {
     clearViews();
     getter_ = std::move(getter);
     writer_ = std::move(writer);
+    physicalWriter_ = std::move(physicalWriter);
     refresh();
 }
 
@@ -460,13 +479,42 @@ void InspectorsWindow::refreshMemory(const CupidGb &gb) {
     // observation must leave an unfinished byte edit intact until it commits.
     if (static_cast<const InspectorMemoryTable *>(memory_)->editing())
         return;
+    const auto region = memoryRegion();
+    const int bankCount = int(inspectorMemoryBankCount(gb, region));
+    memoryBank_->setEnabled(bankCount > 0);
+    if (memoryBank_->count() != bankCount) {
+        const QSignalBlocker block(memoryBank_);
+        const int previous = memoryBank_->currentIndex();
+        memoryBank_->clear();
+        for (int bank = 0; bank < bankCount; ++bank)
+            memoryBank_->addItem(hex(unsigned(bank), 2));
+        if (bankCount)
+            memoryBank_->setCurrentIndex(std::clamp(previous, 0, bankCount - 1));
+    }
+    const auto physical = inspectorMemoryBank(gb, region, size_t(memoryBank_->currentIndex()));
+    const unsigned base = memoryBase();
+    if (region != InspectorMemoryRegion::Mapped &&
+        (page_ < base || unsigned(page_ - base) >= memorySize())) {
+        page_ = uint16_t(base);
+        address_->setText(hex(page_, 4));
+    }
     QStringList rows;
     for (unsigned row = 0; row < 16; ++row) {
         rows << hex(unsigned(page_) + row * 16u, 4);
         for (unsigned column = 0; column < 16; ++column) {
             const unsigned address = unsigned(page_) + row * 16u + column;
-            auto *item = new QTableWidgetItem(hex(cupid_gb_debug_peek(&gb, uint16_t(address)), 2));
-            const bool writable = address >= 0x8000u && !(address >= 0xfea0u && address < 0xff00u);
+            const bool mapped = region == InspectorMemoryRegion::Mapped;
+            const unsigned offset = address - base;
+            const bool present = mapped || offset < physical.size;
+            auto *item = new QTableWidgetItem(
+                present ? hex(mapped ? cupid_gb_debug_peek(&gb, uint16_t(address))
+                                     : physical.data[offset],
+                              2)
+                        : "--");
+            const bool writable =
+                present &&
+                (mapped ? address >= 0x8000u && !(address >= 0xfea0u && address < 0xff00u)
+                        : region != InspectorMemoryRegion::Rom && bool(physicalWriter_));
             item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable |
                            (writable ? Qt::ItemIsEditable : Qt::NoItemFlags));
             memory_->setItem(int(row), int(column), item);
@@ -579,8 +627,9 @@ void InspectorsWindow::refreshPalettes(const CupidGb &gb) {
 
 void InspectorsWindow::jumpToAddress() {
     unsigned address = 0;
-    if (!parseHex(address_->text(), 0xffffu, address)) {
-        status_->setText("Enter an address from $0000 through $FFFF.");
+    if (!parseHex(address_->text(), 0xffffu, address) || address < memoryBase() ||
+        address - memoryBase() >= memorySize()) {
+        status_->setText("Enter an address within the selected memory bank.");
         return;
     }
     page_ = uint16_t(address & 0xff00u);
@@ -594,7 +643,11 @@ bool InspectorsWindow::writeByte(uint16_t address, uint8_t value) {
         status_->setText("This address is read-only or no cartridge is loaded.");
         return false;
     }
-    const bool written = writer_(address, value);
+    const QPointer<InspectorsWindow> self(this);
+    const auto writer = writer_;
+    const bool written = writer(address, value);
+    if (!self)
+        return false;
     refresh();
     status_->setText(
         written
@@ -610,7 +663,7 @@ void InspectorsWindow::writeFromFields() {
         status_->setText("Enter a hexadecimal address ($0000-$FFFF) and byte ($00-$FF).");
         return;
     }
-    writeByte(uint16_t(address), uint8_t(value));
+    writeSelectedByte(uint16_t(address), uint8_t(value));
 }
 
 void InspectorsWindow::memoryEdited(int row, int column) {
@@ -622,5 +675,83 @@ void InspectorsWindow::memoryEdited(int row, int column) {
         status_->setText("Memory cells accept one hexadecimal byte ($00-$FF).");
         return;
     }
-    writeByte(uint16_t(unsigned(page_) + unsigned(row * 16 + column)), uint8_t(value));
+    writeSelectedByte(uint16_t(unsigned(page_) + unsigned(row * 16 + column)), uint8_t(value));
+}
+
+InspectorMemoryRegion InspectorsWindow::memoryRegion() const {
+    return InspectorMemoryRegion(memoryRegion_->currentIndex());
+}
+
+uint16_t InspectorsWindow::memoryBase() const {
+    switch (memoryRegion()) {
+        case InspectorMemoryRegion::Mapped:
+            return 0;
+        case InspectorMemoryRegion::Rom:
+            return memoryBank_->currentIndex() > 0 ? 0x4000 : 0;
+        case InspectorMemoryRegion::VideoRam:
+            return 0x8000;
+        case InspectorMemoryRegion::WorkRam:
+            return memoryBank_->currentIndex() > 0 ? 0xd000 : 0xc000;
+        case InspectorMemoryRegion::CartridgeRam:
+            return 0xa000;
+    }
+    return 0;
+}
+
+unsigned InspectorsWindow::memorySize() const {
+    if (memoryRegion() == InspectorMemoryRegion::Mapped)
+        return 0x10000;
+    const auto *gb = state();
+    return gb ? unsigned(
+                    inspectorMemoryBank(*gb, memoryRegion(), size_t(memoryBank_->currentIndex()))
+                        .size)
+              : 0;
+}
+
+void InspectorsWindow::changeMemoryRegion() {
+    // Destroy an unfinished delegate before changing what its address refers to.
+    {
+        QScopedValueRollback<bool> update(refreshing_, true);
+        memory_->clearContents();
+        const QSignalBlocker block(memoryBank_);
+        memoryBank_->clear();
+        page_ = memoryBase();
+        editAddress_->setText(hex(page_, 4));
+        address_->setText(hex(page_, 4));
+    }
+    refresh();
+}
+
+void InspectorsWindow::changeMemoryBank() {
+    {
+        QScopedValueRollback<bool> update(refreshing_, true);
+        memory_->clearContents();
+        page_ = memoryBase();
+        editAddress_->setText(hex(page_, 4));
+        address_->setText(hex(page_, 4));
+    }
+    refresh();
+}
+
+bool InspectorsWindow::writeSelectedByte(uint16_t address, uint8_t value) {
+    if (memoryRegion() == InspectorMemoryRegion::Mapped)
+        return writeByte(address, value);
+    if (!state() || !physicalWriter_ || memoryRegion() == InspectorMemoryRegion::Rom ||
+        address < memoryBase() || unsigned(address - memoryBase()) >= memorySize()) {
+        status_->setText("This address is read-only or outside the selected memory bank.");
+        return false;
+    }
+    const QPointer<InspectorsWindow> self(this);
+    const auto writer = physicalWriter_;
+    const bool written = writer(memoryRegion(), size_t(memoryBank_->currentIndex()),
+                                uint16_t(address - memoryBase()), value);
+    if (!self)
+        return false;
+    refresh();
+    status_->setText(written ? QString("Wrote $%1 at $%2 in bank $%3; emulation paused.")
+                                   .arg(hex(value, 2))
+                                   .arg(hex(address, 4))
+                                   .arg(memoryBank_->currentText())
+                             : "The selected memory bank rejected this write.");
+    return written;
 }
