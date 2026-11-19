@@ -517,6 +517,10 @@ static uint8_t cupid_cgb_title_checksum(const CupidGb *gb) {
     return checksum;
 }
 
+uint8_t cupid_cgb_boot_title_checksum(const CupidGb *gb) {
+    return cupid_cgb_has_nintendo_licensee(gb) ? cupid_cgb_title_checksum(gb) : 0;
+}
+
 /**
  * @brief Returns the fourth letter of the ROM title (ROM address 0x0137).
  *

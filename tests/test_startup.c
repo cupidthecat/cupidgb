@@ -30,6 +30,7 @@
 #include "cupid/gb/infrared.h"
 #include "cupid/gb/ppu.h"
 #include "cupid/gb/printer.h"
+#include "cupid/gb/reset.h"
 #include "cupid/gb/startup.h"
 #include "cupid/gb/state.h"
 #include "test_state_layout.h"
@@ -295,6 +296,75 @@ static void load_generated_profile(CupidGb *gb, CupidGbModel model, uint64_t see
 
 static void load_generated_rom(CupidGb *gb, CupidGbModel model, uint64_t seed) {
     load_generated_profile(gb, model, seed, model == CUPID_GB_MODEL_CGB);
+}
+
+static void check_cgb_cartridge_entry(CupidGb *gb, bool color, uint8_t checksum) {
+    const uint8_t expected[] = {0x11, checksum,           0, color ? 0xff : 0, color ? 0x56 : 8,
+                                0,    color ? 0x0d : 0x7c};
+    assert(gb->cpu.pc == 0x0100 && gb->cpu.sp == 0xfffe && gb->cpu.f == 0x80);
+    assert(gb->cgb_mode == color);
+    /* Jump to the entry routine and save A, then read and save each remaining register. */
+    for (unsigned i = 0; i < 2 + 2 * (sizeof(expected) - 1); ++i)
+        assert(cupid_gb_step(gb));
+    for (unsigned i = 0; i < sizeof(expected); ++i)
+        assert(cupid_gb_read_u8(gb, (uint16_t)(0xff80 + i)) == expected[i]);
+}
+
+static void test_cgb_cartridge_entry_registers(void) {
+    const CupidGbModel models[] = {CUPID_GB_MODEL_CGB_0, CUPID_GB_MODEL_CGB_A,
+                                   CUPID_GB_MODEL_CGB_B, CUPID_GB_MODEL_CGB_C,
+                                   CUPID_GB_MODEL_CGB_D, CUPID_GB_MODEL_CGB_E};
+
+    const struct {
+        uint8_t flag;
+        uint8_t old_licensee;
+        uint8_t new_licensee_digit;
+        uint8_t checksum;
+    } cases[] = {
+        {0x24, 0x01, '2', 0x38}, {0x24, 0x33, '1', 0x38}, {0x24, 0x33, '2', 0},
+        {0x24, 0x00, '1', 0},    {0x80, 0x01, '1', 0},    {0xc0, 0x33, '1', 0},
+    };
+
+    const uint8_t entry[] = {
+        0xe0, 0x80,       /* LDH [$80], A */
+        0x78, 0xe0, 0x81, /* LD A, B and LDH [$81], A */
+        0x79, 0xe0, 0x82, /* C */
+        0x7a, 0xe0, 0x83, /* D */
+        0x7b, 0xe0, 0x84, /* E */
+        0x7c, 0xe0, 0x85, /* H */
+        0x7d, 0xe0, 0x86, /* L */
+    };
+    uint8_t rom[0x8000] = {0};
+    CupidGb *gb = calloc(1, sizeof(*gb));
+    assert(gb);
+    rom[0x100] = 0xc3; /* JP $0150 */
+    rom[0x101] = 0x50;
+    rom[0x102] = 0x01;
+    memcpy(rom + 0x134, "CUPIDGB HANDOFF", 15);
+    memcpy(rom + 0x150, entry, sizeof(entry));
+    rom[0x144] = '0';
+    cupid_gb_set_power_on_seed(gb, 0);
+    for (unsigned model = 0; model < sizeof(models) / sizeof(models[0]); ++model) {
+        cupid_gb_set_model(gb, models[model]);
+        for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+            rom[0x143] = cases[i].flag;
+            rom[0x145] = cases[i].new_licensee_digit;
+            rom[0x14b] = cases[i].old_licensee;
+            rom[0x14d] = 0;
+            for (unsigned j = 0x134; j <= 0x14c; ++j)
+                rom[0x14d] = (uint8_t)(rom[0x14d] - rom[j] - 1);
+
+            bool color = (cases[i].flag & 0x80u) != 0;
+            assert(cupid_gb_load_rom(gb, rom, sizeof(rom)));
+            check_cgb_cartridge_entry(gb, color, cases[i].checksum);
+            assert(cupid_gb_reset(gb, CUPID_GB_RESET_QUICK));
+            check_cgb_cartridge_entry(gb, color, cases[i].checksum);
+            assert(cupid_gb_reset(gb, CUPID_GB_RESET_HARD));
+            check_cgb_cartridge_entry(gb, color, cases[i].checksum);
+        }
+    }
+    cupid_gb_cleanup(gb);
+    free(gb);
 }
 
 static void observe_serial(const CupidGb *gb, uint8_t transmitted, void *data) {
@@ -978,6 +1048,7 @@ int main(void) {
     test_legacy_sgb_startup_signature();
     test_printer_state_policy();
     test_color_target_initialization();
+    test_cgb_cartridge_entry_registers();
     puts("Startup memory and lifecycle checks passed.");
     return 0;
 }

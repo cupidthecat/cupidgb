@@ -25,6 +25,8 @@
 
 #include "cupid/gbc/cgb.h"
 
+/* Monochrome cartridge handoff B register, with the firmware license check. */
+uint8_t cupid_cgb_boot_title_checksum(const struct CupidGb *gb);
 uint8_t cupid_cgb_palette_read(const struct CupidGb *gb, bool object_palette);
 void cupid_cgb_palette_write(struct CupidGb *gb, bool object_palette, uint8_t value);
 uint8_t cupid_cgb_dma_status(const struct CupidGb *gb);

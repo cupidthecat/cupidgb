@@ -362,3 +362,23 @@ The startup regression checks that the approximate handoff clears physical
 bank 2, firmware receives the raw generation, and firmware re-entry preserves
 live memory. Extra WRAM draws use a separate stream to preserve the seeded
 HRAM and palette sequences. Physical cold-start measurements remain open.
+
+## CGB cartridge entry registers
+
+With built-in startup, monochrome cartridges now start with DE `0008` and HL
+`007C`. Register B contains the sum of the 16 title bytes modulo 256 when the
+header uses the Nintendo license code. Other monochrome cartridges start with
+B `00`. Color-capable and color-only cartridges retain BC `0000`, DE `FF56`,
+and HL `000D`.
+
+The regression saves registers to HRAM with the cartridge's first instructions.
+It covers six header cases on each of the six CGB revisions after cartridge load,
+quick reset, and hard reset. The four monochrome cases exercise both license
+formats and two rejected license combinations. The color cases use flags `80`
+and `C0`.
+
+The 36 entry register comparisons agreed with executed firmware. Revisions A
+through E used the same local firmware image, and revision 0 used a generated
+image. The earlier built-in profile differed in all 24 monochrome cases.
+Divider and LCD phase at handoff still depend on the firmware and cartridge
+header. Firmware-specific bank 2 work data remains open.

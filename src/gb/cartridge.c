@@ -24,6 +24,7 @@
  */
 
 #include "cupid/gb/cartridge.h"
+#include "../gbc/cgb_internal.h"
 #include "cartridge_internal.h"
 
 #include <errno.h>
@@ -46,7 +47,6 @@
 #define NOMINMAX
 #include <windows.h>
 #endif
-#include "cupid/gbc/cgb.h"
 
 // Header field offsets
 
@@ -858,12 +858,19 @@ void cupid_gb_cartridge_post_boot(CupidGb *gb) {
          * Executable firmware replaces this phase when its overlay is entered. */
         gb->div_counter = cupid_gb_sgb_boot_div_counter(gb->rom, gb->rom_size);
     }
-    if (gb->cgb_mode)
+    if (gb->cgb_mode) {
         gb->cpu.a = 0x11;
-    else if (cupid_gb_model_is_cgb(gb->model))
+    } else if (cupid_gb_model_is_cgb(gb->model)) {
+        /* The monochrome handoff leaves both the palette checksum and different
+         * DE and HL values for the cartridge's first instruction. */
+        gb->cpu.b = cupid_cgb_boot_title_checksum(gb);
+        gb->cpu.d = 0;
+        gb->cpu.e = 8;
+        gb->cpu.l = 0x7c;
         cupid_cgb_apply_compatibility_palette(gb);
-    else if (gb->sgb.enabled)
+    } else if (gb->sgb.enabled) {
         cupid_gb_sgb_apply_compatibility_palette(gb);
+    }
 }
 
 void cupid_gb_cartridge_reset_controls(CupidGb *gb) {
