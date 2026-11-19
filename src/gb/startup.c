@@ -74,7 +74,11 @@ static uint64_t fresh_seed(const CupidGb *gb) {
 
 static StartupNoise fill_memory(CupidGb *gb) {
     StartupNoise noise = {gb->power_on.generation_seed, 0, 0};
+    /* Additional WRAM draws start beyond the main startup stream. Keep one
+     * main-stream draw per CGB address so the other seeded regions stay stable. */
+    StartupNoise work_bias = {noise.counter + STARTUP_NOISE_STRIDE * UINT64_C(65536), 0, 0};
     const bool color = cupid_gb_model_is_cgb(gb->model);
+    const bool early_color = cupid_gb_model_is_early_cgb(gb->model);
     const bool pocket = gb->model == CUPID_GB_MODEL_MGB;
     const bool sgb2 = gb->model == CUPID_GB_MODEL_SGB2;
     const size_t work_bytes = color ? sizeof(gb->work_ram) : 0x2000u;
@@ -82,7 +86,20 @@ static StartupNoise fill_memory(CupidGb *gb) {
     memset(gb->video_ram, 0, sizeof(gb->video_ram));
     memset(gb->work_ram + work_bytes, 0, sizeof(gb->work_ram) - work_bytes);
     for (size_t address = 0; address < work_bytes; ++address) {
-        if (color || pocket)
+        if (early_color) {
+            /* Eight-byte lanes alternate between zero and a high bit bias.
+             * The lane order reverses halfway through each physical bank. */
+            const uint8_t base = next_byte(&noise);
+            const bool cleared = ((address >> 11u) ^ (address >> 3u)) & 1u;
+            gb->work_ram[address] =
+                cleared ? 0 : (uint8_t)(base | biased_byte(&work_bias, 4, true));
+        } else if (gb->model == CUPID_GB_MODEL_CGB_D) {
+            /* Revision D swaps the high and low bit biases at the bank midpoint. */
+            const uint8_t base = next_byte(&noise);
+            const uint8_t bias = next_byte(&work_bias);
+            gb->work_ram[address] =
+                address & 0x800u ? (uint8_t)(base & bias) : (uint8_t)(base | bias);
+        } else if (color || pocket)
             gb->work_ram[address] = next_byte(&noise);
         else if (sgb2)
             gb->work_ram[address] = (uint8_t)(0x55u ^ biased_byte(&noise, 3, false));

@@ -22,7 +22,9 @@ Windows and Linux wrote matching native snapshots for each of the six revisions.
 
 Using a local color firmware image for A through E, both builds passed the boot register and divider tests at matching terminal cycle counts. With a generated revision-0 firmware image, both passed the register test and failed the divider test, with matching counts for both results. A second run with generated firmware on A through E likewise passed the register tests and failed the divider tests on CupidGB. The available fixtures leave revision-0 divider behavior and accurate per-revision startup unqualified.
 
-The profiles share much of the existing color implementation. They still need revision-specific display, DMA, oscillator, startup-memory and audio qualification, and broader infrared measurements. The generated tests cover the stated behavior and leave physical verification open.
+A later set used three cartridge color flags on all six revisions with matching firmware per pair. It compared handoff at FF50 and the next eight instruction boundaries. The 162 observations agreed on elapsed clocks, CPU registers, divider state and color mode. The differing I/O read was an object palette byte in color mode, which the firmware leaves seeded. [CGB work RAM measurements](validation-startup.md#cgb-work-ram-by-revision)
+
+The profiles share much of the existing color implementation. They still need revision-specific display, DMA, oscillator and audio qualification, and broader startup and infrared measurements. The generated tests cover the stated behavior and leave physical verification open.
 
 ## Vertical scroll during a tile fetch
 

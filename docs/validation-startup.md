@@ -343,3 +343,22 @@ receipt has SHA-256
 `4980c616fcbfe365042d26f7ec0be532eaff86f383a357f32fde063693736234`.
 These later observations retain the storage/clock source manifest and executable
 identities; they do not replace the older startup records above.
+
+## CGB work RAM by revision
+
+On revisions 0 through C, alternating eight-byte lanes start at zero. The lane
+order reverses halfway through each 4 KiB bank. Bits in the remaining lanes are
+set about 31 times out of 32. Revision D uses a 75% probability in each bank's
+lower half and 25% in the upper half. Revision E uses a uniform distribution.
+
+The cold-entry probe compared 12,582,912 WRAM bytes per engine across 64 seeds
+for each of the six revisions. Every zero lane matched exactly. The largest
+per-bit rate difference was 0.189 percentage points. The probe also used guest
+instructions to read 12,288 samples across physical banks 0 through 7 and
+checked those bytes against the corresponding cold image. Each generator
+retains its own random sequence.
+
+The startup regression checks that the approximate handoff clears physical
+bank 2, firmware receives the raw generation, and firmware re-entry preserves
+live memory. Extra WRAM draws use a separate stream to preserve the seeded
+HRAM and palette sequences. Physical cold-start measurements remain open.

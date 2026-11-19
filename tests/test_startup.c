@@ -229,6 +229,56 @@ static void test_model_distributions(void) {
     free(gb);
 }
 
+static void test_color_work_ram_revisions(void) {
+    static const CupidGbModel models[] = {CUPID_GB_MODEL_CGB_0, CUPID_GB_MODEL_CGB_A,
+                                          CUPID_GB_MODEL_CGB_B, CUPID_GB_MODEL_CGB_C,
+                                          CUPID_GB_MODEL_CGB_D, CUPID_GB_MODEL_CGB_E};
+    CupidGb *gb = calloc(1, sizeof(*gb));
+    uint8_t *post_boot = malloc(sizeof(gb->work_ram));
+    assert(gb && post_boot);
+    for (unsigned model = 0; model < sizeof(models) / sizeof(models[0]); ++model) {
+        BitCounts lower = {0}, upper = {0};
+        const bool early = cupid_gb_model_is_early_cgb(models[model]);
+        cupid_gb_set_model(gb, models[model]);
+        for (unsigned seed = 0; seed < 16; ++seed) {
+            cupid_gb_set_power_on_seed(gb, seed_at(seed));
+            cupid_gb_init(gb);
+            memcpy(post_boot, gb->work_ram, sizeof(gb->work_ram));
+            gb->boot_rom_size = 0x900;
+            cupid_gb_start_boot_rom(gb);
+            assert(gb->boot_rom_enabled);
+            for (size_t offset = 0; offset < sizeof(gb->work_ram); ++offset) {
+                const uint8_t value = gb->work_ram[offset];
+                assert(post_boot[offset] == (offset / 0x1000u == 2u ? 0u : value));
+                const bool upper_half = (offset & 0x800u) != 0;
+                const bool second_lane = (offset & 8u) != 0;
+                if (early && upper_half != second_lane)
+                    assert(value == 0);
+                else
+                    count_byte(upper_half ? &upper : &lower, value);
+            }
+            gb->work_ram[0x800] = 0x39;
+            cupid_gb_enter_boot_rom(gb);
+            assert(gb->work_ram[0x800] == 0x39);
+        }
+        if (early) {
+            require_band(&lower, 95, 99);
+            require_band(&upper, 95, 99);
+        } else if (models[model] == CUPID_GB_MODEL_CGB_D) {
+            require_band(&lower, 73, 77);
+            require_band(&upper, 23, 27);
+        } else {
+            require_band(&lower, 48, 52);
+            require_band(&upper, 48, 52);
+            require_full_byte_domain(&lower);
+            require_full_byte_domain(&upper);
+        }
+    }
+    free(post_boot);
+    cupid_gb_cleanup(gb);
+    free(gb);
+}
+
 static void load_generated_profile(CupidGb *gb, CupidGbModel model, uint64_t seed, bool color) {
     uint8_t rom[0x8000] = {0};
     rom[0x100] = 0x18;
@@ -919,6 +969,7 @@ static void test_color_target_initialization(void) {
 int main(void) {
     test_seeded_generations();
     test_model_distributions();
+    test_color_work_ram_revisions();
     test_cold_firmware_reconstruction();
     test_boot_entry_preserves_memory();
     test_policy_and_state_lifetime();
