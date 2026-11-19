@@ -244,15 +244,9 @@ void MainWindow::present(Presentation presentation) {
     }
     if (sgb) {
         image_ = QImage(CUPID_SGB_SCREEN_WIDTH, CUPID_SGB_SCREEN_HEIGHT, QImage::Format_RGB32);
-        cupid_gb_sgb_render_argb(&gb, reinterpret_cast<uint32_t *>(image_.bits()),
-                                 size_t(image_.width() * image_.height()));
-        auto *pixels = reinterpret_cast<QRgb *>(image_.bits());
-        for (size_t i = 0; i < CUPID_SGB_SCREEN_WIDTH * CUPID_SGB_SCREEN_HEIGHT; ++i) {
-            const QRgb raw = pixels[i];
-            const unsigned rgb555 =
-                (qRed(raw) >> 3) | ((qGreen(raw) >> 3) << 5) | ((qBlue(raw) >> 3) << 10);
-            pixels[i] = (*sgbColorTable_)[rgb555];
-        }
+        cupid_gb_sgb_render_with_color_table(&gb, reinterpret_cast<uint32_t *>(image_.bits()),
+                                             size_t(image_.width() * image_.height()),
+                                             sgbColorTable_->data());
         if (!borderAction_->isChecked())
             image_ = image_.copy(CUPID_SGB_VIEWPORT_X, CUPID_SGB_VIEWPORT_Y, 160, 144);
     } else {

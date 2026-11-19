@@ -478,6 +478,31 @@ static void test_border_compositor(void) {
                0xff180000u);
     }
 
+    uint32_t *mapped = malloc(count * sizeof(*mapped));
+    uint32_t *color_table = malloc(32768u * sizeof(*color_table));
+    assert(mapped && color_table);
+    for (unsigned i = 0; i < 32768u; ++i) {
+        color_table[i] = 0xff115577u ^ (i * 17u);
+    }
+    gb->sgb.screen_palettes[0] |= 0x8000u;
+    gb->sgb.transfer.border_transition = 16;
+    for (unsigned startup = 0; startup < 2; ++startup) {
+        gb->sgb_startup.phase = startup ? 80 : 200;
+        for (unsigned mask = CUPID_SGB_MASK_DISABLED; mask <= CUPID_SGB_MASK_COLOR0; ++mask) {
+            gb->sgb.mask_mode = (uint8_t)mask;
+            cupid_gb_sgb_render_argb(gb, pixels, count);
+            cupid_gb_sgb_render_with_color_table(gb, mapped, count, color_table);
+            for (size_t i = 0; i < count; ++i) {
+                const unsigned red = ((pixels[i] >> 16u) & 0xffu) / 8u;
+                const unsigned green = ((pixels[i] >> 8u) & 0xffu) / 8u;
+                const unsigned blue = (pixels[i] & 0xffu) / 8u;
+                assert(mapped[i] == color_table[red + green * 32u + blue * 1024u]);
+            }
+        }
+    }
+
+    free(color_table);
+    free(mapped);
     free(pixels);
     free(gb);
 }

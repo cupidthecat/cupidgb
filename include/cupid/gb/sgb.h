@@ -108,6 +108,9 @@ void cupid_gb_sgb_write_joyp(struct CupidGb *gb, uint8_t value);
 void cupid_gb_sgb_clock(struct CupidGb *gb, uint32_t dots);
 void cupid_gb_sgb_present(struct CupidGb *gb, bool complete, uint32_t dots_after_frame);
 void cupid_gb_sgb_render_argb(const struct CupidGb *gb, uint32_t *pixels, size_t pixel_count);
+/* A supplied color table maps all 32,768 RGB555 values to output pixels. */
+void cupid_gb_sgb_render_with_color_table(const struct CupidGb *gb, uint32_t *pixels,
+                                          size_t pixel_count, const uint32_t *color_table);
 /* Cartridge declaration only; use commands_enabled for packet permission. */
 bool cupid_gb_sgb_active(const struct CupidGb *gb);
 /* Physical adapter receiver permission, including ordinary cartridges in firmware. */

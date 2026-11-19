@@ -664,7 +664,7 @@ void cupid_gb_sgb_write_joyp(CupidGb *gb, uint8_t value) {
     }
 }
 
-static uint32_t border_color_argb(uint16_t rgb555, unsigned fade) {
+static uint16_t fade_border_color(uint16_t rgb555, unsigned fade) {
     uint16_t adjusted = 0;
     for (unsigned shift = 0; shift < 15; shift += 5) {
         const unsigned channel = ((unsigned)rgb555 >> shift) & 31u;
@@ -672,7 +672,11 @@ static uint32_t border_color_argb(uint16_t rgb555, unsigned fade) {
             adjusted |= (uint16_t)((channel - fade) << shift);
         }
     }
-    return cupid_gb_sgb_rgb15_to_argb(adjusted);
+    return adjusted;
+}
+
+static uint32_t render_color(uint16_t rgb555, const uint32_t *color_table) {
+    return color_table ? color_table[rgb555 & 0x7fffu] : cupid_gb_sgb_rgb15_to_argb(rgb555);
 }
 
 /**
@@ -700,40 +704,58 @@ static uint32_t border_color_argb(uint16_t rgb555, unsigned fade) {
  *                    `uint32_t` elements.
  * @param pixel_count Total number of elements in @p pixels; must be at least
  *                    `CUPID_SGB_SCREEN_WIDTH * CUPID_SGB_SCREEN_HEIGHT`.
+ * @param color_table Optional 32,768-entry RGB555 lookup table for output pixels.
  *
  * @note Does nothing if @p gb or @p pixels is NULL, or @p pixel_count
  *       is too small.
  */
-void cupid_gb_sgb_render_argb(const CupidGb *gb, uint32_t *pixels, size_t pixel_count) {
+void cupid_gb_sgb_render_with_color_table(const CupidGb *gb, uint32_t *pixels, size_t pixel_count,
+                                          const uint32_t *color_table) {
     if (!gb || !pixels || pixel_count < CUPID_SGB_SCREEN_WIDTH * CUPID_SGB_SCREEN_HEIGHT) {
         return;
     }
 
     const CupidGbSgb *sgb = &gb->sgb;
-    const uint32_t backdrop = cupid_gb_sgb_rgb15_to_argb(sgb->screen_palettes[0]);
+    const uint32_t backdrop = render_color(sgb->screen_palettes[0], color_table);
+    const uint32_t black = render_color(0, color_table);
     const uint8_t *screen = sgb->freeze_buffer;
     const unsigned transition = sgb->transfer.border_transition;
     const bool startup = cupid_gb_sgb_startup_active(gb);
     const unsigned fade =
         startup || transition >= 64 ? 0 : (transition > 32 ? 64 - transition : transition);
-    if (startup)
+    if (startup) {
         cupid_gb_sgb_startup_render(gb, pixels, pixel_count);
+        if (color_table) {
+            /* Startup artwork is already expanded to ARGB. Map it before
+             * compositing so the border can use the same output palette. */
+            for (unsigned y = 0; y < CUPID_GB_SCREEN_HEIGHT; ++y) {
+                uint32_t *row = pixels + (y + CUPID_SGB_VIEWPORT_Y) * CUPID_SGB_SCREEN_WIDTH +
+                                CUPID_SGB_VIEWPORT_X;
+                for (unsigned x = 0; x < CUPID_GB_SCREEN_WIDTH; ++x) {
+                    const uint32_t argb = row[x];
+                    const unsigned rgb555 =
+                        ((argb >> 19u) & 31u) | ((argb >> 6u) & 0x3e0u) | ((argb << 7u) & 0x7c00u);
+                    row[x] = color_table[rgb555];
+                }
+            }
+        }
+    }
     uint32_t screen_colors[4][4];
     uint32_t border_colors[4][16];
     for (unsigned palette = 0; palette < 4; ++palette) {
         for (unsigned color = 0; color < 4; ++color) {
             if (sgb->mask_mode == CUPID_SGB_MASK_BLACK) {
-                screen_colors[palette][color] = 0xff000000u;
+                screen_colors[palette][color] = black;
             } else if (sgb->mask_mode == CUPID_SGB_MASK_COLOR0 || color == 0) {
                 screen_colors[palette][color] = backdrop;
             } else {
                 screen_colors[palette][color] =
-                    cupid_gb_sgb_rgb15_to_argb(sgb->screen_palettes[palette * 4u + color]);
+                    render_color(sgb->screen_palettes[palette * 4u + color], color_table);
             }
         }
         for (unsigned color = 1; color < 16; ++color) {
-            border_colors[palette][color] =
-                border_color_argb(sgb->border_palettes[palette * 16u + color], fade);
+            border_colors[palette][color] = render_color(
+                fade_border_color(sgb->border_palettes[palette * 16u + color], fade), color_table);
         }
     }
 
@@ -783,10 +805,14 @@ void cupid_gb_sgb_render_argb(const CupidGb *gb, uint32_t *pixels, size_t pixel_
                         if (!startup)
                             output_row[x] = lcd_palette[lcd_row[x] & 3u];
                     } else {
-                        output_row[x] = tile_available ? backdrop : 0xff000000u;
+                        output_row[x] = tile_available ? backdrop : black;
                     }
                 }
             }
         }
     }
+}
+
+void cupid_gb_sgb_render_argb(const CupidGb *gb, uint32_t *pixels, size_t pixel_count) {
+    cupid_gb_sgb_render_with_color_table(gb, pixels, pixel_count, NULL);
 }

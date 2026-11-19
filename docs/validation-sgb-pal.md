@@ -21,3 +21,9 @@ Linux passes all six selected Qt command-line and workflow groups, including des
 Native adapter workflows also pass on Windows and WSLg, with ordinary and enhanced fixtures for NTSC, PAL and SGB2. Each PAL fixture records 665,070 startup PCM frames, 3,168 subsequent handheld frames, 7,373,520 guest clocks and 14,817,264 presentation clocks. Retained captures show the CupidGB introduction and desktop controls on both platforms. The detailed SGB2 route confirms real audio consumption on each host with a no-write interval. That short sink observation does not qualify sustained PAL playback.
 
 Wider PAL graphics/audio comparisons, physical presentation pacing, commercial firmware and commercial playback remain on the parity checklist.
+
+## Desktop color conversion
+
+The Qt renderer now applies its RGB555 display table to the SGB palettes before compositing. Startup artwork still uses its expanded pixels, so the renderer converts that viewport before applying the border. The ordinary core ARGB renderer is used by headless captures.
+
+The production renderer matched 407 full frames pixel for pixel against rendering to ARGB and then converting the entire image. The comparison covered all 147 display tables, nine startup phases, every border fade level and all four display masks. It also checked palette high bits, tile flips and unavailable tiles.
