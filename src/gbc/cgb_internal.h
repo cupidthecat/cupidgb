@@ -26,7 +26,8 @@
 #include "cupid/gbc/cgb.h"
 
 void cupid_cgb_apply_cartridge_io(struct CupidGb *gb);
-void cupid_cgb_apply_native_boot_clock(struct CupidGb *gb);
+/* Returns the elapsed monochrome setup time beyond the native handoff. */
+unsigned cupid_cgb_apply_cartridge_handoff(struct CupidGb *gb);
 
 /* Monochrome cartridge handoff B register, with the firmware license check. */
 uint8_t cupid_cgb_boot_title_checksum(const struct CupidGb *gb);

@@ -433,8 +433,8 @@ on CGB-C with built-in startup and normal audio. Both sessions applied all
 cycle with identical framebuffer captures and matching 8 KiB saves.
 Both audio sinks reported zero idle or error events.
 
-CGB revision 0 and monochrome-compatibility display handoff phases remain
-open. See [VBlank comparison timing](validation-timing.md#cgb-stat-coincidence-across-scanlines)
+CGB revision 0 display handoff remains open. See
+[VBlank comparison timing](validation-timing.md#cgb-stat-coincidence-across-scanlines)
 for the early color coincidence bit transition.
 
 ### CGB native-color divider at cartridge entry
@@ -458,8 +458,42 @@ callbacks and ten-frame continuation.
 The startup regression checks the first guest DIV read, TIMA advance,
 and pulse length behavior after load, quick reset and hard reset. A guest
 probe also confirms that the sequencer step affects the first length edge
-when the divider phase is identical. CGB revision 0, monochrome
-compatibility and wider APU handoff state remain open.
+when the divider phase is identical. CGB revision 0 and wider APU handoff
+state remain open.
+
+### CGB monochrome compatibility handoff
+
+Built-in startup on CGB A through E enters monochrome cartridges in
+VBlank. The setup time follows the selected palette slot and accounts
+for the legacy tilemap transfer on two keys. DIV, the APU sequencer,
+the pixel clock, the retained display scheduler and the LCD repeat
+window all start at the corresponding point.
+
+The compiled handoff matched 522 supplied-firmware cases. These include
+324 CGB-C cases, 148 held-out cases on A, B, D and E, and 50 license
+controls for the two legacy keys. They cover all 26 measured setup
+durations and the first guest DIV, LY, STAT and NR52 reads.
+
+The legacy paths leave HL at `991A` and write 25 tile indices to VRAM
+bank 0. A separate nine-case comparison checked those cells in both
+banks for the two keys and an ordinary key with each of the three
+cartridge flags. All nine cases retained the bytes through a snapshot
+round trip. The startup regression checks the tilemap, divider and
+display coordinates after load, quick reset and hard reset.
+
+The 448 earlier native-color timing cases still match. Executed firmware
+reproduced the prior build's entry and cartridge snapshots, frame
+callbacks and ten-frame continuation in 55 runs, including both legacy
+keys on each revision. CGB revision 0 and wider firmware VRAM and APU
+state remain open.
+
+Windows passed 105 local tests, Linux passed 103, and the Linux sanitizer
+build passed 76. All 177 acceptance and mapper cases passed on both
+hosts, with identical guest outcomes across hosts. The 121 paired
+firmware cases retained their terminal clocks. In the 28 built-in CGB
+mapper runs, terminal time increased by 2,340 or 2,392 guest cycles.
+Instruction counts, audio frame counts and audio CRCs changed in those
+runs. Framebuffer CRCs and test verdicts stayed the same.
 
 ### Monochrome cartridge in Qt
 

@@ -1266,7 +1266,7 @@ static void compare_color_phase_continuation(CupidGb *a, CupidGb *b) {
     free(y);
 }
 
-static void test_native_color_startup_clock(void) {
+static void test_cgb_startup_clock(void) {
     const CupidGbModel models[] = {CUPID_GB_MODEL_CGB_A, CUPID_GB_MODEL_CGB_B, CUPID_GB_MODEL_CGB_C,
                                    CUPID_GB_MODEL_CGB_D, CUPID_GB_MODEL_CGB_E};
 
@@ -1275,17 +1275,23 @@ static void test_native_color_startup_clock(void) {
         char new_licensee[2];
         uint16_t divider;
         uint8_t apu_step;
+        uint16_t compatibility_cycles;
     } cases[] = {
-        {0x80, 0, 0, 0x01, {'0', '1'}, 8440, 1},
-        {0xc0, 0, 0, 0x33, {'0', '1'}, 8472, 1},
-        {0x80, 0xb3, 'B', 0x01, {'0', '1'}, 13432, 1},
-        {0xc0, 0xb3, 'U', 0x01, {'0', '1'}, 11724, 1},
-        {0x80, 0xb3, '?', 0x33, {'0', '1'}, 11900, 1},
-        {0xc0, 0x46, '?', 0x01, {'0', '1'}, 11824, 1},
-        {0x80, 0x5a, 'A', 0x01, {'0', '1'}, 12200, 1},
-        {0xc0, 0, 0, 0x33, {'0', '2'}, 7872, 0},
-        {0xc0, 0, 0, 0x33, {'Z', '1'}, 7836, 0},
-        {0x80, 0, 0, 0x00, {'0', '1'}, 7840, 0},
+        {0x80, 0, 0, 0x01, {'0', '1'}, 8440, 1, 0},
+        {0xc0, 0, 0, 0x33, {'0', '1'}, 8472, 1, 0},
+        {0x80, 0xb3, 'B', 0x01, {'0', '1'}, 13432, 1, 0},
+        {0xc0, 0xb3, 'U', 0x01, {'0', '1'}, 11724, 1, 0},
+        {0x80, 0xb3, '?', 0x33, {'0', '1'}, 11900, 1, 0},
+        {0xc0, 0x46, '?', 0x01, {'0', '1'}, 11824, 1, 0},
+        {0x80, 0x5a, 'A', 0x01, {'0', '1'}, 12200, 1, 0},
+        {0xc0, 0, 0, 0x33, {'0', '2'}, 7872, 0, 0},
+        {0xc0, 0, 0, 0x33, {'Z', '1'}, 7836, 0, 0},
+        {0x80, 0, 0, 0x00, {'0', '1'}, 7840, 0, 0},
+        {0x00, 0, 'A', 0x00, {'0', '1'}, 9852, 1, 2012},
+        {0x00, 0, 'A', 0x01, {'0', '1'}, 10452, 1, 2012},
+        {0x00, 0x43, 'A', 0x01, {'0', '1'}, 13492, 1, 3036},
+        {0x00, 0x58, 'A', 0x01, {'0', '1'}, 13676, 1, 3220},
+        {0x00, 0x70, 'A', 0x01, {'0', '1'}, 12620, 1, 1660},
     };
 
     uint8_t rom[32768] = {0};
@@ -1311,6 +1317,29 @@ static void test_native_color_startup_clock(void) {
                                          gb->div_counter * 4u + gb->divider_subcycle;
                 assert(divider == cases[i].divider);
                 assert(gb->apu.fs_step == cases[i].apu_step && !gb->apu.fs_skip_div_event);
+                const unsigned position = 168u + cases[i].compatibility_cycles;
+                const unsigned line = 144u + position / 456u;
+                const unsigned dot = position % 456u;
+                assert(cupid_gb_read_u8(gb, 0xff44) == line && gb->pixels.dot == dot);
+                assert(cupid_gb_read_u8(gb, 0xff41) == 0x81 && gb->display_clock.row == line);
+                assert(gb->display_clock.credit_half_dots == -2 * (452 - (int)dot));
+                assert(gb->display_clock.frame_age_dots == 164u + cases[i].compatibility_cycles);
+                assert(gb->lcd_repeat_countdown == 67485u - dot);
+                const bool legacy_tilemap =
+                    cases[i].compatibility_cycles &&
+                    (cases[i].checksum == 0x43 || cases[i].checksum == 0x58);
+                if (cases[i].compatibility_cycles) {
+                    const unsigned hl = (unsigned)gb->cpu.h * 256u + gb->cpu.l;
+                    assert(hl == (legacy_tilemap ? 0x991au : 0x007cu));
+                }
+                for (unsigned tile = 0; tile < 12; ++tile) {
+                    assert(gb->video_ram[0x1904u + tile] == (legacy_tilemap ? 1u + tile : 0u));
+                    assert(gb->video_ram[0x1924u + tile] == (legacy_tilemap ? 13u + tile : 0u));
+                    assert(gb->video_ram[0x3904u + tile] == 0u);
+                    assert(gb->video_ram[0x3924u + tile] == 0u);
+                }
+                assert(gb->video_ram[0x1910u] == (legacy_tilemap ? 25u : 0u));
+                assert(gb->video_ram[0x3910u] == 0u);
                 assert(cupid_gb_step(gb) && cupid_gb_step(gb));
                 /* LDH samples the register after the opcode and immediate byte. */
                 assert(cupid_gb_read_u8(gb, 0xff80) == (divider + 8u) / 256u);
@@ -1374,8 +1403,10 @@ static void test_native_color_startup_phase(void) {
                 cupid_gb_model_is_cgb(a->model) && a->model != CUPID_GB_MODEL_CGB_0 && flag;
             if (native)
                 require_native_color_startup_phase(a);
-            else if (cupid_gb_model_is_cgb(a->model))
+            else if (a->model == CUPID_GB_MODEL_CGB_0)
                 assert(a->io_registers[0x44] == 0 && a->ppu_counter == 0);
+            else if (cupid_gb_model_is_cgb(a->model))
+                assert(a->io_registers[0x44] == 148 && a->pixels.dot == 356);
             compare_color_phase_continuation(a, b);
             for (unsigned kind = 0; kind < 2; ++kind) {
                 a->work_ram[0x12] = 0x5a;
@@ -1507,7 +1538,7 @@ int main(void) {
     test_legacy_sgb_startup_recovery();
     test_legacy_sgb_startup_signature();
     test_printer_state_policy();
-    test_native_color_startup_clock();
+    test_cgb_startup_clock();
     test_native_color_startup_phase();
     test_color_target_initialization();
     test_cgb_cartridge_entry_registers();

@@ -836,11 +836,36 @@ bool cupid_gb_load_rom_file(CupidGb *gb, const char *path) {
     return loaded;
 }
 
+static void cupid_gb_apply_cgb_boot_display(CupidGb *gb, unsigned compatibility_cycles) {
+    enum { DOTS_PER_ROW = 456, NATIVE_ENTRY_DOT = 168, SCHEDULER_LEAD = 4 };
+
+    const unsigned position = NATIVE_ENTRY_DOT + compatibility_cycles;
+    const uint8_t line = (uint8_t)(CUPID_GB_PPU_VISIBLE_SCANLINES + position / DOTS_PER_ROW);
+    const uint16_t dot = (uint16_t)(position % DOTS_PER_ROW);
+    gb->io_registers[CUPID_GB_IO_LY] = line;
+    gb->io_registers[CUPID_GB_IO_STAT] = 0x80u | CUPID_GB_PPU_MODE_VBLANK;
+    gb->pixels = (CupidGbPixels){.initialized = true, .line = line, .dot = dot};
+    gb->ppu_counter = dot / 4u;
+    cupid_gb_pixels_begin_line(gb);
+    gb->pixels.window_armed = true;
+    gb->display_cycles_since_frame = 166u + compatibility_cycles;
+    gb->lcd_repeat_countdown = 67485u - dot;
+    gb->lcd_frame_odd = false;
+    /* The pixel clock and scheduler cross the row boundary four dots apart. */
+    gb->display_clock = (CupidGbDisplayClock){
+        .row = line,
+        .phase = CUPID_GB_DISPLAY_CLOCK_VBLANK_GAP,
+        .credit_half_dots = -2 * (DOTS_PER_ROW - (int)dot - SCHEDULER_LEAD),
+        .frame_age_dots = 164u + compatibility_cycles,
+    };
+}
+
 void cupid_gb_cartridge_post_boot(CupidGb *gb) {
     /* Cartridge requirements cannot change the selected physical model. */
-    gb->cgb_mode = cupid_gb_model_is_cgb(gb->model) && (gb->header.cgb_flag & 0x80u) != 0;
-    const bool native_color_vblank = gb->cgb_mode && gb->model != CUPID_GB_MODEL_CGB_0;
-    if (!native_color_vblank)
+    const bool color = cupid_gb_model_is_cgb(gb->model);
+    gb->cgb_mode = color && (gb->header.cgb_flag & 0x80u) != 0;
+    const bool cgb_vblank = color && gb->model != CUPID_GB_MODEL_CGB_0;
+    if (!cgb_vblank)
         cupid_gb_display_clock_import_legacy(gb);
     gb->sgb.enabled = cupid_gb_model_is_sgb(gb->model) && gb->header.sgb_flag == 3;
     /* Without executed firmware, project the two header permission bytes into
@@ -853,7 +878,7 @@ void cupid_gb_cartridge_post_boot(CupidGb *gb) {
     gb->speed_phase = false;
     gb->io_registers[0x4d] = 0;
     gb->io_registers[0x4f] = (uint8_t)(0xfeu | (gb->cgb_vram_bank & 1u));
-    if (cupid_gb_model_is_cgb(gb->model))
+    if (color)
         cupid_cgb_apply_cartridge_io(gb);
     else
         gb->io_registers[0x70] = (uint8_t)(0xf8u | gb->cgb_wram_bank);
@@ -864,28 +889,7 @@ void cupid_gb_cartridge_post_boot(CupidGb *gb) {
     }
     if (gb->cgb_mode) {
         gb->cpu.a = 0x11;
-        if (native_color_vblank) {
-            cupid_cgb_apply_native_boot_clock(gb);
-            /* Revisions A through E enter native-color software during VBlank.
-             * Pixel delivery and the display scheduler reach their edges at
-             * different offsets from the final firmware instruction. */
-            gb->io_registers[CUPID_GB_IO_LY] = 144u;
-            gb->io_registers[CUPID_GB_IO_STAT] = 0x80u | CUPID_GB_PPU_MODE_VBLANK;
-            gb->pixels = (CupidGbPixels){.initialized = true, .line = 144u, .dot = 168u};
-            gb->ppu_counter = gb->pixels.dot / 4u;
-            cupid_gb_pixels_begin_line(gb);
-            gb->pixels.window_armed = true;
-            gb->display_cycles_since_frame = 166u;
-            gb->lcd_repeat_countdown = 67317u;
-            gb->lcd_frame_odd = false;
-            gb->display_clock = (CupidGbDisplayClock){
-                .row = 144u,
-                .phase = CUPID_GB_DISPLAY_CLOCK_VBLANK_GAP,
-                .credit_half_dots = -568,
-                .frame_age_dots = 164u,
-            };
-        }
-    } else if (cupid_gb_model_is_cgb(gb->model)) {
+    } else if (color) {
         /* The monochrome handoff leaves both the palette checksum and different
          * DE and HL values for the cartridge's first instruction. */
         gb->cpu.b = cupid_cgb_boot_title_checksum(gb);
@@ -895,6 +899,10 @@ void cupid_gb_cartridge_post_boot(CupidGb *gb) {
         cupid_cgb_apply_compatibility_palette(gb);
     } else if (gb->sgb.enabled) {
         cupid_gb_sgb_apply_compatibility_palette(gb);
+    }
+    if (cgb_vblank) {
+        const unsigned compatibility_cycles = cupid_cgb_apply_cartridge_handoff(gb);
+        cupid_gb_apply_cgb_boot_display(gb, compatibility_cycles);
     }
 }
 
