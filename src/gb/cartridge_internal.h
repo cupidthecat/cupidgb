@@ -38,6 +38,8 @@ bool cupid_gb_cartridge_source_fits(const CupidGb *gb, const void *source, size_
 void cupid_gb_cartridge_reset_controls(CupidGb *gb);
 void cupid_gb_cartridge_post_boot(CupidGb *gb);
 
+bool cupid_gb_mbc7_serial_valid(const CupidGbMbc7 *device);
+
 /* A per-call allocator permits deterministic failure tests without global
  * allocation hooks. It must return NULL or a new non-overlapping allocation
  * of at least the requested size with ordinary malloc/free-compatible

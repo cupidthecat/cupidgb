@@ -581,18 +581,6 @@ static void state_extension_mbc7(StateIo *io, CupidGbMbc7 *device) {
     boolean(io, &device->programming_enabled);
 }
 
-static bool valid_mbc7_extension(const CupidGbMbc7 *device) {
-    if ((device->pins & ~0xc3u) || device->data_bits > 16) {
-        return false;
-    }
-    if (!device->data_bits) {
-        return device->command < 0x400u;
-    }
-    /* The serial interface accepts a payload only after WRITE or WRAL. */
-    return (device->command >= 0x500u && device->command <= 0x5ffu) ||
-           (device->command >= 0x440u && device->command <= 0x47fu);
-}
-
 static void state_extension_camera(StateIo *io, CupidGbCamera *camera) {
     bytes(io, camera->registers, sizeof(camera->registers));
     byte(io, &camera->clock_phase);
@@ -818,7 +806,7 @@ static void state_stop_ports(StateIo *io, CupidGb *gb) {
 static bool valid_v5_sections(const CupidGb *gb, unsigned sections, const CupidGbCamera *camera) {
     return (!(sections & STATE_SECTION_SGB) || valid_sgb_extension(&gb->sgb.transfer)) &&
            (!(sections & STATE_SECTION_MMM01) || valid_mmm01_extension(gb)) &&
-           (!(sections & STATE_SECTION_MBC7) || valid_mbc7_extension(&gb->mbc7)) &&
+           (!(sections & STATE_SECTION_MBC7) || cupid_gb_mbc7_serial_valid(&gb->mbc7)) &&
            (!(sections & STATE_SECTION_CAMERA) || valid_camera_extension(gb, camera)) &&
            (!(sections & STATE_SECTION_TPP1) || valid_tpp1_extension(&gb->tpp1)) &&
            (!(sections & STATE_SECTION_HUC3) || valid_huc3_extension(gb));

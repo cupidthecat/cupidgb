@@ -22,6 +22,8 @@
 
 #include "cupid/gb/mbc7.h"
 
+#include "cartridge_internal.h"
+
 #include <string.h>
 
 enum {
@@ -61,6 +63,17 @@ void cupid_gb_mbc7_reset_serial(CupidGb *gb) {
     gb->mbc7.pins = EEPROM_DO;
     gb->mbc7.registers_enabled = false;
     gb->mbc7.programming_enabled = false;
+}
+
+bool cupid_gb_mbc7_serial_valid(const CupidGbMbc7 *device) {
+    if ((device->pins & ~(EEPROM_SELECT | EEPROM_CLOCK | EEPROM_DI | EEPROM_DO)) ||
+        device->data_bits > 16)
+        return false;
+    if (!device->data_bits)
+        return device->command < EEPROM_START;
+    /* Only WRITE and WRAL have a separate data phase. */
+    return (device->command >= 0x500u && device->command <= 0x5ffu) ||
+           (device->command >= 0x440u && device->command <= 0x47fu);
 }
 
 void cupid_gb_mbc7_reset(CupidGb *gb) {

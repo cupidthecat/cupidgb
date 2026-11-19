@@ -39,6 +39,7 @@ enum {
     BESS_CORE_SIZE = 0xd0,
     BESS_INFO_SIZE = 18,
     BESS_RTC_SIZE = 48,
+    BESS_MBC7_SIZE = 10,
     BESS_XOAM_SIZE = 96,
     BESS_SGB_SIZE = 0x39,
     BESS_PORTS = 0x18,
@@ -53,7 +54,7 @@ typedef struct BessBlock {
 } BessBlock;
 
 typedef struct BessState {
-    BessBlock info, core, mapper, clock, extra_oam, sgb;
+    BessBlock info, core, mapper, clock, mbc7, extra_oam, sgb;
     BessBlock regions[BESS_REGION_COUNT];
     BessBlock sgb_regions[BESS_REGION_COUNT];
     size_t block_begin, block_end;
@@ -80,6 +81,8 @@ static BessBlock *known_block(BessState *state, const uint8_t *name) {
         return &state->mapper;
     if (!memcmp(name, "RTC ", 4))
         return &state->clock;
+    if (!memcmp(name, "MBC7", 4))
+        return &state->mbc7;
     if (!memcmp(name, "XOAM", 4))
         return &state->extra_oam;
     if (!memcmp(name, "SGB ", 4))
@@ -164,6 +167,7 @@ static CupidGbStateResult validate(const CupidGb *gb, const BessState *state) {
     }
     if (core[20] > 1 || core[22] > 2 || core[23] || core[BESS_PORTS + 0x50] > 1 ||
         state->mapper.size % 3 || (state->clock.bytes && state->clock.size != BESS_RTC_SIZE) ||
+        (state->mbc7.bytes && state->mbc7.size != BESS_MBC7_SIZE) ||
         (state->extra_oam.bytes && state->extra_oam.size != BESS_XOAM_SIZE) ||
         (state->sgb.bytes && !cupid_gb_model_is_sgb(gb->model)) ||
         (!cupid_gb_model_is_cgb(gb->model) && (state->regions[5].size || state->regions[6].size)))
@@ -328,12 +332,33 @@ static void restore_clock(CupidGb *gb, const uint8_t *rtc) {
                            .base_time = base};
 }
 
+static bool restore_mbc7(CupidGb *gb, const uint8_t *memory) {
+    if (gb->header.mbc_type != CUPID_GB_MBC7)
+        return true;
+    /* Files without the optional device block start with clear wire fields. */
+    const uint8_t empty[BESS_MBC7_SIZE] = {0};
+    if (!memory)
+        memory = empty;
+    /* Restore the pin levels directly so an already-high CLK cannot shift. */
+    const uint8_t flags = memory[0];
+    gb->mbc7.pins = (uint8_t)(((flags >> 1) & 3u) | ((flags & 0x18u) << 3));
+    gb->mbc7.programming_enabled = (flags & 0x20u) != 0;
+    gb->mbc7_latch = (flags & 1u) != 0;
+    gb->mbc7.data_bits = memory[1];
+    gb->mbc7.command = bess_word(memory + 2);
+    gb->mbc7.output = bess_word(memory + 4);
+    gb->mbc7_sensor_x = bess_word(memory + 6);
+    gb->mbc7_sensor_y = bess_word(memory + 8);
+    return cupid_gb_mbc7_serial_valid(&gb->mbc7);
+}
+
 static bool supported_mapper(const CupidGb *gb) {
     switch (gb->header.mbc_type) {
         case CUPID_GB_MBC_NONE:
         case CUPID_GB_MBC1:
         case CUPID_GB_MBC2:
         case CUPID_GB_MBC5:
+        case CUPID_GB_MBC7:
             return true;
         case CUPID_GB_MBC3:
             return !cupid_gb_has_extended_mbc3(gb);
@@ -426,7 +451,7 @@ CupidGbStateResult cupid_gb_bess_load(CupidGb *gb, const uint8_t *data, size_t l
     next->apu.output.filter.startup_pending = false;
     next->apu.output.sample_fraction = 0;
     next->apu.output.fraction_half = false;
-    if (!cupid_gb_audio_state_valid(next)) {
+    if (!restore_mbc7(next, state.mbc7.bytes) || !cupid_gb_audio_state_valid(next)) {
         free(next->cartridge_ram_heap);
         free(next);
         return CUPID_GB_STATE_INVALID;
