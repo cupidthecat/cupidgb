@@ -420,3 +420,36 @@ The 60-second CGB-C run repeated after the I/O latch changes at `7f8d442`.
 Both hosts again applied all 88 inputs, reached the first stage and wrote
 the same 8 KiB save. The final images also matched the earlier run byte for
 byte. Both audio sinks reported zero idle or error events.
+
+## DMA at firmware re-entry
+
+Direct overlay entry cancels pending, active, and restarted OAM DMA while
+keeping the bytes already written to OAM. The first firmware instruction
+can fetch from the overlay immediately. A new write to `FF46` starts a
+fresh copy. The guest regression exercises all three transfer states on
+each of the 12 supported profiles.
+
+Across 72 re-entry and hard-reset cases, the previous build left DMA pending
+or active in 24 direct re-entry cases. With an active transfer, the first boot
+instruction read the cartridge's `HALT` opcode instead of the overlay byte.
+All 72 cases pass with the reset. The paired cold and quick-reset controls
+also passed 66 cases across 11 profiles.
+
+CGB entry also resets the VRAM DMA address latches and releases a pending
+HBlank transfer. On all six revisions, a firmware transfer started without
+an address write copies from the start of the overlay to VRAM bank zero.
+The old destination and all unrelated VRAM bytes retain their prior values.
+
+### Timer, serial and joypad transactions
+
+Overlay entry now clears a pending TIMA reload and its write-blocking window,
+a partial serial transfer, and the monochrome joypad row-release delay. Held
+buttons and pending host input carry forward to the new session.
+
+Before the fix, an old reload could raise IF bit 2 during the first firmware
+read. A pending row change could also make JOYP read `FF` in place of `CF`.
+The updated regression covers these reads, the first TIMA write, and the
+serial control register in 60 cases across all 12 profiles. An independent
+352-observation comparison covered cold, hard-reset, quick-reset, and
+overlay-entry paths. A new serial transfer after re-entry completed with
+the expected data and interrupt.

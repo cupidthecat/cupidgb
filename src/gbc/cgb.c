@@ -58,13 +58,7 @@ void cupid_cgb_init_state(CupidGb *gb) {
         gb->cgb_bg_palette_ram[palette_index] = 0xffu;
         gb->cgb_bg_palette_ram[palette_index + 1u] = 0x7fu;
     }
-    gb->hdma_source = 0u;
-    gb->hdma_destination = 0x8000u;
-    gb->hdma_blocks_remaining = 0u;
-    gb->hdma_active = false;
-    gb->hdma_pending = false;
-    gb->hdma_hblank_delay = 0;
-    gb->hdma_allow_on_wake = false;
+    cupid_cgb_reset_dma(gb);
     gb->io_registers[0x4fu] = 0xfeu;
     gb->io_registers[0x4cu] = 0u;
     gb->io_registers[0x68u] = 0x00u;

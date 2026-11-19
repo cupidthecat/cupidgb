@@ -25,6 +25,7 @@
  */
 
 #include "cupid/gb/gb.h"
+#include "../gbc/cgb_internal.h"
 #include "cupid/gb/battery.h"
 #include "cupid/gb/infrared.h"
 #include "display_clock.h"
@@ -53,7 +54,6 @@
 #include "cupid/gb/sgb.h"
 #include "cupid/gb/timer.h"
 #include "cupid/gb/tpp1.h"
-#include "cupid/gbc/cgb.h"
 
 // Init
 
@@ -509,8 +509,8 @@ void cupid_gb_clear_boot_rom(CupidGb *gb) {
 /**
  * @brief Re-enters firmware while preserving live volatile memory.
  *
- * Zeroes all CPU registers, resets all I/O registers, APU, DIV, timer,
- * and serial state, then maps the boot ROM overlay so execution starts
+ * Zeroes all CPU registers and resets I/O, APU, DMA, DIV, timer, and
+ * serial state, then maps the boot ROM overlay so execution starts
  * at address 0x0000. Wave/palette IO uses the current cold-start generation.
  * WRAM, HRAM, OAM, VRAM, cartridge RAM and RTC data remain intact.
  * For initial firmware startup after ROM loading, use @ref cupid_gb_start_boot_rom
@@ -566,11 +566,16 @@ void cupid_gb_startup_hardware(CupidGb *gb) {
     gb->cgb_vram_bank = 0;
     gb->cgb_wram_bank = 1;
     gb->cgb_object_priority_x = false;
-    gb->hdma_pending = false;
-    gb->hdma_active = false;
-    gb->hdma_hblank_delay = 0;
-    gb->hdma_allow_on_wake = false;
-    gb->hdma_blocks_remaining = 0;
+    /* Release the cartridge bus before the first firmware opcode fetch. */
+    gb->dma_source_base = 0;
+    gb->dma_restart_source_base = 0;
+    gb->dma_index = 0;
+    gb->dma_start_delay = 0;
+    gb->dma_restart_delay = 0;
+    gb->dma_phase = 0;
+    gb->dma_active = false;
+    gb->dma_restart_pending = false;
+    cupid_cgb_reset_dma(gb);
     gb->double_speed = false;
     gb->speed_phase = false;
     gb->speed_switch_armed = false;
@@ -604,6 +609,14 @@ void cupid_gb_startup_hardware(CupidGb *gb) {
     gb->div_counter = 2u;
     gb->divider_subcycle = 0u;
     gb->ppu_counter = 0u;
+    /* A new firmware entry cannot inherit guest peripheral transactions. */
+    gb->timer_counter = 0u;
+    gb->tima_overflow_delay = 0u;
+    gb->tima_reload_just_happened = false;
+    gb->serial_bits_remaining = 0u;
+    gb->serial_tx_latch = 0u;
+    gb->joyp_select_delay = 0u;
+    gb->joyp_select_value = 0u;
     gb->serial_master_clock = false;
     gb->serial_fast_clock = false;
     gb->interrupt_flags = 0x00u;

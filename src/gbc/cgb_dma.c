@@ -29,6 +29,18 @@
 #include "cupid/gb/ppu.h"
 #include "cupid/gb/timer.h"
 
+void cupid_cgb_reset_dma(CupidGb *gb) {
+    gb->hdma_vram_fetch = 0;
+    gb->hdma_source = 0;
+    gb->hdma_destination = 0x8000;
+    gb->hdma_blocks_remaining = 0;
+    gb->hdma_active = false;
+    gb->hdma_pending = false;
+    gb->hdma_running = false;
+    gb->hdma_hblank_delay = 0;
+    gb->hdma_allow_on_wake = false;
+}
+
 /* Zero remaining blocks encodes the completed value FF. Cancellation keeps the
  * newly written count but releases the active request, producing an idle count. */
 uint8_t cupid_cgb_dma_status(const CupidGb *gb) {

@@ -28,11 +28,14 @@
 #include "cupid/core/emulator.h"
 #include "cupid/gb/gb.h"
 #include "cupid/gb/infrared.h"
+#include "cupid/gb/input.h"
 #include "cupid/gb/ppu.h"
 #include "cupid/gb/printer.h"
 #include "cupid/gb/reset.h"
+#include "cupid/gb/sgb.h"
 #include "cupid/gb/startup.h"
 #include "cupid/gb/state.h"
+#include "cupid/gb/timer.h"
 #include "test_state_layout.h"
 
 #include <assert.h>
@@ -851,6 +854,167 @@ static void test_boot_entry_preserves_memory(void) {
     free(before);
 }
 
+static void run_firmware_after_adapter_hold(CupidGb *gb) {
+    for (unsigned step = 0; step < 66000 && cupid_gb_sgb_startup_held(gb); ++step) {
+        assert(cupid_gb_step(gb));
+        int16_t samples[256];
+        while (cupid_gb_apu_drain(gb, samples, 128)) {
+        }
+    }
+    assert(!cupid_gb_sgb_startup_held(gb));
+}
+
+static void arm_firmware_entry_timer(CupidGb *gb) {
+    cupid_gb_write_u8(gb, 0xff04, 0);
+    cupid_gb_write_u8(gb, 0xff06, 0x42);
+    cupid_gb_write_u8(gb, 0xff05, 0xff);
+    cupid_gb_write_u8(gb, 0xff07, 5);
+    for (unsigned cycle = 0; cycle < 8 && !gb->tima_overflow_delay; ++cycle)
+        cupid_gb_tick(gb, 1);
+    assert(gb->tima_overflow_delay == 1);
+}
+
+static void test_firmware_entry_peripheral_transactions(void) {
+    enum { TIMER_OVERFLOW, ROW_RELEASE, HELD_BUTTON, SERIAL_TRANSFER, TIMER_RELOAD };
+
+    const struct {
+        uint8_t port;
+        uint8_t value;
+    } cases[] = {
+        [TIMER_OVERFLOW] = {0x0f, 0xe0}, [ROW_RELEASE] = {0x00, 0xcf},
+        [HELD_BUTTON] = {0x00, 0xce},    [SERIAL_TRANSFER] = {0x02, 0x7e},
+        [TIMER_RELOAD] = {0x05, 0x17},
+    };
+
+    CupidGb *gb = calloc(1, sizeof(*gb));
+    assert(gb);
+    for (unsigned model = CUPID_GB_MODEL_DMG_ABC; model <= CUPID_GB_MODEL_CGB_D; ++model) {
+        for (unsigned transaction = 0; transaction < sizeof(cases) / sizeof(cases[0]);
+             ++transaction) {
+            load_generated_profile(gb, (CupidGbModel)model, 0, true);
+            gb->boot_rom_size = cupid_gb_model_is_cgb(gb->model) ? 0x900 : 0x100;
+            /* Read the relevant I/O port and save the first firmware result in HRAM. */
+            const uint8_t entry[] = {0xf0, cases[transaction].port, 0xe0, 0x80};
+            memcpy(gb->boot_rom, entry, sizeof(entry));
+            if (transaction == TIMER_OVERFLOW || transaction == TIMER_RELOAD) {
+                arm_firmware_entry_timer(gb);
+                if (transaction == TIMER_RELOAD) {
+                    cupid_gb_tick(gb, 1);
+                    assert(gb->tima_reload_just_happened);
+                }
+            } else if (transaction == SERIAL_TRANSFER) {
+                cupid_gb_write_u8(gb, 0xff01, 0xa5);
+                cupid_gb_write_u8(gb, 0xff02, 0x81);
+                cupid_gb_tick(gb, 128);
+                assert(gb->serial_bits_remaining == 7);
+            } else {
+                cupid_gb_write_u8(gb, 0xff00, 0);
+                cupid_gb_write_u8(gb, 0xff00, 0x30);
+                if (transaction == HELD_BUTTON)
+                    cupid_gb_set_buttons(gb, 0xfe);
+            }
+            const uint8_t held = gb->joypad;
+            const bool pending = gb->joyp_sample_pending;
+            cupid_gb_enter_boot_rom(gb);
+            assert(gb->joypad == held && gb->joyp_sample_pending == pending);
+            assert(!gb->tima_overflow_delay && !gb->tima_reload_just_happened);
+            assert(!gb->joyp_select_delay && !gb->joyp_select_value);
+            assert(!gb->serial_bits_remaining && !gb->serial_tx_latch);
+            if (transaction == TIMER_RELOAD) {
+                /* The public bus is writable between overlay entry and stepping.
+                 * A pre-entry reload window must not suppress that write. */
+                cupid_gb_write_u8(gb, 0xff05, 0x17);
+                assert(cupid_gb_read_u8(gb, 0xff05) == 0x17);
+            }
+            run_firmware_after_adapter_hold(gb);
+            assert(cupid_gb_step(gb) && cupid_gb_step(gb));
+            assert(cupid_gb_read_u8(gb, 0xff80) == cases[transaction].value);
+        }
+    }
+    cupid_gb_cleanup(gb);
+    free(gb);
+}
+
+static void test_firmware_entry_oam_dma(void) {
+    static uint8_t rom[0x8000];
+    rom[0x14d] = (uint8_t)-25;
+    memset(rom + 0x4000, 0x76, 0x4000); /* A redirected fetch would execute HALT. */
+    CupidGb *gb = calloc(1, sizeof(*gb));
+    assert(gb);
+    cupid_gb_set_power_on_seed(gb, 0);
+    for (unsigned model = CUPID_GB_MODEL_DMG_ABC; model <= CUPID_GB_MODEL_CGB_D; ++model) {
+        cupid_gb_set_model(gb, (CupidGbModel)model);
+        for (unsigned phase = 0; phase < 3; ++phase) {
+            assert(cupid_gb_load_rom(gb, rom, sizeof(rom)));
+            gb->boot_rom_size = cupid_gb_model_is_cgb(gb->model) ? 0x900 : 0x100;
+            const uint8_t entry[] = {0x3e, 0x42, 0xe0, 0x80}; /* LD A,$42; LDH [$80],A */
+            memcpy(gb->boot_rom, entry, sizeof(entry));
+            cupid_gb_write_u8(gb, 0xff46, 0x40);
+            assert(gb->dma_start_delay);
+            if (phase != 0) {
+                cupid_gb_tick_dma_tcycles(gb, 20);
+                assert(gb->dma_active && gb->dma_index);
+            }
+            if (phase == 2) {
+                cupid_gb_write_u8(gb, 0xff46, 0x40);
+                assert(gb->dma_start_delay && gb->dma_restart_pending);
+            }
+
+            uint8_t oam[sizeof(gb->object_attribute_memory)];
+            memcpy(oam, gb->object_attribute_memory, sizeof(oam));
+            cupid_gb_enter_boot_rom(gb);
+            run_firmware_after_adapter_hold(gb);
+            assert(cupid_gb_step(gb));
+            assert(gb->cpu.pc == 2 && gb->cpu.a == 0x42 && !gb->cpu.halted);
+            assert(cupid_gb_step(gb));
+            assert(cupid_gb_read_u8(gb, 0xff80) == 0x42);
+            assert(!cupid_gb_oam_dma_blocks_bus(gb) && !gb->dma_restart_pending);
+            assert(memcmp(oam, gb->object_attribute_memory, sizeof(oam)) == 0);
+
+            cupid_gb_write_u8(gb, 0xff46, 0x40);
+            cupid_gb_tick_dma_tcycles(gb, 656);
+            assert(!cupid_gb_oam_dma_blocks_bus(gb));
+            for (unsigned i = 0; i < sizeof(oam); ++i)
+                assert(gb->object_attribute_memory[i] == 0x76);
+        }
+    }
+    cupid_gb_cleanup(gb);
+    free(gb);
+}
+
+static void test_firmware_entry_vram_dma(void) {
+    const uint8_t entry[16] = {0x3e, 0x00, 0xe0, 0x55, 0,    0x15, 0x26, 0x37,
+                               0x48, 0x59, 0x6a, 0x7b, 0x8c, 0x9d, 0xae, 0xbf};
+    CupidGb *gb = calloc(1, sizeof(*gb));
+    assert(gb);
+    for (unsigned model = CUPID_GB_MODEL_DMG_ABC; model <= CUPID_GB_MODEL_CGB_D; ++model) {
+        if (!cupid_gb_model_is_cgb((CupidGbModel)model))
+            continue;
+        load_generated_profile(gb, (CupidGbModel)model, 0, true);
+        gb->boot_rom_size = 0x900;
+        memcpy(gb->boot_rom, entry, sizeof(entry));
+        memset(gb->work_ram, 0x37, sizeof(gb->work_ram));
+        memset(gb->video_ram, 0xa5, sizeof(gb->video_ram));
+
+        cupid_gb_write_u8(gb, 0xff51, 0xc0);
+        cupid_gb_write_u8(gb, 0xff53, 0x81);
+        cupid_gb_write_u8(gb, 0xff54, 0x20);
+        cupid_gb_write_u8(gb, 0xff55, 0x81);
+        assert(gb->hdma_active && gb->hdma_pending);
+        cupid_gb_enter_boot_rom(gb);
+        assert(cupid_gb_read_u8(gb, 0xff55) == 0xff);
+        /* Issue the first firmware request using the reset source and destination. */
+        for (unsigned i = 0; i < 3; ++i)
+            assert(cupid_gb_step(gb));
+        assert(memcmp(gb->video_ram, entry, sizeof(entry)) == 0);
+        for (unsigned i = sizeof(entry); i < sizeof(gb->video_ram); ++i)
+            assert(gb->video_ram[i] == 0xa5);
+        assert(cupid_gb_read_u8(gb, 0xff55) == 0xff);
+    }
+    cupid_gb_cleanup(gb);
+    free(gb);
+}
+
 static void test_policy_and_state_lifetime(void) {
     CupidGb *a = calloc(1, sizeof(*a)), *b = calloc(1, sizeof(*b));
     CupidGb *before = malloc(sizeof(*before));
@@ -1082,6 +1246,9 @@ int main(void) {
     test_color_work_ram_revisions();
     test_cold_firmware_reconstruction();
     test_boot_entry_preserves_memory();
+    test_firmware_entry_peripheral_transactions();
+    test_firmware_entry_oam_dma();
+    test_firmware_entry_vram_dma();
     test_policy_and_state_lifetime();
     test_sgb_post_boot_state_continuation();
     test_legacy_sgb_startup_recovery();
