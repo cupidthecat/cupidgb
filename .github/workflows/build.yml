@@ -88,7 +88,8 @@ jobs:
           echo "$source_hash"
           sudo chown _apt:root "$apt_state/lists/partial"
           sudo chmod 700 "$apt_state/lists/partial"
-          apt_options=(-o Acquire::Retries=2 -o Acquire::http::Timeout=20
+          # Package resolution uses the signed binary indexes, without translations.
+          apt_options=(-o Acquire::Languages=none -o Acquire::Retries=2 -o Acquire::http::Timeout=20
                        -o Acquire::https::Timeout=20 -o Dir::State::lists="$apt_state/lists"
                        -o Dir::Etc::sourcelist="$apt_state/ubuntu.sources"
                        -o Dir::Etc::sourceparts="$apt_state/empty-sources")
@@ -216,7 +217,8 @@ jobs:
           echo "$source_hash"
           sudo chown _apt:root "$apt_state/lists/partial"
           sudo chmod 700 "$apt_state/lists/partial"
-          apt_options=(-o Acquire::Retries=2 -o Acquire::http::Timeout=20
+          # Package resolution uses the signed binary indexes, without translations.
+          apt_options=(-o Acquire::Languages=none -o Acquire::Retries=2 -o Acquire::http::Timeout=20
                        -o Acquire::https::Timeout=20 -o Dir::State::lists="$apt_state/lists"
                        -o Dir::Etc::sourcelist="$apt_state/ubuntu.sources"
                        -o Dir::Etc::sourceparts="$apt_state/empty-sources")
