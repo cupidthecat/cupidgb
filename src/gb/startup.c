@@ -162,7 +162,8 @@ void cupid_gb_startup_memory(CupidGb *gb) {
     /* The HLE handoff represents firmware that already cleared physical WRAM
      * bank 2. Initial firmware execution reconstructs the raw generation first. */
     if (cupid_gb_model_is_cgb(gb->model))
-        memset(gb->work_ram + 0x2000u, 0, 0x1000u);
+        memset(gb->work_ram + CUPID_GB_CGB_BOOT_WRAM_START, 0,
+               CUPID_GB_CGB_BOOT_WRAM_END - CUPID_GB_CGB_BOOT_WRAM_START);
 }
 
 void cupid_gb_startup_logo_tiles(CupidGb *gb, const uint8_t logo[CUPID_GB_STARTUP_LOGO_BYTES]) {

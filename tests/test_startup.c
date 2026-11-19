@@ -723,6 +723,56 @@ static void test_legacy_sgb_startup_signature(void) {
     free(target);
 }
 
+static void test_color_cartridge_entry_work_ram(void) {
+    static const CupidGbModel models[] = {CUPID_GB_MODEL_CGB_0, CUPID_GB_MODEL_CGB_A,
+                                          CUPID_GB_MODEL_CGB_B, CUPID_GB_MODEL_CGB_C,
+                                          CUPID_GB_MODEL_CGB_D, CUPID_GB_MODEL_CGB_E};
+
+    static const struct {
+        uint8_t color_flag;
+        uint8_t old_license;
+        uint8_t new_license_second;
+        uint8_t checksum;
+    } cartridges[] = {
+        {0x00, 0x01, '0', 0xef}, {0x80, 0x33, '1', 0x6f}, {0xc0, 0x01, '0', 0xaf},
+        {0x00, 0x33, '0', 0},    {0x80, 0x00, '1', 0},    {0xc0, 0x33, '2', 0},
+    };
+
+    CupidGb *gb = calloc(1, sizeof(*gb));
+    assert(gb);
+    cupid_gb_set_power_on_seed(gb, 0);
+    uint8_t rom[0x8000] = {[0x134] = 0xf8, [0x137] = 0xf7, [0x144] = '0'};
+
+    for (size_t model = 0; model < sizeof(models) / sizeof(models[0]); ++model) {
+        const bool later_color = models[model] != CUPID_GB_MODEL_CGB_0;
+        cupid_gb_set_model(gb, models[model]);
+        for (size_t cart = 0; cart < sizeof(cartridges) / sizeof(cartridges[0]); ++cart) {
+            rom[0x143] = cartridges[cart].color_flag;
+            rom[0x145] = cartridges[cart].new_license_second;
+            rom[0x14b] = cartridges[cart].old_license;
+            rom[0x14d] = 0;
+            for (unsigned address = 0x134; address < 0x14d; ++address)
+                rom[0x14d] = (uint8_t)(rom[0x14d] - rom[address] - 1);
+            assert(cupid_gb_load_rom(gb, rom, sizeof(rom)));
+            for (unsigned startup = 0; startup < 3; ++startup) {
+                if (startup) {
+                    memset(gb->work_ram + 0x2000, 0x5a, 0x1000);
+                    assert(cupid_gb_reset(gb, startup == 1 ? CUPID_GB_RESET_QUICK
+                                                           : CUPID_GB_RESET_HARD));
+                }
+                assert(gb->work_ram[0x2000] == (later_color ? cartridges[cart].checksum : 0));
+                for (size_t offset = 0x2840; offset < 0x2880; offset += 2) {
+                    assert(gb->work_ram[offset] == (later_color ? 0xff : 0));
+                    assert(gb->work_ram[offset + 1] == (later_color ? 0x7f : 0));
+                }
+                assert(gb->work_ram[0x283f] == 0 && gb->work_ram[0x2880] == 0);
+            }
+        }
+    }
+    cupid_gb_cleanup(gb);
+    free(gb);
+}
+
 static void test_cold_firmware_reconstruction(void) {
     CupidGb *a = calloc(1, sizeof(*a)), *b = calloc(1, sizeof(*b));
     CupidGb *before = malloc(sizeof(*before));
@@ -747,8 +797,6 @@ static void test_cold_firmware_reconstruction(void) {
                 assert(b->boot_rom_enabled && b->cpu.pc == 0);
                 assert(cupid_gb_get_power_on_seed(b) == seed);
                 if (model == CUPID_GB_MODEL_CGB) {
-                    for (size_t byte = 0x2000; byte < 0x3000; ++byte)
-                        assert(a->work_ram[byte] == 0);
                     assert(memcmp(a->work_ram + 0x2000, b->work_ram + 0x2000, 0x1000) != 0);
                     assert(memcmp(a->work_ram, b->work_ram, 0x2000) == 0);
                     assert(memcmp(a->work_ram + 0x3000, b->work_ram + 0x3000, 0x5000) == 0);
@@ -1692,6 +1740,7 @@ static void test_color_target_initialization(void) {
 
 int main(void) {
     test_cartridge_entry_logo();
+    test_color_cartridge_entry_work_ram();
     test_cgb0_rejected_license_divider();
     test_seeded_generations();
     test_model_distributions();

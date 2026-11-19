@@ -14,10 +14,11 @@ metadata. The V12 wire layout is unchanged.
 
 Initial firmware startup reconstructs the same cold generation after cartridge
 and battery loading. It preserves cartridge storage and host registrations.
-The approximate CGB post-boot profile clears physical WRAM bank 2 in both color
-and monochrome compatibility modes. Executed firmware receives the original
-cold bytes and performs its own writes. Color output masks the unused RGB555
-high bit while raw palette memory and state files retain all eight stored bits.
+The built-in CGB profile clears physical WRAM bank 2 before applying the
+cartridge handoff in either color or monochrome compatibility mode. Executed
+firmware receives the original cold bytes and performs its own writes. Color
+output masks the unused RGB555 high bit while raw palette memory and state files
+retain all eight stored bits.
 
 ## Cold-memory comparison
 
@@ -640,6 +641,36 @@ The 60-second CGB-C run repeated after the I/O latch changes at `7f8d442`.
 Both hosts again applied all 88 inputs, reached the first stage and wrote
 the same 8 KiB save. The final images also matched the earlier run byte for
 byte. Both audio sinks reported zero idle or error events.
+
+## Color WRAM at cartridge entry
+
+Built-in startup for Color revisions A–E clears physical WRAM bank 2, then
+restores the title checksum and the background fade buffer. `D000` holds the
+title checksum for old licensee byte `01` and for old byte `33` with extended
+code `01`. The checksum adds all 16 bytes at `0134–0143`, including the color
+flag, modulo 256.
+`D840–D87F` holds 32 little-endian `7FFF` colors after the background fade.
+[Title checksum routine](https://codeberg.org/ISSOtm/gb-bootroms/src/commit/443d7f057ae06e8d1d76fa8083650cf0be2cd0ae/src/cgb.asm#L845-L879)
+[Background palette fade](https://codeberg.org/ISSOtm/gb-bootroms/src/commit/443d7f057ae06e8d1d76fa8083650cf0be2cd0ae/src/cgb.asm#L588-L638)
+
+Windows and Linux each matched all 65 modeled bytes in 126 built-in and
+supplied-firmware handoff pairs. Twenty native-color guest readbacks on each
+host selected WRAM bank 2 and read those bytes through the CPU bus. Sixteen
+archived controls with an alternate firmware image left the bank clear.
+
+The regression covers cartridge load, Quick Reset, and Hard Reset for all six
+Color revisions across native and compatibility headers. Quick Reset keeps the
+other WRAM banks. Cold firmware startup restores the raw generation, and Quick
+Reset with installed firmware retains live WRAM until firmware writes. The
+original revision 0 handoff still needs qualification. The supplied firmware
+also left 632–649 different bytes per case in the remaining bank 2 palette
+metadata and buffers.
+
+An unpaced Robopon Sun Version replay on CGB-E applied the 317-input cold route
+on Windows and Linux. Both matched the earlier build's final 160 × 144 image,
+PCM checksum, and 1,075,831,680 guest cycles at the same endpoint. Both new
+runs counted five fewer core steps than the earlier build. The desktop pacing
+measurements in the previous checkpoint cover `03509b5`.
 
 ## DMA at firmware re-entry
 

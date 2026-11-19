@@ -169,11 +169,14 @@ bool MainWindow::startupSmokeTest(const QString &directory) {
         return smokeFailure(__FILE__, __LINE__);
     MainWindow handoff(true, false, false, noBoot, CUPID_GB_MODEL_CGB, uint64_t(0));
     handoff.timer_.stop();
+    uint8_t handoffBank[0x1000] = {};
+    for (size_t offset = 0x840; offset < 0x880; offset += 2) {
+        handoffBank[offset] = 0xff;
+        handoffBank[offset + 1] = 0x7f;
+    }
     if (!handoff.openRom(color) || !handoff.emulator_->gb.cgb_mode ||
         handoff.emulator_->gb.boot_rom_enabled || handoff.emulator_->gb.cpu.pc != 0x100 ||
-        !std::all_of(std::begin(handoff.emulator_->gb.work_ram) + 0x2000,
-                     std::begin(handoff.emulator_->gb.work_ram) + 0x3000,
-                     [](uint8_t value) { return value == 0; }))
+        std::memcmp(handoff.emulator_->gb.work_ram + 0x2000, handoffBank, sizeof(handoffBank)))
         return smokeFailure(__FILE__, __LINE__);
     const QDir firmware(fixtures.filePath("firmware"));
     QByteArray boot(0x900, char(0));

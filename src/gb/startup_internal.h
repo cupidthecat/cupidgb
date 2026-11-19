@@ -29,6 +29,8 @@ enum {
     CUPID_GB_STARTUP_LOGO_BYTES = 48,
     CUPID_GB_CGB_BOOT_STACK_START = 0x72,
     CUPID_GB_CGB_BOOT_STACK_END = 0x7e,
+    CUPID_GB_CGB_BOOT_WRAM_START = 0x2000,
+    CUPID_GB_CGB_BOOT_WRAM_END = 0x3000,
 };
 
 void cupid_gb_startup_memory(CupidGb *gb);

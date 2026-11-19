@@ -361,8 +361,11 @@ static void check_boundary(const CupidGb *gb, const CupidGb *before, CupidGbRese
               gb->io_registers[0x49] == 0x56);
         if (!firmware && gb->model == CUPID_GB_MODEL_CGB) {
             CHECK(!memcmp(gb->work_ram, before->work_ram, 0x2000) &&
-                  filled(gb->work_ram + 0x2000, 0x1000, 0) &&
+                  filled(gb->work_ram + 0x2000, 0x840, 0) &&
+                  filled(gb->work_ram + 0x2880, 0x780, 0) &&
                   !memcmp(gb->work_ram + 0x3000, before->work_ram + 0x3000, 0x5000));
+            for (size_t offset = 0x2840; offset < 0x2880; offset += 2)
+                CHECK(gb->work_ram[offset] == 0xff && gb->work_ram[offset + 1] == 0x7f);
             CHECK(filled(gb->object_attribute_memory, sizeof(gb->object_attribute_memory), 0));
         } else {
             CHECK(!memcmp(gb->work_ram, before->work_ram, sizeof(gb->work_ram)));

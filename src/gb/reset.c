@@ -66,11 +66,15 @@ void cupid_gb_reset_restore_cartridge(CupidGb *next, const CupidGb *previous) {
 }
 
 static void restore_retained_memory(CupidGb *next, const CupidGb *previous) {
-    memcpy(next->work_ram, previous->work_ram, sizeof(next->work_ram));
     if (next->boot_rom_size || !cupid_gb_model_is_cgb(next->model)) {
+        memcpy(next->work_ram, previous->work_ram, sizeof(next->work_ram));
         memcpy(next->high_ram, previous->high_ram, sizeof(next->high_ram));
     } else {
-        /* Keep the bytes already written by the built-in Color handoff. */
+        /* Keep WRAM bank 2 and the HRAM ranges written by the built-in Color handoff. */
+        memcpy(next->work_ram, previous->work_ram, CUPID_GB_CGB_BOOT_WRAM_START);
+        memcpy(next->work_ram + CUPID_GB_CGB_BOOT_WRAM_END,
+               previous->work_ram + CUPID_GB_CGB_BOOT_WRAM_END,
+               sizeof(next->work_ram) - CUPID_GB_CGB_BOOT_WRAM_END);
         const size_t start = CUPID_GB_STARTUP_LOGO_BYTES;
         const size_t end = next->model == CUPID_GB_MODEL_CGB_0 ? CUPID_GB_CGB_BOOT_STACK_END
                                                                : CUPID_GB_CGB_BOOT_STACK_START;
@@ -159,9 +163,7 @@ bool cupid_gb_reset_with_allocator(CupidGb *gb, CupidGbResetKind kind, void *(*a
             /* Wave storage belongs to I/O, not to the retained physical RAM. */
             memset(next->io_registers + 0x30, 0, 16);
         } else if (cupid_gb_model_is_cgb(next->model)) {
-            /* The approximate handoff includes the color firmware's clearing work.
-             * This is a post-boot effect, separate from native boundary retention. */
-            memset(next->work_ram + 0x2000, 0, 0x1000);
+            /* The built-in Color handoff also includes the firmware's OAM clear. */
             memset(next->object_attribute_memory, 0, sizeof(next->object_attribute_memory));
         }
     }

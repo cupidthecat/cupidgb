@@ -735,6 +735,14 @@ unsigned cupid_cgb_apply_cartridge_handoff(CupidGb *gb) {
     if (gb->model == CUPID_GB_MODEL_CGB_0)
         return 0;
 
+    uint8_t *boot_work_ram = gb->work_ram + CUPID_GB_CGB_BOOT_WRAM_START;
+    boot_work_ram[0] = cupid_cgb_boot_title_checksum(gb);
+    /* The startup animation fades all 32 background colors to RGB555 white. */
+    for (size_t offset = 0x840; offset < 0x880; offset += 2) {
+        boot_work_ram[offset] = 0xff;
+        boot_work_ram[offset + 1] = 0x7f;
+    }
+
     /* Startup calls leave their last return addresses and saved registers
      * below SP. The final compatibility call depends on the tilemap path. */
     static const uint8_t boot_stack[CUPID_GB_CGB_BOOT_STACK_END - CUPID_GB_CGB_BOOT_STACK_START] = {
