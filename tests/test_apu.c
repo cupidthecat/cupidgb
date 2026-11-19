@@ -20,6 +20,8 @@
  * along with this program. If not, see <https://gnu.org>.
  */
 #include "cupid/gb/apu.h"
+#include "cupid/gb/reset.h"
+#include "cupid/gb/startup.h"
 #include "cupid/gb/timer.h"
 
 #include "../src/gb/apu_noise.h"
@@ -1655,7 +1657,72 @@ static void test_frozen_audio_backlog(void) {
     }
 }
 
+static void test_color_startup_wave_guest(void) {
+    static const CupidGbModel models[] = {
+        CUPID_GB_MODEL_CGB_0,
+        CUPID_GB_MODEL_CGB_A,
+        CUPID_GB_MODEL_CGB_E,
+    };
+    /* Read the wave cells, enable CH3, then sample FF77 256 times. Later color
+     * revisions supply the 00/FF startup pattern read by this program. */
+    static const uint8_t play[] = {
+        0x3e, 0x00, 0xe0, 0x12, /* Disconnect CH1. */
+        0x3e, 0x80, 0xe0, 0x1a, 0x3e, 0x20, 0xe0, 0x1c, 0x3e, 0xfc, 0xe0, 0x1d, 0x3e, 0x87, 0xe0,
+        0x1e, 0x21, 0x00, 0xc1, 0x06, 0x00, 0xf0, 0x77, 0x22, 0x05, 0x20, 0xfa, 0xc3, 0x00, 0x02,
+    };
+    uint8_t rom[32768] = {0};
+    rom[0x100] = 0xc3;
+    rom[0x101] = 0x50;
+    rom[0x102] = 1;
+    unsigned end = 0x150;
+    rom[end++] = 0x21;
+    rom[end++] = 0;
+    rom[end++] = 0xc0;
+    for (unsigned i = 0; i < 16; ++i) {
+        rom[end++] = 0xf0;
+        rom[end++] = (uint8_t)(0x30u + i);
+        rom[end++] = 0x22;
+    }
+    memcpy(rom + end, play, sizeof(play));
+    for (unsigned model = 0; model < sizeof(models) / sizeof(models[0]); ++model) {
+        for (unsigned native = 0; native < 2; ++native) {
+            rom[0x143] = native ? 0x80 : 0;
+            rom[0x14d] = 0;
+            for (unsigned i = 0x134; i <= 0x14c; ++i)
+                rom[0x14d] = (uint8_t)(rom[0x14d] - rom[i] - 1u);
+            CupidGb *gb = calloc(1, sizeof(*gb));
+            assert(gb);
+            cupid_gb_set_model(gb, models[model]);
+            cupid_gb_set_power_on_seed(gb, 0);
+            assert(cupid_gb_load_rom(gb, rom, sizeof(rom)));
+            for (unsigned reset = 0; reset < 3; ++reset) {
+                if (reset)
+                    assert(cupid_gb_reset(gb,
+                                          reset == 1 ? CUPID_GB_RESET_QUICK : CUPID_GB_RESET_HARD));
+                unsigned steps = 0;
+                while (gb->cpu.pc != 0x200 && steps++ < 2000)
+                    assert(cupid_gb_step(gb));
+                assert(gb->cpu.pc == 0x200 && steps < 2000);
+                for (unsigned i = 0; i < 16; ++i) {
+                    const uint8_t expected = model && (i & 1u) ? 0xff : 0;
+                    assert(cupid_gb_read_u8(gb, (uint16_t)(0xc000u + i)) == expected);
+                }
+                unsigned nonzero = 0;
+                for (unsigned i = 0; i < 256; ++i) {
+                    const uint8_t pcm = cupid_gb_read_u8(gb, (uint16_t)(0xc100u + i));
+                    assert(pcm == 0 || (model && pcm == 0x0f));
+                    nonzero += pcm != 0;
+                }
+                assert(nonzero == (model ? 128u : 0u));
+            }
+            cupid_gb_cleanup(gb);
+            free(gb);
+        }
+    }
+}
+
 int main(void) {
+    test_color_startup_wave_guest();
     test_pending_delivery_and_host_rate();
     test_interference_instance_history();
     test_frozen_audio_backlog();

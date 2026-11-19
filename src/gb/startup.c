@@ -140,14 +140,14 @@ static StartupNoise noise_after_memory(const CupidGb *gb) {
 
 static void fill_wave(CupidGb *gb, StartupNoise *noise, bool firmware) {
     const bool color = cupid_gb_model_is_cgb(gb->model);
-    /* Monochrome power-on noise ends at FF3E; FF3F starts at zero. Color
-     * firmware initializes wave RAM itself, while HLE supplies its 00/FF ramp. */
+    /* Monochrome power-on noise ends at FF3E. CGB-0 retains zeroed wave RAM.
+     * Built-in startup supplies the firmware's 00/FF pattern on CGB A–E. */
     for (unsigned address = 0; address < 16; ++address) {
         uint8_t value = 0;
         if (!color && address < 15)
             value =
                 biased_byte(noise, gb->model == CUPID_GB_MODEL_MGB ? 2 : 3, (address & 1u) == 0);
-        else if (color && !firmware)
+        else if (color && !firmware && gb->model != CUPID_GB_MODEL_CGB_0)
             value = address & 1u ? 0xff : 0;
         gb->io_registers[0x30u + address] = value;
     }

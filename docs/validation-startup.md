@@ -495,6 +495,32 @@ mapper runs, terminal time increased by 2,340 or 2,392 guest cycles.
 Instruction counts, audio frame counts and audio CRCs changed in those
 runs. Framebuffer CRCs and test verdicts stayed the same.
 
+### CGB-0 monochrome divider at cartridge entry
+
+On CGB-0, built-in monochrome startup sets the divider phase to `2884`
+when the extended license check rejects its first byte. The hardware
+test reads `29 2A 2A 2B 2C 2E` at six points after cartridge entry. The
+regression checks the same reads after load, quick reset and hard reset,
+with controls for other license headers and native color mode.
+
+The test distinguishes four-clock-aligned starting phases. The low two
+oscillator bits, authentic CGB-0 firmware execution, other license
+branches, and the display and audio handoff still need qualification.
+
+### CGB-0 wave RAM at cartridge entry
+
+Built-in startup leaves all 16 wave RAM bytes at zero on CGB-0. A
+guest probe reads `FF30` through `FF3F`, enables channel 3 without
+writing a waveform, and samples its PCM output 256 times. The CGB-0
+samples stay zero in both native color and monochrome mode, matching
+the generated CGB-0 firmware. CGB-A and CGB-E retain the alternating
+`00 FF` bytes and produce 128 nonzero samples in the same probe.
+
+All 61 local cartridges that reached the corrected divider branch ran
+for 420 guest intervals on both the baseline and corrected builds.
+Final image checksums, frame counts and audio frame counts matched.
+Cumulative audio checksums differed in 56 runs.
+
 ### CGB pulse 1 at cartridge entry
 
 Built-in startup on CGB A through E restores pulse 1's oscillator phase,

@@ -894,6 +894,14 @@ void cupid_gb_cartridge_post_boot(CupidGb *gb) {
         gb->cpu.e = 8;
         gb->cpu.l = 0x7c;
         cupid_cgb_apply_compatibility_palette(gb);
+        if (gb->model == CUPID_GB_MODEL_CGB_0 && gb->header.old_licensee_code == 0x33u &&
+            gb->header.new_licensee_code[0] != '0') {
+            /* At monochrome entry, rejecting the first extended-license byte
+             * leaves revision 0's divider at 2884. */
+            gb->io_registers[0x04] = 0x28;
+            gb->div_counter = 0x21;
+            gb->divider_subcycle = 0;
+        }
     } else if (gb->sgb.enabled) {
         cupid_gb_sgb_apply_compatibility_palette(gb);
     }

@@ -1520,6 +1520,63 @@ static void test_native_color_startup_phase(void) {
            cases);
 }
 
+static void test_cgb0_rejected_license_divider(void) {
+    static const struct {
+        uint8_t color, license, first, second;
+        bool rejected_first;
+    } headers[] = {
+        {0x00, 0x33, 'Z', 'Z', true}, {0x00, 0x33, 'Y', '1', true},  {0x00, 0x33, '0', 'Z', false},
+        {0x00, 0x01, 0, 0, false},    {0x80, 0x33, 'Z', 'Z', false}, {0xc0, 0x33, 'Z', 'Z', false},
+    };
+
+    static const uint8_t expected[] = {0x29, 0x2a, 0x2a, 0x2b, 0x2c, 0x2e};
+    static const uint8_t approximate[] = {0x1f, 0x20, 0x21, 0x22, 0x23, 0x24};
+    /* The first LDH samples 124 T-cycles after entry. Subsequent samples occur
+     * 256, 252, 256, 256 and 260 T-cycles later, straddling divider increments. */
+    static const unsigned padding[] = {25, 58, 57, 58, 58, 59};
+    for (unsigned header = 0; header < sizeof(headers) / sizeof(headers[0]); ++header) {
+        uint8_t rom[32768] = {0};
+        rom[0x100] = 0xc3;
+        rom[0x101] = 0x50;
+        rom[0x102] = 1;
+        rom[0x143] = headers[header].color;
+        rom[0x144] = headers[header].first;
+        rom[0x145] = headers[header].second;
+        rom[0x14b] = headers[header].license;
+        for (unsigned i = 0x134; i <= 0x14c; ++i)
+            rom[0x14d] = (uint8_t)(rom[0x14d] - rom[i] - 1u);
+        unsigned end = 0x150;
+        for (unsigned sample = 0; sample < sizeof(padding) / sizeof(padding[0]); ++sample) {
+            end += padding[sample];
+            rom[end++] = 0xf0;
+            rom[end++] = 0x04;
+            rom[end++] = 0xe0;
+            rom[end++] = (uint8_t)(0x80u + sample);
+        }
+        CupidGb *gb = calloc(1, sizeof(*gb));
+        assert(gb);
+        cupid_gb_set_power_on_seed(gb, 0);
+        cupid_gb_set_model(gb, CUPID_GB_MODEL_CGB_0);
+        assert(cupid_gb_load_rom(gb, rom, sizeof(rom)));
+        for (unsigned reset = 0; reset < 3; ++reset) {
+            if (reset)
+                assert(cupid_gb_reset(gb, reset == 1 ? CUPID_GB_RESET_QUICK : CUPID_GB_RESET_HARD));
+            const unsigned phase = (unsigned)gb->io_registers[4] * 256u +
+                                   (gb->div_counter & 63u) * 4u + gb->divider_subcycle;
+            assert(phase == (headers[header].rejected_first ? 0x2884u : 0x1ed0u));
+            unsigned steps = 0;
+            while (gb->cpu.pc != end && steps++ < 1000)
+                assert(cupid_gb_step(gb));
+            assert(gb->cpu.pc == end && steps < 1000);
+            const uint8_t *bytes = headers[header].rejected_first ? expected : approximate;
+            for (unsigned sample = 0; sample < sizeof(expected); ++sample)
+                assert(cupid_gb_read_u8(gb, (uint16_t)(0xff80u + sample)) == bytes[sample]);
+        }
+        cupid_gb_cleanup(gb);
+        free(gb);
+    }
+}
+
 static void test_color_target_initialization(void) {
     CupidEmulator *emulator = calloc(1, sizeof(*emulator));
     assert(emulator);
@@ -1536,6 +1593,7 @@ static void test_color_target_initialization(void) {
 }
 
 int main(void) {
+    test_cgb0_rejected_license_divider();
     test_seeded_generations();
     test_model_distributions();
     test_color_work_ram_revisions();
