@@ -94,6 +94,7 @@ static CupidGbStateResult supported(const CupidGb *gb) {
         case CUPID_GB_MBC_NONE:
         case CUPID_GB_MBC1:
         case CUPID_GB_MBC2:
+        case CUPID_GB_MBC3:
         case CUPID_GB_MBC5:
             break;
         case CUPID_GB_MBC7:
@@ -134,10 +135,6 @@ static CupidGbStateResult supported(const CupidGb *gb) {
                   gb->tpp1.mode || gb->tpp1.motor_strength)))
                 return CUPID_GB_STATE_INVALID;
             break;
-        case CUPID_GB_MBC3:
-            if (cupid_gb_has_extended_mbc3(gb))
-                return CUPID_GB_STATE_UNSUPPORTED_FEATURE;
-            break;
         default:
             return CUPID_GB_STATE_UNSUPPORTED_FEATURE;
     }
@@ -146,7 +143,8 @@ static CupidGbStateResult supported(const CupidGb *gb) {
         (gb->header.mbc_type != CUPID_GB_TPP1 && gb->current_ram_bank > 15u) ||
         (gb->header.mbc_type == CUPID_GB_MBC2 && gb->current_rom_bank > 15u) ||
         (gb->header.mbc_type == CUPID_GB_MBC3 &&
-         (gb->current_rom_bank > 127u || gb->current_ram_bank > 7u ||
+         (gb->current_rom_bank > (cupid_gb_has_extended_mbc3(gb) ? 255u : 127u) ||
+          gb->current_ram_bank > 7u ||
           (gb->rtc_register && (gb->rtc_register < 8u || gb->rtc_register > 15u)))) ||
         gb->cgb_vram_bank > 1u || gb->cgb_wram_bank > 7u ||
         (!cupid_gb_model_is_cgb(gb->model) && gb->double_speed))

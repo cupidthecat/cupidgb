@@ -388,6 +388,96 @@ static void check_sgb(CupidGbModel model, const char tag[4], bool declares_enhan
     destroy(source);
 }
 
+static int64_t extended_mbc3_clock(void *unused) {
+    (void)unused;
+    return 1000;
+}
+
+static CupidGb *extended_mbc3(bool timer, bool large_rom, bool large_ram) {
+    const size_t size = large_rom ? 0x400000u : 0x10000u;
+    uint8_t *rom = calloc(1, size);
+    CupidGb *gb = calloc(1, sizeof(*gb));
+    assert(rom && gb);
+    for (size_t bank = 0; bank < size / 0x4000u; ++bank)
+        rom[bank * 0x4000u + 0x200u] = (uint8_t)bank;
+    memcpy(rom + 0x134, "PORTABLE EXT", 12);
+    rom[0x143] = 0x80;
+    rom[0x147] = timer ? 0x10 : 0x13;
+    rom[0x148] = large_rom ? 7 : 1;
+    rom[0x149] = large_ram ? 5 : 3;
+    for (unsigned i = 0x134; i < 0x14d; ++i)
+        rom[0x14d] = (uint8_t)(rom[0x14d] - rom[i] - 1u);
+    cupid_gb_set_model(gb, CUPID_GB_MODEL_CGB_E);
+    cupid_gb_set_power_on_seed(gb, 7);
+    cupid_gb_set_rtc_time_source(gb, extended_mbc3_clock, NULL);
+    assert(cupid_gb_load_rom(gb, rom, size));
+    free(rom);
+    return gb;
+}
+
+static void check_extended_mbc3(void) {
+    for (unsigned geometry = 0; geometry < 4; ++geometry) {
+        for (unsigned timer = 0; timer < 2; ++timer) {
+            for (unsigned policy = 0; policy < 2; ++policy) {
+                const bool large_rom = (geometry & 1u) != 0;
+                const bool large_ram = (geometry & 2u) != 0;
+                CupidGb *source = extended_mbc3(timer != 0, large_rom, large_ram);
+                CupidGb *target = extended_mbc3(timer != 0, large_rom, large_ram);
+                assert(cupid_gb_set_rtc_mode(source, (CupidGbRtcMode)policy));
+                assert(cupid_gb_set_rtc_mode(target, (CupidGbRtcMode)policy));
+                cupid_gb_write_u8(source, 0, 0x0a);
+                cupid_gb_write_u8(source, 0x2000, 0xff);
+                const unsigned raw_bank = geometry ? 255u : 127u;
+                assert(source->current_rom_bank == raw_bank);
+                const unsigned banks = large_ram ? 8u : 4u;
+                for (unsigned bank = 0; bank < banks; ++bank) {
+                    cupid_gb_write_u8(source, 0x4000, (uint8_t)bank);
+                    cupid_gb_write_u8(source, 0xa123, (uint8_t)(0xa0u + bank));
+                }
+                if (timer) {
+                    const uint8_t values[] = {42, 23, 17, 45, 0x81};
+                    for (unsigned reg = 0; reg < 5; ++reg) {
+                        cupid_gb_write_u8(source, 0x4000, (uint8_t)(8u + reg));
+                        cupid_gb_write_u8(source, 0xa000, values[reg]);
+                    }
+                    cupid_gb_write_u8(source, 0x6000, 1);
+                    cupid_gb_write_u8(source, 0x4000, 8);
+                    cupid_gb_write_u8(source, 0xa000, 9);
+                    assert(source->rtc.s == 9 && source->rtc.ls == 42);
+                } else {
+                    /* Without an RTC, bit 3 does not hide the selected SRAM bank. */
+                    cupid_gb_write_u8(source, 0x4000, 0xff);
+                }
+                size_t size;
+                uint8_t *data = capture(source, &size);
+                assert(cupid_gb_bess_load(target, data, size) == CUPID_GB_STATE_OK);
+                assert(target->current_rom_bank == raw_bank);
+                assert(cupid_gb_read_u8(target, 0x4200) == (large_rom ? raw_bank : raw_bank & 3u));
+                assert(cupid_gb_get_rtc_mode(target) == (CupidGbRtcMode)policy);
+                if (timer) {
+                    assert(target->rtc.s == 9 && target->rtc.ls == 42);
+                    assert(cupid_gb_read_u8(target, 0xa000) == 42);
+                    /* Later latch writes still replace the portable saved snapshot. */
+                    cupid_gb_write_u8(target, 0x6000, 0xfe);
+                    assert(target->rtc.latch_prev == 0xfe);
+                    assert(cupid_gb_read_u8(target, 0xa000) == 9);
+                }
+                for (unsigned bank = 0; bank < banks; ++bank) {
+                    cupid_gb_write_u8(target, 0x4000, (uint8_t)(0xf0u | bank));
+                    assert(cupid_gb_read_u8(target, 0xa123) == (uint8_t)(0xa0u + bank));
+                }
+                check_native_snapshot(target);
+                source->current_rom_bank = (uint16_t)(raw_bank + 1u);
+                assert(!cupid_gb_bess_size(source));
+                source->current_rom_bank = raw_bank;
+                free(data);
+                destroy(target);
+                destroy(source);
+            }
+        }
+    }
+}
+
 int main(void) {
     const CupidGbModel models[] = {
         CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_DMG0,  CUPID_GB_MODEL_MGB,   CUPID_GB_MODEL_CGB_0,
@@ -401,6 +491,7 @@ int main(void) {
                 exercise(models[i], mappers[j], true);
         }
     check_invalid();
+    check_extended_mbc3();
     check_sgb(CUPID_GB_MODEL_SGB, "SN  ", true);
     check_sgb(CUPID_GB_MODEL_SGB_PAL, "SP  ", false);
     check_sgb(CUPID_GB_MODEL_SGB2, "S2  ", true);

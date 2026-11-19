@@ -21,8 +21,9 @@ embedded in a foreign state container. A file with a CupidGB native header
 must pass native validation.
 
 Portable states support completed cartridge boot on DMG, Pocket, CGB,
-SGB NTSC, SGB PAL, and SGB2 with ROM-only or ROM+RAM, MBC1, MBC2, standard
-MBC3 with optional RTC, MBC5, MBC7, MMM01, HuC1, HuC3, Camera, and TPP1.
+SGB NTSC, SGB PAL, and SGB2 with ROM-only or ROM+RAM, MBC1, MBC2, MBC3
+(standard and extended, with optional RTC), MBC5, MBC7, MMM01, HuC1, HuC3,
+Camera, and TPP1.
 The importer checks the model family and, when present, the saved
 cartridge title and global checksum. It validates every referenced memory
 range before replacing the running state.
@@ -33,6 +34,11 @@ border data, and the selected controller. The latest captured border
 appears immediately after import. The four tilemap rows outside the
 display are written as zeros. Files without an SGB block restore a
 single controller with commands disabled.
+
+Extended MBC3 cartridges restore all eight ROM-bank bits and up to eight
+SRAM banks. The optional clock block carries separate live and latched
+registers. Some portable readers expose only the low seven ROM-bank bits
+until the first mapper write after import.
 
 For MBC7, BESS carries the EEPROM bytes, an in-progress serial command or
 read, and the guest's latched motion readings. A later guest latch uses
@@ -85,6 +91,10 @@ bank selection with an independent runtime. Three additional exchanges
 checked distinct live and latched RTC values. Donkey Kong and Super Mario
 Bros. Deluxe resumed on CGB-C after exchange in both directions. Both
 responded to further scripted inputs after import.
+
+Extended MBC3 validation checked 54 fixtures in both clock modes. It
+covered larger ROM, larger SRAM, both together, and distinct live and
+latched clocks. Windows and Linux generated 54 byte-identical exports.
 
 MBC7 tests cover EEPROM reads and writes that resume partway through a
 serial transfer. Twenty-two independent portable files restored the same

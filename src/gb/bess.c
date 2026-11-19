@@ -399,6 +399,7 @@ static bool supported_mapper(const CupidGb *gb) {
         case CUPID_GB_MBC_NONE:
         case CUPID_GB_MBC1:
         case CUPID_GB_MBC2:
+        case CUPID_GB_MBC3:
         case CUPID_GB_MBC5:
         case CUPID_GB_MBC7:
         case CUPID_GB_MMM01:
@@ -407,8 +408,6 @@ static bool supported_mapper(const CupidGb *gb) {
         case CUPID_GB_CAMERA:
         case CUPID_GB_TPP1:
             return true;
-        case CUPID_GB_MBC3:
-            return !cupid_gb_has_extended_mbc3(gb);
         default:
             return false;
     }
