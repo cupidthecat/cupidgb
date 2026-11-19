@@ -23,11 +23,53 @@
 #include "display_pipeline.h"
 
 #include <QColor>
+#include <QColorSpace>
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <vector>
+
+QImage scaleNearestDisplayImage(const QImage &source, QSize output) {
+    if (source.isNull() || output.isEmpty())
+        return {};
+    if (source.size() == output)
+        return source;
+    QImage pixels = source;
+    if (source.depth() != 32) {
+        const auto format = source.hasAlphaChannel() ? QImage::Format_ARGB32 : QImage::Format_RGB32;
+        pixels = source.convertToFormat(format);
+    }
+    if (pixels.isNull())
+        return {};
+    QImage result(output, pixels.format());
+    if (result.isNull())
+        return {};
+    result.setColorSpace(source.colorSpace());
+    result.setDevicePixelRatio(source.devicePixelRatio());
+    std::vector<int> columns(size_t(output.width()));
+    for (int x = 0; x < output.width(); ++x) {
+        // Integer arithmetic preserves exact ties at arbitrary host dimensions.
+        columns[size_t(x)] = int(((uint64_t(x) * 2 + 1) * uint64_t(source.width())) /
+                                 (uint64_t(output.width()) * 2));
+    }
+    int previousRow = -1;
+    const size_t rowBytes = size_t(output.width()) * sizeof(QRgb);
+    for (int y = 0; y < output.height(); ++y) {
+        const int row = int(((uint64_t(y) * 2 + 1) * uint64_t(source.height())) /
+                            (uint64_t(output.height()) * 2));
+        auto *destination = reinterpret_cast<QRgb *>(result.scanLine(y));
+        if (row == previousRow) {
+            std::memcpy(destination, result.constScanLine(y - 1), rowBytes);
+        } else {
+            const auto *input = reinterpret_cast<const QRgb *>(pixels.constScanLine(row));
+            for (int x = 0; x < output.width(); ++x)
+                destination[x] = input[columns[size_t(x)]];
+        }
+        previousRow = row;
+    }
+    return result;
+}
 
 QImage filterDisplayImage(const QImage &source, QSize output, ScalingFilter filter) {
     return renderDisplayFrames(source, {}, output, filter, FrameBlending::Disabled, false);
@@ -39,9 +81,7 @@ QImage renderDisplayFrames(const QImage &source, const QImage &previous, QSize o
         return {};
     if (source.size() == output || filter == ScalingFilter::Nearest) {
         const auto mixed = blendDisplayFrames(source, previous, blending, oddFrame);
-        return source.size() == output
-                   ? mixed
-                   : mixed.scaled(output, Qt::IgnoreAspectRatio, Qt::FastTransformation);
+        return scaleNearestDisplayImage(mixed, output);
     }
     const bool blend = blending != FrameBlending::Disabled && !previous.isNull() &&
                        previous.size() == source.size() && previous.cacheKey() != source.cacheKey();

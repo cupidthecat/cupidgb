@@ -23,11 +23,44 @@
 #include "display_pipeline.h"
 
 #include <QColor>
+#include <QColorSpace>
 #include <algorithm>
 #include <cassert>
 #include <cmath>
 
 namespace {
+void testPreciseNearestSampling() {
+    QImage source(160, 144, QImage::Format_RGB32);
+    for (int y = 0; y < source.height(); ++y)
+        for (int x = 0; x < source.width(); ++x)
+            source.setPixel(x, y, qRgb(x, y, 31));
+    for (auto size :
+         {QSize(320, 288), QSize(400, 360), QSize(401, 359), QSize(200, 180), QSize(79, 71)}) {
+        const auto output = filterDisplayImage(source, size, ScalingFilter::Nearest);
+        for (int y = 0; y < size.height(); ++y)
+            for (int x = 0; x < size.width(); ++x) {
+                const int sx = int(std::floor((static_cast<long double>(x) + 0.5L) *
+                                              source.width() / size.width()));
+                const int sy = int(std::floor((static_cast<long double>(y) + 0.5L) *
+                                              source.height() / size.height()));
+                assert(output.pixel(x, y) == source.pixel(sx, sy));
+            }
+    }
+    assert(scaleNearestDisplayImage({}, {4, 4}).isNull());
+    assert(scaleNearestDisplayImage(source, {}).isNull());
+    assert(scaleNearestDisplayImage(source, source.size()) == source);
+
+    QImage translucent(2, 2, QImage::Format_ARGB32_Premultiplied);
+    translucent.fill(QColor(170, 84, 33, 129));
+    translucent.setColorSpace(QColorSpace::DisplayP3);
+    translucent.setDevicePixelRatio(1.25);
+    const auto painted = filterDisplayImage(translucent, {5, 3}, ScalingFilter::Nearest);
+    assert(painted.format() == translucent.format());
+    assert(painted.pixel(2, 1) == translucent.pixel(1, 1));
+    assert(painted.colorSpace() == translucent.colorSpace());
+    assert(painted.devicePixelRatio() == translucent.devicePixelRatio());
+}
+
 void testFilteredFrameBlending() {
     QImage white(160, 144, QImage::Format_RGB32);
     QImage black(160, 144, QImage::Format_RGB32);
@@ -66,8 +99,8 @@ void testFilteredFrameBlending() {
             for (bool odd : {false, true}) {
                 assert(renderDisplayFrames(current, previous, size, ScalingFilter::Nearest, mode,
                                            odd) ==
-                       blendDisplayFrames(current, previous, mode, odd)
-                           .scaled(size, Qt::IgnoreAspectRatio, Qt::FastTransformation));
+                       scaleNearestDisplayImage(blendDisplayFrames(current, previous, mode, odd),
+                                                size));
                 for (auto filter : {ScalingFilter::Bilinear, ScalingFilter::SmoothBilinear}) {
                     const auto output =
                         renderDisplayFrames(current, previous, size, filter, mode, odd);
@@ -121,6 +154,7 @@ void testFilteredFrameBlending() {
 } // namespace
 
 int main() {
+    testPreciseNearestSampling();
     testFilteredFrameBlending();
     QImage corners(2, 2, QImage::Format_RGB32);
     corners.setPixel(0, 0, qRgb(0, 0, 0));

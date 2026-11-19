@@ -33,6 +33,7 @@ enum class FrameBlending { Disabled = 0, Simple = 1, Accurate = 2 };
 
 QRectF displayViewport(QSize source, QSizeF available, DisplayScaling scaling,
                        qreal devicePixelRatio = 1.0);
+QImage scaleNearestDisplayImage(const QImage &source, QSize output);
 QImage filterDisplayImage(const QImage &source, QSize output, ScalingFilter filter);
 QImage renderDisplayFrames(const QImage &current, const QImage &previous, QSize output,
                            ScalingFilter filter, FrameBlending blending, bool oddFrame);

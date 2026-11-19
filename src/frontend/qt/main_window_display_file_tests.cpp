@@ -131,6 +131,30 @@ bool MainWindow::displayFilesSmokeTest(const QString &directory) {
         session.captureState() != state)
         return smokeFailure(__FILE__, __LINE__);
     session.applyDisplaySettings();
+    QImage tagged(160, 144, QImage::Format_RGB32);
+    for (int y = 0; y < tagged.height(); ++y)
+        for (int x = 0; x < tagged.width(); ++x)
+            tagged.setPixel(x, y, qRgb(x, y, 31));
+    filterProbe.filter = ScalingFilter::Nearest;
+    for (auto size : {QSize(320, 288), QSize(401, 359)}) {
+        filterProbe.setFrames({}, {}, FrameBlending::Disabled, false);
+        filterProbe.resize(size);
+        filterProbe.setFrames(tagged, {}, FrameBlending::Disabled, false);
+        const QSize physical =
+            (QSizeF(filterProbe.size()) * filterProbe.devicePixelRatioF()).toSize();
+        QImage painted(physical, QImage::Format_RGB32);
+        painted.setDevicePixelRatio(filterProbe.devicePixelRatioF());
+        filterProbe.render(&painted);
+        for (int y = 0; y < physical.height(); ++y)
+            for (int x = 0; x < physical.width(); ++x) {
+                const int sx = int(std::floor((static_cast<long double>(x) + 0.5L) *
+                                              tagged.width() / physical.width()));
+                const int sy = int(std::floor((static_cast<long double>(y) + 0.5L) *
+                                              tagged.height() / physical.height()));
+                if (painted.pixel(x, y) != tagged.pixel(sx, sy))
+                    return smokeFailure(__FILE__, __LINE__);
+            }
+    }
     const QVariant originalFilter = settings_.value("video/filter");
     const auto restoreFilter = qScopeGuard([&] {
         if (originalFilter.isValid())

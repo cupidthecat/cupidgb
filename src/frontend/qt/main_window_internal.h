@@ -340,17 +340,24 @@ class DisplayWidget final : public QWidget {
             lastPaintAt = now;
         }
         const QRectF target = displayViewport(image.size(), size(), scaling, devicePixelRatioF());
-        if (filter == ScalingFilter::Nearest) {
+        const QSizeF physicalTarget = target.size() * devicePixelRatioF();
+        const QSize output = physicalTarget.toSize();
+        if (filter == ScalingFilter::Nearest && output.width() > 0 && output.height() > 0 &&
+            output.width() % image.width() == 0 && output.height() % image.height() == 0 &&
+            qFuzzyCompare(physicalTarget.width(), qreal(output.width())) &&
+            qFuzzyCompare(physicalTarget.height(), qreal(output.height()))) {
             painter.drawImage(target, image);
             return;
         }
-        const QSize output = (target.size() * devicePixelRatioF()).toSize();
         if (filteredSourceKey != image.cacheKey() || filteredImage.size() != output ||
             cachedFilter != filter) {
-            filteredImage = currentFrame_.isNull()
-                                ? filterDisplayImage(image, output, filter)
-                                : renderDisplayFrames(currentFrame_, previousFrame_, output, filter,
-                                                      blending_, oddFrame_);
+            if (filter == ScalingFilter::Nearest)
+                filteredImage = scaleNearestDisplayImage(image, output);
+            else
+                filteredImage = currentFrame_.isNull()
+                                    ? filterDisplayImage(image, output, filter)
+                                    : renderDisplayFrames(currentFrame_, previousFrame_, output,
+                                                          filter, blending_, oddFrame_);
             filteredSourceKey = image.cacheKey();
             cachedFilter = filter;
         }

@@ -8,7 +8,7 @@ Version 25 captures the flash contents and partial command transaction. Battery 
 
 MBC6 has no working controller in the pinned comparison build. The local library has no matching commercial cartridge. Power-on selectors, ID address aliases, undefined status bits, elapsed command timing, and physical cartridge workflows still need hardware qualification. TAMA5 and Mobile Adapter transfers remain open.
 
-Qt exposes Nearest Neighbor, Bilinear, and Smooth Bilinear through View and Settings. The component test checks pixel-center interpolation in linear light, edge clamping, native-size identity, and solid colors including the darkest shades. The desktop workflow checks visible widget rendering, resize and cache invalidation, persisted settings, Cancel and OK, and unfiltered native-size clipboard and screenshot output. Other scaling filters and the interaction with row-weighted frame blending remain open.
+Qt exposes Nearest Neighbor, Bilinear, and Smooth Bilinear through View and Settings. The component test checks pixel-center interpolation in linear light, edge clamping, native-size identity, and solid colors including the darkest shades. The desktop workflow checks visible widget rendering, resize and cache invalidation, persisted settings, Cancel and OK, and unfiltered native-size clipboard and screenshot output. Other scaling filters remain open.
 
 ## Tests
 
@@ -50,5 +50,19 @@ native-size blend. Unblended output matched the earlier scaler across
 The Qt workflow paints both filters with each row polarity and changes the
 viewport size. Closing a session clears both frames. Screenshot exports use
 the native-size image. Widget checks also covered device pixel
-ratios of 1 and 1.25. Nearest-neighbor sampling at exact fractional-size
-ties still needs work.
+ratios of 1 and 1.25.
+
+## Nearest scaling at fractional viewport sizes
+
+Nearest Neighbor samples the source pixel that contains each output pixel
+center. At an exact tie it selects the pixel with the larger coordinate.
+Accurate blending uses the weight that belongs to that source row. At
+exact integer multiples in physical pixels, the widget draws the source
+image directly and skips the scaled image cache.
+
+An offscreen Qt comparison checked source coordinates and viewport
+coverage across 696 cases at device pixel ratios of 1, 1.25, 1.5 and 2.
+The cases covered Fill, Aspect and Integer modes for GB and SGB image
+sizes. All 158,967,683 sampled pixels matched the pixel-center calculation,
+and the viewport coverage matched the previous paint path. The desktop
+workflow checks tagged source rows and columns at two window sizes.
