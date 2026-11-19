@@ -100,6 +100,8 @@ static void test_import_matrix(CupidGbModel model) {
     assert(before);
     for (unsigned source_host = 0; source_host < 2; ++source_host) {
         CupidGb *source = camera_test_new(model);
+        cupid_gb_write_u8(source, 0xa002, 0);
+        cupid_gb_write_u8(source, 0xa004, 0x08);
         CameraWitness source_witness = {0};
         if (source_host) {
             cupid_gb_set_camera_callback(source, camera_test_request, &source_witness);
@@ -120,6 +122,7 @@ static void test_import_matrix(CupidGbModel model) {
         free(cached.data);
         const size_t offset = camera_offset(source, &blob);
         assert(blob.data[offset] == (source_host ? 6 : 7));
+        assert(blob.data[offset + 4] == 0x08);
         const uint32_t saved_countdown =
             (uint32_t)blob.data[offset + 56] | ((uint32_t)blob.data[offset + 57] << 8) |
             ((uint32_t)blob.data[offset + 58] << 16) | ((uint32_t)blob.data[offset + 59] << 24);
@@ -143,6 +146,7 @@ static void test_import_matrix(CupidGbModel model) {
                 const unsigned calls = target_witness.calls;
                 assert(restore(target, &blob, variant) == CUPID_GB_STATE_OK);
                 assert(target->camera.capture_number == capture_number);
+                assert(target->camera.registers[4] == 0x08);
                 assert(target_witness.calls == calls);
                 assert(target->camera_host.request_sequence == sequence);
                 assert(!target->camera_host.pending_request);
@@ -169,7 +173,12 @@ static void test_import_matrix(CupidGbModel model) {
                         camera_test_begin(target, 0);
                         assert(target->camera.busy_tcycles);
                     }
+                    cupid_gb_camera_tick(&target->camera, target->camera.busy_tcycles);
                 }
+                cupid_gb_write_u8(target, 0x4000, 0);
+                /* Zero exposure gives a zero signal, which becomes 255 after inversion. */
+                assert(cupid_gb_read_u8(target, 0xa100) == 0);
+                assert(cupid_gb_read_u8(target, 0xaeff) == 0);
                 camera_test_free(target);
             }
         }

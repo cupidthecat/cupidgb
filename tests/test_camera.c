@@ -370,6 +370,7 @@ static void test_portable_banking(CupidGbModel model) {
     cupid_gb_write_u8(source, 0x4000, 0x1f);
     for (unsigned reg = 1; reg < sizeof(source->camera.registers); ++reg)
         cupid_gb_write_u8(source, (uint16_t)(0xa000u + reg), (uint8_t)(0x61u ^ reg));
+    cupid_gb_write_u8(source, 0xa004, 0x6d);
     cupid_gb_write_u8(source, 0xa000, 7);
     assert(source->camera.busy_tcycles && source->camera.capture_number == 1);
     cupid_gb_write_u8(source, 0x4000, 0x0f);

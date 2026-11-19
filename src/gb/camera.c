@@ -31,7 +31,7 @@ enum {
     CAMERA_GAIN = 1,
     CAMERA_EXPOSURE_HIGH = 2,
     CAMERA_EXPOSURE_LOW = 3,
-    CAMERA_EDGE = 4,
+    CAMERA_SENSOR_MODE = 4,
     CAMERA_THRESHOLDS = 6
 };
 
@@ -171,14 +171,16 @@ static int sensor_pixel(const CupidGbCamera *camera, const uint8_t *pixels, int 
                                         44320, 45406, 46393, 47298, 48134, 48912, 49637, 50320,
                                         50958, 51562, 52133, 52681, 53200, 53695, 54169, 54635};
     gray = (gray * gain_q15[index]) >> 15u;
-    return (int)(gray * exposure(camera) / 4096u);
+    const int exposed = (int)(gray * exposure(camera) / 4096u);
+    /* A004 bit 3 inverts the exposed signal, including samples used by the edge filter. */
+    return (camera->registers[CAMERA_SENSOR_MODE] & 0x08u) ? UINT8_MAX - exposed : exposed;
 }
 
 static unsigned sensor_level(const CupidGbCamera *camera, const uint8_t *pixels, int x, int y) {
     int gray = sensor_pixel(camera, pixels, x, y);
     if ((camera->registers[CAMERA_GAIN] & 0xe0u) == 0xe0u) {
         static const uint8_t edge_gain_quarters[] = {2, 3, 4, 5, 8, 12, 16, 20};
-        unsigned index = (camera->registers[CAMERA_EDGE] >> 4u) & 7u;
+        unsigned index = (camera->registers[CAMERA_SENSOR_MODE] >> 4u) & 7u;
         const int strength = edge_gain_quarters[index];
         static const int8_t dx[] = {-1, 1, 0, 0};
         static const int8_t dy[] = {0, 0, -1, 1};

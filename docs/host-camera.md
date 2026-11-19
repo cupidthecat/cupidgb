@@ -50,9 +50,9 @@ conversion policy.
 Equal crop dimensions do not establish identical interpolation or camera-driver
 processing across platforms.
 
-Conversion runs once per captured image. Ordinary cartridge reads use the
-retained sensor bytes through the emulated gain, exposure, edge and dither
-processing. Register writes can therefore change how those bytes become tiles.
+Conversion runs once per captured image. Ordinary cartridge reads apply gain,
+exposure, sensor polarity, edge processing, and dithering to the retained
+samples. Register writes can change how those samples become tiles.
 The cartridge's busy bit blocks camera SRAM until the host completes the
 request. A second shutter write can change its mode bits but does not cancel an
 outstanding capture.
@@ -60,6 +60,15 @@ outstanding capture.
 The generated sensor works in the Qt frontend and in applications that embed
 the core without a camera provider. It runs without opening or enumerating
 camera devices.
+
+Bit 3 of the Camera register at `A004` selects negative output. CupidGB
+subtracts the exposed level from 255 before edge processing and threshold
+conversion. Both input sources use this signed calculation, and the retained
+host image keeps its original samples. The regression checks both tile
+bitplanes at full and half exposure and verifies inversion after restoring a
+native state. The register's polarity is documented by the sensor datasheet.
+Exact analog output and its interaction with edge processing still need
+physical measurement. [M64282FP datasheet, sections 11.3 and 11.6.5](https://gbdev.gg8.se/files/docs/misc/M64282FP.pdf)
 
 ## Save states, reset and rewind
 

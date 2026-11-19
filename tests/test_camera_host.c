@@ -106,6 +106,56 @@ static void test_immediate(CupidGbModel model) {
     camera_test_free(gb);
 }
 
+static void test_image_inversion(void) {
+    CupidGb *gb = camera_test_new(CUPID_GB_MODEL_CGB_E);
+    uint8_t pixels[CUPID_GB_CAMERA_SENSOR_SIZE];
+    for (unsigned index = 0; index < sizeof(pixels); ++index)
+        pixels[index] = (uint8_t)((index & 3u) * 64u);
+    CameraWitness witness = {.immediate = 2, .pixels = pixels};
+    cupid_gb_set_camera_callback(gb, camera_test_request, &witness);
+
+    const struct {
+        uint8_t exposure_high, sensor_mode, low_plane, high_plane;
+    } cases[] = {
+        {0x10, 0x07, 0xaa, 0xcc},
+        {0x10, 0x0f, 0x22, 0x11},
+        {0x08, 0x00, 0x99, 0xee},
+        {0x08, 0x08, 0x11, 0x00},
+    };
+
+    for (size_t index = 0; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        cupid_gb_write_u8(gb, 0x4000, 0x10);
+        cupid_gb_write_u8(gb, 0xa002, cases[index].exposure_high);
+        cupid_gb_write_u8(gb, 0xa004, cases[index].sensor_mode);
+        camera_test_begin(gb, 2);
+        assert(!gb->camera_host.pending_request && cupid_gb_read_u8(gb, 0xa000) == 2);
+        cupid_gb_write_u8(gb, 0x4000, 0);
+        /* Half exposure distinguishes signal inversion from inverting the input image. */
+        for (uint16_t address = 0xa100; address < 0xaf00; address += 2) {
+            assert(cupid_gb_read_u8(gb, address) == cases[index].low_plane);
+            assert(cupid_gb_read_u8(gb, (uint16_t)(address + 1u)) == cases[index].high_plane);
+        }
+    }
+    assert(witness.calls == sizeof(cases) / sizeof(cases[0]));
+    assert(!memcmp(gb->camera_host.image, pixels, sizeof(pixels)));
+
+    /* With 2-D edge gain 0.5, inverting the center and neighbors before the
+     * signed filter yields 225 here. Inverting only the filtered result yields 227. */
+    memset(pixels, 33, sizeof(pixels));
+    pixels[CUPID_GB_CAMERA_SENSOR_WIDTH + 1] = 32;
+    cupid_gb_write_u8(gb, 0x4000, 0x10);
+    cupid_gb_write_u8(gb, 0xa001, 0xe4);
+    cupid_gb_write_u8(gb, 0xa002, 0x10);
+    cupid_gb_write_u8(gb, 0xa004, 0x08);
+    for (uint16_t address = 0xa015; address < 0xa018; ++address)
+        cupid_gb_write_u8(gb, address, 226);
+    camera_test_begin(gb, 2);
+    cupid_gb_write_u8(gb, 0x4000, 0);
+    assert(cupid_gb_read_u8(gb, 0xa102) & 0x40);
+    assert(cupid_gb_read_u8(gb, 0xa103) & 0x40);
+    camera_test_free(gb);
+}
+
 static void test_registration_and_exhaustion(void) {
     CupidGb *gb = camera_test_new(CUPID_GB_MODEL_CGB);
     CameraWitness witness = {0};
@@ -194,6 +244,7 @@ int main(void) {
         test_immediate(models[i]);
         test_transactions(models[i]);
     }
+    test_image_inversion();
     test_registration_and_exhaustion();
     puts("Host camera request, pixel and reset regressions passed.");
     return 0;
