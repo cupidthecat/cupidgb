@@ -21,6 +21,7 @@
  */
 
 #include "cupid/gb/battery.h"
+#include "cupid/gb/bess.h"
 #include "cupid/gb/camera.h"
 #include "cupid/gb/debugger.h"
 #include "cupid/gb/gb.h"
@@ -56,6 +57,8 @@ static void load_camera(CupidGb *gb, CupidGbModel model) {
 static void test_banking(CupidGbModel model) {
     CupidGb gb = {0};
     load_camera(&gb, model);
+    assert(cupid_gb_read_u8(&gb, 0x4000) == 1);
+    cupid_gb_write_u8(&gb, 0x6000, 0);
     assert(cupid_gb_read_u8(&gb, 0x4000) == 1);
     cupid_gb_write_u8(&gb, 0x3fff, 0);
     assert(cupid_gb_read_u8(&gb, 0x4000) == 0);
@@ -339,12 +342,93 @@ static void test_sensor_processing(void) {
     }
 }
 
+static unsigned little_u32(const uint8_t *data) {
+    return (unsigned)data[0] | (unsigned)data[1] << 8 | (unsigned)data[2] << 16 |
+           (unsigned)data[3] << 24;
+}
+
+static void test_portable_banking(CupidGbModel model) {
+    CupidGb *source = calloc(1, sizeof(*source)), *target = calloc(1, sizeof(*target));
+    assert(source && target);
+    load_camera(source, model);
+    load_camera(target, model);
+    const size_t startup_size = cupid_gb_bess_size(source);
+    uint8_t *startup = malloc(startup_size);
+    assert(startup_size && startup);
+    assert(cupid_gb_bess_save(source, startup, startup_size, NULL) == CUPID_GB_STATE_OK);
+    assert(cupid_gb_bess_load(target, startup, startup_size) == CUPID_GB_STATE_OK);
+    assert(cupid_gb_read_u8(target, 0x4000) == 1);
+    cupid_gb_write_u8(target, 0x4000, 0x10);
+    assert(cupid_gb_read_u8(target, 0x4000) == 1 && target->camera.mapped);
+    free(startup);
+
+    cupid_gb_write_u8(source, 0x0000, 0x0a);
+    cupid_gb_write_u8(source, 0x2000, 0xc7);
+    cupid_gb_write_u8(source, 0x4000, 0x0f);
+    cupid_gb_write_u8(source, 0xa080, 0x39);
+    cupid_gb_write_u8(source, 0x0000, 0);
+    cupid_gb_write_u8(source, 0x4000, 0x1f);
+    for (unsigned reg = 1; reg < sizeof(source->camera.registers); ++reg)
+        cupid_gb_write_u8(source, (uint16_t)(0xa000u + reg), (uint8_t)(0x61u ^ reg));
+    cupid_gb_write_u8(source, 0xa000, 7);
+    assert(source->camera.busy_tcycles && source->camera.capture_number == 1);
+    cupid_gb_write_u8(source, 0x4000, 0x0f);
+    target->camera_host.image[123] = 0x92;
+
+    const size_t size = cupid_gb_bess_size(source);
+    uint8_t *data = malloc(size);
+    assert(size && data && cupid_gb_bess_save(source, data, size, NULL) == CUPID_GB_STATE_OK);
+    assert(cupid_gb_bess_load(target, data, size) == CUPID_GB_STATE_OK);
+    assert(!target->camera.mapped && !target->ram_enabled);
+    assert(target->current_rom_bank == 0xc7 && cupid_gb_read_u8(target, 0x4000) == 7);
+    assert(target->current_ram_bank == 0x0f && cupid_gb_read_u8(target, 0xa080) == 0x39);
+    assert(!target->camera.busy_tcycles && !target->camera.capture_number);
+    assert(target->camera.registers[0] == 6 && target->camera_host.image[123] == 0x92);
+    assert(!memcmp(target->camera.registers + 1, source->camera.registers + 1,
+                   sizeof(source->camera.registers) - 1));
+
+    uint8_t *block = data + little_u32(data + size - 8u);
+    while (block + 8u <= data + size - 8u && memcmp(block, "MBC ", 4))
+        block += 8u + little_u32(block + 4);
+    assert(block + 8u <= data + size - 8u);
+    memcpy(block, "TEST", 4);
+    assert(cupid_gb_bess_load(target, data, size) == CUPID_GB_STATE_OK);
+    assert(cupid_gb_read_u8(target, 0x4000) == 1);
+    const size_t native_size = cupid_gb_state_size(target);
+    uint8_t *native = malloc(native_size);
+    assert(native_size && native);
+    assert(cupid_gb_save_state(target, native, native_size, NULL) == CUPID_GB_STATE_OK);
+    assert(cupid_gb_load_state(target, native, native_size) == CUPID_GB_STATE_OK);
+    cupid_gb_write_u8(target, 0x0000, 0x0a);
+    assert(cupid_gb_read_u8(target, 0x4000) == 0 && target->ram_enabled);
+    cupid_gb_write_u8(target, 0x2000, 1);
+    cupid_gb_write_u8(target, 0x6000, 0);
+    assert(cupid_gb_read_u8(target, 0x4000) == 1);
+
+    /* The first ordered mapper write also resolves the alias during import. */
+    memcpy(block, "MBC ", 4);
+    const size_t pairs = little_u32(block + 4) / 3u;
+    const uint8_t enable_ram[] = {0, 0, 0x0a};
+    for (size_t index = 0; index < pairs; ++index)
+        memcpy(block + 8u + 3u * index, enable_ram, sizeof(enable_ram));
+    assert(cupid_gb_bess_load(target, data, size) == CUPID_GB_STATE_OK);
+    assert(cupid_gb_read_u8(target, 0x4000) == 0 && target->ram_enabled);
+    free(native);
+    free(data);
+    cupid_gb_cleanup(target);
+    cupid_gb_cleanup(source);
+    free(target);
+    free(source);
+}
+
 int main(void) {
     test_banking(CUPID_GB_MODEL_DMG_ABC);
     test_banking(CUPID_GB_MODEL_CGB);
     test_capture(CUPID_GB_MODEL_DMG_ABC);
     test_capture(CUPID_GB_MODEL_CGB);
     test_capture(CUPID_GB_MODEL_SGB);
+    test_portable_banking(CUPID_GB_MODEL_DMG_ABC);
+    test_portable_banking(CUPID_GB_MODEL_CGB);
     test_sensor_processing();
     puts("Camera banking, capture, and state regressions passed.");
     return 0;

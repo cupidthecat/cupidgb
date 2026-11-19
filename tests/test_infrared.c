@@ -21,6 +21,8 @@
  */
 
 #include "cupid/common/sha256.h"
+#include "cupid/gb/bess.h"
+#include "cupid/gb/cartridge.h"
 #include "cupid/gb/huc3.h"
 #include "cupid/gb/infrared.h"
 #include "cupid/gb/state.h"
@@ -337,6 +339,43 @@ static void test_legacy_sensor_defaults(void) {
     }
 }
 
+static void test_portable_huc1(void) {
+    CupidGb *source = new_cartridge(CUPID_GB_MODEL_DMG_ABC, 0xff, false);
+    CupidGb *target = new_cartridge(CUPID_GB_MODEL_DMG_ABC, 0xff, false);
+    OutputEvents events = {0};
+    cupid_gb_set_infrared_input(target, true);
+    cupid_gb_set_infrared_callback(target, observe_output, &events);
+    size_t size = cupid_gb_bess_size(source);
+    uint8_t *data = malloc(size);
+    assert(size && data && cupid_gb_bess_save(source, data, size, NULL) == CUPID_GB_STATE_OK);
+    assert(cupid_gb_bess_load(target, data, size) == CUPID_GB_STATE_OK);
+    assert(cupid_gb_selected_rom_bank(target, false) == 1);
+    cupid_gb_write_u8(target, 0x6000, 0);
+    assert(cupid_gb_selected_rom_bank(target, false) == 0);
+    free(data);
+
+    cupid_gb_write_u8(source, 0x2000, 0x3f);
+    cupid_gb_write_u8(source, 0x4000, 3);
+    cupid_gb_write_u8(source, 0xa880, 0x68);
+    cupid_gb_write_u8(source, 0x0000, 0x0e);
+    cupid_gb_write_u8(source, 0xa000, 1);
+    for (unsigned open = 1; open <= 2; ++open) {
+        if (open == 2)
+            cupid_gb_write_u8(source, 0x0000, 0);
+        size = cupid_gb_bess_size(source);
+        data = malloc(size);
+        assert(size && data && cupid_gb_bess_save(source, data, size, NULL) == CUPID_GB_STATE_OK);
+        assert(cupid_gb_bess_load(target, data, size) == CUPID_GB_STATE_OK);
+        assert(target->huc1_ir_mode == source->huc1_ir_mode && !events.count);
+        assert(target->huc3_ir_input && cupid_gb_infrared_output(target));
+        assert(target->mbc5_rom_bank == 0x3f && target->current_ram_bank == 3);
+        free(data);
+    }
+    assert(cupid_gb_read_u8(target, 0xa880) == 0x68);
+    destroy(target);
+    destroy(source);
+}
+
 int main(void) {
     test_receiver_by_model_and_mapper();
     test_led_callbacks_and_storage();
@@ -346,6 +385,7 @@ int main(void) {
     test_sensor_clock_domains();
     test_state_continuation();
     test_legacy_sensor_defaults();
+    test_portable_huc1();
     puts("Infrared regressions passed.");
     return 0;
 }

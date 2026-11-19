@@ -22,6 +22,7 @@
 
 #include "cupid/gb/bess.h"
 
+#include "bess_identity.h"
 #include "cartridge_internal.h"
 #include "cupid/gb/cartridge.h"
 #include "cupid/gb/mbc6.h"
@@ -38,8 +39,10 @@ enum {
     BESS_HUC3_BYTES = 17,
     BESS_TPP1_BYTES = 17,
     BESS_MBC7_BYTES = 10,
+    BESS_MMM01_MAPPER_BYTES = 21,
     BESS_XOAM_BYTES = 0x60,
     BESS_SGB_BYTES = 0x39,
+    BESS_CAMERA_REGISTERS = sizeof(((CupidGbCamera *)0)->registers),
     BESS_SGB_MAP_BYTES = 0x800,
     BESS_SGB_MEMORY_BYTES = 0x2000 + BESS_SGB_MAP_BYTES + 0x80 + 0x20 + 0x1000 + 0x168 + 0xfd2
 };
@@ -82,8 +85,8 @@ static bool overlaps_session(const CupidGb *gb, const void *bytes, size_t size) 
 static CupidGbStateResult supported(const CupidGb *gb) {
     if (!gb || !gb->loaded || !gb->rom)
         return CUPID_GB_STATE_NO_ROM;
-    if (gb->rom_size < 0x150u || gb->rom_size > gb->rom_capacity ||
-        !cupid_gb_model_is_valid(gb->model) || !cupid_gb_cartridge_storage_valid(gb))
+    if (!cupid_gb_bess_header_bank(gb) || !cupid_gb_model_is_valid(gb->model) ||
+        !cupid_gb_cartridge_storage_valid(gb))
         return CUPID_GB_STATE_INVALID;
     if (gb->program_kind != CUPID_GB_PROGRAM_CARTRIDGE || gb->boot_rom_enabled)
         return CUPID_GB_STATE_UNSUPPORTED_FEATURE;
@@ -97,11 +100,29 @@ static CupidGbStateResult supported(const CupidGb *gb) {
             if (gb->current_rom_bank > 255u || !cupid_gb_mbc7_serial_valid(&gb->mbc7))
                 return CUPID_GB_STATE_INVALID;
             break;
+        case CUPID_GB_MMM01:
+            if (gb->mmm01_rom_select > 0x7fu || gb->mmm01_bank_select > 0x7fu ||
+                (gb->mmm01_mode & 0x82u) || gb->mmm01_ram_mask > 3)
+                return CUPID_GB_STATE_INVALID;
+            break;
+        case CUPID_GB_HUC1:
+            if (gb->current_ram_bank > 7u || gb->mbc5_rom_bank > 63u ||
+                (gb->current_rom_bank != gb->mbc5_rom_bank &&
+                 (gb->current_rom_bank != 1u || gb->mbc5_rom_bank || gb->current_ram_bank ||
+                  gb->huc1_ir_mode || gb->huc3.ir_output)))
+                return CUPID_GB_STATE_INVALID;
+            break;
         case CUPID_GB_HUC3:
             if (gb->huc3_mode > 15u || gb->huc3.rtc_base_time < 0 ||
                 gb->current_rom_bank > CUPID_GB_HUC3_STARTUP_BANK ||
                 (gb->current_rom_bank == CUPID_GB_HUC3_STARTUP_BANK &&
                  (gb->huc3_mode || gb->current_ram_bank)))
+                return CUPID_GB_STATE_INVALID;
+            break;
+        case CUPID_GB_CAMERA:
+            if (gb->current_rom_bank > 255u || gb->camera.registers[0] > 7u ||
+                (cupid_gb_camera_has_startup_alias(gb) &&
+                 (gb->ram_enabled || gb->current_ram_bank || gb->camera.mapped)))
                 return CUPID_GB_STATE_INVALID;
             break;
         case CUPID_GB_TPP1:
@@ -148,10 +169,20 @@ static size_t mapper_bytes(const CupidGb *gb) {
             return 15;
         case CUPID_GB_MBC7:
             return 9;
+        case CUPID_GB_MMM01:
+            return BESS_MMM01_MAPPER_BYTES;
+        case CUPID_GB_HUC1:
+            if (gb->current_rom_bank != gb->mbc5_rom_bank)
+                return 0;
+            return gb->huc3.ir_output ? (gb->huc1_ir_mode ? 12 : 15) : 9;
         case CUPID_GB_HUC3:
             /* An omitted mapper block leaves the initial bank 1 mapping and
              * zero raw latch intact until the first control write. */
             return gb->current_rom_bank == CUPID_GB_HUC3_STARTUP_BANK ? 0 : 9;
+        case CUPID_GB_CAMERA:
+            return cupid_gb_camera_has_startup_alias(gb)
+                       ? 0
+                       : 3u * (3u + BESS_CAMERA_REGISTERS + !gb->camera.mapped);
         case CUPID_GB_TPP1:
             return gb->current_rom_bank == gb->tpp1.rom_bank ? (gb->tpp1.motor_strength ? 15 : 12)
                                                              : 0;
@@ -253,11 +284,45 @@ static void mapper_pair(uint8_t *data, size_t *cursor, uint16_t address, uint8_t
     *cursor += 3;
 }
 
+static void write_camera_mapper(uint8_t *data, size_t *cursor, const CupidGb *gb) {
+    uint8_t pairs[3u * (4u + BESS_CAMERA_REGISTERS)];
+    size_t count = 0;
+    mapper_pair(pairs, &count, 0x0000, gb->ram_enabled ? 0x0a : 0);
+    mapper_pair(pairs, &count, 0x2000, (uint8_t)gb->current_rom_bank);
+    mapper_pair(pairs, &count, 0x4000, (uint8_t)(0x10u | gb->current_ram_bank));
+    /* Replay configuration without starting a new exposure. */
+    mapper_pair(pairs, &count, 0xa000, gb->camera.registers[0] & 6u);
+    for (unsigned reg = 1; reg < BESS_CAMERA_REGISTERS; ++reg)
+        mapper_pair(pairs, &count, (uint16_t)(0xa000u + reg), gb->camera.registers[reg]);
+    if (!gb->camera.mapped)
+        mapper_pair(pairs, &count, 0x4000, (uint8_t)gb->current_ram_bank);
+    write_block(data, cursor, "MBC ", pairs, count);
+}
+
 static void write_mapper(uint8_t *data, size_t *cursor, const CupidGb *gb) {
-    uint8_t pairs[15];
+    uint8_t pairs[BESS_MMM01_MAPPER_BYTES];
     size_t count = 0;
     if (!mapper_bytes(gb))
         return;
+    if (gb->header.mbc_type == CUPID_GB_CAMERA) {
+        write_camera_mapper(data, cursor, gb);
+        return;
+    }
+    if (gb->header.mbc_type == CUPID_GB_MMM01) {
+        /* Set raw bits while writable and restore the mode before the mode
+         * disable bit. Apply the irreversible lock after every other latch. */
+        mapper_pair(pairs, &count, 0x4000, 0);
+        mapper_pair(pairs, &count, 0x6000, 0);
+        mapper_pair(pairs, &count, 0x0000, 0x3a);
+        mapper_pair(pairs, &count, 0x2000, gb->mmm01_rom_select);
+        mapper_pair(pairs, &count, 0x6000, gb->mmm01_mode);
+        mapper_pair(pairs, &count, 0x4000, gb->mmm01_bank_select);
+        mapper_pair(pairs, &count, 0x0000,
+                    (uint8_t)((gb->mmm01_ram_mask << 4) | (gb->ram_enabled ? 0x0au : 0) |
+                              (gb->mmm01_locked ? 0x40u : 0)));
+        write_block(data, cursor, "MBC ", pairs, count);
+        return;
+    }
     if (gb->header.mbc_type == CUPID_GB_TPP1) {
         mapper_pair(pairs, &count, 0, (uint8_t)gb->tpp1.rom_bank);
         mapper_pair(pairs, &count, 1, (uint8_t)(gb->tpp1.rom_bank >> 8));
@@ -268,10 +333,12 @@ static void write_mapper(uint8_t *data, size_t *cursor, const CupidGb *gb) {
         write_block(data, cursor, "MBC ", pairs, count);
         return;
     }
-    mapper_pair(pairs, &count, 0x0000,
-                gb->header.mbc_type == CUPID_GB_HUC3 ? gb->huc3_mode
-                : gb->ram_enabled                    ? 0x0a
-                                                     : 0);
+    uint8_t mode = gb->ram_enabled ? 0x0a : 0;
+    if (gb->header.mbc_type == CUPID_GB_HUC3)
+        mode = gb->huc3_mode;
+    else if (gb->header.mbc_type == CUPID_GB_HUC1)
+        mode = gb->huc1_ir_mode || gb->huc3.ir_output ? 0x0e : 0;
+    mapper_pair(pairs, &count, 0x0000, mode);
     switch (gb->header.mbc_type) {
         case CUPID_GB_MBC1:
             mapper_pair(pairs, &count, 0x2000, gb->mbc1_bank_low5);
@@ -297,6 +364,15 @@ static void write_mapper(uint8_t *data, size_t *cursor, const CupidGb *gb) {
         case CUPID_GB_HUC3:
             mapper_pair(pairs, &count, 0x2000, (uint8_t)gb->current_rom_bank);
             mapper_pair(pairs, &count, 0x4000, (uint8_t)gb->current_ram_bank);
+            break;
+        case CUPID_GB_HUC1:
+            mapper_pair(pairs, &count, 0x2000, (uint8_t)gb->mbc5_rom_bank);
+            mapper_pair(pairs, &count, 0x4000, (uint8_t)gb->current_ram_bank);
+            if (gb->huc3.ir_output) {
+                mapper_pair(pairs, &count, 0xa000, 1);
+                if (!gb->huc1_ir_mode)
+                    mapper_pair(pairs, &count, 0x0000, 0);
+            }
             break;
         default:
             mapper_pair(pairs, &count, 0x2000, (uint8_t)gb->mbc5_rom_bank);
@@ -406,8 +482,9 @@ CupidGbStateResult cupid_gb_bess_save(const CupidGb *gb, uint8_t *data, size_t c
     const size_t blocks_start = cursor;
     write_block(data, &cursor, "NAME", (const uint8_t *)writer_name, sizeof(writer_name) - 1);
     uint8_t info[0x12];
-    memcpy(info, gb->rom + 0x134, 16);
-    memcpy(info + 16, gb->rom + 0x14e, 2);
+    const uint8_t *rom_header = cupid_gb_bess_header_bank(gb);
+    memcpy(info, rom_header + 0x134, 16);
+    memcpy(info + 16, rom_header + 0x14e, 2);
     write_block(data, &cursor, "INFO", info, sizeof(info));
     write_block(data, &cursor, "CORE", core, sizeof(core));
     write_mapper(data, &cursor, gb);

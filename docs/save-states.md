@@ -22,11 +22,10 @@ must pass native validation.
 
 Portable states support completed cartridge boot on DMG, Pocket, CGB,
 SGB NTSC, SGB PAL, and SGB2 with ROM-only or ROM+RAM, MBC1, MBC2, standard
-MBC3 with optional RTC, MBC5, MBC7, HuC3, and TPP1. The importer checks
-the model family and, when present, the saved cartridge title and global
-checksum.
-It validates every referenced memory range before replacing the running
-state.
+MBC3 with optional RTC, MBC5, MBC7, MMM01, HuC1, HuC3, Camera, and TPP1.
+The importer checks the model family and, when present, the saved
+cartridge title and global checksum. It validates every referenced memory
+range before replacing the running state.
 
 BESS restores CPU registers, memory, mapped banks, and register values.
 On SGB, it also carries command permission, palettes, attributes, visible
@@ -40,6 +39,11 @@ read, and the guest's latched motion readings. A later guest latch uses
 live motion from the receiving session. When the optional MBC7 block is
 absent, the serial interface and motion latches start clear.
 
+MMM01 checkpoints identify the cartridge by its menu header. They work
+with both menu-first and menu-last dumps. They restore the raw controller
+latches, including bits held by masks, and apply the lock after restoring
+bank and mode selection.
+
 HuC3 checkpoints carry cartridge RAM, bank and mode selection, and the
 clock and alarm counters. A checkpoint taken before the first mapper
 write keeps the initial bank-one mapping until a write selects the raw
@@ -47,7 +51,19 @@ bank. The clock and alarm block is optional. If it is absent, both sets
 of counters start at zero. Host-synchronized loads clamp future
 timestamps to the receiving clock without clearing the stored counters.
 Accurate mode starts its next guest interval at the receiving clock.
-Portable loads start a fresh nibble command and infrared history.
+Portable loads start a fresh nibble command and infrared history while
+keeping the receiving session's live infrared input.
+
+HuC1 checkpoints restore ROM and SRAM banking, the SRAM or infrared port
+selection, and the LED output. The LED can stay lit after the guest
+switches back to SRAM. The receiving session supplies the live input.
+
+Camera checkpoints carry banking, SRAM, and all 54 Camera registers. An
+export clears the shutter's busy bit so loading it does not start a new
+exposure. Host images stay with the receiving session. Use a native slot
+to preserve a pending generated exposure. If the file supplies no mapper
+writes, ROM bank one is visible until the next mapper write applies the
+raw bank-zero latch.
 
 TPP1 checkpoints carry banking, up to 2 MiB of SRAM, both clock copies,
 the stored MR4 value, and motor strength. The initial bank-one view is
@@ -87,6 +103,22 @@ TPP1 validation matched 38 imports and 17 exports against independent
 checkpoints. The cases cover both clock modes, all four mapper modes,
 full-width ROM and SRAM latches, clock rollover, motor commands, and
 omitted mapper controls or clock data.
+
+HuC1 and Camera validation covered 28 independent imports with a native
+save and load before continuing. The same 28 states were re-exported and
+replayed independently, alongside 19 fresh exports. The cases cover the
+HuC1 LED after switching back to SRAM, the Camera register window with
+SRAM writes disabled, and Camera files with no mapper block.
+In a bounded Game Boy Camera run with virtual input, saving a slot took
+the cartridge from 30 free slots to 29. That count survived exchange in
+both directions, and all 122,880 album SRAM bytes matched. Physical
+camera image quality remains unverified.
+
+MMM01 validation covered 36 opposite-layout exchanges. They preserve
+unlocked and locked latches and subsequent guest bank and RAM reads.
+Another 36 imports matched direct replay of the mapper writes in each
+file. Replay follows the writes even when a producer replaces bits that
+its cartridge had previously held.
 
 Host camera images and pending device requests stay with the receiving session. Saving a pending host capture writes an idle camera to the file while the live request continues. After full validation, a load into host-camera mode cancels obsolete requests and clears imported busy state while retaining the current image. This also applies to a saved generated countdown. Without a provider, generated captures retain their countdown, while a host-origin snapshot starts idle. The existing 64-byte camera section and strict busy/countdown validator are unchanged. See [Camera cartridges](host-camera.md) for reset, rewind and embedding rules.
 

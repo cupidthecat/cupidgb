@@ -22,6 +22,8 @@
 
 #include "cupid/gb/camera.h"
 
+#include "cartridge_internal.h"
+
 #include <string.h>
 
 enum {
@@ -73,9 +75,12 @@ bool cupid_gb_camera_complete(CupidGb *gb, uint64_t request, const uint8_t *pixe
 }
 
 void cupid_gb_camera_mapper_write(CupidGb *gb, uint16_t address, uint8_t value) {
+    if (address < 0x8000u && cupid_gb_camera_has_startup_alias(gb))
+        gb->current_rom_bank = 0;
     if (address < 0x2000u) {
         gb->ram_enabled = (value & 0x0fu) == 0x0au;
     } else if (address < 0x4000u) {
+        gb->mbc5_rom_bank = value;
         gb->current_rom_bank = value;
     } else if (address < 0x6000u) {
         gb->current_ram_bank = value & 0x0fu;

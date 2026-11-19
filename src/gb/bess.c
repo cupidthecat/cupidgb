@@ -24,6 +24,7 @@
 
 #include "audio_output.h"
 #include "audio_state.h"
+#include "bess_identity.h"
 #include "cartridge_internal.h"
 #include "cupid/gb/apu.h"
 #include "cupid/gb/cartridge.h"
@@ -159,7 +160,8 @@ static bool matches_model(CupidGbModel model, const uint8_t *id) {
     }
 }
 
-static CupidGbStateResult validate(const CupidGb *gb, const BessState *state) {
+static CupidGbStateResult validate(const CupidGb *gb, const BessState *state,
+                                   const uint8_t *rom_header) {
     const uint8_t *core = state->core.bytes;
     if (bess_word(core) != 1)
         return CUPID_GB_STATE_UNSUPPORTED_VERSION;
@@ -168,8 +170,8 @@ static CupidGbStateResult validate(const CupidGb *gb, const BessState *state) {
     if (state->info.bytes) {
         if (state->info.size != BESS_INFO_SIZE)
             return CUPID_GB_STATE_INVALID;
-        if (memcmp(state->info.bytes, gb->rom + 0x134, 16) ||
-            memcmp(state->info.bytes + 16, gb->rom + 0x14e, 2))
+        if (memcmp(state->info.bytes, rom_header + 0x134, 16) ||
+            memcmp(state->info.bytes + 16, rom_header + 0x14e, 2))
             return CUPID_GB_STATE_WRONG_ROM;
     }
     if (core[20] > 1 || core[22] > 2 || core[23] || core[BESS_PORTS + 0x50] > 1 ||
@@ -399,7 +401,10 @@ static bool supported_mapper(const CupidGb *gb) {
         case CUPID_GB_MBC2:
         case CUPID_GB_MBC5:
         case CUPID_GB_MBC7:
+        case CUPID_GB_MMM01:
+        case CUPID_GB_HUC1:
         case CUPID_GB_HUC3:
+        case CUPID_GB_CAMERA:
         case CUPID_GB_TPP1:
             return true;
         case CUPID_GB_MBC3:
@@ -415,8 +420,8 @@ CupidGbStateResult cupid_gb_bess_load(CupidGb *gb, const uint8_t *data, size_t l
     if (!cupid_gb_model_is_valid(gb->model) || gb->program_kind != CUPID_GB_PROGRAM_CARTRIDGE ||
         !supported_mapper(gb))
         return CUPID_GB_STATE_UNSUPPORTED_FEATURE;
-    if (gb->rom_size < 0x150u || gb->rom_size > gb->rom_capacity ||
-        !cupid_gb_cartridge_storage_valid(gb) ||
+    const uint8_t *rom_header = cupid_gb_bess_header_bank(gb);
+    if (!rom_header || !cupid_gb_cartridge_storage_valid(gb) ||
         !cupid_gb_cartridge_source_fits(gb, data, length) ||
         !cupid_gb_bess_has_footer(data, length))
         return CUPID_GB_STATE_INVALID;
@@ -428,7 +433,7 @@ CupidGbStateResult cupid_gb_bess_load(CupidGb *gb, const uint8_t *data, size_t l
     if (state.sgb.bytes && (state.sgb.size < BESS_SGB_SIZE || state.sgb.bytes < state.core.bytes ||
                             !read_regions(&state, data, limit, state.sgb.bytes, state.sgb_regions)))
         return CUPID_GB_STATE_INVALID;
-    const CupidGbStateResult status = validate(gb, &state);
+    const CupidGbStateResult status = validate(gb, &state, rom_header);
     if (status != CUPID_GB_STATE_OK)
         return status;
 
@@ -454,6 +459,8 @@ CupidGbStateResult cupid_gb_bess_load(CupidGb *gb, const uint8_t *data, size_t l
     cupid_gb_init(next);
     cupid_gb_reset_restore_cartridge(next, gb);
     cupid_gb_cartridge_reset_controls(next);
+    if (next->header.mbc_type == CUPID_GB_CAMERA)
+        next->mbc5_rom_bank = 0;
     next->power_on = gb->power_on;
     /* An omitted RTC block has no portable timestamp. Keep the receiver's
      * clock rather than treating its counters as having run since the epoch. */
@@ -499,6 +506,7 @@ CupidGbStateResult cupid_gb_bess_load(CupidGb *gb, const uint8_t *data, size_t l
         return CUPID_GB_STATE_INVALID;
     }
     cupid_gb_reset_restore_host(next, gb);
+    next->huc3_ir_input = gb->huc3_ir_input;
     cupid_gb_input_import_legacy(next);
     if (next->header.mbc_type == CUPID_GB_HUC3)
         restore_huc3(next, state.huc3.bytes);
