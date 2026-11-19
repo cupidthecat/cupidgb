@@ -382,3 +382,17 @@ through E used the same local firmware image, and revision 0 used a generated
 image. The earlier built-in profile differed in all 24 monochrome cases.
 Divider and LCD phase at handoff still depend on the firmware and cartridge
 header. Firmware-specific bank 2 work data remains open.
+
+### Monochrome cartridge in Qt
+
+Windows and WSLg each ran Donkey Kong for 60 seconds at `0d898fa` on CGB-C
+using built-in startup, normal audio, seed zero, and separate copies of the same
+save. Both applied all 88 scripted inputs and reached the first stage.
+The final guest images and written 8 KiB saves matched byte for byte. Reopening
+each saved copy and applying eight more inputs produced matching first-stage
+intro images, and both saves retained their contents.
+
+After warmup, Qt measured guest clock progress at 100.008% of target on Windows
+and 100.020% on WSLg. The WSLg monotonic clock advanced at 96.68% of its raw clock
+over the full run. The 95th-percentile widget paint intervals were 18.29 ms and
+18.12 ms respectively. Both audio sinks reported zero idle or error events.
