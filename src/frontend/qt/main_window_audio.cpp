@@ -1,17 +1,110 @@
+/**
+ * @file    main_window_audio.cpp
+ * @brief   Qt audio output, listening preferences, and recording lifecycle.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <https://gnu.org>.
+ */
+
 #include "main_window_internal.h"
+
+#include <QScopeGuard>
+
+void MainWindow::applyAudioPolicy(CupidGb *gb) const {
+    cupid_gb_apu_set_filter_mode(gb, configuredAudioFilter(settings_));
+    cupid_gb_apu_set_interference_volume(gb, double(configuredAudioInterference(settings_)) / 100);
+    for (size_t channel = 0; channel < audioChannelActions_.size(); ++channel)
+        cupid_gb_apu_set_channel_muted(gb, unsigned(channel),
+                                       !audioChannelActions_[channel]->isChecked());
+}
+
+bool MainWindow::collectAudio(CoreAudioCollector &collected) {
+    if (!emulator_)
+        return false;
+    const auto frames = collected.frames();
+    const auto handheld = collected.frames(CUPID_GB_AUDIO_ORIGIN_HANDHELD);
+    const auto startup = collected.frames(CUPID_GB_AUDIO_ORIGIN_SGB_STARTUP);
+    const bool complete = collected.collect(emulator_->gb);
+    generatedAudioFrames_ += collected.frames() - frames;
+    handheldAudioFrames_ += collected.frames(CUPID_GB_AUDIO_ORIGIN_HANDHELD) - handheld;
+    startupAudioFrames_ += collected.frames(CUPID_GB_AUDIO_ORIGIN_SGB_STARTUP) - startup;
+    if (collected.frames() > frames)
+        appendMusicSamples(collected.samples() + frames * 2, collected.frames() - frames);
+    if (complete)
+        publishMusicFrame();
+    return complete;
+}
+
+bool MainWindow::discardCoreAudio() {
+    if (emulator_ && CoreAudioCollector::discard(emulator_->gb))
+        return true;
+    setPaused(true);
+    reportError("Audio output could not be preserved. Emulation is paused.");
+    return false;
+}
+
+void MainWindow::recordAudio(const CoreAudioCollector &collected) {
+    if (!recorder_ || !recorder_->active())
+        return;
+    // Adapter introduction and its silent lead-in are playback only. Skipping
+    // those spans must not write replacement silence into the handheld recording.
+    for (size_t i = 0; i < collected.spanCount(); ++i) {
+        const auto &span = collected.spans()[i];
+        if (span.origin != CUPID_GB_AUDIO_ORIGIN_HANDHELD)
+            continue;
+        if (!recorder_->append(collected.samples() + span.firstFrame * 2u, span.frames)) {
+            const QString error = recorder_->errorString();
+            if (deferLinkRecordingError(error))
+                return;
+            if (stopRecording())
+                reportError("Audio recording stopped: " + error);
+            return;
+        }
+    }
+}
 
 void MainWindow::setupAudio() {
     // Some audio backends dispatch Qt events while opening or closing a stream.
     // Guest execution must not reenter a pause, load, or rewind transition.
-    QScopedValueRollback<bool> operation(stateOperation_, true);
+    const QPointer<MainWindow> self(this);
+    const bool previousOperation = stateOperation_;
+    stateOperation_ = true;
+    const auto operation = qScopeGuard([self, previousOperation] {
+        if (self)
+            self->stateOperation_ = previousOperation;
+    });
+    const uint64_t session = sessionId_;
+    const auto current = [self, session] { return self && self->sessionId_ == session; };
     stopAudio();
+    if (!current())
+        return;
     audioConverter_.reset();
-    audioBuffer_ = std::make_unique<AudioBuffer>();
+    audioClockDrift_.reset();
+    hostAudioBytesWritten_ = 0;
+    audioBuffer_ = std::make_shared<AudioBuffer>();
     const QByteArray requested = settings_.value("audio/outputDevice").toByteArray();
     QAudioDevice device = QMediaDevices::defaultAudioOutput();
+    if (!current())
+        return;
     audioDeviceFallback_ = false;
     if (!requested.isEmpty()) {
         const auto available = QMediaDevices::audioOutputs();
+        if (!current())
+            return;
         const auto match = std::find_if(
             available.cbegin(), available.cend(),
             [&requested](const QAudioDevice &candidate) { return candidate.id() == requested; });
@@ -35,13 +128,20 @@ void MainWindow::setupAudio() {
         statusBar()->showMessage("No usable audio output device is available");
         return;
     }
-    audioBuffer_ = std::make_unique<AudioBuffer>(format.bytesPerFrame());
+    audioBuffer_ = std::make_shared<AudioBuffer>(format.bytesPerFrame());
     audioConverter_ = std::make_unique<AudioConverter>(format);
+    turboAudioWindow_.setSampleRate(unsigned(format.sampleRate()));
     audioQueueLimit_ = format.bytesForDuration(50000);
     audioPrimeBytes_ = format.bytesForDuration(30000);
     audioPriming_ = true;
-    audio_ = std::make_unique<QAudioSink>(device, format);
-    connect(audio_.get(), &QAudioSink::stateChanged, this, [this](QAudio::State state) {
+    const auto buffer = audioBuffer_;
+    const auto sink = createAudioSink<QAudioSink>(device, format);
+    if (!current() || audioBuffer_ != buffer)
+        return;
+    audio_ = sink;
+    connect(sink.get(), &QAudioSink::stateChanged, this, [this](QAudio::State state) {
+        if (audioClockTrace_.enabled())
+            audioClockTrace_.stateChanged(clock_.nsecsElapsed(), int(state));
         if (state == QAudio::IdleState)
             audioPriming_ = true;
         if (state == QAudio::IdleState && telemetryClock_.isValid() &&
@@ -50,29 +150,40 @@ void MainWindow::setupAudio() {
         if (state == QAudio::StoppedState && audio_ && audio_->error() != QAudio::NoError)
             ++audioErrorEvents_;
     });
-    audio_->setBufferSize(audioQueueLimit_);
-    audio_->setVolume(
+    sink->setBufferSize(audioQueueLimit_);
+    if (!current() || audio_ != sink)
+        return;
+    sink->setVolume(
         muteAction_->isChecked() ? 0.0f : settings_.value("audio/volume", 100).toFloat() / 100);
+    if (!current() || audio_ != sink)
+        return;
     if (audioDeviceFallback_)
         statusBar()->showMessage("Selected audio output is unavailable; using System Default",
                                  5000);
 }
 
 void MainWindow::stopAudio() {
+    const QPointer<MainWindow> self(this);
+    const bool previousOperation = stateOperation_;
+    stateOperation_ = true;
+    const auto operation = qScopeGuard([self, previousOperation] {
+        if (self)
+            self->stateOperation_ = previousOperation;
+    });
+    audioModeResetPending_ = false;
     audioDevice_ = nullptr;
     audioPriming_ = true;
-    if (audio_) {
-        // Disconnect callbacks before releasing the owning pointer: stopping the
-        // backend may synchronously emit stateChanged during destruction.
-        audio_->disconnect(this);
-        // A pause or timeline change discards obsolete samples. Draining the old
-        // stream can block the UI indefinitely when the host device stops consuming.
-        audio_->reset();
-        audio_.reset();
-    }
+    audioClockDrift_.reset();
+    hostAudioBytesWritten_ = 0;
+    if (audioConverter_)
+        audioConverter_->setHostClockRatio(1);
+    // Detach immediately, but retain the old backend while a reentrant start/write
+    // still uses its device. The final lease resets the obsolete stream, not drains it.
+    retireAudioSink(audio_, this);
 }
 
 void MainWindow::clearAudio() {
+    audioModeResetPending_ = false;
     audioPriming_ = true;
     if (audio_) {
         // A new sink owns a fresh backend stream. Rapid reuse after several
@@ -82,32 +193,156 @@ void MainWindow::clearAudio() {
     }
     if (audioConverter_)
         audioConverter_->reset();
+    audioClockDrift_.reset();
+    hostAudioBytesWritten_ = 0;
     if (audioBuffer_)
         audioBuffer_->clear();
 }
 
 void MainWindow::pumpAudio() {
-    QScopedValueRollback<bool> operation(stateOperation_, true);
-    if (audio_ && !paused_) {
+    const QPointer<MainWindow> self(this);
+    const auto finishModeChange = qScopeGuard([self] {
+        if (self && self->audioModeResetPending_ && !self->stateOperation_) {
+            self->clearAudio();
+            if (self)
+                self->applyHeldButtons();
+        }
+    });
+    const bool previousOperation = stateOperation_;
+    stateOperation_ = true;
+    const auto operation = qScopeGuard([self, previousOperation] {
+        if (self)
+            self->stateOperation_ = previousOperation;
+    });
+    // The final backend lease can delete its window during retirement. Both
+    // exit guards outlive that lease and must check ownership before cleanup.
+    // Backend event dispatch can replace the session queue while a write is active.
+    const auto buffer = audioBuffer_;
+    const auto sink = audio_;
+    if (audio_ && !paused_ && !menuInputSuspended_) {
         // The event loop produces one guest frame at a time. Accumulate real samples
         // before starting the sink so frame-sized writes tolerate host scheduling jitter.
         // The 30 ms target stays below the 50 ms execution-backpressure limit.
         if (audioPriming_) {
-            if (audioBuffer_->bytesAvailable() < audioPrimeBytes_)
+            const qint64 now = clock_.nsecsElapsed();
+            audioClockDrift_.interrupt(now);
+            if (audioConverter_)
+                audioConverter_->setHostClockRatio(audioClockDrift_.ratio());
+            if (buffer->bytesAvailable() < audioPrimeBytes_) {
+                if (audioClockTrace_.enabled())
+                    audioClockTrace_.pump({now, hostAudioBytesWritten_, -1, -1,
+                                           buffer->bytesAvailable(), -1, true,
+                                           audioClockDrift_.ratio(),
+                                           audioConverter_ ? audioConverter_->hostClockRatio() : 1,
+                                           audioClockDrift_.updates(), nextFrame_ - now});
                 return;
+            }
             // Start only when generated audio is ready. Repeated reset/start calls
             // with an empty queue can leave the Windows backend idle after a load.
-            if (!audioDevice_)
-                audioDevice_ = audio_->start();
-            if (audioDevice_ && audioBuffer_->writeTo(audioDevice_, audio_->bytesFree()) > 0) {
+            if (!audioDevice_) {
+                QIODevice *device = sink->start();
+                if (!self || sink != audio_ || buffer != audioBuffer_ || paused_)
+                    return;
+                audioDevice_ = device;
+            }
+            QIODevice *const device = audioDevice_;
+            const auto state = sink->state();
+            // A failed start can leave the backend without a native client.
+            // Capacity is only valid for a started, writable stream.
+            if (!self || !device || (state != QAudio::ActiveState && state != QAudio::IdleState))
+                return;
+            const qint64 capacity = sink->bytesFree();
+            if (!self || sink != audio_ || buffer != audioBuffer_ || device != audioDevice_ ||
+                paused_ || menuDepth_ || menuInputSuspended_)
+                return;
+            if (audioClockTrace_.enabled()) {
+                const qint64 nativeBytes = sink->bufferSize();
+                if (!self || sink != audio_ || buffer != audioBuffer_ || device != audioDevice_ ||
+                    paused_ || menuDepth_ || menuInputSuspended_)
+                    return;
+                audioClockTrace_.pump({clock_.nsecsElapsed(), hostAudioBytesWritten_, capacity,
+                                       nativeBytes, buffer->bytesAvailable(), int(state), true,
+                                       audioClockDrift_.ratio(),
+                                       audioConverter_ ? audioConverter_->hostClockRatio() : 1,
+                                       audioClockDrift_.updates(), nextFrame_ - now});
+            }
+            const qint64 written = buffer->writeTo(device, capacity);
+            if (self && written > 0 && sink == audio_ && buffer == audioBuffer_ && !paused_) {
+                hostAudioBytesWritten_ += uint64_t(written);
                 audioPriming_ = false;
                 ++audioPrimeEvents_;
             }
             return;
         }
-        if (audioDevice_)
-            audioBuffer_->writeTo(audioDevice_, audio_->bytesFree());
+        if (audioDevice_) {
+            QIODevice *const device = audioDevice_;
+            const auto state = sink->state();
+            if (!self || (state != QAudio::ActiveState && state != QAudio::IdleState))
+                return;
+            const qint64 capacity = sink->bytesFree();
+            const qint64 nativeBytes = sink->bufferSize();
+            if (!self || sink != audio_ || buffer != audioBuffer_ || device != audioDevice_ ||
+                paused_ || menuDepth_ || menuInputSuspended_)
+                return;
+            const auto format = sink->format();
+            const bool normalRate = !playbackTurbo() &&
+                                    playbackSpeed() == GuestClockPacer::normalSpeedSteps &&
+                                    !rewind_;
+            const int frameBytes = format.bytesPerFrame();
+            const unsigned sampleRate = unsigned(std::max(format.sampleRate(), 0));
+            const qint64 now = clock_.nsecsElapsed();
+            qint64 queuedFrames = -1;
+            if (!normalRate) {
+                audioClockDrift_.reset();
+            } else if (state == QAudio::ActiveState && frameBytes > 0 && capacity >= 0) {
+                audioClockDrift_.observe(now, hostAudioBytesWritten_ / uint64_t(frameBytes),
+                                         capacity / frameBytes, sampleRate);
+                if (nativeBytes > 0 && capacity <= nativeBytes)
+                    queuedFrames = (nativeBytes - capacity + buffer->bytesAvailable()) / frameBytes;
+            } else {
+                audioClockDrift_.interrupt(now);
+            }
+            if (audioConverter_)
+                audioConverter_->setHostClockRatio(
+                    audioClockDrift_.playbackRatio(queuedFrames, sampleRate));
+            if (audioClockTrace_.enabled())
+                audioClockTrace_.pump({now, hostAudioBytesWritten_, capacity, nativeBytes,
+                                       buffer->bytesAvailable(), int(state), false,
+                                       audioClockDrift_.ratio(),
+                                       audioConverter_ ? audioConverter_->hostClockRatio() : 1,
+                                       audioClockDrift_.updates(), nextFrame_ - now});
+            const qint64 written = buffer->writeTo(device, capacity);
+            if (self && written > 0 && sink == audio_ && buffer == audioBuffer_ &&
+                device == audioDevice_ && format.bytesPerFrame() > 0)
+                hostAudioBytesWritten_ += uint64_t(written);
+        }
     }
+}
+
+QByteArray MainWindow::convertPlaybackAudio(const int16_t *samples, size_t frames,
+                                            const QAudioFormat &format) {
+    if (!audioConverter_ || !audioBuffer_ || !format.isValid() || format.bytesPerFrame() <= 0 ||
+        !turboAudioWindow_.setSampleRate(unsigned(format.sampleRate())))
+        return {};
+    QByteArray converted = audioConverter_->convert(samples, frames);
+    const size_t frameBytes = size_t(format.bytesPerFrame());
+    size_t capacity = TurboAudioWindow::unlimitedFrames;
+    if (playbackTurbo()) {
+        // The threshold frame is accepted too. This bounds the pending whole
+        // host frames; the audio backend has its own separate buffering.
+        const size_t maximum = size_t(format.sampleRate()) / 8 + 1;
+        const size_t queued = size_t(audioBuffer_->bytesAvailable()) / frameBytes;
+        capacity = queued < maximum ? maximum - queued : 0;
+    }
+    const auto filtered =
+        turboAudioWindow_.filter(converted.data(), size_t(converted.size()), frameBytes,
+                                 playbackTurbo(), playbackTurboCap(), capacity);
+    if (filtered.status != TurboAudioWindow::Status::Ok)
+        return {};
+    converted.truncate(qsizetype(filtered.outputFrames * frameBytes));
+    turboWindowDroppedFrames_ += filtered.windowDroppedFrames;
+    turboCapacityDroppedFrames_ += filtered.capacityDroppedFrames;
+    return converted;
 }
 
 bool MainWindow::startRecording(const QString &path) {
@@ -145,6 +380,7 @@ bool MainWindow::startRecording(const QString &path) {
     }
     refreshActions();
     statusBar()->showMessage("Recording forward audio at the core sample rate", 3000);
+    notifyOnScreen("Audio recording started");
     return true;
 }
 
@@ -158,5 +394,6 @@ bool MainWindow::stopRecording() {
         return false;
     }
     statusBar()->showMessage("Audio recording saved", 3000);
+    notifyOnScreen("Audio recording ended");
     return true;
 }

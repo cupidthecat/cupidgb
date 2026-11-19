@@ -1,4 +1,48 @@
+/**
+ * @file    main_window_debugger.cpp
+ * @brief   Qt debugger commands, instruction history, and tool session control.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <https://gnu.org>.
+ */
+
 #include "main_window_internal.h"
+
+#include <QScopeGuard>
+
+namespace {
+bool readDebuggerSymbols(CupidGbDebugger *debugger, const QString &path, QString &error) {
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly) || file.size() > 4 * 1024 * 1024) {
+        error = "Cannot read symbols: " + path + "\n" + file.errorString();
+        return false;
+    }
+    const QByteArray text = file.readAll();
+    size_t errorLine = 0;
+    if (text.size() != file.size() ||
+        !cupid_gb_debugger_load_symbols(debugger, text.constData(), size_t(text.size()),
+                                        &errorLine)) {
+        error =
+            QString("Symbols rejected at line %1; existing symbols are unchanged.").arg(errorLine);
+        return false;
+    }
+    return true;
+}
+} // namespace
 
 void MainWindow::ensureDebugger() {
     const bool created = !debugger_;
@@ -46,7 +90,10 @@ void MainWindow::openInspectors() {
         inspectorsWindow_ = new InspectorsWindow(this);
         inspectorsWindow_->setSession(
             [this] { return emulator_ ? &emulator_->gb : nullptr; },
-            [this](uint16_t address, uint8_t value) { return debuggerWrite(address, value); });
+            [this](uint16_t address, uint8_t value) { return debuggerWrite(address, value); },
+            [this](InspectorMemoryRegion region, size_t bank, uint16_t offset, uint8_t value) {
+                return debuggerWritePhysical(region, bank, offset, value);
+            });
         inspectorsWindow_->setColorTable(cgbColorTable_.get());
     }
     inspectorsWindow_->refresh();
@@ -73,8 +120,11 @@ void MainWindow::resetDebuggerTimeline(bool clearSession) {
 }
 
 void MainWindow::pauseDebugger() {
+    const QPointer<MainWindow> self(this);
     if (!debuggerInputPaused_)
         debuggerPlayerButtons_ = livePlayerButtons();
+    if (linkSession_ && emulator_)
+        debuggerPlayerButtons_[0] = emulator_->gb.joypad;
     debuggerInputPaused_ = true;
     debuggerTimer_.stop();
     const auto previousStop = debugger_ ? debugger_->last_stop : CUPID_GB_DEBUG_STOP_NONE;
@@ -85,10 +135,14 @@ void MainWindow::pauseDebugger() {
         // paused tools inspect the guest input at the stopped boundary.
         setPaused(true);
     }
+    if (!self)
+        return;
     // The pause transition also resets execution, so retain the stopped reason
     // after it completes. Errors must remain inspectable without skipping a hit.
     if (debugger_ && (previousStop == CUPID_GB_DEBUG_STOP_BREAKPOINT ||
-                      previousStop == CUPID_GB_DEBUG_STOP_ERROR))
+                      previousStop == CUPID_GB_DEBUG_STOP_WATCHPOINT ||
+                      previousStop == CUPID_GB_DEBUG_STOP_ERROR ||
+                      previousStop == CUPID_GB_DEBUG_STOP_ILLEGAL_OPCODE))
         debugger_->last_stop = previousStop;
 }
 
@@ -144,6 +198,7 @@ void MainWindow::refreshDebugger() {
     }
     if (!debugger_->bp_count)
         breakpoints += "None\n";
+    breakpoints += debuggerWatchpointListing();
     breakpoints += QString("\nSymbols: %1\nInstruction history: %2 / 128")
                        .arg(debugger_->symbol_count)
                        .arg(debuggerHistory_.size());
@@ -153,18 +208,9 @@ void MainWindow::refreshDebugger() {
 
 bool MainWindow::loadDebuggerSymbols(const QString &path) {
     ensureDebugger();
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly) || file.size() > 4 * 1024 * 1024) {
-        debuggerWindow_->appendOutput("Cannot read symbols: " + path + "\n" + file.errorString());
-        return false;
-    }
-    const QByteArray text = file.readAll();
-    size_t errorLine = 0;
-    if (text.size() != file.size() ||
-        !cupid_gb_debugger_load_symbols(debugger_.get(), text.constData(), size_t(text.size()),
-                                        &errorLine)) {
-        debuggerWindow_->appendOutput(
-            QString("Symbols rejected at line %1; existing symbols are unchanged.").arg(errorLine));
+    QString error;
+    if (!readDebuggerSymbols(debugger_.get(), path, error)) {
+        debuggerWindow_->appendOutput(error);
         return false;
     }
     debuggerWindow_->appendOutput(QString("Loaded %1 symbols from %2.")
@@ -172,6 +218,29 @@ bool MainWindow::loadDebuggerSymbols(const QString &path) {
                                       .arg(QFileInfo(path).fileName()));
     refreshDebugger();
     return true;
+}
+
+bool MainWindow::prepareResetSymbols(std::unique_ptr<CupidGbDebugger> &symbols) {
+    if (debugger_) {
+        symbols = std::make_unique<CupidGbDebugger>();
+        cupid_gb_debugger_init(symbols.get());
+        const QFileInfo rom(romPath_);
+        const QString path = rom.dir().filePath(rom.completeBaseName() + ".sym");
+        QString error;
+        // Validate replacement symbols before committing a cartridge reset.
+        // An absent companion file deliberately removes the previous symbols.
+        if (QFileInfo::exists(path) && !readDebuggerSymbols(symbols.get(), path, error)) {
+            reportError(error);
+            return false;
+        }
+    }
+    return true;
+}
+
+bool MainWindow::reloadRom() {
+    if (musicInfo_)
+        return false;
+    return resetCartridge(ResetWorkflow::Reload);
 }
 
 bool MainWindow::rememberDebuggerStep() {
@@ -211,17 +280,21 @@ bool MainWindow::rememberDebuggerStep() {
     return true;
 }
 
-void MainWindow::drainDebuggerAudio() {
+bool MainWindow::drainDebuggerAudio() {
     if (!emulator_)
-        return;
-    int16_t samples[CUPID_GB_APU_BUF_FRAMES * 2];
-    const auto frames = cupid_gb_apu_drain(&emulator_->gb, samples, CUPID_GB_APU_BUF_FRAMES);
-    generatedAudioFrames_ += frames;
-    if (recorder_ && recorder_->active() && !recorder_->append(samples, frames)) {
-        const QString error = recorder_->errorString();
-        stopRecording();
-        reportError("Audio recording stopped: " + error);
+        return false;
+    const uint64_t session = sessionId_;
+    const uint64_t timeline = timelineId_;
+    CoreAudioCollector collected;
+    const bool complete = collectAudio(collected);
+    recordAudio(collected);
+    if (!emulator_ || sessionId_ != session || timelineId_ != timeline)
+        return false;
+    if (!complete) {
+        setPaused(true);
+        reportError("Audio output could not be preserved. Emulation is paused.");
     }
+    return complete;
 }
 
 void MainWindow::stopDebugger(const QString &message) {
@@ -247,36 +320,56 @@ void MainWindow::debuggerSlice() {
         refreshDebugger();
         return;
     }
-    if (stateOperation_ || menuDepth_)
+    if (stateOperation_ || menuDepth_ || menuInputSuspended_)
         return;
+    if (linkSession_) {
+        linkedDebuggerSlice();
+        return;
+    }
     QScopedValueRollback<bool> operation(stateOperation_, true);
+    // Paused debugger instructions can collect motor samples and publish frames.
+    // Every exit, including a breakpoint or failed step, discards that host
+    // feedback before another debugger slice or forward playback can use it.
+    const auto clearDebuggerRumble = qScopeGuard([this] { resetControllerRumble(); });
+    // An exact restore can begin with both output owners populated. Empty them
+    // before the first hardware call, including a held startup call.
+    if (!drainDebuggerAudio())
+        return;
     QElapsedTimer slice;
     slice.start();
     for (unsigned count = 0; count < 128 && slice.elapsed() < 4; ++count) {
-        if (!rememberDebuggerStep()) {
+        const bool remembered = !cupid_gb_sgb_startup_held(&emulator_->gb);
+        if (remembered && !rememberDebuggerStep()) {
             stopDebugger("Debugger stopped: instruction history could not be captured.");
             return;
         }
         const uint64_t previousSteps = debugger_->steps;
         const auto result = cupid_gb_debugger_step(debugger_.get(), &emulator_->gb);
         const bool conditionError =
-            result == CUPID_GB_DEBUG_STOP_ERROR && debugger_->steps == previousSteps;
-        if (emulator_->gb.sgb.player_count != controllerPlayerCount_)
+            remembered && result == CUPID_GB_DEBUG_STOP_ERROR && debugger_->steps == previousSteps;
+        if (inputPlayerCount() != controllerPlayerCount_)
             refreshControllerPlayerCount();
-        if (result == CUPID_GB_DEBUG_STOP_BREAKPOINT || result == CUPID_GB_DEBUG_STOP_NO_ROM ||
-            conditionError) {
+        if (remembered && (result == CUPID_GB_DEBUG_STOP_BREAKPOINT ||
+                           result == CUPID_GB_DEBUG_STOP_NO_ROM || conditionError)) {
             // These stops precede execution. Keep a failed hardware-step
             // attempt, but do not offer a fictitious instruction Backstep.
             debuggerHistoryBytes_ -=
                 debuggerHistory_.back().capacity() + qsizetype(sizeof(QByteArray));
             debuggerHistory_.pop_back();
         }
-        ++debuggerCommandSteps_;
-        drainDebuggerAudio();
+        debuggerCommandSteps_ += debugger_->steps - previousSteps;
+        if (!drainDebuggerAudio())
+            return;
         updatePrinter();
         if (result != CUPID_GB_DEBUG_STOP_NONE) {
-            stopDebugger(conditionError ? "Breakpoint condition evaluation failed."
-                                        : QString::fromUtf8(cupid_gb_debugger_stop_name(result)));
+            if (result == CUPID_GB_DEBUG_STOP_WATCHPOINT ||
+                (remembered && result == CUPID_GB_DEBUG_STOP_ERROR && !conditionError &&
+                 debugger_->last_watch_hit.id))
+                stopDebugger(debuggerWatchMessage(result == CUPID_GB_DEBUG_STOP_ERROR));
+            else
+                stopDebugger(conditionError
+                                 ? "Breakpoint condition evaluation failed."
+                                 : QString::fromUtf8(cupid_gb_debugger_stop_name(result)));
             return;
         }
         if (debuggerCommandSteps_ >= 1000000) {
@@ -289,6 +382,12 @@ void MainWindow::debuggerSlice() {
 }
 
 bool MainWindow::debuggerBackstep() {
+    if (linkSession_) {
+        if (debuggerWindow_)
+            debuggerWindow_->appendOutput(
+                "Instruction Backstep is unavailable while a link cable is connected.");
+        return false;
+    }
     if (!emulator_ || debuggerHistory_.empty()) {
         if (debuggerWindow_)
             debuggerWindow_->appendOutput(
@@ -297,19 +396,22 @@ bool MainWindow::debuggerBackstep() {
     }
     pauseDebugger();
     const QByteArray state = qUncompress(debuggerHistory_.back());
-    if (state.isEmpty() || cupid_gb_load_state_with_context(
+    if (state.isEmpty() || cupid_gb_load_state_live_with_context(
                                &emulator_->gb, reinterpret_cast<const uint8_t *>(state.constData()),
                                size_t(state.size()), debuggerContext_.get()) != CUPID_GB_STATE_OK) {
         stopDebugger("Debugger history could not be restored.");
         return false;
     }
     ++timelineId_;
-    resetPrinter();
+    cancelCameraCapture();
     resetControllerRumble();
-    controllerPlayerCount_ =
-        cupid_gb_sgb_active(&emulator_->gb) ? emulator_->gb.sgb.player_count : 1;
+    controllerPlayerCount_ = inputPlayerCount();
     debuggerHistoryBytes_ -= debuggerHistory_.back().capacity() + qsizetype(sizeof(QByteArray));
     debuggerHistory_.pop_back();
+    // Live Backstep retains receiving stream history, just like disk load and
+    // rewind. Its queued prefix and intro must not leak into the new timeline.
+    if (!discardCoreAudio())
+        return false;
     if (inspectorsWindow_)
         inspectorsWindow_->sessionChanged();
     batteryDirty_ = true;
@@ -317,9 +419,7 @@ bool MainWindow::debuggerBackstep() {
     clearAudio();
     resetRewind();
     rememberFrame();
-    previousDisplayFrame_ = {};
-    currentDisplayFrame_ = {};
-    present();
+    present(Presentation::Reset);
     refreshDebugger();
     return true;
 }
@@ -327,19 +427,51 @@ bool MainWindow::debuggerBackstep() {
 bool MainWindow::debuggerWrite(uint16_t address, uint8_t value) {
     if (!emulator_)
         return false;
+    const QPointer<MainWindow> self(this);
+    const uint64_t session = sessionId_;
+    const uint64_t timeline = timelineId_;
     pauseDebugger();
-    if (!cupid_gb_debug_poke(&emulator_->gb, address, value))
+    if (!self || !emulator_ || sessionId_ != session || timelineId_ != timeline ||
+        !cupid_gb_debug_poke(&emulator_->gb, address, value))
         return false;
+    finishDebuggerEdit();
+    return true;
+}
+
+bool MainWindow::debuggerWritePhysical(InspectorMemoryRegion region, size_t bank, uint16_t offset,
+                                       uint8_t value) {
+    if (!emulator_ || region == InspectorMemoryRegion::Mapped ||
+        region == InspectorMemoryRegion::Rom)
+        return false;
+    if (offset >= inspectorMemoryBank(emulator_->gb, region, bank).size)
+        return false;
+    const QPointer<MainWindow> self(this);
+    const uint64_t session = sessionId_;
+    const uint64_t timeline = timelineId_;
+    pauseDebugger();
+    if (!self || !emulator_ || sessionId_ != session || timelineId_ != timeline)
+        return false;
+    const auto bytes = inspectorMemoryBank(emulator_->gb, region, bank);
+    if (offset >= bytes.size)
+        return false;
+    // The selected physical bank bypasses guest mapper and LCD access gates.
+    // Host storage observers still need the same dirty signal as a guest write.
+    const_cast<uint8_t *>(bytes.data)[offset] = value;
+    if (region == InspectorMemoryRegion::CartridgeRam)
+        ++emulator_->gb.battery_write_generation;
+    finishDebuggerEdit();
+    return true;
+}
+
+void MainWindow::finishDebuggerEdit() {
     ++timelineId_;
+    cancelCameraCapture();
     resetDebuggerTimeline();
     resetRewind();
     rememberFrame();
     watchBattery();
-    previousDisplayFrame_ = {};
-    currentDisplayFrame_ = {};
-    present();
+    present(Presentation::Reset);
     refreshDebugger();
-    return true;
 }
 
 void MainWindow::debuggerCommand(const QString &input) {
@@ -352,14 +484,18 @@ void MainWindow::debuggerCommand(const QString &input) {
     const auto output = [this](const QString &text) { debuggerWindow_->appendOutput(text); };
     if (verb == "help" || verb == "?") {
         output("break [bank:address|symbol] [if expression]   delete NUMBER|all   breakpoints\n"
+               "watch[/r|/w|/rw] address [to end [inclusive]] [if condition]\n"
+               "unwatch [ID|all]   watchpoints   list\n"
                "continue (c)   step (s)   next (n)   finish (f)   backstep (bs)\n"
                "registers (r)   print (p) expression   disassemble [address]\n"
                "x address [decimal count]\n"
-               "write address byte   set register value   symbols path\n"
+               "write address byte   set register value   symbols path   reset [quick|reload]\n"
                "Numbers are decimal; use $ or 0x for hexadecimal. Symbols are supported.\n"
                "Backstep retains up to 128 explicit debugger steps within 32 MiB.\n"
                "Continuous playback does not record instruction history.\n"
                "Expressions are pure 16-bit values; [address] reads a byte and {address} a word.\n"
+               "Watchpoints default to writes; range ends are excluded unless inclusive is given.\n"
+               "Write conditions also accept old and new; read conditions use zero for both.\n"
                "Precedence: comparisons; + - | ||; * / % & ^ &&; shifts; bank:address.\n"
                "Assignment and unary operators are not supported.");
         return;
@@ -377,6 +513,23 @@ void MainWindow::debuggerCommand(const QString &input) {
     }
     if (!emulator_) {
         output("Open a cartridge before using debugger execution or memory commands.");
+        return;
+    }
+    if (debuggerWatchCommand(command))
+        return;
+    if (verb == "reset") {
+        if (words.size() == 1) {
+            if (resetConsole(CUPID_GB_RESET_HARD))
+                output("Console reset; compatible rewind history retained.");
+        } else if (words.size() == 2 && words[1].compare("quick", Qt::CaseInsensitive) == 0) {
+            if (resetConsole(CUPID_GB_RESET_QUICK))
+                output("Console quick reset; compatible rewind history retained.");
+        } else if (words.size() == 2 && words[1].compare("reload", Qt::CaseInsensitive) == 0) {
+            if (reloadRom())
+                output("Cartridge and companion symbols reloaded; instruction history cleared.");
+        } else {
+            output("Usage: reset [quick|reload]");
+        }
         return;
     }
     const auto number = [](QString text, unsigned maximum, unsigned *value) {
@@ -457,6 +610,9 @@ void MainWindow::debuggerCommand(const QString &input) {
                 location = value.value;
             }
         }
+        // Direct addresses and symbols use the same bank width as expressions.
+        if (valid && bank >= 0)
+            bank &= 0x1ff;
         const QByteArray expression = condition.toUtf8();
         if (!valid ||
             !cupid_gb_debugger_breakpoint_add_condition(debugger_.get(), &emulator_->gb, bank,
@@ -579,6 +735,7 @@ void MainWindow::debuggerCommand(const QString &input) {
         else if (name == "L")
             cpu.l = uint8_t(value);
         ++timelineId_;
+        cancelCameraCapture();
         resetDebuggerTimeline();
         if (inspectorsWindow_)
             inspectorsWindow_->sessionChanged();

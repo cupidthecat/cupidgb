@@ -1,3 +1,25 @@
+/**
+ * @file    main_window_display.cpp
+ * @brief   Qt display presentation and persistent settings workflows.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <https://gnu.org>.
+ */
+
 #include "main_window_internal.h"
 
 #include <QWidgetAction>
@@ -64,8 +86,20 @@ void MainWindow::buildColorMenus(QMenu *view) {
 }
 
 void MainWindow::applyDisplaySettings() {
+    const bool messages = settings_.value("video/osd", false).toBool();
+    display_->messages.setEnabled(messages);
+    if (auto *action = findChild<QAction *>("video/osd"))
+        action->setChecked(messages);
     const int scaling = std::clamp(settings_.value("video/scaling", 0).toInt(), 0, 2);
     display_->scaling = DisplayScaling(scaling);
+    bool validFilter = false;
+    int filter = settings_.value("video/filter", 0).toInt(&validFilter);
+    if (!validFilter || filter < 0 || filter >= int(scalingFilterActions_.size()))
+        filter = 0;
+    display_->filter = ScalingFilter(filter);
+    for (size_t i = 0; i < scalingFilterActions_.size(); ++i)
+        scalingFilterActions_[i]->setChecked(int(i) == filter);
+    display_->update();
     const int palette = std::clamp(settings_.value("video/palette", 0).toInt(), 0, 4);
     for (size_t i = 0; i < scalingActions_.size(); ++i)
         scalingActions_[i]->setChecked(int(i) == scaling);
@@ -104,22 +138,19 @@ void MainWindow::applyDisplaySettings() {
     const QSignalBlocker blockTemperature(colorTemperatureSlider_);
     colorTemperatureSlider_->setValue(colorSettings.temperature);
     const bool showBorder = settings_.value("video/sgbBorder", true).toBool();
-    const bool borderChanged = emulator_ && cupid_gb_sgb_active(&emulator_->gb) &&
+    const bool borderChanged = emulator_ && cupid_gb_sgb_host_present(&emulator_->gb) &&
                                !image_.isNull() &&
                                (image_.width() == CUPID_SGB_SCREEN_WIDTH) != showBorder;
-    const bool colorHardware = emulator_ && (emulator_->gb.model == CUPID_GB_MODEL_CGB ||
-                                             cupid_gb_sgb_active(&emulator_->gb));
-    if (displayPalette_ != colors || displayOffColor_ != offColor || borderChanged ||
-        (colorChanged && colorHardware)) {
-        previousDisplayFrame_ = {};
-        currentDisplayFrame_ = {};
-    }
+    const bool colorHardware = emulator_ && (cupid_gb_model_is_cgb(emulator_->gb.model) ||
+                                             cupid_gb_sgb_host_present(&emulator_->gb));
+    const bool resetHistory = displayPalette_ != colors || displayOffColor_ != offColor ||
+                              borderChanged || (colorChanged && colorHardware);
     displayPalette_ = colors;
     displayOffColor_ = offColor;
     setFrameBlending(configuredFrameBlending(settings_));
     borderAction_->setChecked(showBorder);
     if (emulator_)
-        present();
+        present(resetHistory ? Presentation::Reset : Presentation::Redraw);
     else
         display_->update();
 }
@@ -149,6 +180,8 @@ void MainWindow::resizeWindowCentered(const QSize &windowSize, const QRect &prev
 }
 
 void MainWindow::resizeDisplay(int scale) {
+    if (musicPresentation_)
+        return;
     scale = std::clamp(scale, 1, 8);
     if (isFullScreen()) {
         showNormal();
@@ -162,14 +195,37 @@ void MainWindow::resizeDisplay(int scale) {
         windowSizeActions_[i]->setChecked(int(i) + 1 == scale);
 }
 
-void MainWindow::present(bool completedFrame) {
+void MainWindow::notifyOnScreen(const QString &message) {
     if (!emulator_)
         return;
-    const auto &gb = emulator_->gb;
-    // A repeated hardware frame leaves both the visible image and blend history intact.
-    if (completedFrame && gb.display_frame_type == CUPID_GB_FRAME_REPEAT)
+    if (musicInfo_) {
+        statusBar()->showMessage(message, 3000);
         return;
-    const bool sgb = cupid_gb_sgb_active(&gb);
+    }
+    display_->messages.show(message);
+}
+
+void MainWindow::advanceScreenMessages() {
+    if (musicInfo_ || !display_->messages.enabled())
+        return;
+    const QString mode = turbo_      ? QStringLiteral("Fast forward...")
+                         : slowHeld_ ? QStringLiteral("Slow motion...")
+                         : rewind_   ? QStringLiteral("Rewinding...")
+                                     : QString();
+    display_->messages.advanceFrame(mode);
+}
+
+void MainWindow::present(Presentation presentation) {
+    if (!emulator_)
+        return;
+    if (presentMusic())
+        return;
+    const auto &gb = emulator_->gb;
+    const bool sgb = cupid_gb_sgb_host_present(&gb);
+    // A loaded adapter surface can change independently of its handheld image.
+    if (!sgb && presentation == Presentation::Frame &&
+        gb.display_frame_type == CUPID_GB_FRAME_REPEAT)
+        return;
     const QSize nativeSize = sgb && borderAction_->isChecked()
                                  ? QSize(CUPID_SGB_SCREEN_WIDTH, CUPID_SGB_SCREEN_HEIGHT)
                                  : QSize(160, 144);
@@ -188,15 +244,9 @@ void MainWindow::present(bool completedFrame) {
     }
     if (sgb) {
         image_ = QImage(CUPID_SGB_SCREEN_WIDTH, CUPID_SGB_SCREEN_HEIGHT, QImage::Format_RGB32);
-        cupid_gb_sgb_render_argb(&gb, reinterpret_cast<uint32_t *>(image_.bits()),
-                                 size_t(image_.width() * image_.height()));
-        auto *pixels = reinterpret_cast<QRgb *>(image_.bits());
-        for (size_t i = 0; i < CUPID_SGB_SCREEN_WIDTH * CUPID_SGB_SCREEN_HEIGHT; ++i) {
-            const QRgb raw = pixels[i];
-            const unsigned rgb555 =
-                (qRed(raw) >> 3) | ((qGreen(raw) >> 3) << 5) | ((qBlue(raw) >> 3) << 10);
-            pixels[i] = (*sgbColorTable_)[rgb555];
-        }
+        cupid_gb_sgb_render_with_color_table(&gb, reinterpret_cast<uint32_t *>(image_.bits()),
+                                             size_t(image_.width() * image_.height()),
+                                             sgbColorTable_->data());
         if (!borderAction_->isChecked())
             image_ = image_.copy(CUPID_SGB_VIEWPORT_X, CUPID_SGB_VIEWPORT_Y, 160, 144);
     } else {
@@ -204,9 +254,9 @@ void MainWindow::present(bool completedFrame) {
         const bool offImage = gb.display_frame_type == CUPID_GB_FRAME_LCD_OFF ||
                               gb.display_frame_type == CUPID_GB_FRAME_BLANK_FIRST;
         if (offImage || gb.display_frame_type == CUPID_GB_FRAME_ARTIFICIAL) {
-            image_.fill(gb.model == CUPID_GB_MODEL_CGB ? (*cgbColorTable_)[0x7fff]
-                        : offImage                     ? displayOffColor_
-                                                       : displayPalette_[0]);
+            image_.fill(cupid_gb_model_is_cgb(gb.model) ? (*cgbColorTable_)[0x7fff]
+                        : offImage                      ? displayOffColor_
+                                                        : displayPalette_[0]);
         } else {
             auto *pixels = reinterpret_cast<QRgb *>(image_.bits());
             // Hardware mode stays fixed while this framebuffer is converted.
@@ -219,35 +269,47 @@ void MainWindow::present(bool completedFrame) {
             }
         }
     }
+    // State restores and incompatible display conversions explicitly start a
+    // new history. An empty history alone does not identify a reset: a paused
+    // startup image can already contain text before the first guest frame.
+    if (presentation == Presentation::Reset) {
+        previousDisplayFrame_ = {};
+        currentDisplayFrame_ = {};
+        previousMessageFrame_ = {};
+        currentMessageFrame_ = {};
+    }
     // Only completed LCD frames advance blend history. A restored VBlank frame
     // may seed it once so the next guest frame has a valid predecessor.
-    if (completedFrame) {
+    if (presentation == Presentation::Frame) {
         previousDisplayFrame_ = currentDisplayFrame_;
+        previousMessageFrame_ = currentDisplayFrame_.isNull() ? QImage() : currentMessageFrame_;
         currentDisplayFrame_ = image_;
-    } else if (currentDisplayFrame_.isNull() && gb.frame_ready) {
+    } else if (presentation == Presentation::Reset && gb.frame_ready) {
         currentDisplayFrame_ = image_;
     }
+    // Toggling notifications clears pending text, but the submitted LCD image
+    // survives until another guest frame. Its text can still blend into that
+    // next frame; host settings changes must not advance this history.
+    if (presentation != Presentation::Redraw)
+        currentMessageFrame_ =
+            display_->messages.enabled() ? display_->messages.image(image_.size()) : QImage();
     // SGB sends the image to the TV without the handheld LCD's row polarity.
     const auto mode =
         sgb && frameBlending_ == FrameBlending::Accurate ? FrameBlending::Simple : frameBlending_;
-    display_->image = blendDisplayFrames(image_, previousDisplayFrame_, mode, gb.lcd_frame_odd);
+    if (currentMessageFrame_.isNull() && previousMessageFrame_.isNull()) {
+        display_->setFrames(image_, previousDisplayFrame_, mode, gb.lcd_frame_odd);
+    } else {
+        // Draw before blending so appearing and expiring text uses the same
+        // weights as LCD pixels. Repeat events retain the submitted composite.
+        const QImage current = composeScreenMessage(image_, currentMessageFrame_);
+        const QImage previous = composeScreenMessage(previousDisplayFrame_, previousMessageFrame_);
+        display_->setFrames(current, previous, mode, gb.lcd_frame_odd);
+    }
     display_->setMinimumSize(image_.size());
     if (resizeWindow)
         resizeWindowCentered(logicalWindowSize(nativeSize, defaultScale), previousWindowGeometry);
     ++presentedImages_;
     display_->update();
-}
-
-void MainWindow::screenshot() {
-    if (image_.isNull())
-        return;
-    const bool wasPaused = paused_;
-    setPaused(true);
-    const QString path =
-        QFileDialog::getSaveFileName(this, "Save Screenshot", "CupidGB.png", "PNG image (*.png)");
-    if (!path.isEmpty() && !image_.save(path, "PNG"))
-        reportError("Could not save screenshot: " + path);
-    setPaused(wasPaused);
 }
 
 void MainWindow::configure() {
@@ -265,8 +327,14 @@ void MainWindow::configure() {
     model->addItem("Game Boy", CUPID_GB_MODEL_DMG_ABC);
     model->addItem("Game Boy (DMG0)", CUPID_GB_MODEL_DMG0);
     model->addItem("Game Boy Pocket / Light", CUPID_GB_MODEL_MGB);
-    model->addItem("Game Boy Color", CUPID_GB_MODEL_CGB);
-    model->addItem("Super Game Boy", CUPID_GB_MODEL_SGB);
+    model->addItem("Game Boy Color (CPU 0)", CUPID_GB_MODEL_CGB_0);
+    model->addItem("Game Boy Color (CPU A)", CUPID_GB_MODEL_CGB_A);
+    model->addItem("Game Boy Color (CPU B)", CUPID_GB_MODEL_CGB_B);
+    model->addItem("Game Boy Color (CPU C)", CUPID_GB_MODEL_CGB_C);
+    model->addItem("Game Boy Color (CPU D)", CUPID_GB_MODEL_CGB_D);
+    model->addItem("Game Boy Color (CPU E)", CUPID_GB_MODEL_CGB);
+    model->addItem("Super Game Boy NTSC", CUPID_GB_MODEL_SGB);
+    model->addItem("Super Game Boy PAL", CUPID_GB_MODEL_SGB_PAL);
     model->addItem("Super Game Boy 2", CUPID_GB_MODEL_SGB2);
     model->setCurrentIndex(
         model->findData(modelOverride_.value_or(settings_.value("emulation/model", -1).toInt())));
@@ -282,6 +350,9 @@ void MainWindow::configure() {
     bootLayout->setContentsMargins(0, 0, 0, 0);
     auto *boot = new QLineEdit(bootDirectory());
     boot->setObjectName("bootDirectory");
+    boot->setToolTip("Color CPU 0 uses cgb0_boot.bin. CPUs A through D use cgb_boot.bin. "
+                     "CPU E uses cgbE_boot.bin when present, then cgb_boot.bin. "
+                     "Color firmware files must contain 2304 bytes.");
     boot->setPlaceholderText("Empty: start from post-boot state");
     auto *browse = new QPushButton("Browse…");
     bootLayout->addWidget(boot);
@@ -293,11 +364,30 @@ void MainWindow::configure() {
             boot->setText(path);
     });
     form->addRow("Boot ROM directory", bootRow);
+    auto *rtcMode = new QComboBox;
+    rtcMode->setObjectName("rtcMode");
+    rtcMode->addItem("Sync to System Clock", int(CUPID_GB_RTC_SYNC_TO_HOST));
+    rtcMode->addItem("Accurate", int(CUPID_GB_RTC_ACCURATE));
+    rtcMode->setCurrentIndex(rtcMode->findData(int(configuredRtcMode(settings_))));
+    form->addRow("Real Time Clock:", rtcMode);
+    auto *turboCap = new QComboBox;
+    turboCap->setObjectName("turboSpeedCap");
+    for (const unsigned quarters : turboCapChoices)
+        turboCap->addItem(quarters ? QString("%1%").arg(quarters * 25) : QStringLiteral("Uncapped"),
+                          quarters);
+    turboCap->setCurrentIndex(turboCap->findData(turboCapQuarters_));
+    turboCap->setToolTip("Upper speed while Turbo is held. Slow motion scales this limit.");
+    form->addRow("Turbo speed cap", turboCap);
     auto *scaling = new QComboBox;
     scaling->setObjectName("displayScaling");
     scaling->addItems({"Integer Scale", "Retain Aspect Ratio", "Fill Window"});
     scaling->setCurrentIndex(int(display_->scaling));
     form->addRow("Display scaling", scaling);
+    auto *filter = new QComboBox;
+    filter->setObjectName("scalingFilter");
+    filter->addItems({"Nearest Neighbor", "Bilinear", "Smooth Bilinear"});
+    filter->setCurrentIndex(int(display_->filter));
+    form->addRow("Scaling filter", filter);
     auto *windowScale = new QComboBox;
     windowScale->setObjectName("windowScale");
     for (int factor = 1; factor <= 8; ++factor)
@@ -361,6 +451,24 @@ void MainWindow::configure() {
     border->setObjectName("sgbBorder");
     border->setChecked(settings_.value("video/sgbBorder", true).toBool());
     form->addRow("SGB display", border);
+    auto *messages = new QCheckBox("Show on-screen messages");
+    messages->setObjectName("onScreenMessages");
+    messages->setChecked(settings_.value("video/osd", false).toBool());
+    form->addRow("Notifications", messages);
+    auto *cameraSource = new QComboBox;
+    cameraSource->setObjectName("cameraSource");
+    cameraSource->addItem("System Camera", "system");
+    cameraSource->addItem("Generated Pattern", "generated");
+    cameraSource->setCurrentIndex(cameraSource_ == CameraSource::Generated ? 1 : 0);
+    cameraSource->setToolTip("System Camera uses the operating system default device when the "
+                             "cartridge requests an image. Generated Pattern does not access a "
+                             "camera. Changing input cancels the current capture.");
+    if (cameraSourceOverride_) {
+        cameraSource->setEnabled(false);
+        cameraSource->setToolTip("Set by --camera-source for this session.");
+    }
+    form->addRow(cameraSourceOverride_ ? "Camera input (session override)" : "Camera input",
+                 cameraSource);
     auto *outputDevice = new QComboBox;
     outputDevice->setObjectName("audioOutputDevice");
     outputDevice->addItem("System Default", QByteArray());
@@ -378,6 +486,31 @@ void MainWindow::configure() {
     volume->setRange(0, 100);
     volume->setValue(settings_.value("audio/volume", 100).toInt());
     form->addRow("Volume", volume);
+    auto *audioFilter = new QComboBox;
+    audioFilter->setObjectName("audioFilterMode");
+    for (size_t mode = 0; mode < audioFilterNames.size(); ++mode)
+        audioFilter->addItem(audioFilterNames[mode], int(mode));
+    audioFilter->setCurrentIndex(audioFilter->findData(int(configuredAudioFilter(settings_))));
+    form->addRow("Highpass Filter:", audioFilter);
+    auto *interferenceRow = new QWidget;
+    interferenceRow->setObjectName("audioInterferenceRow");
+    auto *interferenceLayout = new QHBoxLayout(interferenceRow);
+    interferenceLayout->setContentsMargins(0, 0, 0, 0);
+    auto *interference = new QSlider(Qt::Horizontal);
+    interference->setObjectName("audioInterferenceVolume");
+    interference->setRange(0, 100);
+    interference->setSingleStep(5);
+    interference->setPageStep(5);
+    interference->setValue(configuredAudioInterference(settings_));
+    auto *interferenceValue = new QLabel(QString("%1%").arg(interference->value()));
+    interferenceValue->setObjectName("audioInterferenceVolumeValue");
+    interferenceValue->setMinimumWidth(interferenceValue->fontMetrics().horizontalAdvance("100%"));
+    connect(
+        interference, &QSlider::valueChanged, interferenceValue,
+        [interferenceValue](int value) { interferenceValue->setText(QString("%1%").arg(value)); });
+    interferenceLayout->addWidget(interference);
+    interferenceLayout->addWidget(interferenceValue);
+    form->addRow("Interference Volume:", interferenceRow);
     auto *rewindLength = new QComboBox;
     for (const int seconds : {0, 10, 30, 60, 120, 300, 600})
         rewindLength->addItem(seconds ? QString("Up to %1 seconds").arg(seconds) : "Disabled",
@@ -406,6 +539,12 @@ void MainWindow::configure() {
         edits[i]->setObjectName(QString("input/%1").arg(i));
         form->addRow(buttonNames[i], edits[i]);
     }
+    std::array<QKeySequenceEdit *, 8> linkedEdits;
+    for (size_t i = 0; i < linkedEdits.size(); ++i) {
+        linkedEdits[i] = new InputKeyEdit(linkedKeys_[i]);
+        linkedEdits[i]->setObjectName(QString("input/linkPlayer2/%1").arg(i));
+        form->addRow(QString("Link player 2: %1").arg(buttonNames[i]), linkedEdits[i]);
+    }
     std::array<QKeySequenceEdit *, 5> specialEdits;
     for (size_t i = 0; i < specialEdits.size(); ++i) {
         specialEdits[i] = new InputKeyEdit(specialKeys_[i]);
@@ -432,8 +571,8 @@ void MainWindow::configure() {
     auto *note =
         new QLabel("Choose one key per button or mode. Empty mappings disable an input.\n"
                    "Command shortcuts may include modifiers. Each mapping must be unique.\n"
-                   "Rewind duration is bounded by the selected memory limit.\n"
-                   "Controllers and debugger tools remain incomplete.");
+                   "Link player 2 controls the other game from the focused window.\n"
+                   "Rewind duration is bounded by the selected memory limit.");
     note->setWordWrap(true);
     layout->addWidget(note);
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
@@ -459,6 +598,7 @@ void MainWindow::configure() {
             return;
         }
         std::array<int, 8> values{};
+        std::array<int, 8> linkedValues{};
         std::array<int, 5> specialValues{};
         std::vector<int> used;
         auto readInput = [&](QKeySequenceEdit *edit, int &value) {
@@ -483,6 +623,12 @@ void MainWindow::configure() {
                                      "Choose unique single keys for buttons and modes.");
                 return;
             }
+        for (size_t i = 0; i < linkedEdits.size(); ++i)
+            if (!readInput(linkedEdits[i], linkedValues[i])) {
+                QMessageBox::warning(&dialog, "Input",
+                                     "Choose unique single keys for both link players and modes.");
+                return;
+            }
         for (size_t i = 0; i < specialEdits.size(); ++i)
             if (!readInput(specialEdits[i], specialValues[i])) {
                 QMessageBox::warning(&dialog, "Input",
@@ -505,9 +651,12 @@ void MainWindow::configure() {
             commands.push_back(sequence);
         }
         keys_ = values;
+        linkedKeys_ = linkedValues;
         specialKeys_ = specialValues;
         for (size_t i = 0; i < values.size(); ++i)
             settings_.setValue(QString("input/%1").arg(i), values[i]);
+        for (size_t i = 0; i < linkedValues.size(); ++i)
+            settings_.setValue(QString("input/linkPlayer2/%1").arg(i), linkedValues[i]);
         for (size_t i = 0; i < specialValues.size(); ++i)
             settings_.setValue(QString("input/special/%1").arg(i), specialValues[i]);
         for (size_t i = 0; i < commands.size(); ++i) {
@@ -515,11 +664,18 @@ void MainWindow::configure() {
             settings_.setValue("shortcuts/" + shortcutActions_[i]->objectName(),
                                commands[i].toString(QKeySequence::PortableText));
         }
+        synchronizeInputBindings();
         if (!modelOverride_)
             settings_.setValue("emulation/model", model->currentData());
+        const auto clockMode = CupidGbRtcMode(rtcMode->currentData().toInt());
+        settings_.setValue("emulation/rtcMode", int(clockMode));
+        if (emulator_)
+            cupid_gb_set_rtc_mode(&emulator_->gb, clockMode);
+        setTurboCap(turboCap->currentData().toUInt());
         settings_.setValue("emulation/bootDirectory", boot->text());
         bootDirectoryOverride_ = QString();
         settings_.setValue("video/scaling", scaling->currentIndex());
+        settings_.setValue("video/filter", filter->currentIndex());
         const int oldScale = settings_.value("video/defaultScale", 2).toInt();
         settings_.setValue("video/defaultScale", windowScale->currentData());
         settings_.setValue("video/palette", palette->currentIndex());
@@ -527,12 +683,29 @@ void MainWindow::configure() {
         settings_.setValue("video/colorCorrection", correction->currentData());
         settings_.setValue("video/colorTemperature", temperature->value());
         settings_.setValue("video/sgbBorder", border->isChecked());
+        settings_.setValue("video/osd", messages->isChecked());
         for (size_t i = 0; i < colorNames.size(); ++i)
             settings_.setValue(QString("video/customPalette/%1").arg(i), colorNames[i]);
         settings_.setValue("video/customPalette/off", offColorValue.name());
+        if (!cameraSourceOverride_) {
+            const auto selected =
+                cameraSource->currentIndex() == 1 ? CameraSource::Generated : CameraSource::System;
+            if (selected != cameraSource_) {
+                settings_.setValue("camera/source", cameraSource->currentData());
+                cancelCameraCapture();
+                cameraError_.clear();
+                cameraSource_ = selected;
+                if (emulator_)
+                    applyCameraSource(&emulator_->gb);
+            }
+        }
         const bool outputChanged = requestedOutput != outputDevice->currentData().toByteArray();
         settings_.setValue("audio/outputDevice", outputDevice->currentData().toByteArray());
         settings_.setValue("audio/volume", volume->value());
+        settings_.setValue("audio/highpassMode", audioFilter->currentData());
+        settings_.setValue("audio/interferenceVolume", interference->value());
+        if (emulator_)
+            applyAudioPolicy(&emulator_->gb);
         if (settings_.value("emulation/rewindSeconds", 120) != rewindLength->currentData() ||
             settings_.value("emulation/rewindMiB", 256) != rewindBudget->currentData()) {
             settings_.setValue("emulation/rewindSeconds", rewindLength->currentData());

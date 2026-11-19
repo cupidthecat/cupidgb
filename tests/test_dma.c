@@ -1,9 +1,32 @@
+/**
+ * @file    test_dma.c
+ * @brief   Regression tests for OAM DMA, color DMA, and transfer scheduling.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://gnu.org>.
+ */
+
 #include "cupid/gb/debugger.h"
 #include "cupid/gb/gb.h"
 #include "cupid/gb/input.h"
 #include "cupid/gb/ppu.h"
 #include "cupid/gb/state.h"
 #include "cupid/gb/timer.h"
+#include "cupid/gbc/cgb.h"
 
 #include <assert.h>
 #include <stdlib.h>
@@ -103,8 +126,8 @@ static void test_general_transfer_clocks_and_blocks(void) {
         assert(gb->elapsed_cycles == duration);
         assert(gb->io_registers[4] * 64u + gb->div_counter ==
                ((divider + duration / (fast ? 2u : 4u)) & 0x3fffu));
-        assert(gb->apu.sample_acc == duration * UINT32_C(44100) % 4194304u);
-        assert(gb->apu.buf_write == duration * UINT32_C(44100) / 4194304u);
+        assert(gb->apu.output.sample_acc == duration * UINT32_C(44100) % 4194304u);
+        assert(gb->apu.output.buf_write == duration * UINT32_C(44100) / 4194304u);
         assert(cupid_gb_read_u8(gb, 0xff55) == 0xff);
         release(gb);
     }
@@ -142,6 +165,7 @@ static void test_oam_dma_restart_at_completion(void) {
     for (unsigned model = 0; model < sizeof(models) / sizeof(models[0]); ++model) {
         for (unsigned copied = 159; copied <= 160; ++copied) {
             CupidGb *gb = hardware(models[model], true, false, 0);
+            cupid_gb_write_u8(gb, 0xd000, 0x6d);
             cupid_gb_write_u8(gb, 0xff46, 0xc0);
             cupid_gb_tick(gb, (uint16_t)(copied + 1));
             assert(gb->dma_active && gb->dma_index == copied);
@@ -154,7 +178,7 @@ static void test_oam_dma_restart_at_completion(void) {
              * Restarting before the last byte keeps OAM inaccessible at destination zero. */
             assert(cupid_gb_read_u8(gb, 0xfe00) == (copied == 160 ? 4 : 0xff));
             cupid_gb_tick_dma_tcycles(gb, 4);
-            assert(gb->dma_index == 1 && gb->object_attribute_memory[0] == 0);
+            assert(gb->dma_index == 1 && gb->object_attribute_memory[0] == 0x6d);
             release(gb);
         }
     }
@@ -325,6 +349,90 @@ static void test_mode_3_destination_conflict(void) {
     }
 }
 
+static void test_startup_write_ownership(void) {
+    static const struct WriteVector {
+        uint16_t offset;
+        uint8_t value, banks;
+    } early[2][9] =
+        {
+            {{0x000, 0xc6, 3},
+             {0x800, 0xbc, 3},
+             {0xc00, 0x80, 1},
+             {0xc01, 0x85, 1},
+             {0xc02, 0x8a, 1},
+             {0xc03, 0x8f, 3},
+             {0xc07, 0xa3, 3},
+             {0xc0b, 0xb7, 3},
+             {0xc0f, 0xcb, 3}},
+            {{0x000, 0xc6, 3},
+             {0x800, 0xbc, 3},
+             {0xc00, 0x80, 1},
+             {0xc01, 0x85, 3},
+             {0xc02, 0x8a, 3},
+             {0xc03, 0x8f, 3},
+             {0xc07, 0xa3, 3},
+             {0xc0b, 0xb7, 3},
+             {0xc0f, 0xcb, 3}},
+        },
+      blocked[] = {{0x000, 0xbc, 3}, {0x001, 0xc1, 3}, {0x801, 0x8f, 3}, {0x802, 0xa3, 3},
+                   {0x803, 0xb7, 3}, {0x804, 0xcb, 3}, {0xc02, 0x8a, 3}, {0xc06, 0x9e, 3},
+                   {0xc0a, 0xb2, 3}, {0xc0e, 0xc6, 3}};
+
+    for (unsigned fast = 0; fast < 2; ++fast) {
+        for (unsigned bank = 0; bank < 2; ++bank) {
+            for (unsigned late = 0; late < 2; ++late) {
+                CupidGb *gb = hardware(CUPID_GB_MODEL_CGB, true, fast != 0, 0);
+                cupid_gb_write_u8(gb, 0xff04, 0);
+                cupid_gb_write_u8(gb, 0xff42, 0);
+                cupid_gb_write_u8(gb, 0xff43, 0);
+                cupid_gb_write_u8(gb, 0xff45, 0);
+                cupid_gb_write_u8(gb, 0xff4a, 0);
+                cupid_gb_write_u8(gb, 0xff4b, 200);
+                memset(gb->object_attribute_memory, 0, sizeof(gb->object_attribute_memory));
+                for (unsigned row = 0; row < 8; ++row) {
+                    gb->video_ram[row * 2u] = 0xff;
+                    gb->video_ram[0x11u + row * 2u] = 0xff;
+                    gb->video_ram[0x20u + row * 2u] = 0xff;
+                    gb->video_ram[0x21u + row * 2u] = 0xff;
+                }
+                gb->video_ram[0x30] = 0x5a;
+                memset(gb->video_ram + 0x1c00, 1, 0x400);
+                memset(gb->video_ram + 0xc00, 0x19, 0x100);
+                memset(gb->video_ram + 0x2c00, 0x19, 0x100);
+                uint8_t expected[0x4000];
+                memcpy(expected, gb->video_ram, sizeof(expected));
+                const struct WriteVector *writes = late ? blocked : early[fast];
+                const unsigned count = late ? 10u : 9u;
+                /* Bank bit0 means the selected bank; bit1 means the other bank.
+                 * The early normal-speed bytes stay in one bank despite STAT3. */
+                for (unsigned index = 0; index < count; ++index)
+                    for (unsigned relative_bank = 0; relative_bank < 2; ++relative_bank)
+                        if (writes[index].banks & (1u << relative_bank))
+                            expected[writes[index].offset + (bank ^ relative_bank) * 0x2000u] =
+                                writes[index].value;
+                for (unsigned byte = 0; byte < 16; ++byte)
+                    cupid_gb_write_u8(gb, (uint16_t)(0xc100u + byte), (uint8_t)(0x80u + byte * 5u));
+                cupid_gb_write_u8(gb, 0xff4f, (uint8_t)bank);
+                cupid_gb_write_u8(gb, 0xff40, 0x91);
+                unsigned phase = 0;
+                const unsigned target = (late ? 84u : 74u) * (fast ? 2u : 1u);
+                for (unsigned cycle = 0; cycle < target; ++cycle)
+                    phase = cupid_gb_tick_color_dma_slot(gb, 1, phase);
+                cupid_gb_write_u8(gb, 0xff51, 0xc1);
+                cupid_gb_write_u8(gb, 0xff52, 0);
+                cupid_gb_write_u8(gb, 0xff53, 0x0c);
+                cupid_gb_write_u8(gb, 0xff54, 0);
+                cupid_gb_write_u8(gb, 0xff55, 0);
+                assert(gb->hdma_pending);
+                cupid_cgb_run_pending_dma(gb);
+                assert(cupid_gb_read_u8(gb, 0xff55) == 0xff);
+                assert(memcmp(gb->video_ram, expected, sizeof(expected)) == 0);
+                release(gb);
+            }
+        }
+    }
+}
+
 static void test_hblank_delay_and_next_block(void) {
     for (unsigned fast = 0; fast < 2; ++fast) {
         CupidGb *gb = hardware(CUPID_GB_MODEL_CGB, true, fast != 0, 0);
@@ -439,6 +547,7 @@ int main(void) {
     test_start_boundary_and_latched_opcode();
     test_general_transfer_clocks_and_blocks();
     test_mode_3_destination_conflict();
+    test_startup_write_ownership();
     test_oam_dma_subcycle_and_tail();
     test_oam_dma_restart_at_completion();
     test_overlapping_dma_bus_arbitration();

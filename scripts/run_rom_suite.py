@@ -1,4 +1,23 @@
 #!/usr/bin/env python3
+# @file    run_rom_suite.py
+# @brief   Run external GB/GBC test cartridges and retain explicit verdicts.
+# @author  cupidthecat
+# @date    2026-11-16
+#
+# Copyright (C) 2026 cupidthecat
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <https://gnu.org>.
 """Run externally supplied GB/GBC test ROMs and keep explicit test verdicts."""
 
 import argparse
@@ -9,10 +28,29 @@ import subprocess
 import sys
 
 
-def run_case(runner, rom, model, protocol, frames, timeout, boot=None):
+def parse_power_on_seed(value):
+    if value == "auto":
+        return value
+    hexadecimal = value.startswith(("0x", "0X"))
+    digits = value[2:] if hexadecimal else value
+    alphabet = "0123456789abcdef" if hexadecimal else "0123456789"
+    message = "Use auto or an unsigned 64-bit decimal or 0x hexadecimal power-on seed."
+    if not digits or any(digit.lower() not in alphabet for digit in digits):
+        raise argparse.ArgumentTypeError(message)
+    significant = digits.lstrip("0") or "0"
+    if len(significant) > (16 if hexadecimal else 20):
+        raise argparse.ArgumentTypeError(message)
+    if int(significant, 16 if hexadecimal else 10) > (1 << 64) - 1:
+        raise argparse.ArgumentTypeError(message)
+    return value
+
+
+def run_case(runner, rom, model, protocol, frames, timeout, boot=None, power_on_seed=None):
     command = [str(runner), "--model", model, "--protocol", protocol, "--frames", str(frames)]
     if boot:
         command += ["--boot", str(boot)]
+    if power_on_seed is not None:
+        command += ["--power-on-seed", str(power_on_seed)]
     command.append(str(rom))
     record = {"rom": str(rom), "sha256": hashlib.sha256(rom.read_bytes()).hexdigest()}
     try:
@@ -34,7 +72,8 @@ def run_case(runner, rom, model, protocol, frames, timeout, boot=None):
     record["exit_code"] = completed.returncode
     record["stdout"] = output[-16384:]
     record["stderr"] = completed.stderr.decode("utf-8", errors="replace")[-16384:]
-    allowed_codes = {"pass": (0,), "bounded": (0, 3), "step_limit": (0, 3), "fail": (1,)}
+    allowed_codes = {"pass": (0,), "bounded": (0, 3), "step_limit": (0, 3), "fail": (1,),
+                     "illegal_opcode": (1,), "core_error": (2,), "output_error": (2,)}
     if (record.get("status") in allowed_codes
             and completed.returncode not in allowed_codes[record["status"]]):
         record["status"] = "runner_error"
@@ -45,12 +84,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("runner", type=Path)
     parser.add_argument("roms", type=Path, nargs="+")
-    parser.add_argument("--model", choices=("dmg", "mgb", "cgb", "sgb", "sgb2"), default="dmg")
+    parser.add_argument("--model", choices=("dmg", "mgb", "cgb", "sgb", "sgb2", "sgbpal"), default="dmg")
     parser.add_argument("--protocol", choices=("serial", "register", "fibonacci", "memory", "none"),
                         default="serial")
     parser.add_argument("--frames", type=int, default=600)
     parser.add_argument("--timeout", type=float, default=30)
     parser.add_argument("--boot", type=Path)
+    parser.add_argument("--power-on-seed", type=parse_power_on_seed, metavar="auto|UINT64",
+                        help="Cold-start seed in decimal or 0x hexadecimal; defaults to auto")
     parser.add_argument("--output", type=Path, required=True,
                         help="Private JSON report path; records ROM paths and captured output")
     args = parser.parse_args()
@@ -67,7 +108,8 @@ def main():
         parser.error("No GB/GBC ROMs found.")
     results = []
     for rom in dict.fromkeys(roms):
-        result = run_case(runner, rom, args.model, args.protocol, args.frames, args.timeout, args.boot)
+        result = run_case(runner, rom, args.model, args.protocol, args.frames, args.timeout,
+                          args.boot, args.power_on_seed)
         results.append(result)
         print(f"{result['status']}: {rom.name}", flush=True)
     counts = {status: sum(r["status"] == status for r in results)

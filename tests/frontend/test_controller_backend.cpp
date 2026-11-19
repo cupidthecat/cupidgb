@@ -1,3 +1,25 @@
+/**
+ * @file    test_controller_backend.cpp
+ * @brief   Virtual-device tests for controller discovery, events, and feedback.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://gnu.org>.
+ */
+
 #include "controller_backend.h"
 
 #include <QCoreApplication>
@@ -125,6 +147,140 @@ struct VirtualDevice {
             SDL_JoystickClose(joystick);
     }
 };
+
+static void sharedBackendChecks(VirtualDevice &device) {
+    auto first = std::make_unique<ControllerBackend>();
+    ControllerBackend second;
+    std::vector<InputEvent> firstEvents, secondEvents;
+    first->inputEvent = [&](const InputEvent &event) { firstEvents.push_back(event); };
+    second.inputEvent = [&](const InputEvent &event) { secondEvents.push_back(event); };
+    QString error;
+    require(first->start(&error) && second.start(&error), "shared_backends_start");
+    require(std::string(SDL_GetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS)) == "1",
+            "shared_background_hint_held");
+    DeviceState a, b;
+    require(first->state(device.id, &a) && second.state(device.id, &b),
+            "shared_device_available_to_both_clients");
+    const auto burst = [&] {
+        require(SDL_JoystickSetVirtualButton(device.joystick, 3, 1) == 0, "shared_transient_press");
+        SDL_JoystickUpdate();
+        require(SDL_JoystickSetVirtualButton(device.joystick, 3, 0) == 0,
+                "shared_transient_release");
+        SDL_JoystickUpdate();
+    };
+    const auto values = [&](const std::vector<InputEvent> &events, InputEvent::Kind kind,
+                            int control, bool allowed) {
+        std::vector<int> result;
+        for (const auto &event : events)
+            if (event.instance == device.id && event.kind == kind && event.control == control &&
+                event.allowed == allowed)
+                result.push_back(event.value);
+        return result;
+    };
+    const auto edgePair = [&](const std::vector<InputEvent> &events, bool allowed) {
+        return values(events, InputEvent::Kind::Button, 3, allowed) == std::vector<int>({1, 0}) &&
+               values(events, InputEvent::Kind::ControllerButton, SDL_CONTROLLER_BUTTON_Y,
+                      allowed) == std::vector<int>({1, 0});
+    };
+
+    second.setInputEnabled(false);
+    firstEvents.clear();
+    secondEvents.clear();
+    burst();
+    second.pollNow();
+    require(edgePair(secondEvents, false) && firstEvents.empty(),
+            "inactive_client_collects_edges_without_foreign_callbacks");
+    first->pollNow();
+    require(edgePair(firstEvents, true), "inactive_poll_preserves_active_client_transient_edges");
+    first->pollNow();
+    second.pollNow();
+    require(edgePair(firstEvents, true) && edgePair(secondEvents, false),
+            "shared_edges_delivered_once_per_client");
+
+    firstEvents.clear();
+    secondEvents.clear();
+    burst();
+    second.setInputEnabled(true);
+    second.pollNow();
+    first->pollNow();
+    require(secondEvents.empty() && edgePair(firstEvents, true),
+            "client_resync_suppresses_only_its_old_edges");
+
+    firstEvents.clear();
+    secondEvents.clear();
+    second.setInputEnabled(false);
+    burst();
+    first->pollNow();
+    second.beforePoll = [&] { second.setInputEnabled(true); };
+    second.pollNow();
+    second.beforePoll = {};
+    require(edgePair(firstEvents, true) && secondEvents.empty(),
+            "before_poll_resync_discards_already_copied_client_edges");
+
+    firstEvents.clear();
+    secondEvents.clear();
+    burst();
+    std::vector<InputEvent> newcomerEvents;
+    {
+        ControllerBackend newcomer;
+        newcomer.inputEvent = [&](const InputEvent &event) { newcomerEvents.push_back(event); };
+        require(newcomer.start(&error), "new_client_joins_pending_event_stream");
+        first->pollNow();
+        second.pollNow();
+        require(newcomerEvents.empty() && edgePair(firstEvents, true) &&
+                    edgePair(secondEvents, true),
+                "new_client_start_preserves_existing_clients_edges");
+    }
+    require(first->running() && second.running() &&
+                std::string(SDL_GetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS)) == "1",
+            "new_client_shutdown_keeps_shared_transport_alive");
+
+    firstEvents.clear();
+    secondEvents.clear();
+    SDL_Event unrelated{};
+    unrelated.type = SDL_USEREVENT;
+    unrelated.user.code = 0x4c494e4b;
+    require(SDL_PushEvent(&unrelated) == 1, "shared_unrelated_event_enqueue");
+    burst();
+    second.pollNow();
+    second.stop();
+    first->pollNow();
+    SDL_Event found{};
+    require(edgePair(firstEvents, true) &&
+                SDL_PeepEvents(&found, 1, SDL_GETEVENT, SDL_USEREVENT, SDL_USEREVENT) == 1 &&
+                found.user.code == unrelated.user.code,
+            "client_shutdown_preserves_peer_edges_and_unrelated_events");
+    require(std::string(SDL_GetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS)) == "1" &&
+                second.start(&error),
+            "peer_restart_keeps_shared_hint_and_subsystems");
+
+    require(first->rumble(device.id, 1100, 1200, 10) && second.rumble(device.id, 2100, 2200, 250),
+            "new_client_motor_command_takes_ownership");
+    require(first->state(device.id, &a) && second.state(device.id, &b) && !a.rumbleActive &&
+                b.rumbleActive && device.low == 2100 && device.high == 2200,
+            "superseded_motor_intent_is_retired");
+    QElapsedTimer elapsed;
+    elapsed.start();
+    require(waitFor([&] { return elapsed.elapsed() >= 25; }) && device.low == 2100 &&
+                device.high == 2200,
+            "old_owner_expiry_cannot_stop_new_motor_command");
+    const unsigned motorCalls = device.rumbleCalls;
+    first->stopRumble(device.id);
+    first.reset();
+    require(second.running() && second.state(device.id, &b) && b.rumbleActive &&
+                device.low == 2100 && device.high == 2200 && device.rumbleCalls == motorCalls,
+            "old_owner_stop_and_destruction_preserve_new_motor_command");
+    require(std::string(SDL_GetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS)) == "1",
+            "first_client_destruction_keeps_background_hint");
+    second.stop();
+    require(!device.low && !device.high &&
+                std::string(SDL_GetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS)) == "0",
+            "last_client_stops_owned_motor_and_restores_original_hint");
+    require((SDL_WasInit(SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER | SDL_INIT_HAPTIC) &
+             (SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER | SDL_INIT_HAPTIC)) ==
+                (SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER | SDL_INIT_HAPTIC),
+            "shared_transport_preserves_external_subsystem_references");
+}
 
 int main(int argc, char **argv) {
     QCoreApplication app(argc, argv);
@@ -380,6 +536,32 @@ int main(int argc, char **argv) {
                     found.user.code == user.user.code,
                 "unrelated_sdl_event_preserved");
 
+        unsigned gatedPolls = 0;
+        backend.beforePoll = [&] {
+            ++gatedPolls;
+            backend.pollNow();
+            backend.setInputEnabled(false);
+        };
+        events.clear();
+        require(SDL_JoystickSetVirtualButton(second->joystick, 8, 1) == 0,
+                "pre_poll_gate_press_set");
+        backend.pollNow();
+        require(gatedPolls == 1 && backend.state(second->id, &b) && b.physical.buttons[8] &&
+                    !b.effective.allowed && !b.effective.buttons[8],
+                "pre_poll_gate_is_current_and_recursion_is_bounded");
+        require(std::any_of(events.begin(), events.end(),
+                            [&](const InputEvent &event) {
+                                return event.instance == second->id &&
+                                       event.kind == InputEvent::Kind::Button &&
+                                       event.control == 8 && event.value && !event.allowed;
+                            }),
+                "pre_poll_gate_blocks_new_event_delivery");
+        backend.beforePoll = {};
+        backend.setInputEnabled(true);
+        require(SDL_JoystickSetVirtualButton(second->joystick, 8, 0) == 0,
+                "pre_poll_gate_press_release");
+        backend.pollNow();
+
         require(backend.rumble(second->id, 800, 900, 250), "rumble_before_stop");
         backend.stop();
         require(!backend.running() && backend.devices().empty() && !second->low && !second->high,
@@ -392,6 +574,14 @@ int main(int argc, char **argv) {
                 "external_sdl_subsystem_references_survive");
         require(backend.start(&error) && backend.state(second->id, &b) && b.effective.buttons[1],
                 "restart_reopens_live_state");
+        backend.beforePoll = [&] { backend.stop(); };
+        backend.pollNow();
+        require(!backend.running() && backend.devices().empty(), "pre_poll_stop_is_safe");
+        require(!backend.start(&error) && !backend.running() && backend.devices().empty(),
+                "pre_poll_stop_cancels_startup");
+        backend.beforePoll = {};
+        require(backend.start(&error) && backend.state(second->id, &b),
+                "pre_poll_stop_releases_recursion_guard");
         backend.stop();
         unsigned destructorNotifications = 0;
         auto scopedBackend = std::make_unique<ControllerBackend>();
@@ -407,6 +597,7 @@ int main(int argc, char **argv) {
         require(waitFor([&] { return beats >= destructorBeats + 5; }) &&
                     destructorNotifications == previousNotifications,
                 "qt_loop_safe_after_backend_destruction");
+        sharedBackendChecks(*first);
         first->detach();
         second->detach();
         raw->detach();

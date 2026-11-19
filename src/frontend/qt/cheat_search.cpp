@@ -1,7 +1,33 @@
+/**
+ * @file    cheat_search.cpp
+ * @brief   Physical-RAM search filters, edits, and freeze-code generation.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://gnu.org>.
+ */
+
 #include "cheat_search.h"
 
 #include <cstring>
 #include <stdexcept>
+
+extern "C" {
+#include "cupid/gb/cartridge.h"
+}
 
 void CheatSearch::reset() {
     previous_.clear();
@@ -10,7 +36,7 @@ void CheatSearch::reset() {
 
 void CheatSearch::filter(const CupidGb &gb, CheatSearchType type, CheatSearchCondition condition,
                          uint16_t operand) {
-    const size_t workSize = gb.model == CUPID_GB_MODEL_CGB ? 0x8000 : 0x2000;
+    const size_t workSize = cupid_gb_model_is_cgb(gb.model) ? 0x8000 : 0x2000;
     if (candidates_.empty() || workSize != workRamSize_ ||
         gb.cartridge_ram_size != cartridgeRamSize_) {
         reset();
@@ -35,7 +61,8 @@ void CheatSearch::filter(const CupidGb &gb, CheatSearchType type, CheatSearchCon
     candidates_.resize(retained);
     std::memcpy(previous_.data(), gb.work_ram, workRamSize_);
     if (cartridgeRamSize_)
-        std::memcpy(previous_.data() + workRamSize_, gb.cartridge_ram, cartridgeRamSize_);
+        std::memcpy(previous_.data() + workRamSize_, cupid_gb_cartridge_ram_const(&gb),
+                    cartridgeRamSize_);
     std::memcpy(previous_.data() + workRamSize_ + cartridgeRamSize_, gb.high_ram,
                 sizeof(gb.high_ram));
 }
@@ -76,7 +103,7 @@ const uint8_t *CheatSearch::address(const CupidGb &gb, size_t offset) const {
         return gb.work_ram + offset;
     offset -= workRamSize_;
     if (offset < cartridgeRamSize_)
-        return gb.cartridge_ram + offset;
+        return cupid_gb_cartridge_ram_const(&gb) + offset;
     return gb.high_ram + offset - cartridgeRamSize_;
 }
 
@@ -94,7 +121,7 @@ uint16_t CheatSearch::currentValue(const CupidGb &gb, size_t index) const {
 
 bool CheatSearch::writeValue(CupidGb &gb, size_t index, uint16_t number) const {
     if (index >= candidates_.size() ||
-        workRamSize_ != (gb.model == CUPID_GB_MODEL_CGB ? 0x8000u : 0x2000u) ||
+        workRamSize_ != (cupid_gb_model_is_cgb(gb.model) ? 0x8000u : 0x2000u) ||
         cartridgeRamSize_ != gb.cartridge_ram_size)
         return false;
     auto *destination = const_cast<uint8_t *>(address(gb, candidates_[index]));

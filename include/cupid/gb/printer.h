@@ -1,3 +1,25 @@
+/**
+ * @file    printer.h
+ * @brief   Serial printer lifecycle, host image callbacks, and job-progress interface.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://gnu.org>.
+ */
+
 #ifndef CUPID_GB_PRINTER_H
 #define CUPID_GB_PRINTER_H
 
@@ -26,10 +48,13 @@ CupidGbPrinter *cupid_gb_printer_create(CupidGbPrinterImageCallback image,
 void cupid_gb_printer_reset(CupidGbPrinter *printer);
 /* Detach the link from its core before destroying the printer. */
 void cupid_gb_printer_destroy(CupidGbPrinter *printer);
+/* This factory marks the built-in endpoint for native snapshots. Keep its link
+ * fields together and detach it before destroying the caller-owned allocation. */
 CupidGbSerialLink cupid_gb_printer_link(CupidGbPrinter *printer);
 /* Advance the accessory after a guest execution slice. Serial callbacks also
- * synchronize it before receiving data. The printer has its own state and is
- * independent of the attached console's save state. */
+ * synchronize it before receiving data. Native V12 snapshots include the recognized
+ * endpoint's protocol, image buffer and job timer without storing host callbacks.
+ * Loading emits no image/completion callback and never replays already printed paper. */
 void cupid_gb_printer_update(CupidGbPrinter *printer, const CupidGb *gb);
 
 #endif

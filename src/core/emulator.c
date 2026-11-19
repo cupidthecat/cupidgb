@@ -1,11 +1,28 @@
 /**
- * @file emulator.c
- * @brief Emulator core for managing system state, ROM loading, and stepping.
+ * @file    emulator.c
+ * @brief   Core instance lifecycle, cartridge loading, and GB/GBC stepping.
+ * @author  cupidthecat
+ * @date    2026-11-16
  *
- * Provides a unified interface for different target systems (e.g., GB, GBC).
- * All public functions operate on a `CupidEmulator` instance and delegate
- * system-specific logic to the appropriate subsystem (e.g., `cupid_gb_*`).
+ * The public entry points operate on a CupidEmulator instance and delegate
+ * Game Boy and Game Boy Color hardware operations to the core.
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://gnu.org>.
  */
+
 #include "cupid/core/emulator.h"
 
 #include "cupid/common/log.h"
@@ -20,10 +37,10 @@ void cupid_emulator_init(CupidEmulator *emulator, CupidSystem target_system) {
     emulator->initialized = true;
 
     if (target_system == CUPID_SYSTEM_GB || target_system == CUPID_SYSTEM_GBC) {
-        cupid_gb_init(&emulator->gb);
         if (target_system == CUPID_SYSTEM_GBC) {
             cupid_gb_set_model(&emulator->gb, CUPID_GB_MODEL_CGB);
         }
+        cupid_gb_init(&emulator->gb);
     }
 
     cupid_log_info("CupidGB core initialized.");

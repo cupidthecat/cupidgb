@@ -1,6 +1,29 @@
+/**
+ * @file    test_debugger_window.cpp
+ * @brief   Qt tests for debugger commands, history, and controls.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://gnu.org>.
+ */
+
 #include "debugger_window.h"
 
 #include <QApplication>
+#include <QComboBox>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
@@ -53,6 +76,21 @@ int main(int argc, char **argv) {
     assert(window.findChild<QLabel *>("debuggerState")->text().startsWith("Running"));
     window.submitCommand("   ");
     assert(commands.size() == 2);
+    auto *watchAddress = window.findChild<QLineEdit *>("debuggerWatchpointAddress");
+    auto *watchMode = window.findChild<QComboBox *>("debuggerWatchpointMode");
+    auto *addWatch = window.findChild<QPushButton *>("debuggerAddWatchpoint");
+    auto *clearWatches = window.findChild<QPushButton *>("debuggerClearWatchpoints");
+    assert(watchAddress && watchMode && addWatch && clearWatches);
+    watchAddress->setText("$c000 to $c010 if new == $42");
+    assert(watchMode->currentData().toString() == "w");
+    for (const auto &mode : QStringList{"w", "r", "rw"}) {
+        watchMode->setCurrentIndex(watchMode->findData(mode));
+        addWatch->click();
+        assert(commands.back() == "watch/" + mode + " $c000 to $c010 if new == $42");
+    }
+    clearWatches->click();
+    assert(commands.back() == "unwatch all");
+    const qsizetype handledCommands = commands.size();
     for (int line = 0; line < 2100; ++line)
         window.appendOutput(QString::number(line));
     assert(window.findChild<QPlainTextEdit *>("debuggerOutput")->blockCount() <= 2000);
@@ -72,6 +110,6 @@ int main(int argc, char **argv) {
     assert(!window.isVisible() && closed == 4);
     window.setHandlers({}, {}, {});
     window.submitCommand("help");
-    assert(commands.size() == 2);
+    assert(commands.size() == handledCommands);
     return 0;
 }

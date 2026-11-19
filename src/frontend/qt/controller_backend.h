@@ -1,3 +1,25 @@
+/**
+ * @file    controller_backend.h
+ * @brief   Controller device records and input/motor transport interface.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://gnu.org>.
+ */
+
 #pragma once
 
 #define SDL_MAIN_HANDLED
@@ -14,6 +36,7 @@
 #include <QTimer>
 
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <map>
 #include <vector>
@@ -77,6 +100,8 @@ class ControllerBackend final : public QObject {
     void stopRumble(SDL_JoystickID instance);
 
     // All callbacks run synchronously on this object's thread. Queue destructive/reentrant work.
+    // The gate callback runs before event delivery and may stop or request another poll.
+    std::function<void()> beforePoll;
     std::function<void(const DeviceInfo &)> deviceAdded, deviceChanged;
     std::function<void(SDL_JoystickID)> deviceRemoved, inputReleased;
     std::function<void(const DeviceState &, bool resynchronized)> stateChanged;
@@ -87,6 +112,9 @@ class ControllerBackend final : public QObject {
     bool eventFilter(QObject *watched, QEvent *event) override;
 
   private:
+    struct SharedTransport;
+    static SharedTransport &transport();
+
     struct Device {
         SDL_Joystick *joystick = nullptr;
         SDL_GameController *controller = nullptr;
@@ -100,16 +128,14 @@ class ControllerBackend final : public QObject {
     void closeDevice(Device &device);
     void updateGate();
     void discardPendingEdges();
-    void drainEvents(Uint32 first, Uint32 last);
     void dispatch(const SDL_Event &event);
     void assertThread() const;
 
     std::map<SDL_JoystickID, Device> devices_;
+    std::deque<SDL_Event> pendingEvents_;
     QTimer timer_;
     QElapsedTimer clock_;
-    QString previousBackgroundHint_;
     bool initialized_ = false, polling_ = false;
-    bool hadBackgroundHint_ = false, installedBackgroundHint_ = false;
     bool focused_ = true, enabled_ = true, background_ = false;
 };
 

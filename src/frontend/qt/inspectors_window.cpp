@@ -1,3 +1,25 @@
+/**
+ * @file    inspectors_window.cpp
+ * @brief   Qt mapped/physical memory editing and graphics inspection windows.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://gnu.org>.
+ */
+
 #include "inspectors_window.h"
 
 #include "inspector_renderer.h"
@@ -11,8 +33,10 @@
 #include <QLineEdit>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPointer>
 #include <QPushButton>
 #include <QScopedValueRollback>
+#include <QSignalBlocker>
 #include <QSplitter>
 #include <QTabWidget>
 #include <QTableWidget>
@@ -35,6 +59,14 @@ class InspectorMemoryTable final : public QTableWidget {
         return state() == QAbstractItemView::EditingState;
     }
 };
+
+bool mappedMemoryWritable(const CupidGb &gb, uint16_t address) {
+    if (address < 0x8000u)
+        return false;
+    if (address >= 0xfea0u && address < 0xff00u)
+        return gb.model >= CUPID_GB_MODEL_CGB_0 && gb.model <= CUPID_GB_MODEL_CGB_D;
+    return true;
+}
 
 QString hex(unsigned value, int width) {
     return QString::number(value, 16).rightJustified(width, QLatin1Char('0')).toUpper();
@@ -93,6 +125,7 @@ class InspectorImageView final : public QWidget {
     }
 
     QImage image;
+    InspectorOverlays overlays;
     std::function<void(QPoint)> pointChanged;
 
     QSize sizeHint() const override {
@@ -112,8 +145,10 @@ class InspectorImageView final : public QWidget {
     void paintEvent(QPaintEvent *) override {
         QPainter painter(this);
         painter.fillRect(rect(), palette().brush(QPalette::Dark));
-        if (!image.isNull())
+        if (!image.isNull()) {
             painter.drawImage(target(), image);
+            paintInspectorOverlays(painter, target(), image.size(), overlays);
+        }
     }
 
     void mouseMoveEvent(QMouseEvent *event) override {
@@ -138,6 +173,16 @@ InspectorsWindow::InspectorsWindow(QWidget *parent) : QMainWindow(parent, Qt::Wi
     live_->setChecked(true);
     controls->addWidget(refreshButton);
     controls->addWidget(live_);
+    grid_ = new QCheckBox("Tile grid");
+    grid_->setObjectName("inspectorGrid");
+    grid_->setToolTip("Show tile boundaries in both the Tiles and Maps views.");
+    scrolling_ = new QCheckBox("Scrolling viewport");
+    scrolling_->setObjectName("inspectorScrolling");
+    scrolling_->setToolTip("Show the 160 by 144 background viewport from SCX and SCY.");
+    grid_->hide();
+    scrolling_->hide();
+    controls->addWidget(grid_);
+    controls->addWidget(scrolling_);
     controls->addStretch();
     layout->addLayout(controls);
     context_ = new QLabel;
@@ -156,6 +201,18 @@ InspectorsWindow::InspectorsWindow(QWidget *parent) : QMainWindow(parent, Qt::Wi
     auto *memoryPage = new QWidget;
     auto *memoryLayout = new QVBoxLayout(memoryPage);
     auto *navigation = new QHBoxLayout;
+    memoryRegion_ = new QComboBox;
+    memoryRegion_->setObjectName("inspectorMemoryRegion");
+    memoryRegion_->setToolTip(
+        "Physical banks use backing-storage offsets. ROM banks follow file order.");
+    memoryRegion_->addItems(
+        {"Mapped address space", "ROM banks", "VRAM banks", "WRAM banks", "Cartridge RAM banks"});
+    memoryBank_ = new QComboBox;
+    memoryBank_->setObjectName("inspectorMemoryBank");
+    memoryBank_->setMinimumContentsLength(6);
+    navigation->addWidget(memoryRegion_);
+    navigation->addWidget(new QLabel("Bank"));
+    navigation->addWidget(memoryBank_);
     address_ = new QLineEdit("0000");
     address_->setObjectName("inspectorAddress");
     address_->setMaximumWidth(100);
@@ -192,8 +249,8 @@ InspectorsWindow::InspectorsWindow(QWidget *parent) : QMainWindow(parent, Qt::Wi
     edit->addWidget(editValue_);
     edit->addWidget(write);
     memoryLayout->addLayout(edit);
-    memoryLayout->addWidget(
-        new QLabel("ROM and unusable memory are read-only. I/O writes can change hardware state."));
+    memoryLayout->addWidget(new QLabel(
+        "Physical RAM edits bypass banking and access gates. Mapped I/O writes affect hardware."));
     tabs_->addTab(memoryPage, "Memory");
 
     auto *tilesPage = new QWidget;
@@ -304,15 +361,19 @@ InspectorsWindow::InspectorsWindow(QWidget *parent) : QMainWindow(parent, Qt::Wi
     connect(go, &QPushButton::clicked, this, [this] { jumpToAddress(); });
     connect(address_, &QLineEdit::returnPressed, this, [this] { jumpToAddress(); });
     connect(previous, &QPushButton::clicked, this, [this] {
-        page_ = uint16_t(page_ - 0x100u);
+        const unsigned span = std::max(0x100u, (memorySize() + 0xffu) & ~0xffu);
+        page_ = uint16_t(memoryBase() + (unsigned(page_ - memoryBase()) + span - 0x100u) % span);
         address_->setText(hex(page_, 4));
         refresh();
     });
     connect(next, &QPushButton::clicked, this, [this] {
-        page_ = uint16_t(page_ + 0x100u);
+        const unsigned span = std::max(0x100u, (memorySize() + 0xffu) & ~0xffu);
+        page_ = uint16_t(memoryBase() + (unsigned(page_ - memoryBase()) + 0x100u) % span);
         address_->setText(hex(page_, 4));
         refresh();
     });
+    connect(memoryRegion_, &QComboBox::currentIndexChanged, this, [this] { changeMemoryRegion(); });
+    connect(memoryBank_, &QComboBox::currentIndexChanged, this, [this] { changeMemoryBank(); });
     connect(write, &QPushButton::clicked, this, [this] { writeFromFields(); });
     connect(memory_, &QTableWidget::cellChanged, this,
             [this](int row, int column) { memoryEdited(row, column); });
@@ -322,7 +383,13 @@ InspectorsWindow::InspectorsWindow(QWidget *parent) : QMainWindow(parent, Qt::Wi
     });
     for (auto *box : {tileBank_, tilePalette_, mapKind_, mapAddressing_, mapPalette_})
         connect(box, &QComboBox::currentIndexChanged, this, [this] { refresh(); });
-    connect(tabs_, &QTabWidget::currentChanged, this, [this] { refresh(); });
+    for (auto *box : {grid_, scrolling_})
+        connect(box, &QCheckBox::toggled, this, [this] { refresh(); });
+    connect(tabs_, &QTabWidget::currentChanged, this, [this](int tab) {
+        grid_->setVisible(tab == 1 || tab == 2);
+        scrolling_->setVisible(tab == 2);
+        refresh();
+    });
     connect(objects_, &QTableWidget::itemSelectionChanged, this, [this] {
         if (!refreshing_)
             showObject();
@@ -331,10 +398,11 @@ InspectorsWindow::InspectorsWindow(QWidget *parent) : QMainWindow(parent, Qt::Wi
     clearViews();
 }
 
-void InspectorsWindow::setSession(Getter getter, Writer writer) {
+void InspectorsWindow::setSession(Getter getter, Writer writer, PhysicalWriter physicalWriter) {
     clearViews();
     getter_ = std::move(getter);
     writer_ = std::move(writer);
+    physicalWriter_ = std::move(physicalWriter);
     refresh();
 }
 
@@ -362,13 +430,15 @@ void InspectorsWindow::refresh() {
         return;
     }
     tabs_->setEnabled(true);
+    grid_->setEnabled(true);
+    scrolling_->setEnabled(true);
     if (status_->text() == "Open a cartridge to inspect its hardware state.")
         status_->setText(
             "Double-click a writable memory cell to edit it. Editing pauses emulation.");
     context_->setText(QString("ROM0 bank %1 | ROMX bank %2 | VRAM bank %3 | WRAM bank %4 | RAM "
                               "bank %5 | LY %6 | LCD mode %7")
-                          .arg(cupid_gb_effective_rom_bank(gb, true))
-                          .arg(cupid_gb_effective_rom_bank(gb, false))
+                          .arg(cupid_gb_debugger_bank(gb, 0x0000))
+                          .arg(cupid_gb_debugger_bank(gb, 0x4000))
                           .arg(cupid_cgb_vram_offset(gb, 0x8000) / 0x2000u)
                           .arg(cupid_cgb_wram_offset(gb, 0xd000) / 0x1000u)
                           .arg(cupid_gb_effective_ram_bank(gb))
@@ -396,6 +466,8 @@ void InspectorsWindow::refresh() {
 void InspectorsWindow::clearViews() {
     QScopedValueRollback<bool> update(refreshing_, true);
     tabs_->setEnabled(false);
+    grid_->setEnabled(false);
+    scrolling_->setEnabled(false);
     context_->setText("No cartridge loaded");
     status_->setText("Open a cartridge to inspect its hardware state.");
     memory_->clearContents();
@@ -403,6 +475,7 @@ void InspectorsWindow::clearViews() {
     palettes_->clearContents();
     for (auto *view : {tilesImage_, mapImage_, objectImage_}) {
         view->image = {};
+        view->overlays = {};
         view->update();
     }
     mapInfo_->clear();
@@ -414,13 +487,41 @@ void InspectorsWindow::refreshMemory(const CupidGb &gb) {
     // observation must leave an unfinished byte edit intact until it commits.
     if (static_cast<const InspectorMemoryTable *>(memory_)->editing())
         return;
+    const auto region = memoryRegion();
+    const int bankCount = int(inspectorMemoryBankCount(gb, region));
+    memoryBank_->setEnabled(bankCount > 0);
+    if (memoryBank_->count() != bankCount) {
+        const QSignalBlocker block(memoryBank_);
+        const int previous = memoryBank_->currentIndex();
+        memoryBank_->clear();
+        for (int bank = 0; bank < bankCount; ++bank)
+            memoryBank_->addItem(hex(unsigned(bank), 2));
+        if (bankCount)
+            memoryBank_->setCurrentIndex(std::clamp(previous, 0, bankCount - 1));
+    }
+    const auto physical = inspectorMemoryBank(gb, region, size_t(memoryBank_->currentIndex()));
+    const unsigned base = memoryBase();
+    if (region != InspectorMemoryRegion::Mapped &&
+        (page_ < base || unsigned(page_ - base) >= memorySize())) {
+        page_ = uint16_t(base);
+        address_->setText(hex(page_, 4));
+    }
     QStringList rows;
     for (unsigned row = 0; row < 16; ++row) {
         rows << hex(unsigned(page_) + row * 16u, 4);
         for (unsigned column = 0; column < 16; ++column) {
             const unsigned address = unsigned(page_) + row * 16u + column;
-            auto *item = new QTableWidgetItem(hex(cupid_gb_debug_peek(&gb, uint16_t(address)), 2));
-            const bool writable = address >= 0x8000u && !(address >= 0xfea0u && address < 0xff00u);
+            const bool mapped = region == InspectorMemoryRegion::Mapped;
+            const unsigned offset = address - base;
+            const bool present = mapped || offset < physical.size;
+            auto *item = new QTableWidgetItem(
+                present ? hex(mapped ? cupid_gb_debug_peek(&gb, uint16_t(address))
+                                     : physical.data[offset],
+                              2)
+                        : "--");
+            const bool writable =
+                present && (mapped ? mappedMemoryWritable(gb, uint16_t(address))
+                                   : region != InspectorMemoryRegion::Rom && bool(physicalWriter_));
             item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable |
                            (writable ? Qt::ItemIsEditable : Qt::NoItemFlags));
             memory_->setItem(int(row), int(column), item);
@@ -437,6 +538,7 @@ void InspectorsWindow::setColorTable(const ColorTable *colors) {
 void InspectorsWindow::refreshTiles(const CupidGb &gb) {
     tilesImage_->image = inspectorTiles(gb, tileBank_->currentData().toInt(),
                                         paletteSelection(tilePalette_), colorTable_);
+    tilesImage_->overlays.grid = grid_->isChecked() ? InspectorGrid::Tiles : InspectorGrid::None;
     tilesImage_->update();
 }
 
@@ -444,6 +546,9 @@ void InspectorsWindow::refreshMap(const CupidGb &gb) {
     mapImage_->image = inspectorMap(gb, InspectorMap(mapKind_->currentIndex()),
                                     InspectorTileAddressing(mapAddressing_->currentIndex()),
                                     paletteSelection(mapPalette_), colorTable_);
+    mapImage_->overlays = {grid_->isChecked() ? InspectorGrid::Map : InspectorGrid::None,
+                           scrolling_->isChecked(),
+                           QPoint(gb.io_registers[0x43], gb.io_registers[0x42])};
     mapImage_->update();
     mapInfo_->setText(QString("SCX %1  SCY %2  WX %3  WY %4. Hover for tile attributes.")
                           .arg(gb.io_registers[0x43])
@@ -497,7 +602,7 @@ void InspectorsWindow::showObject() {
 }
 
 void InspectorsWindow::refreshPalettes(const CupidGb &gb) {
-    const bool cgb = gb.model == CUPID_GB_MODEL_CGB;
+    const bool cgb = cupid_gb_model_is_cgb(gb.model);
     palettes_->setRowCount(cgb ? 16 : 3);
     for (unsigned row = 0; row < unsigned(palettes_->rowCount()); ++row) {
         const QString name =
@@ -529,8 +634,9 @@ void InspectorsWindow::refreshPalettes(const CupidGb &gb) {
 
 void InspectorsWindow::jumpToAddress() {
     unsigned address = 0;
-    if (!parseHex(address_->text(), 0xffffu, address)) {
-        status_->setText("Enter an address from $0000 through $FFFF.");
+    if (!parseHex(address_->text(), 0xffffu, address) || address < memoryBase() ||
+        address - memoryBase() >= memorySize()) {
+        status_->setText("Enter an address within the selected memory bank.");
         return;
     }
     page_ = uint16_t(address & 0xff00u);
@@ -540,11 +646,16 @@ void InspectorsWindow::jumpToAddress() {
 }
 
 bool InspectorsWindow::writeByte(uint16_t address, uint8_t value) {
-    if (!state() || !writer_ || address < 0x8000u || (address >= 0xfea0u && address < 0xff00u)) {
+    const auto *gb = state();
+    if (!gb || !writer_ || !mappedMemoryWritable(*gb, address)) {
         status_->setText("This address is read-only or no cartridge is loaded.");
         return false;
     }
-    const bool written = writer_(address, value);
+    const QPointer<InspectorsWindow> self(this);
+    const auto writer = writer_;
+    const bool written = writer(address, value);
+    if (!self)
+        return false;
     refresh();
     status_->setText(
         written
@@ -560,7 +671,7 @@ void InspectorsWindow::writeFromFields() {
         status_->setText("Enter a hexadecimal address ($0000-$FFFF) and byte ($00-$FF).");
         return;
     }
-    writeByte(uint16_t(address), uint8_t(value));
+    writeSelectedByte(uint16_t(address), uint8_t(value));
 }
 
 void InspectorsWindow::memoryEdited(int row, int column) {
@@ -572,5 +683,83 @@ void InspectorsWindow::memoryEdited(int row, int column) {
         status_->setText("Memory cells accept one hexadecimal byte ($00-$FF).");
         return;
     }
-    writeByte(uint16_t(unsigned(page_) + unsigned(row * 16 + column)), uint8_t(value));
+    writeSelectedByte(uint16_t(unsigned(page_) + unsigned(row * 16 + column)), uint8_t(value));
+}
+
+InspectorMemoryRegion InspectorsWindow::memoryRegion() const {
+    return InspectorMemoryRegion(memoryRegion_->currentIndex());
+}
+
+uint16_t InspectorsWindow::memoryBase() const {
+    switch (memoryRegion()) {
+        case InspectorMemoryRegion::Mapped:
+            return 0;
+        case InspectorMemoryRegion::Rom:
+            return memoryBank_->currentIndex() > 0 ? 0x4000 : 0;
+        case InspectorMemoryRegion::VideoRam:
+            return 0x8000;
+        case InspectorMemoryRegion::WorkRam:
+            return memoryBank_->currentIndex() > 0 ? 0xd000 : 0xc000;
+        case InspectorMemoryRegion::CartridgeRam:
+            return 0xa000;
+    }
+    return 0;
+}
+
+unsigned InspectorsWindow::memorySize() const {
+    if (memoryRegion() == InspectorMemoryRegion::Mapped)
+        return 0x10000;
+    const auto *gb = state();
+    return gb ? unsigned(
+                    inspectorMemoryBank(*gb, memoryRegion(), size_t(memoryBank_->currentIndex()))
+                        .size)
+              : 0;
+}
+
+void InspectorsWindow::changeMemoryRegion() {
+    // Destroy an unfinished delegate before changing what its address refers to.
+    {
+        QScopedValueRollback<bool> update(refreshing_, true);
+        memory_->clearContents();
+        const QSignalBlocker block(memoryBank_);
+        memoryBank_->clear();
+        page_ = memoryBase();
+        editAddress_->setText(hex(page_, 4));
+        address_->setText(hex(page_, 4));
+    }
+    refresh();
+}
+
+void InspectorsWindow::changeMemoryBank() {
+    {
+        QScopedValueRollback<bool> update(refreshing_, true);
+        memory_->clearContents();
+        page_ = memoryBase();
+        editAddress_->setText(hex(page_, 4));
+        address_->setText(hex(page_, 4));
+    }
+    refresh();
+}
+
+bool InspectorsWindow::writeSelectedByte(uint16_t address, uint8_t value) {
+    if (memoryRegion() == InspectorMemoryRegion::Mapped)
+        return writeByte(address, value);
+    if (!state() || !physicalWriter_ || memoryRegion() == InspectorMemoryRegion::Rom ||
+        address < memoryBase() || unsigned(address - memoryBase()) >= memorySize()) {
+        status_->setText("This address is read-only or outside the selected memory bank.");
+        return false;
+    }
+    const QPointer<InspectorsWindow> self(this);
+    const auto writer = physicalWriter_;
+    const bool written = writer(memoryRegion(), size_t(memoryBank_->currentIndex()),
+                                uint16_t(address - memoryBase()), value);
+    if (!self)
+        return false;
+    refresh();
+    status_->setText(written ? QString("Wrote $%1 at $%2 in bank $%3; emulation paused.")
+                                   .arg(hex(value, 2))
+                                   .arg(hex(address, 4))
+                                   .arg(memoryBank_->currentText())
+                             : "The selected memory bank rejected this write.");
+    return written;
 }

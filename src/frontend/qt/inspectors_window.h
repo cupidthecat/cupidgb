@@ -1,6 +1,28 @@
+/**
+ * @file    inspectors_window.h
+ * @brief   Qt mapped/physical memory and graphics-inspector window interface.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://gnu.org>.
+ */
+
 #pragma once
 
-#include "color_pipeline.h"
+#include "inspector_renderer.h"
 
 #include <QMainWindow>
 #include <QTimer>
@@ -24,8 +46,10 @@ class InspectorsWindow final : public QMainWindow {
     // The writer pauses emulation and invalidates debugger history before editing.
     using Writer = std::function<bool(uint16_t, uint8_t)>;
 
+    using PhysicalWriter = std::function<bool(InspectorMemoryRegion, size_t, uint16_t, uint8_t)>;
+
     explicit InspectorsWindow(QWidget *parent = nullptr);
-    void setSession(Getter getter, Writer writer);
+    void setSession(Getter getter, Writer writer, PhysicalWriter physicalWriter = {});
     void setColorTable(const ColorTable *colors);
     // Cancel uncommitted edits when the host replaces or restores hardware state.
     void sessionChanged();
@@ -36,6 +60,12 @@ class InspectorsWindow final : public QMainWindow {
   private:
     CupidGb *state() const;
     void refreshMemory(const CupidGb &gb);
+    void changeMemoryRegion();
+    void changeMemoryBank();
+    bool writeSelectedByte(uint16_t address, uint8_t value);
+    InspectorMemoryRegion memoryRegion() const;
+    uint16_t memoryBase() const;
+    unsigned memorySize() const;
     void refreshTiles(const CupidGb &gb);
     void refreshMap(const CupidGb &gb);
     void refreshObjects(const CupidGb &gb);
@@ -48,12 +78,17 @@ class InspectorsWindow final : public QMainWindow {
 
     Getter getter_;
     Writer writer_;
+    PhysicalWriter physicalWriter_;
     const ColorTable *colorTable_ = nullptr;
     QTimer timer_;
     QTabWidget *tabs_ = nullptr;
     QLabel *context_ = nullptr;
     QLabel *status_ = nullptr;
     QCheckBox *live_ = nullptr;
+    QCheckBox *grid_ = nullptr;
+    QCheckBox *scrolling_ = nullptr;
+    QComboBox *memoryRegion_ = nullptr;
+    QComboBox *memoryBank_ = nullptr;
     QLineEdit *address_ = nullptr;
     QLineEdit *editAddress_ = nullptr;
     QLineEdit *editValue_ = nullptr;

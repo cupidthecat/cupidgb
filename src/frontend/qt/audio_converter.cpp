@@ -1,3 +1,25 @@
+/**
+ * @file    audio_converter.cpp
+ * @brief   Streaming stereo resampling and conversion to the host audio format.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://gnu.org>.
+ */
+
 #include "audio_converter.h"
 
 #include <algorithm>
@@ -11,11 +33,16 @@ void AudioConverter::reset() {
     inputFrames_ = 0;
     nextPosition_ = 0;
     previous_[0] = previous_[1] = 0;
+    hostClockRatio_ = 1;
 }
 
 void AudioConverter::setInputRate(double rate) {
     if (std::isfinite(rate) && rate >= 4000 && rate <= 384000)
         inputRate_ = rate;
+}
+
+void AudioConverter::setHostClockRatio(double ratio) {
+    hostClockRatio_ = std::isfinite(ratio) && ratio >= 0.9 && ratio <= 1.1 ? ratio : 1;
 }
 
 void AudioConverter::append(QByteArray &bytes, float sample) const {
@@ -50,7 +77,7 @@ QByteArray AudioConverter::convert(const int16_t *samples, size_t frames) {
     if (!samples || !frames || !output_.isValid())
         return bytes;
     const uint64_t end = inputFrames_ + frames;
-    const double step = inputRate_ / output_.sampleRate();
+    const double step = inputRate_ / (output_.sampleRate() * hostClockRatio_);
     // Delay the final fractional sample until its right neighbor is available.
     while (nextPosition_ < double(end - 1)) {
         const auto first = uint64_t(nextPosition_);

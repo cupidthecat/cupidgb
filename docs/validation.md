@@ -1,10 +1,28 @@
 # Validation record
 
-This record starts with the desktop and timing checks on 2026-11-04 and includes later work through 2026-11-08. Results apply to each stated build, input set, and scope. They do not establish complete hardware or frontend parity. The comparison source revision is `ea667ad79aa28409f034b1fd6da7304e1844750d`.
+This record starts with the desktop and timing checks on 2026-11-04 and includes later work through 2026-11-18. Results apply to each stated build, input set, and scope. They do not establish complete hardware or frontend parity. The comparison source revision is `ea667ad79aa28409f034b1fd6da7304e1844750d`.
 
 Earlier sections retain the results and assumptions of their original builds. A result without a recorded model clock does not qualify the corrected SGB clock. Use the current model-clock reports when comparing physical speed across profiles.
 
+The [audio and native-state checkpoint](validation-audio.md) records reconstruction, live-load, Camera and continuation results separately from these earlier builds. The subsequent [display and infrared checkpoint](validation-timing.md) records display-delivery, pixel and VRAM comparisons and distinguishes development probes from final integration gates.
+
+The [reset, input and native-state checkpoint](validation-reset.md) records the earlier Windows and Linux reset and recording workflows, version 16 continuation between both hosts, external suites, core throughput and bounded native runtime. It retains the application/raw-clock measurements and the CGB row-selection and rumble gaps identified at that checkpoint.
+
+The [fetch-row and controller feedback checkpoint](validation-fetch-feedback.md) records version 17 row retention, hardware-delivery motor sampling, Windows workflow checks, separately scoped Linux results, paired probes and the complete bounded local cartridge scan. It identifies the interrupted final Linux desktop validation and the evidence that remains valid for the current core.
+
+The [cartridge storage checkpoint](validation-cartridge-storage.md) records extended ROM banking and failure-preserving storage changes. [Host-clock measurements](validation-host-clock.md) distinguish Windows playback results from the Linux clock fault that blocks sustained-speed qualification. The later [wave-memory](validation-wave-retrigger.md) and [serial-selection](validation-serial-selection.md) records cover generated hardware comparisons, native continuation and the status of their integration checks.
+
+The [hardware selection integration checkpoint](validation-hardware-selection.md) combines the completed wave-memory and serial comparisons, version 18 file interchange, unchanged external-corpus results, native desktop checks and four Windows gameplay runs. It distinguishes fresh targeted checks from reused core evidence. The subsequent Linux clock-readiness gate timed out before any gameplay case launched; sustained Linux playback remains unqualified.
+
+The [storage, wave and camera checkpoint](validation-storage-wave.md) records full SRAM ownership, native version 20 and queued camera lifetimes. The subsequent [SGB startup checkpoint](validation-sgb-startup.md) records independent host-only clocks, ordered startup output, version 21 states, paired startup observations and fresh Windows runtime checks. Each checkpoint retains its own source and artifact identities, failed attempts and qualification limits.
+
 ## Builds and automated checks
+
+The later [linked-window checkpoint](validation-link.md) records the paired-clock comparisons, refreshed mapper corpus, complete platform gates, cartridge scan and native two-window measurements for the link-play changes. Its results have their own source and artifact identities.
+
+The [GBS player checkpoint](validation-gbs.md) records music execution, reconstruction-history corrections, double-speed display boundaries, version 23 program identity and native player workflows. Its generated music inputs and listening-history comparisons remain separate from cartridge gameplay qualification.
+
+The [Game Boy Color revision checkpoint](validation-cgb-revisions.md) records the generated OAM, infrared and audio checks, version 27 continuation, and the remaining divider and firmware coverage.
 
 | Environment | Configuration | Result |
 | --- | --- | --- |
@@ -750,3 +768,1029 @@ After a five-second warmup, guest progress ranges from 99.965% to 100.025%. Widg
 A separate 60-second run uses the refreshed installed production executable, local firmware, normal audio and default rewind. Tetris reaches 99.978% post-warmup guest progress with zero audio idle/errors, paint p95/maximum 17.91/37.85 ms, and a 66.68 MiB peak working set. This control covers ordinary-cartridge routing; it does not establish every game's performance. Sustained Linux audio remains blocked by the previously recorded host stalls.
 
 Private probe and fixture receipts are retained under `input-audio-20261111/motion`, including `oracle-results.json`, `audit-and-headless-verdict.json`, and `native/post-classifier/final-native-verdict.json`. ROMs, boot binaries, EEPROM saves and captures remain outside public commits.
+
+
+## Shared video bus and object-fetch timing
+
+The 2026-11-11 integration passes 39 CTest checks on Windows with Qt 6.8.3, 39 on Linux with Qt 6.4.2, and 26 Linux core checks with ASan/UBSan and leak detection. These include the boot-entry repair found during review: entering firmware aborts the old object countdown as well as its stage. The regression reproduces the retained countdown before the repair and checks saving/loading after boot entry across all four stages. All production C/C++ files remain below 2,000 lines.
+
+The first parallel Linux desktop run aborted inside PulseAudio during a short command-line workflow. The preserved preceding build and current build both passed standalone CLI controls. Full serial desktop runs then passed, including the final build. The failed log remains retained. This result does not resolve the sustained Linux audio stalls recorded above.
+
+Private paired probes compare equivalent hardware, deterministic synthetic cartridges and the pinned revision. All 12,288 retained contention cases match complete VRAM, all 160 OAM bytes, guest time and transfer status. The set combines 6,912 primary cases with 5,376 cases using additional source pages. It covers both CGB speeds, VRAM banks, LCD state, source classes, destination wrapping, warmup and overlapping transfers. This closes those reproduced cases, not every possible bus collision.
+
+Another 18,816 observations after actual CPU steps and 6,400 observations through interrupt acknowledgment match the compared CPU, timer, audio phase/count, DMA, LCD, VRAM and valid OAM fields. An expanded 125,440-observation sweep preserves all valid OAM, DMA, timer, audio and LCD matches without introducing a new field mismatch. It retains 128 CPU and 1,152 VRAM differences that already existed. Palette-tail differences remain separate; no full-state equality claim includes them.
+
+A per-dot screen checks 4,032 cases across matched monochrome, Pocket, color and SGB2 profiles. It covers clipped sprites, eight scroll offsets, overlapping objects and both heights. Background, OAM-word and sprite-data transactions and pixel emission match; color cases also compare emitted 15-bit pixels. Controlled tile/flag writes on either alignment edge establish when the word is sampled. A later held scan verifies that the sprite word replaces both retained OAM bus bytes. Raw unused-OAM readback matches all 1,536 profile/address cases, and all 2,457,600 reachable redirected reads match. No out-of-bounds OAM storage access is reproduced.
+
+The composed V9 implementation passes 292 snapshot continuations spanning initial discarded pixels, pending alignment/word reads, data countdowns, mid-fetch window writes and older busy imports. Comparisons use an un-serialized continuation branch. Ordinary and trusted state paths preserve the retained row; changing that row in a naturally captured normal-speed state changes future OAM. Fast-profile checks establish wire preservation and continuation, without claiming the same whole-machine-cycle mutation witness. Frozen V3/V4 fixture assertions still pass, and malformed row, stage, selected-object and boolean fields leave the target unchanged.
+
+The external screen remains 177 explicit passes and four bounded cases out of 181. Failed intermediate grid and external results remain preserved alongside the corrected results. The paired artifact receipts precede the separately tested boot-entry lifecycle repair. Private receipts retain source/artifact hashes, full outputs and commands outside version control.
+
+Complete FIFO/window timing remains open: the checked CGB window restart is still one dot early. Sampled STOP OAM/palette gates, broader hardware revisions, remaining bus conflicts, all-game compatibility and sustained playback qualification also remain open. Current-writer continuation checks do not reconstruct missing timing history in older files.
+
+
+Uncapped throughput controls compare the preceding merged build with accuracy checkpoint `9531139`. Each run advances 3,600 guest intervals, approximately 60.274 guest seconds. One warmup pair is discarded before five alternating measured pairs per game and host. Complete PCM, final images and guest counters match across builds and hosts for both inputs. Windows QPC elapsed medians increase from 7.620 to 8.160 seconds for Tetris and 8.906 to 9.589 for Mario Deluxe. Linux `CLOCK_MONOTONIC_RAW` medians increase from 6.786 to 7.725 and 8.034 to 8.458 seconds. Adjusted Linux clock measurements remain separate because the host rate changes. These are headless throughput costs, not presentation FPS or sustained playback results.
+
+A counts-only profile finds no selected or pending object in more than 96% of enabled lookup calls for those sequences. The lookup now returns immediately for zero selected slots or a fully fetched selected mask, ignoring unused higher bits from older snapshots. A private 46,137,344-case check preserves return values and mask mutations. Three measured alternating pilot pairs after warmup retain complete outputs and lower elapsed medians relative to `9531139`: Windows by 2.06%/1.02% and Linux by 1.46%/0.62% for Tetris/Mario Deluxe. These small pilot changes qualify the lookup shortcut only; the added accuracy work still has a net throughput cost. Both desktop suites and the sanitizer suite pass again after the shortcut.
+
+## Native ports and desktop workflows, 2026-11-15
+
+The current hardware work samples STOP access independently for VRAM, OAM and the
+color-palette port, retains the palette release edge in native version 10, and
+keeps versions 2 through 9 readable with defaults for missing history. CGB reset,
+register dispatch, palette access, DMA and rendering now occupy separate modules.
+The hardware tests also cover monochrome OAM-conflict phases and pixel-queue lane
+shifting. These checks do not establish complete fetcher timing or every hardware
+revision.
+
+A PPU-only comparison covers 64 physical-color profiles: color and compatibility
+mode, normal and double speed, eight scroll offsets, and zero or ten objects. It
+samples 1,400 dots per profile, then repeats with nine directly latched STOP
+positions. All 896,000 access masks and STAT mode samples match. A first run finds
+160 differing sprite pixels: compatibility mode had discarded physical attribute
+reads, losing background priority when VRAM was blocked. The targeted regression
+fails before the repair and passes afterward. The current production core matches
+all 276,480 compared RGB555 words. Internal line and LCD-x bookkeeping still differs
+at some boundaries. This fixture does not execute CPU STOP or cover DMA, audio,
+every pixel pattern or complete pipeline equivalence.
+
+The desktop work adds palette-file import/export, a persistent named palette
+library with automatic color controls, timestamped captures, Save As and clipboard
+capture. Restoring built-ins at the library limit now rejects the whole operation
+and preserves custom entries. The automatic theme collection remains incomplete.
+Windows resources and optional Open With scripts are included; registration tests
+use a private registry hive and preserve current user associations.
+
+Audio queue writes release the queue lock before calling the backend. In-flight
+operations retain the old queue and sink through reentrant session changes. Queue
+replacement and telemetry resets cannot consume replacement samples or charge the
+new reporting window. Stream-capacity checks validate ownership again before
+writing. Native callback tests close the cartridge during a write and open a menu
+during timer pumping; the menu case must retain the guest cycle count.
+
+Windows MSVC/Qt 6.8.3 Release passes 45/45 checks, including both private-hive tests.
+An earlier Linux GCC/Qt 6.4.2 Release suite passes 43/43. After the attribute repair,
+42/43 pass; the CLI check hits the intermittent backend abort described below.
+The separate Linux ASan/UBSan core build passes 26/26 after the repair with leak
+detection enabled. Native Windows and Linux audio-enabled
+Qt workflow checks pass. The palette editor was captured and visually reviewed
+under both native window systems.
+
+The first Linux desktop suite aborted one short CLI launch inside PulseAudio with
+`mainloop_io_free` asserting `!e->dead`. The standalone CLI check and one complete
+43-case rerun pass, but later launches reproduce PulseAudio dispatch assertions.
+A clean `bd41bf4` baseline also reproduces the abort on its first CLI test run.
+A debugger capture places the current failure in the PulseAudio thread during
+Qt's global audio-engine destruction, after the core has shut down. This does not
+prove the exact cause. A later
+60-second Linux CGB run completes, but the WSLg audio socket is missing and stream
+creation fails. Its clock and image measurements do not qualify sustained audio.
+
+A Windows CGB input sequence reaches commercial course selection over 60 seconds.
+After five seconds of warmup, guest progress is 99.995% with zero audio idle or
+error events. This run starts with a hidden window and has no widget paint events;
+it qualifies the bounded guest/audio counters only. It does not establish visible
+presentation, physical display refresh, complete gameplay or all-game speed.
+
+A separate visible Windows DMG input run reaches an active falling-block board.
+The 55-second window after warmup records 99.994% guest progress, 3,287 widget
+paints, zero audio idle events and zero audio errors. Widget paint intervals have
+a 16.732 ms median, 18.081 ms 95th percentile and 20.408 ms maximum. An earlier
+menu-only trace records one startup audio idle event; it is retained separately.
+These are bounded application observations, without a listening assessment or
+physical display-refresh measurement. They do not qualify every game or saving.
+
+The matching Linux Qt 6.8.3 SDK passes 43/43 desktop checks, three additional
+complete CLI workflow runs, and a native Xcb audio-enabled smoke check. Desktop CI
+now selects that SDK on Linux as well as Windows. The earlier Qt 6.4.2 failures
+remain recorded; changing the validated toolkit does not establish long-term
+Linux audio stability or resolve changes to the host clock and audio service.
+
+A corrected Windows CGB trace enters level 1-1 and exercises running, scrolling
+and jumping. The 60-second run ends in the active level with terrain and an enemy
+visible. Its post-warmup window records 99.994% guest progress, 3,290 widget paints,
+zero audio idle events and zero audio errors. Paint intervals have a 16.719 ms
+median, 17.987 ms 95th percentile and 24.123 ms maximum. A separate 35-second
+capture caught a guest-controlled LCD-off transition: private per-interval checks
+show the display returning within five intervals. That white capture is retained
+without treating it as a persistent renderer failure.
+
+Active commercial DMG and CGB states also pass a bounded Linux V10 continuation
+check. Independent instances preserve 17 queued PCM frames at restore, then match
+443,012 drained stereo frames, 600 presentation buffers, final framebuffers and
+the complete final native state bytes over roughly ten further guest seconds.
+This checks the core codec and continuation; frontend disk workflows and
+cross-platform state interchange have separate requirements.
+
+The refreshed external corpus is pinned at `31510e12eea6286d36eea060a6adde755e1067aa`.
+Source-qualified shared-boot cases pass on both Windows and Linux: 66/66 DMG and
+53/53 CGB acceptance cases, plus 28 MBC1/MBC2/MBC5 banking cases. Two banking
+exhaustion cases remain bounded at the initial 600-interval limit and pass their
+separate 3,600-interval runs. All 149 paired observations, including those initial
+bounded results, agree on verdicts, guest counters, image/PCM checksums and exit
+codes. These counts cover the selected models and protocols. Source-inapplicable
+startup revisions remain excluded, and these three mapper families do not stand
+in for every cartridge peripheral or all-game qualification.
+
+The Qt 6.8.3 native Linux CGB run also reaches active level 1-1 over 60 requested
+seconds with normal 44,100 Hz output. It exits normally with zero audio errors
+and zero startup or post-warmup idle events. The 55-second post-warmup window
+reports 99.997% guest progress against the adjusted host clock. Read-only clock
+sampling records 122 successful observations, changing ticks from 9,644 to
+9,685 microseconds and changing frequency correction. Adjusted monotonic time
+advances at roughly 0.9644 to 0.9685 of the RAW clock's rate. Consequently, the
+near-nominal adjusted-clock result does not establish stable real-time speed.
+Peak sampled resident memory is 114,680 KiB. The sampler makes no clock writes.
+
+The refreshed local library inventory contains 880 inputs and 878 distinct ROM
+hashes. A cold shared-boot scan gives each input 420 guest intervals with no input
+or battery loading: 874 reach that bound and six stop on illegal opcodes. All
+894 original files, including adjacent user data, retain their hashes and
+modification times. A bounded startup is not a compatibility verdict. The library
+contains ROM-only, MBC1, MBC2, MBC3, MBC5, MBC7, HuC3 and Camera inputs; it has no
+commercial HuC1, MBC6, MMM01 or TPP1 input. One nonstandard header is retained in
+the inventory and excluded from verified mapper coverage.
+
+All six stopped inputs also reach illegal instructions in the comparison build.
+Default startup matches five terminal register sets and four complete preceding
+64-instruction windows. Source inspection and repeated controls identify a
+startup-memory difference: the comparison's color profile varies work/high RAM,
+while CupidGB initializes it to zero. A separate reference-only zero-randomness
+control matches all six terminal sets and preceding windows. These diagnostic
+controls do not establish default startup equivalence or justify changing an
+input. A clean `bd41bf4` baseline matches all six current terminal sets, preceding
+windows and base-cycle counts. Power-on memory variation remains a parity
+requirement.
+
+One hosted portable-hash sanitizer state check exceeds its 120-second limit;
+the identical check passes in 111.53 seconds in the other event's job. A local
+complete run takes 132.21 seconds. The instrumented portable-hash configuration
+now gives that state check 240 seconds, retaining the entire matrix. Other
+configurations keep the 120-second state limit. The local portable state, SHA-256
+and C/C++ integration checks all pass with leak detection enabled.
+
+## Cartridge storage, pulse clocks and Qt playback, 2026-11-15
+
+This milestone uses the reference revision recorded in the parity checklist.
+Private receipts retain the source snapshots, executable hashes, test inputs,
+boot hashes and commands. Existing dirty checkouts were preserved; implementation
+and validation took place in a separate worktree.
+
+The cartridge header matrix covers all 256 type bytes, eight RAM-size codes and
+both DMG and CGB. Of 4,096 paired cases, 4,066 match exactly. The remaining 30 are
+the documented direct-RAM types `08` and `09` and partial MBC6 behavior, ten each.
+No additional discrepancy remains in that matrix. Another 2,244 paired MMM01
+cases match storage capacity, controller selection, battery/timer/motor flags,
+ROM reads and RAM/open-bus observations. These cover both dump layouts,
+conflicting menu/game metadata, truncated headers and padded physical tails.
+
+Address-line tests cover 15 cartridge variants, nine physical ROM capacities and
+512 register sequences per image. They verify erased tails, both ROM windows and
+RAM aliases against the loader's power-of-two geometry. The address tests reuse
+the logical bank-selection API; dedicated controller tests and the paired
+runtime observations provide the separate decoder evidence.
+
+Pulse checks cover both channels, four duties, two divider offsets, first
+triggers, live duty writes, active retriggers, length expiry, inactive retriggers,
+DAC disconnect/reconnect and subsequent triggers. All 61,440 recorded
+observations match in phase, channel status and raw sample: 49,152 across four
+monochrome models and 12,288 on the modeled color revision. The first timing
+repair still differed in held DAC samples; that discrepancy was retained and
+resolved before the final comparison. These checks do not establish analog DAC
+response, complete wave/noise/envelope behavior or audible quality.
+
+Independent review found a combined trigger/length-enable write that temporarily
+expired a one-tick counter before choosing trigger timing. The fix samples
+activity at entry to the write, preserving active retrigger delay and held
+output. A regression covers both pulse channels, all four power phases, five
+monochrome model tags and color hardware at both CPU speeds: 56 configurations.
+The separate paired probe covers 96 scenarios and 393,600 observations, including
+expiry without trigger and active/inactive controls. All observations match.
+The frozen preceding build differs in all 98,400 observations from the 24
+combined-trigger scenarios; its other 72 scenarios match.
+
+Native version 11 adds two validated pulse DAC codes and preserves monochrome
+pulse timing that older writers did not maintain. Continuation checks include
+active, suppressed, length-expired and disconnected channels. Older-format
+fixtures retain their existing hashes. Versions 2 through 10 load with explicit
+defaults for missing pulse history, without borrowing a destination session's
+state.
+
+The final source passes 46/46 Windows MSVC/Qt 6.8.3 Release checks in 42.37 seconds
+and 44/44 Linux GCC/Qt 6.8.3 Release checks in 45.90 seconds. Sanitizer validation
+includes the 26-check pulse/storage core run and focused ASan/UBSan rebuilds for
+the later debugger repair and expanded TPP1 regression.
+An earlier portable-hash sanitizer run passed the state, SHA-256 and C/C++
+integration checks, with the state matrix taking 163.48 seconds. Its final
+rebuild passes the latter two checks but reaches the unchanged 240-second state
+limit under concurrent validation. A repeat after the library scans finish
+passes all three checks; the complete state matrix takes 108.43 seconds within
+the same 240-second limit. The original failed receipt remains intact, and no
+cases or assertions were removed.
+Native capture review found that tiny unhinted glyph paths fragmented letters
+even after drawing the white face over its outline. The renderer now uses hinted
+monochrome text at integer baselines, with a one-pixel axial outline and
+12-pixel line spacing. Native Windows and Xcb previews resolve readable system
+monospace faces. Exact bitmap typography remains unqualified.
+
+The new Windows glyph regression initially fails because the offscreen plugin
+finds zero font families and draws identical missing-glyph boxes, including for
+a space. Native rendering resolves Consolas and has intact letter faces. The
+same test binary passes unchanged when its process-local font directory points
+to the installed Windows fonts. CTest now supplies that directory from the
+Windows environment. No glyph assertion was weakened; the failed test and
+private diagnostic attempts remain preserved.
+
+Earlier native Windows and Linux Xcb workflow checks passed with real audio.
+Final installed-package checks are recorded separately below. A new callback
+case exposed a test fixture that queued four bytes despite a negotiated
+eight-byte Windows host frame. The fixture now uses the negotiated frame size;
+the production audio path was unchanged by that correction. A Linux attempt
+failed before those cases because the existing WSLg audio socket was absent.
+The failed receipt remains recorded. A later read-only readiness check found the
+socket present, and the audio-enabled workflow passed. No audio service or global
+host setting was changed.
+
+Later checks explain the intermittent missing socket during fresh WSL boots.
+In one recorded boot, both `stat` and the Python socket check report `ENOENT`
+through uptime 11.50 seconds. The socket appears at 12.52 seconds, and a bounded
+protocol probe connects successfully with daemon autospawn disabled. The private
+native-validation harness now waits up to 15 seconds for that existing-server
+connection and launches the application from the same process. This addresses
+test startup readiness without restarting or reconfiguring the audio service.
+Earlier attempts that stopped before launching CupidGB remain recorded as such.
+
+Native captures on both platforms were visually reviewed for tile grids,
+viewport wrapping at SCX 200/SCY 224 and message placement. Overlay workflow
+checks preserve paused native-state bytes and clean screenshot pixels. Eighteen
+combinations cover three blend modes, both row phases, the DMG viewport, the SGB
+viewport and the full SGB border image. Messages compose before blending; repeat
+events age logical text while retaining the submitted raster. Expiry and setting
+changes preserve the previous frame's blend contribution until guest
+presentation advances. Repainting or pausing does not consume message lifetime.
+Startup checks cover version, header title and logical CRC across ordinary,
+truncated and MMM01 layouts.
+
+Further review reproduced a paused redraw defect: disabling messages retained
+their pixels for the first paint, but changing the blend mode or applying
+unchanged Settings again erased them. Presentation now distinguishes host
+redraws, completed guest frames and explicit history resets. The regression
+fails before that repair and passes afterward. It exercises the actual actions
+and repeated settings application in all 18 configurations, plus paused startup
+before the first guest frame, queued notifications, Repeat and subsequent
+publication. Open/load/rewind/Backstep/edit callers were audited for explicit
+reset intent; the message matrix does not separately qualify notification pixels
+through every real restore workflow.
+
+Turbo cap checks exercise every menu choice, settings persistence, pacing gates,
+combined slow/turbo rates and callback reentrancy. A separate external held-key
+driver could not retain X11 focus on this WSLg session, and external window
+readback returned black. Those attempts remain recorded and do not qualify
+physical held-key timing. The application's native workflow checks and captures
+pass; no production change was made to work around the external driver.
+
+The expanded Windows and Linux external runs use the acceptance/banking revision
+`31510e12eea6286d36eea060a6adde755e1067aa` and the additional hardware-test revision
+`c240dd7d700e5c0b00a7bbba52b53e4ee67b5f15`. They cover 242 explicit passes across
+243 cases: 119 source-qualified acceptance cases, 56 DMG/CGB banking cases,
+24 audio cases, 22 CPU cases, 14 memory/instruction timing cases and seven OAM
+cases. One OAM timing ROM remains bounded, including at an extended limit.
+
+The corrected Windows run initially has 241 passes, one bounded case and one
+missing report. The missing case exits before emulation because its ROM buffer
+allocation fails. Windows commit availability was about 507 MiB when inspected;
+the private resource receipt retains the host counters. An isolated rerun with
+the identical executable, input, firmware, model and limit passes. With that
+separately recorded observation, all 243 Windows/Linux guest results agree,
+including cycle and instruction counts, final image and PCM checksums, and
+protocol output. The original failed record remains unchanged.
+
+The remaining ROM's text logger crosses the end of its 8 KiB RAM window and
+overwrites copied executable code at `C000`. Both cores execute the first
+overflowing instruction at cycle 77,746,804, overwrite the byte at 77,746,816 and
+disable cartridge RAM at 79,465,692. Their terminal registers, memory and the
+preceding instruction trace agree. A private diagnostic copy suppresses only
+the memory-text append call while retaining all 116 timing cases, their expected
+CRC, console output and result protocol. It passes on both cores; the integrated
+V11 runner also passes at cycle 114,321,652 after 12,735,631 instructions. The
+original ROM remains unchanged and its corpus verdict remains bounded.
+
+The final V11 replay checks nine cases from eight local cartridge images across
+ROM-only, MBC1, MBC2, MBC3, MBC5, MBC7, HuC3 and Camera. Every case runs a local
+restore on each platform and imports the other platform's saved file: 36/36
+paths pass. Windows and Linux saved/final bytes, images, PCM and continuation
+reports match. The comparisons cover 319,566,188 CPU instructions, 21,608
+presentation/memory observations and 432 complete native states. All 24
+protected source files retain their bytes, size and modification times.
+
+These cases use HLE post-boot profiles, fresh battery memory and a private RTC
+clock derived from guest time. Each save occurs during visible mode 3 after
+3,000 guest intervals, with 17–19 queued PCM frames, and continues for another
+600 intervals after loading into a separately advanced instance. The observed
+phases include active GB/GBC play, an additional MBC1 life-loss sequence, MBC2
+name entry, MBC3 introduction dialogue, MBC7 play/tutorial screens, HuC3 movement
+and synthetic Camera captures. The Camera capture counter advances from 174 to
+182. The local MBC7 image is modified and remains qualified by its exact private
+hash. This covers bounded continuation and file portability; it does not qualify
+physical peripherals, host audio delivery or complete commercial gameplay.
+
+A frozen Windows throughput comparison isolates the cartridge storage/address
+changes from the other work. Five alternating repetitions per input run 1,800
+guest intervals with normal PCM generation and a fixed processor affinity.
+Every guest report, final image checksum and PCM checksum matches. Median host
+times change from 4.863 to 4.910 seconds for ROM-only, 4.411 to 4.420 for MBC1,
+4.379 to 4.247 for MBC2, 6.187 to 6.164 for MBC3 and 7.649 to 7.581 for MBC5.
+The results are mixed, and other validation was active. They do not establish a
+general speedup or sustained presentation performance.
+
+### Debugger ROM reads and supported cartridge ranges
+
+Bank-qualified debugger expressions previously wrapped an address within the
+original file length. A read in the erased tail of a truncated physical bank
+could therefore return bytes from the start of the image. The debugger now uses
+the same physical bank population as mapped reads and returns `FF` beyond the
+available file bytes. This change affects debugger inspection only.
+
+Twenty-eight generated images cover 420 explicit expressions and 28 conditional
+breakpoint checks. Native-state bytes remain identical before and after each
+inspection. All 4,928 paired reference reads match; the preserved preceding
+debugger differs on 2,136. The debugger tests pass on Windows and Linux.
+
+Expanded TPP1 regressions cover 12 DMG/CGB capacity cases from no SRAM through
+128 KiB. They check 2,560 read-only aliases, 2,560 writable aliases and 47,616
+independent reads for unintended changes to other physical banks. Another 1,024
+mode/latch cases verify absent-SRAM bus values at zero, five and six T-cycles,
+including expiry without hold renewal. An 8 MiB fixture distinguishes all 512
+physical ROM banks with two-byte markers. It exercises 131,072 complete 16-bit
+register selections across both models, each intermediate byte-write state,
+register mirrors, raw latch readback and a fixed lower ROM window. Both platform
+tests pass. ROM above 8 MiB and SRAM above 128 KiB remain unsupported.
+
+### Extended local startup scan
+
+The corrected hardware build ran all 880 local input files, representing 878
+distinct images, for up to 3,600 nominal 70,224-cycle guest intervals each. Models were
+selected consistently with the private inventory: 556 CGB, 198 DMG and 126 SGB.
+Runs use shared local boot binaries, fresh storage, no button input and no
+success protocol. A bounded result means only that the run reached its limit.
+
+| Cartridge family | Inputs | Bounded | Core error |
+| --- | ---: | ---: | ---: |
+| MBC5 | 500 | 493 | 7 |
+| MBC1 | 272 | 272 | 0 |
+| MBC3 | 81 | 81 | 0 |
+| MBC2 | 11 | 11 | 0 |
+| ROM-only | 12 | 12 | 0 |
+| MBC7 | 1 | 1 | 0 |
+| HuC3 | 1 | 1 | 0 |
+| Camera | 1 | 1 | 0 |
+| Unclassified header | 1 | 1 | 0 |
+| Total | 880 | 873 | 7 |
+
+Both the initial V11 scan and the corrected-trigger scan produce those counts.
+All input identities match between them. Status, instruction and cycle counts,
+presentation counts, final image checksums and protocol fields agree for all
+880 inputs. Nine PCM checksums change after the pulse correction; their sample
+counts remain equal. This is a comparison between CupidGB builds, not a complete
+reference-audio comparison. All 894 protected source files retain their bytes,
+size and modification times.
+
+Six errors retain the termination fields from the earlier, shorter scan. The
+additional stop occurs after 2,648 presentations on a 384 KiB image whose header
+declares 1 MiB. It also occurs in the frozen preceding build. Investigation
+follows a bank switch into a sequence of `FF` bytes, repeated restart
+instructions, a descending stack and eventual execution from work RAM. A pinned
+reference run and selected controlled power-on RAM fills reproduce the terminal
+instruction history; other fills change the later path. Power-on RAM variation
+therefore remains a qualification gap. No per-game exception was added.
+
+There are no local commercial HuC1, MMM01, TPP1 or MBC6 inputs in this inventory.
+Their generated register tests must remain separate from commercial evidence.
+The scan does not establish that every game boots, accepts input, saves correctly
+or runs at nominal speed.
+
+### Native gameplay measurements
+
+Two Windows runs used the corrected pulse core, normal audio, fresh private
+cartridge copies and recorded input. Each ran for 120 seconds with rewind
+capture enabled. They preceded the final debugger and message-rendering review;
+those later changes do not alter the emulation path, and messages were disabled
+in these fresh settings.
+
+| Input and model | Post-warmup guest progress | Paint interval p95 / maximum | Audio error / idle events | Peak resident memory |
+| --- | ---: | ---: | ---: | ---: |
+| Tetris, DMG | 100.0016% | 18.34 / 35.47 ms | 0 / 0 | 102.22 MiB |
+| Mario Deluxe, CGB | 97.4513% | 19.32 / 1,640.02 ms | 0 / 0 | 141.73 MiB |
+
+Both processes exit successfully, apply the recorded controls and retain the
+original inputs and existing saves. The CGB run writes and flushes a private
+8 KiB battery file. Its final capture shows active first-stage gameplay; the DMG
+capture shows a game-over screen. The latter is not evidence of 120 seconds of
+continuous active play.
+
+Other validation and host commit pressure were present during these runs. The
+CGB stall and below-nominal guest progress remain part of the record. Paint
+events measure widget activity, not physical refresh, and zero backend events
+do not establish audible equivalence. A Linux attempt stops at its prelaunch
+readiness guard because the WSLg audio socket is absent; no application playback
+occurred in that attempt.
+
+A later 120-second CGB repeat uses the final installed Windows executable,
+`e58c272dcf83d4f8f04a9ae3ce3f55a38c8234834c095dee3bdc184c0270d50a`,
+with no concurrent builds or validation runs. Guest progress after warmup is
+100.0048% of the nominal clock. Widget paint intervals have a 16.74 ms median,
+17.66 ms p95, 18.26 ms p99 and 27.46 ms maximum. Normal audio remains enabled,
+with zero sink errors or idle events after startup. All 22 recorded inputs apply,
+the private 8 KiB battery file flushes, and the final capture shows the player,
+enemy, pipe and HUD in the first stage.
+
+Peak process memory is 142.69 MiB, with 7.0 seconds of sampled application CPU
+time. Sampled host CPU activity has a 1.39% median and 6.40% maximum. The earlier
+stalled sample, original inputs and installed executable remain unchanged.
+This repeat qualifies one cartridge over two minutes under a quieter host load;
+it does not establish a code speedup, universal full speed, physical refresh
+timing or audible quality.
+
+### Installed desktop checks
+
+The final Windows folder deployment contains 295 files and uses the executable
+hash recorded above. Its native workflow smoke passes in 11.46 seconds with an
+actual audio sink. The process search path contains only the staged executable
+directory and Windows system directories; `QT_PLUGIN_PATH` is unset. Module
+receipts place Qt, SDL2 and the required desktop/media plugins in that stage.
+All ten workflow captures are retained, including readable startup and action
+messages. The included runtime redistributable was not executed, and this
+existing development machine does not qualify a clean installation.
+
+The Linux installation initially reaches its 180-second native-workflow guard.
+Two bounded debugger traces find the main thread probing missing theme icons
+under the private prefix on the Windows-mounted filesystem: first during
+Settings construction, then during screenshot-dialog construction. Neither
+trace shows a file dialog waiting in its modal loop. Reordering the system icon
+paths while retaining that prefix still stalls. Removing the prefix narrows the
+cause, but the final check retains it.
+
+Generating and validating the prefix's hicolor icon cache resolves the measured
+delay. A fresh 22-file stage differs from the original only by that cache; every
+original installed file and the application icon retain their hashes. Its native
+Xcb workflow passes with real audio in 17.10 seconds under the unchanged
+180-second guard. All ten captures are retained and the message captures are
+readable. No application code, dialog fixture, audio service or global desktop
+setting changed for this repair. The original timeout and diagnostic attempts
+remain intact.
+
+The installed Linux executable is
+`4dc66c1ed916be43411bbbffe7b262ba01c744d0e408019b9e011e160395ed7a`.
+The source executable is
+`18e78d561f108791ff817aebc702ccf1929dc47346d9d2705848adf167c21e06`;
+installation removes its build runtime-search path. The process uses the
+explicit matching Qt 6.8.3 runtime and system SDL2. Metadata hashes, XML and
+runtime dependencies pass the available checks. Desktop-file validation and
+desktop database registration utilities were unavailable. This stage does not
+qualify a portable Linux bundle or every desktop environment.
+
+The fresh Linux stage also completes the 120-second CGB input sequence with
+normal audio, 22 applied controls, a flushed 8 KiB battery file and a final
+active-play capture. After warmup, the application's adjusted monotonic clock
+reports 100.0012% nominal guest progress, with widget paint intervals of
+17.42 ms at p95 and 19.08 ms maximum. Audio error and post-startup idle counters
+remain zero. Process CPU time is 26.89 seconds and peak resident memory is
+161.81 MiB. Original inputs, previous samples, and the build and installed Linux
+executables remain unchanged.
+
+This WSL host still changes clock rate during the run. Across sampled intervals,
+adjusted monotonic time advances by 0.9167 to 1.0003 seconds per raw-clock second.
+Complete process durations are 120.93 adjusted seconds and
+127.30 raw seconds, including startup and shutdown. These measurements do not
+qualify stable physical-time Linux speed. No global clock setting was changed.
+
+## MMM01 debugger and playback replay
+
+This follow-up uses comparison revision
+`ea667ad79aa28409f034b1fd6da7304e1844750d` and the preceding
+`9b1058cd17695758dd935bc9fa9cbac5aa94bfeb` checkpoint as its baseline. The work
+changes debugger bank identity, Turbo host-audio selection and rewind replay.
+It does not revise the V11 state encoding or the guest cartridge mapping.
+
+### Debugger bank identity
+
+MMM01 debugger identities now follow the controller's logical bank numbers in
+both supported dump layouts. Bank-qualified memory queries translate those
+numbers into the original file's storage without changing mapper latches or
+rotating input bytes. Unlocked menu banks retain the raw `FFFE` and `FFFF`
+identities used by the debugger API. Expressions and the console's explicit
+breakpoint banks still narrow to nine bits; unqualified breakpoints can target
+the startup menu.
+
+The paired matrix contains 28 generated inputs on DMG and CGB, each in six
+controller states. It covers both menu placements, two-bank and 512-bank inputs,
+truncated and odd lengths, erased padding, lock and multiplex modes, and the
+type-11 detection heuristic. The complete matrix has 102,816 observations:
+
+| Observation | Cases | Baseline differences | Fixed differences |
+| --- | ---: | ---: | ---: |
+| Qualified reads | 86,016 | 26,928 | 0 |
+| Mapped banks, PC and labels | 672 | 494 | 0 |
+| Numeric breakpoints | 11,424 | 976 | 0 |
+| Symbol values | 2,352 | 0 | 0 |
+| Symbol breakpoints | 2,352 | 256 | 0 |
+| Total | 102,816 | 28,654 | 0 |
+
+The new public debugger regression fails on the original implementation and
+passes after the fix. It also checks two logical bank numbers that alias the
+same storage while retaining distinct breakpoint identities. The Qt workflow
+covers both models and layouts, inspector labels, wide raw API identities,
+console narrowing and wildcard breakpoints. A separate 336-instance comparison
+preserves complete ROM hashes, V11 snapshot bytes and battery bytes before and
+after the change. Debugger queries themselves leave serialized state unchanged.
+
+### Turbo audio selection
+
+The independently written host-frame helper selects contiguous spans in place
+without allocating. Its generated matrix covers 13,673,366 input frames in
+12,130 blocks, including 44.1, 48 and 96 kHz, all supported caps, complete frame
+sizes from one to 32 bytes, partition boundaries, phase wrap, normal bypass,
+queue capacity, host-rate changes, invalid input and guard bytes. Windows MSVC
+Release and Linux AddressSanitizer/UndefinedBehaviorSanitizer checks pass.
+
+A separate private probe runs the pinned source's actual playback callback at
+fixed rates and volume. Across 3,031,096 input frames in 408 blocks, all 736,938
+retained frame identifiers match byte for byte. Its artificial queue is empty
+until the selected capacity is exhausted and then reports above the threshold.
+This establishes the window arithmetic under that queue model. It does not
+establish native buffering, resampling, waveform quality, rate-change behavior
+or backend drop-trace equivalence.
+
+The integrated queue checks seed `floor(rate / 8)` pending frames, accept one
+more, then reject the first excess frame for 44.1 kHz integer stereo and 48 kHz
+float stereo. The software queue's inclusive limit is separate from the native
+sink's requested 50 ms buffer. Normal playback retains its existing conversion
+and execution-backpressure policy.
+
+### Rewind execution and callback safety
+
+Before implementation, paired probes of the actual history capture/pop API and
+CupidGB's restore/remove/replay sequence match all 32 numeric trace rows. They
+cover history lengths 0, 1, 2, 3, 5 and 8 under normal and Turbo rewind. Normal
+rewind first replays the current frame position and then moves back one frame
+per interval. Turbo moves back one frame initially, then two. Empty or
+insufficient history executes its terminal instruction and waits for release.
+
+The new regression first fails on the old frontend with displayed tag 16 instead
+of 17 and no newly generated replay PCM. The corrected frontend consumes the
+proper history, restores current input and runs forward to produce each replay
+image and sound. Positive executed cycles drive combined slow/Turbo pacing;
+backward movement through guest time never becomes a negative host deadline.
+
+Integrated workflows cover history byte accounting and exhaustion, release and
+forward resumption, current input, slow and rapid controls, fractional capped
+and uncapped pacing, invalid or wrong-cartridge snapshots, battery preservation,
+recording isolation, breakpoint stops and whole-frame host conversion. They
+also check focus loss during guarded dispatch and retained controller modes.
+Review caught a keyboard-release ordering defect that could leave old-mode
+audio queued; the final code retains the previous flags until reconciliation
+and applies or defers the reset correctly.
+
+Presentation and history are committed before backend audio calls can dispatch
+session changes. The frame path returns without accessing guest state after
+those calls. Session, timeline and pacing-generation checks prevent a callback
+from charging an old interval to a new deadline or executing a newly loaded
+timeline through the previous tick.
+
+### Complete local builds
+
+The initial complete follow-up passes all 47 Windows Release checks in 37.54
+seconds and all 45 Linux Release checks in 44.19 seconds. Both include the
+expanded Qt workflows and the standalone Turbo window target. Source hashes
+remain unchanged through each build and test run.
+
+The Windows executable is
+`302d3e6d67986548e026e48fef56022c717f754941bcba0de5ef1ef242bc1a92`.
+The Linux build executable is
+`3ba45a7da9fde121b620e97a839b1231528ae29dea9c8c7723b70b2d35fda617`.
+
+### Native audio fixture diagnosis
+
+Both fresh installed native checks initially fail the new readiness assertion,
+before reaching its injected focus-loss callback. That fixture generates four
+intervals, stops producing audio and waits 75 ms, then incorrectly requires the
+short stream to remain primed. The failures take 5.06 seconds on Windows and
+5.55 seconds on Linux; neither reaches the overall time guard.
+
+Instrumented runs show active playback with no error before the wait. Windows
+accepts 2,879 complete 48 kHz float-stereo frames, and Linux accepts 1,654 complete
+44.1 kHz integer-stereo frames. After the forced wait, each backend reports an
+idle stream and an underrun, as expected when its producer stops. Linux's
+processed duration advances from 6.22 to 37.51 ms. These observations identify a
+fixture assumption, not a change needed in production audio buffering.
+
+The repaired fixture keeps the 75 ms readiness deadline and stops polling when
+native capacity increases. It requires active playback, no backend error, a new
+prime, positive processed time and accepted complete frames. A carried Turbo
+phase can legitimately discard an entire interval, so bounded warmup and
+callback loops advance through that phase and stop immediately when the
+callback fires. The original failed stages and both diagnostic runs remain
+preserved.
+
+### Final installed workflows
+
+Fresh canonical installations pass the complete native audio workflow in
+11.43 seconds on Windows and 19.75 seconds on Linux/Xcb. Both run under the
+unchanged 180-second guard and retain all ten UI captures. The repaired
+fixture is the only change to the eight frozen playback integration files
+since the initial complete local suites; production playback behavior is
+unchanged during the fixture repair.
+
+| Platform and mode | Host format | Accepted frames | Writable capacity | Readiness |
+| --- | --- | ---: | ---: | ---: |
+| Windows Turbo | 48 kHz float stereo | 2,399 | 0 to 3,840 bytes | 2 ms |
+| Windows rewind | 48 kHz float stereo | 2,879 | 0 to 3,840 bytes | 8 ms |
+| Linux Turbo | 44.1 kHz integer stereo | 1,654 | 0 to 4,408 bytes | 1 ms |
+| Linux rewind | 44.1 kHz integer stereo | 2,756 | 0 to 4,412 bytes | 31 ms |
+
+All four observations retain active playback, no backend error, a live device,
+a new prime and positive processed time. The later focus-loss, nested-tick,
+state-load, phase/queue and cartridge-close assertions all complete. Startup
+text and debugger controls remain readable on both platforms.
+
+The final Windows build and installed executable have SHA-256
+`6dab6a8c8def8db19037bb87d1c2d32bf8213982d979894e39c55e7b622eb29c`.
+All loaded Qt and SDL modules come from its 295-file stage, with SDK Qt absent
+from the process search path. The Linux build is
+`0b4596870c8e28ecbd4ae72b8d454a7e89255ec97909259cafc97c9e0d3736f2`;
+the installed executable is
+`2022f7220db3343a4e13be74d73cd1b8bf7f99afde4e94b369b642865535ff6e`.
+The 22-file Linux stage uses matching Qt 6.8.3 and system SDL2, has a validated
+private icon cache and contains no executable RPATH or RUNPATH. Its existing
+audio server passes the protocol readiness gate without a service change.
+
+Source and executable identities remain unchanged throughout the final native
+runs. Formatting and whitespace checks pass, all 114 local documentation links
+resolve, and all 162 project source/test files remain below 2,000 lines. These
+installed workflow checks do not establish audible quality, sustained gameplay
+speed, clean-machine deployment or a portable Linux bundle.
+
+Matching history order and selected host-frame identifiers does not qualify
+identical rewind waveforms. V11 retains deterministic APU/filter history, and
+the host's slow-motion conversion has its own interpolation policy. WAVE
+recording still captures forward PCM and excludes replay; controller rumble
+remains suppressed during rewind. Printer protocol, image-buffer and job state
+are not yet restored with native snapshots. These remain explicit parity gaps.
+
+## Peripheral continuation and desktop lifecycle, 2026-11-15
+
+Checkpoint `40c299b0e92fe6e94c5bd84e3cb9db205ad195ac` adds native V12 printer and
+infrared history, shared CGB/HuC1/HuC3
+infrared connections, explicit cartridge/symbol reload, and reduced Qt polling
+while idle. The comparison revision remains
+`ea667ad79aa28409f034b1fd6da7304e1844750d`. Generated probes and commercial replay
+use frozen libraries, inputs, and source manifests; their scope is recorded below.
+
+### Regression gates
+
+The final Windows Release build passes all 49 checks; Linux Release passes all
+47. Both include the Qt reload, printer, controller, and idle-timer workflows.
+The Linux core sanitizer build passes all 28 checks with address/undefined
+behavior instrumentation and leak detection. The first full Release runs found
+two stale test expectations: a supposedly unsupported version was now V12, and
+an MBC7 size assertion omitted six receiver bytes. The repaired checks still
+require rejection of the next version and the exact current wire length.
+
+Printer reattachment also exposed a production defect: after loading an earlier
+console timeline while the printer was detached, immediate capture rejected its
+future clock origin. Attachment now rebases that origin without consuming or
+clearing the pending job. The regression fails before the repair and passes
+through both ordinary and trusted snapshot APIs afterward.
+
+### Printer continuation
+
+All 16 paired cases and 80 observations pass. The matrix covers buffered DATA,
+partially received DATA and reply bytes at one, four, and seven sampled bits,
+and an active print job on DMG and CGB. Each engine agrees with its independently
+continued control for image bytes, replies, callback order, and remaining work.
+Paired callback brackets and tail-cycle counts also agree in every case. The
+brackets are 12 base cycles wide; these are instruction/host-operation bounds,
+not exact internal callback edges.
+
+Both engines produce 30 image/completion callbacks on the uninterrupted paths
+and the same 30 after native restoration. Saving and loading emit none. An
+explicit-reset negative control still loses the pending history in all 16 cases.
+Four additional origin cases make 320 step comparisons per engine and agree on
+fresh-device load and reset clocks. V12 states with a printer occupy 333,301 bytes
+for these ordinary cartridges.
+
+The independent core regressions also cover the attachment matrix, malformed
+records with recomputed integrity, overlapping storage, older imports, reset,
+and retained callbacks. Qt workflows cover disk load, rewind, Backstep, already
+emitted paper, and queued work crossing a cartridge replacement. These checks
+do not qualify physical printing or commercial printer workflows.
+
+### Mapper and infrared comparisons
+
+The refreshed header/storage matrix has 4,096 rows: 4,066 match, with the same
+30 recorded exceptions for ROM+RAM types `08` and `09` and partial MBC6 type `20`.
+The exception check retains exact expected values rather than excluding those
+types from comparison. All 2,244 MMM01 menu/header rows match. Generated core
+tests cover ROM-only, MBC1, multicart MBC1, MBC2, MBC3, extended MBC3, MBC5/rumble,
+MMM01, MBC7, HuC1, HuC3, Camera, and TPP1. This is controller coverage, not a claim
+that every commercial cartridge or peripheral works.
+
+All 17,664 infrared register/callback observations and 10,240 stable sensor rows
+match. The frozen transition matrix retains 550 differences among 8,192 rows.
+A subsequent phase audit reproduces those rows and finds no separate charge-rate
+or clamping discrepancy: the implementations use different deterministic noise
+phases, and the original fixtures also began with different divider/display
+phases. Those 550 rows therefore describe that recorded setup, not a controlled
+measurement of one isolated defect. Exact transition behavior remains pending;
+stable receiver agreement does not establish it.
+
+A controlled follow-up normalizes divider and presentation origins. Resetting
+DIV changes detection in 254 of 512 comparison pairs, while CupidGB changes in
+none. A VRAM read that synchronizes deferred display work changes detection in
+107 of another 512 pairs; CupidGB again changes in none. One pair has identical
+CupidGB native bytes despite distinct required outputs. Exact transition parity
+therefore needs additional retained phase/history or a broader event mapping;
+substituting an existing elapsed, line, or frame counter is insufficient.
+
+### Commercial native-state continuation
+
+Nine traces cover eight commercial cartridges across ROM-only, MBC1, MBC2,
+MBC3, MBC5, MBC7, HuC3, and Camera, including a separate active MBC1 gameplay
+trace. Each local run warms for 3,000 intervals, saves during mode 3 with 17–19
+queued PCM frames, and compares 600 continuation intervals. All 36 runs pass:
+nine local save/restore runs per platform and nine cross-platform imports in
+each direction.
+
+The aggregate contains 319,566,188 instruction comparisons, 21,608 presentation
+and memory comparisons, and 432 complete native-byte comparisons. Every drained
+PCM chunk matches. Saved/final states and captured start/end image bytes agree
+between hosts. All 341 protected original files retain their bytes and
+modification times.
+
+These runs use frozen Windows library
+`c60f336d6488c7a19c467eb121b7547bcf4cb346ecb7abcc0432b43888c578d1`
+and Linux library
+`f2b3bcc5c1842bb38394e7c8d110c4d31fd5609ebef17ec890153d047f4c0520`.
+A later frontend rebuild changed the live Linux archive after a documented
+header-comment edit. The receipt retains that archive and the exact comment
+diff and does not claim byte identity with the frozen library. No continuation
+assertion failed. Startup uses the approximate post-boot profile and a private
+deterministic clock; PCM is checked before host playback. No printer or cable
+is attached during these commercial replay runs.
+
+### External suites and illegal execution
+
+The current frozen Windows runner produces 242 explicit passes in the 243-case
+external gate. The remaining OAM timing logger reaches its 3,600-interval limit
+with result code 128 and no success verdict. It remains bounded, not passed.
+
+Fresh diagnosis of the seven previously failing library inputs finds matching
+terminal opcodes, instruction counts, and final 256 instruction/register records
+under controlled startup. Their CPU fetches still expose a separate bug:
+CupidGB consumes no time for an invalid opcode and leaves IE enabled. The
+comparison consumes one machine cycle and clears IE while peripheral clocks
+continue. A 44-case synthetic matrix covers all eleven invalid opcodes, both
+CGB speeds, and both IME values; an injected pending interrupt incorrectly wakes
+CupidGB in every case. This is a remaining CPU/API/frontend gap. The seven
+library outcomes stay errors, and matching terminal paths do not justify labeling
+every input a bad dump or claiming successful gameplay.
+
+### Installed native workflows
+
+Fresh Windows and Linux installations pass the complete native Qt workflow with
+real audio, using the unchanged 180-second guard. Both verify the expected Qt/SDL
+runtime paths and retain ten UI captures. Debugger controls, startup messages,
+map overlays, and palette panels remain readable on both hosts. The Windows
+stage has 295 files; the Linux stage has 22 and uses Qt 6.8.3 with system SDL2.
+
+The Windows installed executable is
+`5d1e243ec621e57714ae38b8a86d35bac4a9479758547eeabdc05d4e2aed9396`.
+The Linux build executable is
+`d82c8c7880cc2c09760b6e3de7ce9202b8f694b5d44c28891dfe13ffc3727377`;
+its installed executable is
+`43e700942db1dcf1e721f40d8593bbab4dc0cd188c591ce4e18576fdcd3a14c8`.
+These integration checks run while other validation is active. Their duration
+is not a performance benchmark, and passing them does not qualify audible
+quality, physical refresh, a clean machine, or a portable Linux bundle.
+
+Formatting and whitespace checks pass. All 170 project C/C++ source and header
+files remain below 2,000 lines; the largest is the 1,957-line state regression.
+No obsolete root `licenses` directory is present. The project license and
+required notices for retained dependencies remain intact.
+
+## Illegal-opcode halt and bounded library scan, 2026-11-16
+
+The follow-up corrects the CPU defect recorded above. All eleven illegal primary
+bytes now complete their fetch cycle, clear IE, and enter the existing halted
+state. Timer, serial, graphics, and sound continue under the normal hardware
+gates. OAM DMA remains suspended until wakeup. Pending IF bits alone cannot wake
+the CPU with IE clear; a debugger can deliberately restore IE and release it.
+Native V12 already represents this state, so no format or legacy-load change is
+needed.
+
+Observed stepping reports the actual illegal byte and address. Explicit debugger
+commands stop with a distinct diagnostic and retain Backstep. Ordinary playback
+continues the halted hardware. The runner ends with `illegal_opcode` and exit 1,
+including the final fetch's clocks, presentation event, and PCM. A simultaneous
+protocol success or duration limit cannot turn that outcome into a pass.
+
+### Core and paired lockup checks
+
+The targeted Linux Release run passes GB, CPU timing, CPU lockup, native state,
+and debugger checks. The new target covers 198 illegal-opcode cases: eleven
+bytes, six model/speed profiles, and IME off, on, or enabled by a preceding EI.
+It also checks all 1,536 CB-subopcode/profile combinations, blocked bus fetches,
+HALT-bug addresses, interrupt preemption, IF-only non-wake, explicit IE release,
+plain/observed equivalence, peripheral output, and snapshot continuation.
+
+The first new peripheral fixture incorrectly expected OAM DMA to finish during
+HALT. The inspected memory path requires suspension; the corrected fixture
+checks unchanged pending DMA/OAM and completion after explicit wakeup. No DMA
+production behavior was changed to satisfy that test.
+
+Fresh paired probes use comparison revision
+`ea667ad79aa28409f034b1fd6da7304e1844750d` and frozen candidate library
+`4f8d9ba46870ec9a867c76249c5ab39238e5cefff648a25e6158e22c20ebfaa9`.
+All 66 cases and 396 observations agree across fetch, idle, an IF request,
+further idle, explicit IE release, and the following instruction. They cover
+all eleven bytes, both CGB speeds, and all three IME conditions. Separate
+event, cycle, PC, IE, and IME expectations also pass. The retained pre-change
+negative control differs in all 396 observations, including every initial
+fetch. Protected inputs and the 55 frozen core source/header files remain
+unchanged.
+
+The seven affected library inputs still reach illegal instructions in both
+engines. Their final 256 instruction/register records, total instruction counts,
+and total base clocks now agree in every pair. Six cases gain the missing two
+base cycles of a double-speed fetch; one gains four. These comparisons use the
+same color boot binary, released buttons, no battery load, and a controlled
+startup state. Matching the terminal path and halt behavior does not establish
+successful gameplay or justify classifying every input as a bad dump.
+
+### Completed pre-fix library scan
+
+The retained runner with SHA-256
+`865b517e19d9a168c2540b1f0b45f8cce836ae10fa1a42b4d4b8c4e18dd072ec`
+completes the 880-input scan: 873 reach the 3,600-interval guest-time bound and
+seven report the original core error. This executable was frozen before the CPU
+repair; these totals do not describe a rescan of the new executable.
+
+The inventory contains 878 distinct ROM hashes. Model selection is 198 DMG,
+556 CGB, and 126 SGB runs, using the corresponding recorded boot inputs. The
+mapper inventory is 500 MBC5, 272 MBC1, 81 MBC3, 12 ROM-only, 11 MBC2, and one
+each for MBC7, HuC3, Camera, and an unknown header type. All seven errors occur
+among the MBC5 inputs. No HuC1, MMM01, TPP1, or MBC6 commercial input is present.
+Generated controller probes supply separate coverage where applicable.
+
+Every protected original retains its bytes and modification time; the frozen
+runner is unchanged. A bounded result records execution through the chosen
+guest-clock limit. It does not establish active play, correct pixels or sound,
+successful persistence, every mapper feature, or sustained native performance.
+
+### Final builds, CLI outcomes, and native workflows
+
+The final Release builds pass all 50 Windows checks and all 48 Linux checks,
+including the expanded Qt workflow and required archive tests. The Linux
+address/undefined-behavior sanitizer build passes all 29 checks with leak
+detection. The new CPU lockup target and the complete runner regression run in
+each configuration. The 194 recorded build/test inputs remain unchanged through
+these final gates and native validation.
+
+The first Windows suite passed 49 of 50 checks. Its new debugger fixture invoked
+bare `reset`, which is not implemented by the current console. The diagnostic
+run located the failed post-reset assertion. Changing that fixture to the
+existing `reset reload` command made the focused check and subsequent full
+suite pass. Bare and quick-reset console commands remain explicit checklist
+gaps; no production reset behavior was changed to satisfy this fixture.
+
+The actual runner also rechecks the seven library failures on both hosts. All
+fourteen executions return `illegal_opcode` with exit 1, the expected fetched
+byte/address, and one additional completed step. Six gain two base cycles and
+one gains four. All seven parsed result records agree across platforms except
+host elapsed time, including audio and image checksums. Their other output
+counters remain equal to the retained pre-fix scan. These checks use frozen
+Windows runner
+`8abe3f9a7633ee93ed6bccb53a188cee24c4bc4752056b8e9a05b8ec72f98e4b`
+and Linux runner
+`db6c70b52d16914e44fd985baefa4c8513994984c63e54b9924c7d64ad389cab`.
+The private guard records the exact one-line Qt fixture correction during the
+Windows run; the runner/core inputs, binaries, ROMs, boot input, and saves remain
+unchanged. No successful case was repeated to replace its evidence.
+
+The new Windows runner also repeats the 243-case external gate: 242 explicit
+passes and the same bounded OAM timing logger. The passing groups contain 119
+model-qualified acceptance cases, 56 mapper cases, 24 audio cases, 22 CPU cases,
+14 timing cases, and seven OAM cases. The remaining logger reports code 128
+after 3,600 intervals without a success verdict. It remains inconclusive; the
+runner hash is unchanged throughout the gate.
+
+Fresh installations pass the complete native Qt workflow with real audio on
+Windows and Linux/Xcb. Both verify the expected runtime paths and retain ten
+captures. The debugger, map overlay, startup message, and palette views remain
+readable. Native save/load, rewind, and reentrant audio-write cartridge close
+checks also pass. These runs establish the stated integration scope under
+concurrent validation load, without a performance or audible-quality claim.
+
+The Windows build and installed executable hash is
+`6addb20d9aaff6ddb892b26f68eea1233b268ec206bce040ec06c48848c0eb30`.
+The Linux build hash is
+`b65f7b2cd9f79381323ccbab419cfc3edd2096426ddfa8985e4f8db6d483843f`;
+the installed ELF hash is
+`dc3b9867ddee0840bab8e47cdb063fed9e2f81535b82323c73f64983918dca47`.
+The installation receipt retains the normal Linux RPATH change and runtime
+dependencies. All 171 project C/C++ source and header files remain below 2,000
+lines, with formatting and whitespace checks passing.
+
+## Native pacing and idle measurements, 2026-11-16
+
+The CPU implementation is committed as
+`07fb75b7df5b303899e4b11df2360c9a2ffb469c`. Its 194 frozen build/test inputs
+match the committed Git blobs. All six hosted Windows, Linux, and sanitizer
+checks pass on that exact head in workflow runs `43780966953` and `43780963140`.
+
+### Idle work
+
+The idle-timer change delivered in `40c299b` was measured separately with frozen
+frontend sources, identical core libraries within each platform, identical
+instrumentation, and a generated DMG loop cartridge. Eight sequential runs
+followed baseline/candidate/candidate/baseline order on Windows and Ubuntu under
+WSLg/Xcb. All 48 phases completed. Each phase measured five Qt elapsed seconds
+after settling. Mean main-timer deliveries per Qt second were:
+
+| Idle state | Windows before | Windows after | Linux before | Linux after |
+| --- | ---: | ---: | ---: | ---: |
+| Paused | 929.7 | 62.6 | 909.8 | 62.6 |
+| Menu open | 932.2 | 62.6 | 917.4 | 62.6 |
+| Rewind exhausted | 924.5 | 62.4 | 899.5 | 62.4 |
+| No cartridge | 930.5 | 62.6 | 902.3 | 62.6 |
+
+Main-timer deliveries fell by about 93%. The independent controller timer
+continued near 125 deliveries per second. All 32 idle phases advanced no guest
+cycles or generated audio frames; all 16 active/recovery phases advanced both.
+Both variants retained the 1 ms active timer, and no measured phase added an
+audio error or idle event. Linux process CPU time averaged 44.8–50.3 ms per idle
+phase before the change and 19.6–28.6 ms afterward. Sources, executables, and
+deployment files retained their recorded hashes.
+
+This comparison used no physical controller. Application timer and dispatcher
+events do not measure physical wakeups or energy use. Windows thread-cycle
+readings remain raw observations without a CPU-utilization conversion. The
+private idle receipt has SHA-256
+`e2754b39dad6af6ac102e864af10d4c0d6c8ed3c1bc14011db01df086481c5b5`.
+
+### Bounded commercial sessions
+
+The installed CPU-checkpoint applications ran two local commercial cartridges
+on each platform with explicit post-boot startup, normal audio, scripted inputs,
+and rewind recording. Each of the four sessions completed its 120-second
+application-time limit with exit 0. Statistics below exclude the first five
+seconds, leaving approximately 115 application seconds per session.
+
+| Session | Guest speed against app clock | Paint p95 | Paint p99 | Peak RSS |
+| --- | ---: | ---: | ---: | ---: |
+| Windows DMG | 100.0023% | 17.68 ms | 18.24 ms | 103.5 MiB |
+| Windows CGB | 100.0047% | 17.72 ms | 18.41 ms | 143.9 MiB |
+| Linux/Xcb DMG | 100.0021% | 17.68 ms | 18.08 ms | 126.4 MiB |
+| Linux/Xcb CGB | 100.0042% | 17.52 ms | 18.24 ms | 159.0 MiB |
+
+Guest speed divides measured base-speed cycles by application elapsed time and
+the selected model clock. Paint intervals count Qt widget paint events
+separately from guest execution; they do not measure physical display refresh.
+The largest post-warmup paint interval was 25.64 ms. Peak RSS includes the
+interface, audio, and accumulating rewind history. Retained rewind data reached
+about 61.0 MiB for DMG and 97.8 MiB for CGB.
+
+All four sessions recorded zero audio errors and zero audio-idle events after
+startup, with active device processing and no illegal-opcode diagnostic. The
+traces applied 14 input events for DMG and 22 for CGB. Both final DMG captures
+show Game Over; both CGB captures show an active course. CGB sessions flushed
+fresh private 8 KiB battery files, without a battery reload round trip in this
+measurement. Original ROM, trace, existing-save bytes and modification times,
+and installed executable hashes remained unchanged.
+
+Linux guest percentages and paint intervals use adjusted monotonic time. The
+harness also retained `CLOCK_MONOTONIC_RAW`: whole-process durations were
+122.496 seconds for DMG and 121.988 seconds for CGB, including startup and
+shutdown. Sampled adjusted-to-RAW interval ratios ranged from 0.917 to 1.023.
+Those process durations do not share the application's measurement window and
+cannot replace it in a guest-speed calculation. Both clocks are retained for
+the idle comparison as well; its callback table uses Qt elapsed time.
+
+The combined private receipt binds each result, image, trace, source manifest,
+and installation manifest to the recorded binaries. Coverage is limited to
+these snapshots, cartridges, traces, and one Windows/WSLg host. Audible quality,
+physical refresh, longer active play, and wider cartridge coverage remain
+unmeasured by this set. The idle result establishes reduced idle work; it does
+not establish an active-game throughput gain or universal full speed.
+
+## Cold memory and firmware startup, 2026-11-16
+
+The [startup validation record](validation-startup.md) covers model-specific cold memory, seed controls, SGB handoff and older-state recovery, mapped register comparisons, executed firmware, and the final Windows/Linux regression gates. It retains the raw display-phase and PCM differences. The later [clock validation record](validation-rtc.md) qualifies the four-dot display offset as a coordinate difference for the tested normal-speed CGB startup edges; PCM equality remains open.
+
+## Cartridge clocks and divider continuation, 2026-11-16
+
+The [cartridge-clock validation record](validation-rtc.md) covers host and emulated clock policies, controller-specific battery behavior, bounded raw-counter arithmetic, logical clock delivery, the STOP/HBlank DMA divider repair, and native version 13 continuation. It distinguishes frozen comparisons, negative controls, current integration results and remaining qualification.
+
+## Initial display sizing, 2026-11-16
+
+The [display validation record](validation-display.md) covers the initial-window status-bar correction, an old-constructor negative control, focused Windows/Linux frontend suites, installed native UI/audio checks, and before/after viewport captures. Earlier timed gameplay samples retain their original executables and render sizes.

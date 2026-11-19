@@ -1,11 +1,36 @@
+/**
+ * @file    controller_backend.cpp
+ * @brief   Controller discovery, input events, motion samples, and motor output.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://gnu.org>.
+ */
+
 #include "controller_backend.h"
 
 #include <QCoreApplication>
 #include <QEvent>
+#include <QPointer>
+#include <QScopedValueRollback>
 #include <QThread>
 
 #include <algorithm>
 #include <array>
+#include <limits>
 #include <set>
 #include <string>
 
@@ -16,6 +41,104 @@ static constexpr Uint32 lastControllerEvent = SDL_CONTROLLERSTEAMHANDLEUPDATED;
 #else
 static constexpr Uint32 lastControllerEvent = SDL_CONTROLLERSENSORUPDATE;
 #endif
+
+struct ControllerBackend::SharedTransport {
+    static constexpr Uint32 subsystems =
+        SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER | SDL_INIT_HAPTIC;
+    std::vector<QPointer<ControllerBackend>> clients;
+    std::map<SDL_JoystickID, ControllerBackend *> rumbleOwners;
+    QThread *thread = nullptr;
+    QString previousBackgroundHint;
+    bool hadBackgroundHint = false, installedBackgroundHint = false, collecting = false;
+
+    void restoreBackgroundHint() {
+        const char *currentHint = SDL_GetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS);
+        if (!installedBackgroundHint || !currentHint || std::string(currentHint) != "1")
+            return;
+        if (hadBackgroundHint)
+            SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS,
+                        previousBackgroundHint.toUtf8().constData());
+        else
+            SDL_ResetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS);
+    }
+
+    bool acquire(ControllerBackend *client, QString *error) {
+        if (!clients.empty() && thread != QThread::currentThread()) {
+            if (error)
+                *error =
+                    QStringLiteral("Controller devices are in use on another application thread");
+            return false;
+        }
+        if (clients.empty()) {
+            SDL_SetMainReady();
+            // One process-wide lease keeps physical input current for every window.
+            // Delivery remains a per-client choice, independently of native focus.
+            const char *previous = SDL_GetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS);
+            hadBackgroundHint = previous != nullptr;
+            previousBackgroundHint = QString::fromUtf8(previous ? previous : "");
+            installedBackgroundHint = SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
+            if (SDL_InitSubSystem(subsystems) < 0) {
+                if (error)
+                    *error = QString::fromUtf8(SDL_GetError());
+                restoreBackgroundHint();
+                return false;
+            }
+            thread = QThread::currentThread();
+        }
+        clients.emplace_back(client);
+        return true;
+    }
+
+    void release(ControllerBackend *client) {
+        clients.erase(std::remove(clients.begin(), clients.end(), client), clients.end());
+        if (!clients.empty())
+            return;
+        rumbleOwners.clear();
+        SDL_QuitSubSystem(subsystems);
+        restoreBackgroundHint();
+        thread = nullptr;
+    }
+
+    QString collect(bool allPending = false) {
+        if (clients.empty() || collecting)
+            return {};
+        Q_ASSERT(thread == QThread::currentThread());
+        QScopedValueRollback<bool> active(collecting, true);
+        SDL_PumpEvents();
+        SDL_JoystickUpdate();
+        // SDL has one event queue. Preserve each edge for every live client;
+        // callbacks run later, only during that client's own guarded poll.
+        // Normal ticks are bounded. A gate transition drains the pending snapshot
+        // once so it can suppress its old presses without discarding a peer's edges.
+        const std::array<std::pair<Uint32, Uint32>, 2> ranges{
+            std::pair<Uint32, Uint32>{SDL_JOYAXISMOTION, SDL_JOYBATTERYUPDATED},
+            {SDL_CONTROLLERAXISMOTION, lastControllerEvent}};
+        std::array<SDL_Event, 64> events{};
+        for (const auto &[first, last] : ranges) {
+            size_t remaining = allPending ? std::numeric_limits<size_t>::max() : 512;
+            while (remaining) {
+                const int requested = int(std::min(remaining, events.size()));
+                const int count =
+                    SDL_PeepEvents(events.data(), requested, SDL_GETEVENT, first, last);
+                if (count < 0)
+                    return QString::fromUtf8(SDL_GetError());
+                for (const auto &client : clients)
+                    if (client && client->initialized_)
+                        client->pendingEvents_.insert(client->pendingEvents_.end(), events.begin(),
+                                                      events.begin() + count);
+                if (count < requested)
+                    break;
+                remaining -= size_t(count);
+            }
+        }
+        return {};
+    }
+};
+
+ControllerBackend::SharedTransport &ControllerBackend::transport() {
+    static SharedTransport shared;
+    return shared;
+}
 
 bool InputState::operator==(const InputState &other) const {
     return axes == other.axes && buttons == other.buttons && hats == other.hats &&
@@ -41,32 +164,19 @@ bool ControllerBackend::start(QString *error) {
     assertThread();
     if (initialized_)
         return true;
-    SDL_SetMainReady();
-    // Collect physical state even when the host blocks delivery. This avoids stale held buttons.
-    // A future shared SDL host must agree on this process-wide hint and event-stream ownership.
-    const char *previousHint = SDL_GetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS);
-    hadBackgroundHint_ = previousHint != nullptr;
-    previousBackgroundHint_ = QString::fromUtf8(previousHint ? previousHint : "");
-    installedBackgroundHint_ = SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
-    constexpr Uint32 subsystems = SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER | SDL_INIT_HAPTIC;
-    if (SDL_InitSubSystem(subsystems) < 0) {
-        if (error)
-            *error = QString::fromUtf8(SDL_GetError());
-        if (installedBackgroundHint_) {
-            if (hadBackgroundHint_)
-                SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS,
-                            previousBackgroundHint_.toUtf8().constData());
-            else
-                SDL_ResetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS);
-        }
+    if (!transport().acquire(this, error))
         return false;
-    }
     initialized_ = true;
     clock_.start();
     discardPendingEdges();
     if (QCoreApplication::instance())
         QCoreApplication::instance()->installEventFilter(this);
     pollNow();
+    if (!initialized_) {
+        if (error)
+            *error = QStringLiteral("Controller polling stopped during startup");
+        return false;
+    }
     timer_.start();
     return true;
 }
@@ -78,22 +188,15 @@ void ControllerBackend::stop() {
         return;
     if (QCoreApplication::instance())
         QCoreApplication::instance()->removeEventFilter(this);
+    initialized_ = false;
     for (auto &[id, device] : devices_) {
         closeDevice(device);
         if (deviceRemoved)
             deviceRemoved(id);
     }
     devices_.clear();
-    SDL_QuitSubSystem(SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER | SDL_INIT_HAPTIC);
-    const char *currentHint = SDL_GetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS);
-    if (installedBackgroundHint_ && currentHint && std::string(currentHint) == "1") {
-        if (hadBackgroundHint_)
-            SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS,
-                        previousBackgroundHint_.toUtf8().constData());
-        else
-            SDL_ResetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS);
-    }
-    initialized_ = false;
+    pendingEvents_.clear();
+    transport().release(this);
 }
 
 bool ControllerBackend::running() const {
@@ -159,13 +262,17 @@ void ControllerBackend::setAllowBackground(bool enabled) {
 void ControllerBackend::discardPendingEdges() {
     if (!initialized_)
         return;
-    // Old queued presses must not become shortcut presses after delivery is enabled again.
-    // Current held state is delivered separately as a resynchronization, without synthetic edges.
-    // Keep device/remapping metadata queued so a delivery boundary cannot hide a capability change.
-    SDL_PumpEvents();
-    SDL_JoystickUpdate();
-    SDL_FlushEvents(SDL_JOYAXISMOTION, SDL_JOYBUTTONUP);
-    SDL_FlushEvents(SDL_CONTROLLERAXISMOTION, SDL_CONTROLLERBUTTONUP);
+    const QString error = transport().collect(true);
+    // A resumed window receives held state without replaying old shortcut presses.
+    // Peers retain their copies, and device/remapping metadata remains queued here.
+    const auto inputEdge = [](const SDL_Event &event) {
+        return (event.type >= SDL_JOYAXISMOTION && event.type <= SDL_JOYBUTTONUP) ||
+               (event.type >= SDL_CONTROLLERAXISMOTION && event.type <= SDL_CONTROLLERBUTTONUP);
+    };
+    pendingEvents_.erase(std::remove_if(pendingEvents_.begin(), pendingEvents_.end(), inputEdge),
+                         pendingEvents_.end());
+    if (!error.isEmpty() && errorOccurred)
+        errorOccurred(error);
 }
 
 void ControllerBackend::updateGate() {
@@ -358,6 +465,16 @@ bool ControllerBackend::rumble(SDL_JoystickID id, uint16_t low, uint16_t high, u
     }
     if (SDL_JoystickRumble(device.joystick, low, high, duration) < 0)
         return false;
+    auto &owners = transport().rumbleOwners;
+    const auto previous = owners.find(id);
+    if (previous != owners.end() && previous->second != this) {
+        const auto stale = previous->second->devices_.find(id);
+        if (stale != previous->second->devices_.end()) {
+            stale->second.state.rumbleActive = false;
+            stale->second.rumbleUntil = 0;
+        }
+    }
+    owners[id] = this;
     device.state.rumbleActive = true;
     device.rumbleUntil = clock_.elapsed() + duration;
     return true;
@@ -370,8 +487,15 @@ void ControllerBackend::stopRumble(SDL_JoystickID id) {
         return;
     auto &device = it->second;
     if (device.state.rumbleActive) {
-        // Unplug can make this fail. Clear host intent regardless, and never replay on reconnect.
-        SDL_JoystickRumble(device.joystick, 0, 0, 0);
+        auto &owners = transport().rumbleOwners;
+        const auto owner = owners.find(id);
+        // A newer command from another window owns the physical motor. Expiring
+        // or closing the previous window must not cancel that command.
+        if (owner != owners.end() && owner->second == this) {
+            SDL_JoystickRumble(device.joystick, 0, 0, 0);
+            owners.erase(owner);
+        }
+        // Unplug may reject the native stop. Never replay intent on reconnect.
         device.state.rumbleActive = false;
         device.rumbleUntil = 0;
     }
@@ -417,40 +541,33 @@ void ControllerBackend::dispatch(const SDL_Event &e) {
         inputEvent(event);
 }
 
-void ControllerBackend::drainEvents(Uint32 first, Uint32 last) {
-    // Preserve unrelated SDL event streams. At most 512 input events per family per Qt turn.
-    std::array<SDL_Event, 64> events{};
-    for (unsigned budget = 0; budget < 512; budget += static_cast<unsigned>(events.size())) {
-        const int count = SDL_PeepEvents(events.data(), static_cast<int>(events.size()),
-                                         SDL_GETEVENT, first, last);
-        if (count < 0) {
-            if (errorOccurred)
-                errorOccurred(QString::fromUtf8(SDL_GetError()));
-            break;
-        }
-        for (int i = 0; i < count; ++i)
-            dispatch(events[i]);
-        if (count < static_cast<int>(events.size()))
-            break;
-    }
-}
-
 void ControllerBackend::pollNow() {
     assertThread();
     if (!initialized_ || polling_)
         return;
-    polling_ = true;
-    SDL_PumpEvents();
-    SDL_JoystickUpdate();
+    QScopedValueRollback<bool> polling(polling_, true);
+    if (beforePoll)
+        beforePoll();
+    if (!initialized_)
+        return;
+    const QString error = transport().collect();
     reconcileDevices();
-    drainEvents(SDL_JOYAXISMOTION, SDL_JOYBATTERYUPDATED);
-    drainEvents(SDL_CONTROLLERAXISMOTION, lastControllerEvent);
+    if (!error.isEmpty() && errorOccurred)
+        errorOccurred(error);
+    // Pop before callback delivery so a gate transition can remove the remaining
+    // old edges even when it occurs inside an input callback.
+    for (unsigned budget = 0; initialized_ && !pendingEvents_.empty() && budget < 1024; ++budget) {
+        const SDL_Event event = pendingEvents_.front();
+        pendingEvents_.pop_front();
+        dispatch(event);
+    }
+    if (!initialized_)
+        return;
     for (auto &[id, device] : devices_) {
         update(device);
         if (device.state.rumbleActive && clock_.elapsed() >= device.rumbleUntil)
             stopRumble(id);
     }
-    polling_ = false;
 }
 
 } // namespace cupid::input

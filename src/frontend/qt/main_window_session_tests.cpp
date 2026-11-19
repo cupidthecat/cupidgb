@@ -1,6 +1,30 @@
+/**
+ * @file    main_window_session_tests.cpp
+ * @brief   Qt model selection, idle scheduling, pacing, and display-cadence regressions.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://gnu.org>.
+ */
+
+#include "inspector_renderer.h"
 #include "main_window_internal.h"
 
 #include <QDebug>
+#include <QScopeGuard>
 
 extern "C" {
 #include "cupid/gb/ppu.h"
@@ -88,6 +112,94 @@ bool MainWindow::modelSmokeTest(const QString &directory) {
         if (!saved.openRom(plain) || saved.emulator_->gb.model != CUPID_GB_MODEL_CGB)
             return smokeFailure(__FILE__, __LINE__);
     }
+    const std::array<CupidGbModel, 6> revisions = {CUPID_GB_MODEL_CGB_0, CUPID_GB_MODEL_CGB_A,
+                                                   CUPID_GB_MODEL_CGB_B, CUPID_GB_MODEL_CGB_C,
+                                                   CUPID_GB_MODEL_CGB_D, CUPID_GB_MODEL_CGB};
+    for (const auto revision : revisions) {
+        settings_.setValue("emulation/model", int(revision));
+        MainWindow selected(true, true);
+        if (!selected.openRom(colorOnly) || selected.emulator_->gb.model != revision ||
+            selected.emulator_->target_system != CUPID_SYSTEM_GBC ||
+            !selected.emulator_->gb.cgb_mode || !selected.runFrame() || !selected.restart() ||
+            selected.emulator_->gb.model != revision || !selected.openRom(colorOnly, true) ||
+            selected.emulator_->gb.model != revision || !selected.openRom(plain) ||
+            selected.emulator_->gb.model != revision || selected.emulator_->gb.cgb_mode ||
+            inspectorMemoryBankCount(selected.emulator_->gb, InspectorMemoryRegion::WorkRam) != 8 ||
+            inspectorMemoryBankCount(selected.emulator_->gb, InspectorMemoryRegion::VideoRam) != 2)
+            return smokeFailure(__FILE__, __LINE__);
+        selected.emulator_->gb.display_frame_type = CUPID_GB_FRAME_LCD_OFF;
+        selected.present(Presentation::Reset);
+        if (selected.image_.pixel(0, 0) != (*selected.cgbColorTable_)[0x7fff])
+            return smokeFailure(__FILE__, __LINE__);
+        bool checked = false;
+        const auto nextRevision =
+            revision == CUPID_GB_MODEL_CGB_0 ? CUPID_GB_MODEL_CGB : CUPID_GB_MODEL_CGB_0;
+        QTimer driver;
+        driver.setInterval(1);
+        connect(&driver, &QTimer::timeout, &selected, [&] {
+            auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+            if (!dialog || dialog->objectName() != "settings")
+                return;
+            driver.stop();
+            auto *choice = dialog->findChild<QComboBox *>("hardwareModel");
+            checked = choice && choice->isEnabled() && choice->currentData().toInt() == revision;
+            for (const auto available : revisions)
+                checked = checked && choice->findData(int(available)) >= 0;
+            if (checked) {
+                choice->setCurrentIndex(choice->findData(int(nextRevision)));
+                dialog->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Ok)->click();
+            } else {
+                dialog->reject();
+            }
+        });
+        driver.start();
+        selected.configure();
+        if (!checked || selected.emulator_->gb.model != revision ||
+            settings_.value("emulation/model").toInt() != nextRevision || !selected.restart() ||
+            selected.emulator_->gb.model != nextRevision || !selected.closeRom() ||
+            !selected.openRom(colorOnly) || selected.emulator_->gb.model != nextRevision)
+            return smokeFailure(__FILE__, __LINE__);
+    }
+    // Firmware identity is a session input. A failed revision-specific lookup
+    // must preserve the currently loaded cartridge and its state.
+    QTemporaryDir firmware(QDir(directory).filePath("color-firmware-XXXXXX"));
+    const auto writeFirmware = [&](const QString &name, uint8_t marker) {
+        QByteArray bytes(0x900, char(0));
+        bytes[0x200] = char(marker);
+        QFile file(firmware.filePath(name));
+        return file.open(QIODevice::WriteOnly) && file.write(bytes) == bytes.size();
+    };
+    if (!firmware.isValid() || !writeFirmware("cgb_boot.bin", 0x31))
+        return smokeFailure(__FILE__, __LINE__);
+    MainWindow firstRevision(true, true, false, firmware.path(), CUPID_GB_MODEL_CGB_0);
+    if (firstRevision.openRom(colorOnly) || firstRevision.emulator_ ||
+        !writeFirmware("cgb0_boot.bin", 0x40) || !firstRevision.openRom(colorOnly) ||
+        firstRevision.emulator_->gb.boot_rom_size != 0x900 ||
+        firstRevision.emulator_->gb.boot_rom[0x200] != 0x40)
+        return smokeFailure(__FILE__, __LINE__);
+    firstRevision.failed_ = false;
+    const auto originalFirmwareState = firstRevision.captureState();
+    if (originalFirmwareState.isEmpty() || !QFile::remove(firmware.filePath("cgb0_boot.bin")) ||
+        firstRevision.openRom(colorOnly, true) ||
+        firstRevision.captureState() != originalFirmwareState ||
+        !writeFirmware("cgb0_boot.bin", 0x40))
+        return smokeFailure(__FILE__, __LINE__);
+    firstRevision.failed_ = false;
+    if (!firstRevision.closeRom())
+        return smokeFailure(__FILE__, __LINE__);
+    for (const auto revision : revisions) {
+        MainWindow booted(true, true, false, firmware.path(), revision);
+        if (!booted.openRom(colorOnly) || !booted.emulator_->gb.boot_rom_enabled ||
+            booted.emulator_->gb.cpu.pc != 0 || booted.emulator_->gb.model != revision ||
+            booted.emulator_->gb.boot_rom[0x200] !=
+                (revision == CUPID_GB_MODEL_CGB_0 ? 0x40 : 0x31))
+            return smokeFailure(__FILE__, __LINE__);
+    }
+    if (!writeFirmware("cgbE_boot.bin", 0x45))
+        return smokeFailure(__FILE__, __LINE__);
+    MainWindow latestRevision(true, true, false, firmware.path(), CUPID_GB_MODEL_CGB);
+    if (!latestRevision.openRom(colorOnly) || latestRevision.emulator_->gb.boot_rom[0x200] != 0x45)
+        return smokeFailure(__FILE__, __LINE__);
     const QVariant savedScale = settings_.value("video/defaultScale", 2);
     const QVariant savedBorder = settings_.value("video/sgbBorder", true);
     settings_.setValue("video/defaultScale", 2);
@@ -102,6 +214,13 @@ bool MainWindow::modelSmokeTest(const QString &directory) {
         MainWindow sized(true);
         sized.show();
         QApplication::processEvents();
+        const auto initialCanvasFits = [&] {
+            return sized.display_->width() >= 320 && sized.display_->height() >= 288;
+        };
+        if (!initialCanvasFits()) {
+            qWarning() << "Initial 2x canvas is too small:" << sized.display_->size();
+            return smokeFailure(__FILE__, __LINE__);
+        }
         const QRect available = sized.screen()->availableGeometry();
         sized.move(available.center() - QPoint(sized.width() / 2, sized.height() / 2));
         QApplication::processEvents();
@@ -115,6 +234,11 @@ bool MainWindow::modelSmokeTest(const QString &directory) {
         if (!sized.openRom(enhanced))
             return smokeFailure(__FILE__, __LINE__);
         sized.setPaused(true);
+        QApplication::processEvents();
+        if (!initialCanvasFits()) {
+            qWarning() << "First cartridge reduced the 2x canvas:" << sized.display_->size();
+            return smokeFailure(__FILE__, __LINE__);
+        }
         const QSize handheldSize = sized.size();
         const QPoint handheldCenter = doubledCenter();
         settings_.setValue("emulation/model", int(CUPID_GB_MODEL_SGB2));
@@ -231,6 +355,30 @@ bool MainWindow::modelSmokeTest(const QString &directory) {
             return smokeFailure(__FILE__, __LINE__);
         sized.setPaused(true);
     }
+    {
+        const bool hadGeometry = settings_.contains("window/geometry");
+        const QVariant savedGeometry = settings_.value("window/geometry");
+        const auto restoreGeometrySetting = qScopeGuard([&] {
+            if (hadGeometry)
+                settings_.setValue("window/geometry", savedGeometry);
+            else
+                settings_.remove("window/geometry");
+        });
+        MainWindow remembered(true);
+        remembered.show();
+        remembered.resize(517, 389);
+        QApplication::processEvents();
+        const QSize rememberedSize = remembered.size();
+        settings_.setValue("window/geometry", remembered.saveGeometry());
+        MainWindow restored(false, true);
+        restored.show();
+        QApplication::processEvents();
+        if (restored.size() != rememberedSize) {
+            qWarning() << "Startup replaced restored geometry:" << restored.size() << "expected"
+                       << rememberedSize;
+            return smokeFailure(__FILE__, __LINE__);
+        }
+    }
     settings_.setValue("video/defaultScale", savedScale);
     settings_.setValue("video/sgbBorder", savedBorder);
     if (hadModel)
@@ -240,8 +388,118 @@ bool MainWindow::modelSmokeTest(const QString &directory) {
     return true;
 }
 
+bool MainWindow::idleTimerSmokeTest(const QString &path) {
+    MainWindow session(true, true, false, QStringLiteral(""), CUPID_GB_MODEL_DMG_ABC);
+    if (!session.timer_.isActive() || session.timer_.interval() != 16 ||
+        !session.controllers_->backend().running())
+        return smokeFailure(__FILE__, __LINE__);
+    session.tick();
+    if (session.emulator_ || session.timer_.interval() != 16 || !session.openRom(path) ||
+        session.timer_.interval() != 1)
+        return smokeFailure(__FILE__, __LINE__);
+
+    session.setPaused(true);
+    const uint64_t pausedCycles = session.emulator_->gb.elapsed_cycles;
+    unsigned idleCallbacks = 0;
+    const auto idleConnection =
+        connect(&session.timer_, &QTimer::timeout, &session, [&] { ++idleCallbacks; });
+    QEventLoop idleLoop;
+    QTimer::singleShot(48, &idleLoop, &QEventLoop::quit);
+    idleLoop.exec();
+    disconnect(idleConnection);
+    if (!idleCallbacks || session.timer_.interval() != 16 ||
+        session.emulator_->gb.elapsed_cycles != pausedCycles)
+        return smokeFailure(__FILE__, __LINE__);
+    session.setPaused(false);
+    if (session.timer_.interval() != 1)
+        return smokeFailure(__FILE__, __LINE__);
+
+    // Delivery gates update on a controller poll, without waiting for the main timer.
+    session.setPaused(true);
+    session.controllers_->setFocused(true);
+    session.controllers_->setDeliveryEnabled(true);
+    session.controllers_->backend().pollNow();
+    if (session.controllers_->deliveryEnabled() || session.timer_.interval() != 16)
+        return smokeFailure(__FILE__, __LINE__);
+    session.timer_.stop();
+    session.controllers_->setFocused(true);
+    session.controllers_->setDeliveryEnabled(true);
+    session.controllers_->backend().pollNow();
+    if (!session.controllers_->deliveryEnabled())
+        return smokeFailure(__FILE__, __LINE__);
+
+    // Manual session fixtures keep ownership of their stopped timer across every transition.
+    session.setPaused(false);
+    if (session.timer_.isActive() || session.timer_.interval() != 1)
+        return smokeFailure(__FILE__, __LINE__);
+    const uint64_t beforeGuard = session.emulator_->gb.elapsed_cycles;
+    {
+        QScopedValueRollback<bool> operation(session.stateOperation_, true);
+        session.resetPacing();
+        session.tick();
+        if (session.timer_.isActive() || session.timer_.interval() != 1 ||
+            session.emulator_->gb.elapsed_cycles != beforeGuard)
+            return smokeFailure(__FILE__, __LINE__);
+    }
+    session.tick();
+    if (session.timer_.isActive() || session.timer_.interval() != 1 ||
+        session.emulator_->gb.elapsed_cycles <= beforeGuard)
+        return smokeFailure(__FILE__, __LINE__);
+
+    session.resetRewind();
+    session.keyboardSpecialHeld_[1] = true;
+    session.reconcileControllerInput();
+    session.resetPacing();
+    session.tick();
+    if (!session.rewindExhausted_ || session.timer_.interval() != 16 || session.timer_.isActive())
+        return smokeFailure(__FILE__, __LINE__);
+    const QByteArray exhausted = session.captureState();
+    session.tick();
+    if (session.captureState() != exhausted)
+        return smokeFailure(__FILE__, __LINE__);
+    session.keyboardSpecialHeld_[1] = false;
+    session.reconcileControllerInput();
+    if (session.timer_.interval() != 1)
+        return smokeFailure(__FILE__, __LINE__);
+    session.keyboardSpecialHeld_[1] = true;
+    session.rewindFailed_ = true;
+    session.reconcileControllerInput();
+    if (session.timer_.interval() != 16)
+        return smokeFailure(__FILE__, __LINE__);
+    session.keyboardSpecialHeld_[1] = false;
+    session.reconcileControllerInput();
+    if (session.timer_.interval() != 1)
+        return smokeFailure(__FILE__, __LINE__);
+    session.resetRewind();
+
+    auto *menu = session.menuBar()->actions().value(1)->menu();
+    if (!menu || !QMetaObject::invokeMethod(menu, "aboutToShow", Qt::DirectConnection) ||
+        !session.menuDepth_ || session.timer_.interval() != 16)
+        return smokeFailure(__FILE__, __LINE__);
+    const uint64_t menuCycles = session.emulator_->gb.elapsed_cycles;
+    session.tick();
+    if (session.emulator_->gb.elapsed_cycles != menuCycles ||
+        !QMetaObject::invokeMethod(menu, "aboutToHide", Qt::DirectConnection))
+        return smokeFailure(__FILE__, __LINE__);
+    QCoreApplication::sendPostedEvents(&session, QEvent::MetaCall);
+    if (session.menuDepth_ || session.timer_.interval() != 1 || session.timer_.isActive())
+        return smokeFailure(__FILE__, __LINE__);
+    if (!session.closeRom() || session.timer_.interval() != 16 || session.timer_.isActive() ||
+        !session.openRom(path) || session.timer_.interval() != 1 || session.timer_.isActive())
+        return smokeFailure(__FILE__, __LINE__);
+    session.setPaused(true);
+    if (session.timer_.interval() != 16 || session.timer_.isActive())
+        return smokeFailure(__FILE__, __LINE__);
+    session.setPaused(false);
+    session.timer_.start();
+    return session.closeRom() && session.timer_.isActive() && session.timer_.interval() == 16;
+}
+
 bool MainWindow::pacingSmokeTest(const QString &path) {
-    for (const auto model : {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_SGB, CUPID_GB_MODEL_SGB2}) {
+    if (!idleTimerSmokeTest(path))
+        return smokeFailure(__FILE__, __LINE__);
+    for (const auto model : {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_SGB, CUPID_GB_MODEL_SGB2,
+                             CUPID_GB_MODEL_SGB_PAL}) {
         settings_.setValue("emulation/model", int(model));
         if (!openRom(path))
             return smokeFailure(__FILE__, __LINE__);
@@ -293,7 +551,158 @@ bool MainWindow::pacingSmokeTest(const QString &path) {
         if (!closeRom())
             return smokeFailure(__FILE__, __LINE__);
     }
-    return displayCadenceSmokeTest(path);
+    return turboCapSmokeTest(path) && displayCadenceSmokeTest(path);
+}
+
+bool MainWindow::turboCapSmokeTest(const QString &path) {
+    const bool hadCap = settings_.contains("emulation/turboCap");
+    const QVariant savedCap = settings_.value("emulation/turboCap");
+    const QVariant savedRewind = settings_.value("emulation/rewindSeconds", 120);
+    const auto restoreSettings = qScopeGuard([&] {
+        if (hadCap)
+            settings_.setValue("emulation/turboCap", savedCap);
+        else
+            settings_.remove("emulation/turboCap");
+        settings_.setValue("emulation/rewindSeconds", savedRewind);
+    });
+    for (const QVariant &invalid :
+         {QVariant(-25), QVariant(125), QVariant(151), QVariant(425), QVariant(150.5),
+          QVariant(QStringLiteral("bad")), QVariant(QStringLiteral("99999999999999999999"))}) {
+        settings_.setValue("emulation/turboCap", invalid);
+        if (configuredTurboCapQuarters(settings_) != 0)
+            return smokeFailure(__FILE__, __LINE__);
+    }
+    settings_.setValue("emulation/turboCap", 425);
+    MainWindow session(true, true, false, QStringLiteral(""), CUPID_GB_MODEL_DMG_ABC);
+    session.timer_.stop();
+    if (session.turboCapQuarters_ || !session.turboCapActions_[0]->isChecked() ||
+        settings_.value("emulation/turboCap").toInt() != 425)
+        return smokeFailure(__FILE__, __LINE__);
+    settings_.setValue("emulation/rewindSeconds", 0);
+    if (!session.openRom(path))
+        return smokeFailure(__FILE__, __LINE__);
+    session.setPaused(true);
+    const QByteArray initial = session.captureState();
+    for (size_t index = 0; index < turboCapChoices.size(); ++index) {
+        session.turboCapActions_[index]->trigger();
+        if (session.turboCapQuarters_ != turboCapChoices[index] ||
+            settings_.value("emulation/turboCap").toUInt() != turboCapChoices[index] * 25)
+            return smokeFailure(__FILE__, __LINE__);
+        for (size_t other = 0; other < turboCapChoices.size(); ++other)
+            if (session.turboCapActions_[other]->isChecked() != (other == index))
+                return smokeFailure(__FILE__, __LINE__);
+    }
+    if (session.captureState() != initial)
+        return smokeFailure(__FILE__, __LINE__);
+    session.setTurboCap(6);
+    for (const bool accept : {false, true}) {
+        bool inspected = false;
+        QTimer::singleShot(0, &session, [&] {
+            auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+            if (!dialog)
+                return;
+            auto *cap = dialog->findChild<QComboBox *>("turboSpeedCap");
+            inspected = cap && cap->count() == int(turboCapChoices.size()) &&
+                        cap->currentData().toUInt() == 6;
+            if (cap)
+                cap->setCurrentIndex(cap->findData(7u));
+            dialog->findChild<QDialogButtonBox *>()
+                ->button(accept ? QDialogButtonBox::Ok : QDialogButtonBox::Cancel)
+                ->click();
+        });
+        session.configure();
+        if (!inspected || session.turboCapQuarters_ != (accept ? 7u : 6u) ||
+            settings_.value("emulation/turboCap").toUInt() != (accept ? 175u : 150u))
+            return smokeFailure(__FILE__, __LINE__);
+    }
+    {
+        MainWindow reopened(true, true);
+        reopened.timer_.stop();
+        if (reopened.turboCapQuarters_ != 7 || !reopened.turboCapActions_[2]->isChecked())
+            return smokeFailure(__FILE__, __LINE__);
+    }
+
+    auto &gb = session.emulator_->gb;
+    const uint32_t clockHz = cupid_gb_base_clock_hz(&gb);
+    // The three execution gates must also hold when Turbo bypasses its deadline.
+    const auto stoppedCycles = gb.elapsed_cycles;
+    session.turbo_ = true;
+    session.nextFrame_ = 0;
+    session.tick();
+    if (gb.elapsed_cycles != stoppedCycles)
+        return smokeFailure(__FILE__, __LINE__);
+    session.setPaused(false);
+    session.setTurboCap(0);
+    session.turbo_ = true;
+    {
+        QScopedValueRollback<unsigned> menu(session.menuDepth_, 1);
+        session.tick();
+    }
+    {
+        QScopedValueRollback<bool> operation(session.stateOperation_, true);
+        session.tick();
+    }
+    if (gb.elapsed_cycles != stoppedCycles)
+        return smokeFailure(__FILE__, __LINE__);
+
+    for (const unsigned cap : {6u, 7u, 16u}) {
+        session.setTurboCap(cap);
+        session.turbo_ = true;
+        session.slowHeld_ = true;
+        session.speedSteps_ = 13;
+        session.resetPacing();
+        const auto start = gb.elapsed_cycles;
+        const auto deadline = session.nextFrame_;
+        session.tick();
+        const auto consumed = gb.elapsed_cycles - start;
+        const auto duration = qint64(consumed * UINT64_C(64000000000) / (clockHz * 13u * cap));
+        if (session.paused_ || !consumed || consumed > 70248 ||
+            session.nextFrame_ != deadline + duration)
+            return smokeFailure(__FILE__, __LINE__);
+        session.nextFrame_ = session.clock_.nsecsElapsed() + INT64_C(1000000000);
+        const auto waiting = gb.elapsed_cycles;
+        session.tick();
+        if (gb.elapsed_cycles != waiting)
+            return smokeFailure(__FILE__, __LINE__);
+    }
+    session.setTurboCap(0);
+    session.nextFrame_ = session.clock_.nsecsElapsed() + INT64_C(1000000000);
+    const auto unboundedStart = gb.elapsed_cycles;
+    session.tick();
+    if (gb.elapsed_cycles <= unboundedStart || gb.elapsed_cycles - unboundedStart > 70248)
+        return smokeFailure(__FILE__, __LINE__);
+
+    // Selecting a cap must not change normal-speed hardware, PCM production or
+    // its model-clock deadline. Exact native restores control both guest and
+    // output history here; live timeline restoration has separate workflow checks.
+    session.turbo_ = session.slowHeld_ = false;
+    session.speedSteps_ = 16;
+    const auto normalStart = session.captureState();
+    QByteArray normalResult;
+    uint64_t normalAudio = 0;
+    for (const unsigned cap : {6u, 16u}) {
+        if (cupid_gb_load_state(&gb, reinterpret_cast<const uint8_t *>(normalStart.constData()),
+                                size_t(normalStart.size())) != CUPID_GB_STATE_OK)
+            return smokeFailure(__FILE__, __LINE__);
+        session.setTurboCap(cap);
+        session.resetPacing();
+        const auto start = gb.elapsed_cycles;
+        const auto deadline = session.nextFrame_;
+        const auto audio = session.generatedAudioFrames_;
+        session.tick();
+        const auto consumed = gb.elapsed_cycles - start;
+        if (!consumed || session.nextFrame_ != deadline + qint64(consumed * 1000000000 / clockHz))
+            return smokeFailure(__FILE__, __LINE__);
+        if (normalResult.isEmpty()) {
+            normalResult = session.captureState();
+            normalAudio = session.generatedAudioFrames_ - audio;
+        } else if (normalResult != session.captureState() ||
+                   normalAudio != session.generatedAudioFrames_ - audio) {
+            return smokeFailure(__FILE__, __LINE__);
+        }
+    }
+    qInfo("CupidGB turbo cap settings and guest-clock deadline workflows passed");
+    return true;
 }
 
 bool MainWindow::displayCadenceSmokeTest(const QString &path) {

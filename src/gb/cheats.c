@@ -1,6 +1,29 @@
+/**
+ * @file    cheats.c
+ * @brief   Cheat-code parsing, memory substitutions, and portable cheat-list storage.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://gnu.org>.
+ */
+
 #include "cupid/gb/cheats.h"
 
 #include "cupid/gb/cartridge.h"
+#include "mbc6_internal.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -240,6 +263,12 @@ CupidGbCheatResult cupid_gb_cheats_import(CupidGbCheats *cheats, const char *cod
 }
 
 static uint16_t selected_bank(const CupidGb *gb, uint16_t address) {
+    if (gb->header.mbc_type == CUPID_GB_MBC6) {
+        if (address >= 0x4000u && address < 0x8000u)
+            return (uint16_t)cupid_gb_mbc6_rom_bank(gb, address, false);
+        if (address >= 0xa000u && address < 0xc000u)
+            return (uint16_t)(cupid_gb_mbc6_ram_offset(gb, address) / 0x1000u);
+    }
     if (address < 0x8000u)
         return (uint16_t)cupid_gb_selected_rom_bank(gb, address < 0x4000u);
     if (address >= 0xa000u && address < 0xc000u) {

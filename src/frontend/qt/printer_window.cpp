@@ -1,3 +1,25 @@
+/**
+ * @file    printer_window.cpp
+ * @brief   Qt printer paper display, image export, and system printing.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://gnu.org>.
+ */
+
 #include "printer_window.h"
 
 #include <QFileDialog>
@@ -44,24 +66,24 @@ PrinterWindow::PrinterWindow(QWidget *parent, ModalAction runWhilePaused)
             [this](int, int maximum) { scroll_->verticalScrollBar()->setValue(maximum); });
 }
 
-void PrinterWindow::append(const uint8_t *pixels, int height, int top, int bottom) {
-    const int rows = top + height + bottom;
-    if (rows == 0)
-        return;
-    if (!isVisible())
-        feed_ = {};
-    const int width = CUPID_GB_PRINTER_WIDTH;
-    const int offset = feed_.height();
-    if (offset > QWIDGETSIZE_MAX / 2 - rows) {
-        feedError_ = true;
-        status_->setText("Printer feed exceeds the display's maximum height.");
-        return;
+bool PrinterWindow::append(const uint8_t *pixels, int height, int top, int bottom) {
+    if (height < 0 || top < 0 || bottom < 0 || (height && !pixels)) {
+        feedError_ = "The printer image is invalid.";
+        return false;
     }
-    QImage paper(width, offset + rows, QImage::Format_Grayscale8);
+    const qint64 rows = qint64(top) + height + bottom;
+    if (!rows)
+        return false;
+    const int width = CUPID_GB_PRINTER_WIDTH;
+    const int offset = isVisible() ? feed_.height() : 0;
+    if (rows > QWIDGETSIZE_MAX / 2 - offset) {
+        feedError_ = "Printer feed exceeds the display's maximum height.";
+        return false;
+    }
+    QImage paper(width, offset + int(rows), QImage::Format_Grayscale8);
     if (paper.isNull()) {
-        feedError_ = true;
-        status_->setText("Printer feed is too large.");
-        return;
+        feedError_ = "Printer feed is too large.";
+        return false;
     }
     paper.fill(255);
     if (offset)
@@ -69,19 +91,28 @@ void PrinterWindow::append(const uint8_t *pixels, int height, int top, int botto
     if (height)
         std::memcpy(paper.scanLine(offset + top), pixels, size_t(height) * width);
     feed_ = std::move(paper);
-    const QPixmap preview = QPixmap::fromImage(feed_.scaled(feed_.size() * 2));
-    image_->setPixmap(preview);
-    image_->resize(preview.size());
-    save_->setEnabled(true);
-    print_->setEnabled(true);
-    feedError_ = false;
-    setPrinting(true);
-    show();
+    feedError_.clear();
+    feedDirty_ = true;
+    printing_ = true;
+    return true;
 }
 
 void PrinterWindow::setPrinting(bool printing) {
-    if (!feedError_)
-        status_->setText(printing ? "Printing…" : QString());
+    printing_ = printing;
+}
+
+void PrinterWindow::refresh(bool reveal) {
+    if (feedDirty_) {
+        const QPixmap preview = QPixmap::fromImage(feed_.scaled(feed_.size() * 2));
+        image_->setPixmap(preview);
+        image_->resize(preview.size());
+        feedDirty_ = false;
+    }
+    save_->setEnabled(!feed_.isNull());
+    print_->setEnabled(!feed_.isNull());
+    status_->setText(feedError_.isEmpty() ? (printing_ ? "Printing…" : QString()) : feedError_);
+    if (reveal && !feed_.isNull())
+        show();
 }
 
 bool PrinterWindow::saveFeed(const QString &path) const {

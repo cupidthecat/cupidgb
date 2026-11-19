@@ -1,3 +1,25 @@
+/**
+ * @file    gb.h
+ * @brief   Game Boy hardware state, model definitions, memory access, and lifecycle API.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://gnu.org>.
+ */
+
 #ifndef CUPID_GB_GB_H
 #define CUPID_GB_GB_H
 
@@ -5,35 +27,47 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "cupid/gb/audio_output.h"
+#include "cupid/gb/gbs.h"
+#include "cupid/gb/mbc6.h"
+#include "cupid/gb/rtc.h"
 #include "cupid/gb/sgb.h"
+#include "cupid/gb/sgb_startup.h"
+#include "cupid/gb/startup.h"
+#include "cupid/gb/tama5.h"
 
-#define CUPID_GB_MAX_ROM_SIZE (8u * 1024u * 1024u)
-#define CUPID_GB_MAX_RAM_SIZE (128u * 1024u)
+/* Full 16-bit TPP1 bank span: 65536 physical banks of 16 KiB each.
+ * This bounds input size, not the memory reserved for an unloaded machine. */
+#define CUPID_GB_MAX_ROM_SIZE 0x40000000u
+#define CUPID_GB_MIN_ROM_CAPACITY 0x8000u
+/* Ordinary cartridges and the legacy native-state prefix retain this fixed span. */
+#define CUPID_GB_INLINE_RAM_SIZE (128u * 1024u)
+#define CUPID_GB_MAX_RAM_SIZE (2u * 1024u * 1024u)
 #define CUPID_GB_MAX_BOOT_ROM_SIZE 0x0900u /* CGB boot ROM is 2304 bytes */
 #define CUPID_GB_SCREEN_WIDTH 160u
 #define CUPID_GB_SCREEN_HEIGHT 144u
-
-/* APU sample buffer: ~2.8 frames at 44100 Hz / 60 fps */
-#define CUPID_GB_APU_SAMPLE_RATE 44100u
-#define CUPID_GB_APU_BUF_FRAMES 2048u
 
 /*
  * All 4 Game Boy audio channels + frame sequencer state.
  * ch*_len  = internal length counter (counts DOWN; channel stops at 0).
  * ch*_freq = current 11-bit channel frequency.
- * ch*_timer = T-cycle countdown until next event (duty step / wave pos / LFSR).
- * buf[]    = int16_t stereo samples, L then R, generated each tick.
- * buf_write = number of stereo frames currently waiting in buf[].
+ * ch1..3_timer = T-cycle countdown until the next duty step or wave fetch.
+ * ch4_timer retains a legacy nominal period; noise_timing owns the running divider.
+ * output holds the host-rate reconstruction, filter, and queued stereo frames.
  */
+typedef struct CupidGbEnvelopeGate {
+    bool clock;
+    bool locked;
+    bool lock_pending;
+} CupidGbEnvelopeGate;
+
 typedef struct CupidGbPulseTiming {
-    uint8_t start_delay; /* Remaining trigger settling time, 0..12 base T-cycles. */
+    uint8_t start_delay; /* Remaining trigger settling time, 0..14 base T-cycles. */
     uint8_t edge_age;    /* Base T-cycles since a frequency edge; 4 means older. */
     bool clock_started;
     bool output_high;
     bool output_blocked;
-    bool envelope_clock;
-    bool envelope_locked;
-    bool envelope_lock_pending;
+    CupidGbEnvelopeGate envelope;
 } CupidGbPulseTiming;
 
 typedef struct CupidGbSweepTiming {
@@ -49,7 +83,7 @@ typedef struct CupidGbSweepTiming {
 typedef struct CupidGbNoiseTiming {
     uint16_t divider_counter; /* Ordinary edges mask to 14 bits; DAC-off carries retain all 16. */
     uint8_t clock_phase;      /* Power-relative base-clock phase, 0..7. */
-    uint8_t remaining;        /* Remaining 2 MHz prescaler ticks, 0..34. */
+    uint8_t remaining;        /* Remaining 2 MHz prescaler ticks, 0..38. */
     bool foreground;
     bool background;
     bool started_dac_off;
@@ -58,6 +92,9 @@ typedef struct CupidGbNoiseTiming {
     bool output_high;
     bool last_shift_narrow;
     bool pre_shift_bit7;
+    bool feedback_latch; /* Delayed exclusive-or feedback for monochrome noise shifts. */
+    uint8_t start_delay; /* Monochrome trigger settling time, 0..12 base T-cycles. */
+    CupidGbEnvelopeGate envelope;
 } CupidGbNoiseTiming;
 
 typedef struct CupidGbApu {
@@ -117,6 +154,7 @@ typedef struct CupidGbApu {
     uint8_t ch3_wave_access_ticks; /* DMG-only access window after a wave fetch */
     bool ch3_freq_pending;         /* apply ch3_freq after the next wave RAM fetch */
     uint8_t ch3_sample;            /* current 4-bit output */
+    uint8_t ch3_sample_byte;       /* Retained fetch data, independent of wave RAM writes. */
 
     /* CH4 – noise (LFSR) */
     bool ch4_dac;
@@ -135,20 +173,18 @@ typedef struct CupidGbApu {
 
     /* Hardware clock/output latches; native v3 appends these after its v2 prefix. */
     uint8_t clock_phase;    /* Power-relative base-clock phase, 0..3. */
-    uint8_t envelope_delay; /* Deferred color double-speed envelope edge, 0..2 base clocks. */
+    uint8_t envelope_delay; /* Deferred color double-speed envelope edge, 0..4 base clocks. */
     CupidGbPulseTiming pulse_timing[2];
     CupidGbSweepTiming sweep_timing;
     CupidGbNoiseTiming noise_timing;
+    /* Disconnected pulse DACs retain their hardware codes independently of synthesis events. */
+    uint8_t pulse_dac_hold[2];
+    /* DAC disconnect freezes its code until a later channel-output event. */
+    uint8_t dac_sample[CUPID_GB_AUDIO_CHANNELS];
+    uint16_t pending_cycles;   /* Delivered base T-cycles awaiting a digital APU run. */
+    uint16_t pcm_read_inhibit; /* Early CGB delivery latch, FF76 in the low byte. */
 
-    /* Output */
-    uint32_t sample_acc;
-    int16_t buf[CUPID_GB_APU_BUF_FRAMES * 2u]; /* L/R interleaved */
-    uint32_t buf_write;                        /* number of stereo frames written */
-    uint32_t sample_rate; /* Zero selects the default rate for zero-initialized callers. */
-    int64_t mix_left, mix_right;
-    int64_t highpass_left, highpass_right;
-    uint32_t highpass_rate;
-    bool highpass_disabled;
+    CupidGbAudioOutput output;
 } CupidGbApu;
 
 typedef enum CupidGbMbcType {
@@ -164,7 +200,8 @@ typedef enum CupidGbMbcType {
     CUPID_GB_HUC3,
     CUPID_GB_MBC_UNKNOWN,
     CUPID_GB_CAMERA,
-    CUPID_GB_TPP1
+    CUPID_GB_TPP1,
+    CUPID_GB_TAMA5
 } CupidGbMbcType;
 
 typedef struct CupidGbCamera {
@@ -180,17 +217,18 @@ typedef struct CupidGbRtc {
     uint8_t s, m, h, dl, dh;      /* live registers */
     uint8_t ls, lm, lh, ldl, ldh; /* latched copies */
     uint8_t latch_prev;           /* last value written to latch port */
-    int64_t base_time;            /* system clock snapshot for elapsed-time calc */
+    int64_t base_time;            /* Signed storage of the clock's uint64_t timestamp bits. */
 } CupidGbRtc;
 
 typedef struct CupidGbTpp1 {
     uint16_t rom_bank;
     uint8_t ram_bank;
     uint8_t mode;
-    uint8_t status;  /* Rumble strength, RTC running, and RTC overflow. */
+    uint8_t status;  /* MR4, including literal imported low bits, RTC running and overflow. */
     uint8_t live[4]; /* Weeks, packed weekday/hour, minutes, seconds. */
     uint8_t latched[4];
     int64_t rtc_base_time;
+    uint8_t motor_strength; /* Independent command-selected strength, 0..3. */
 } CupidGbTpp1;
 
 typedef struct CupidGbCpu {
@@ -238,9 +276,34 @@ typedef enum CupidGbModel {
     CUPID_GB_MODEL_DMG0 = 1,
     CUPID_GB_MODEL_MGB = 2,
     CUPID_GB_MODEL_CGB = 3,
+    CUPID_GB_MODEL_CGB_E = CUPID_GB_MODEL_CGB,
     CUPID_GB_MODEL_SGB = 4,
-    CUPID_GB_MODEL_SGB2 = 5
+    CUPID_GB_MODEL_SGB2 = 5,
+    CUPID_GB_MODEL_SGB_PAL = 6,
+    CUPID_GB_MODEL_CGB_0 = 7,
+    CUPID_GB_MODEL_CGB_A = 8,
+    CUPID_GB_MODEL_CGB_B = 9,
+    CUPID_GB_MODEL_CGB_C = 10,
+    CUPID_GB_MODEL_CGB_D = 11
 } CupidGbModel;
+
+static inline bool cupid_gb_model_is_valid(CupidGbModel model) {
+    return (unsigned)model <= CUPID_GB_MODEL_CGB_D;
+}
+
+static inline bool cupid_gb_model_is_cgb(CupidGbModel model) {
+    return model == CUPID_GB_MODEL_CGB_E ||
+           (model >= CUPID_GB_MODEL_CGB_0 && model <= CUPID_GB_MODEL_CGB_D);
+}
+
+static inline bool cupid_gb_model_is_early_cgb(CupidGbModel model) {
+    return model >= CUPID_GB_MODEL_CGB_0 && model <= CUPID_GB_MODEL_CGB_C;
+}
+
+typedef enum CupidGbProgramKind {
+    CUPID_GB_PROGRAM_CARTRIDGE = 0,
+    CUPID_GB_PROGRAM_GBS = 1
+} CupidGbProgramKind;
 
 /* Pixel queues retain fetched data across CPU writes and save/rewind boundaries.
  * Palette lookup happens when a pixel leaves the queue, rather than at HBlank. */
@@ -288,14 +351,96 @@ typedef void (*CupidGbSerialLaunchCallback)(const struct CupidGb *gb, bool outgo
                                             void *user_data);
 typedef bool (*CupidGbSerialSampleCallback)(const struct CupidGb *gb, void *user_data);
 
+typedef enum CupidGbSerialDevice {
+    CUPID_GB_SERIAL_DEVICE_NONE = 0,
+    CUPID_GB_SERIAL_DEVICE_PRINTER = 1,
+} CupidGbSerialDevice;
+
 typedef struct CupidGbSerialLink {
     CupidGbSerialLaunchCallback launch;
     CupidGbSerialSampleCallback sample;
     void *user_data;
+    /* Built-in factories supply this tag. Ordinary cable callbacks use NONE. */
+    CupidGbSerialDevice device;
 } CupidGbSerialLink;
 
 typedef void (*CupidGbRumbleCallback)(const struct CupidGb *gb, bool enabled, uint64_t base_cycles,
                                       void *user_data);
+typedef void (*CupidGbRumbleStrengthCallback)(const struct CupidGb *gb, uint8_t strength,
+                                              uint64_t base_cycles, void *user_data);
+typedef void (*CupidGbRumbleSampleCallback)(const struct CupidGb *gb, uint8_t strength,
+                                            void *user_data);
+typedef void (*CupidGbPresentationCallback)(const struct CupidGb *gb, uint8_t frame_type,
+                                            void *user_data);
+typedef void (*CupidGbInfraredCallback)(const struct CupidGb *gb, bool enabled,
+                                        uint64_t base_cycles, void *user_data);
+
+enum {
+    CUPID_GB_CAMERA_SENSOR_WIDTH = 128,
+    CUPID_GB_CAMERA_SENSOR_HEIGHT = 112,
+    CUPID_GB_CAMERA_SENSOR_SIZE = CUPID_GB_CAMERA_SENSOR_WIDTH * CUPID_GB_CAMERA_SENSOR_HEIGHT
+};
+
+typedef void (*CupidGbCameraRequestCallback)(struct CupidGb *gb, uint64_t request, void *user_data);
+
+/* Device ownership and the last accepted sensor image belong to the receiving
+ * session. Native states contain neither these pixels nor asynchronous requests. */
+typedef struct CupidGbCameraHost {
+    CupidGbCameraRequestCallback request_callback;
+    void *user_data;
+    uint64_t request_sequence;
+    uint64_t pending_request;
+    uint8_t image[CUPID_GB_CAMERA_SENSOR_SIZE];
+} CupidGbCameraHost;
+
+/* Alignment and word sampling are independent of the data-byte countdown. */
+typedef enum CupidGbObjectFetchStage {
+    CUPID_GB_OBJECT_IDLE,
+    CUPID_GB_OBJECT_WAIT_BACKGROUND,
+    CUPID_GB_OBJECT_READ_WORD,
+    CUPID_GB_OBJECT_LEGACY,
+    CUPID_GB_OBJECT_ABORTED
+} CupidGbObjectFetchStage;
+
+/* The fetcher's horizontal position includes the discarded pixels before LCD
+ * output starts. Window byte reads retain their own half-fetch history.
+ * CGB D and E use the row selected at the tile-map address half. */
+typedef struct CupidGbPixelTiming {
+    int16_t logical_x;
+    uint8_t flags;
+    uint8_t fetch_y;
+} CupidGbPixelTiming;
+
+/* CPU reads and committed PPU fetch addresses survive LCD power transitions.
+ * Eager pixel work is pending until the display schedule performs fine work. */
+typedef struct CupidGbVramBus {
+    uint16_t map_address;
+    uint16_t data_address;
+    uint8_t read_value;
+    uint16_t fetch_map_address;
+    uint16_t fetch_data_address;
+} CupidGbVramBus;
+
+/* Display waits and interrupted batches affect VRAM read history and infrared
+ * thresholds even when no visible pixel changes. Every model retains this state. */
+typedef struct CupidGbDisplayClock {
+    int32_t credit_half_dots;
+    uint32_t frame_age_dots;
+    uint16_t row_half_dots;
+    uint16_t batch_half_dots;
+    uint8_t row;
+    uint8_t phase;
+    uint8_t cursor;
+    uint8_t window_alignment;
+    uint8_t flags;
+    uint8_t fine_wait_half_dots;
+} CupidGbDisplayClock;
+
+struct CupidGb;
+/* Host-only observation of the original guest bus address before any bus-lock
+ * or DMA redirection. An observer must not mutate or reenter the machine. */
+typedef void (*CupidGbMemoryAccessCallback)(void *user_data, struct CupidGb *gb, uint16_t address,
+                                            bool writing, uint8_t value);
 
 typedef struct CupidGb {
     CupidGbCpu cpu;
@@ -304,11 +449,27 @@ typedef struct CupidGb {
     const CupidGbCheats *cheats; /* Borrowed host configuration, outside native snapshots. */
     uint8_t *rom;
     size_t rom_size;
+    size_t rom_capacity;     /* Owned host allocation size; excluded from native save states. */
+    uint64_t rom_generation; /* Successful cartridge loads invalidate cached host state identity. */
+    /* Immutable host program identity. Native states retain the receiving descriptor;
+     * ordinary cartridges keep the music header and accepted payload length zero. */
+    CupidGbProgramKind program_kind;
+    uint8_t gbs_header[CUPID_GB_GBS_HEADER_SIZE];
+    size_t gbs_payload_size;
+    /* Cartridge configuration can leave wide MBC3 wiring attached to a later
+     * music program. This host latch survives resets and loads, but not cleanup. */
+    bool mbc3_extended_history;
     uint8_t video_ram[0x4000];
-    uint8_t cartridge_ram[CUPID_GB_MAX_RAM_SIZE];
+    uint8_t cartridge_ram[CUPID_GB_INLINE_RAM_SIZE];
     size_t cartridge_ram_size;
+    uint8_t
+        *cartridge_ram_heap; /* Optional complete TPP1 SRAM allocation, never an inline alias. */
+    size_t
+        cartridge_ram_capacity; /* Zero for inline storage; host ownership, outside save states. */
+    uint8_t *mbc6_flash;        /* MBC6 array and hidden bytes. Separate from battery SRAM. */
     uint8_t work_ram[0x8000];
     uint8_t object_attribute_memory[0x00a0];
+    uint8_t extra_oam[48]; /* Writable cells behind FEA0–FEFF on color revisions 0–D. */
     uint8_t io_registers[0x0080];
     uint8_t high_ram[0x007f];
     uint8_t frame_buffer[CUPID_GB_SCREEN_WIDTH * CUPID_GB_SCREEN_HEIGHT];
@@ -336,6 +497,8 @@ typedef struct CupidGb {
     uint16_t mbc7_sensor_y;
     bool mbc7_latch;
     CupidGbMbc7 mbc7;
+    CupidGbMbc6 mbc6;
+    CupidGbTama5 tama5;
     /* MMM01 */
     bool mmm01_locked;
     uint8_t mmm01_bank_base; /* Retained for the legacy native state prefix. */
@@ -350,13 +513,16 @@ typedef struct CupidGb {
     bool huc3_ir_input; /* Live host signal, outside native snapshots. */
     CupidGbCamera camera;
     bool serial_master_clock;
-    uint64_t cartridge_bus_expiry; /* Half-dot deadline on the shared main bus. */
+    /* SC writes select the divider tap. Mode changes do not repeat that write. */
+    bool serial_fast_clock;
+    uint64_t cartridge_bus_expiry; /* Half-dot deadline, or zero for a stable value. */
     uint8_t cartridge_bus_data;
     uint64_t elapsed_cycles; /* Base-speed T-cycles, including LCD-off execution. */
     uint8_t serial_bits_remaining;
     uint8_t serial_tx_latch;
     uint16_t div_counter;
     uint16_t timer_counter;
+    uint8_t divider_subcycle;    /* Unheld CPU T-cycles since the last divider edge, 0..3. */
     uint8_t tima_overflow_delay; /* M-cycles remaining until TMA reload + timer IRQ */
     bool tima_reload_just_happened;
     uint16_t dma_source_base;
@@ -416,18 +582,45 @@ typedef struct CupidGb {
     uint64_t battery_write_generation; /* Host dirty tracking; excluded from guest snapshots. */
     char save_path[260];
     CupidGbSgb sgb;
+    CupidGbSgbStartup sgb_startup;
     CupidGbApu apu;
     CupidGbPixels pixels;
     /* Boot ROM overlay */
     uint8_t boot_rom[CUPID_GB_MAX_BOOT_ROM_SIZE];
     size_t boot_rom_size;  /* 0x0100 for DMG, 0x0900 for CGB */
     bool boot_rom_enabled; /* true while boot ROM is mapped */
-    /* Host registrations are excluded from hardware snapshots. */
+    /* Registrations stay live; recognized built-in device history is serialized separately. */
     CupidGbSerialOutputCallback serial_output_callback;
     void *serial_output_user_data;
     CupidGbSerialLink serial_link;
     CupidGbRumbleCallback rumble_callback;
     void *rumble_user_data;
+    CupidGbRumbleStrengthCallback rumble_strength_callback;
+    void *rumble_strength_user_data;
+    CupidGbRumbleSampleCallback rumble_sample_callback;
+    void *rumble_sample_user_data;
+    CupidGbPresentationCallback presentation_callback;
+    void *presentation_user_data;
+    CupidGbInfraredCallback infrared_callback;
+    void *infrared_user_data;
+    CupidGbMemoryAccessCallback memory_access_callback;
+    void *memory_access_user_data;
+    uint16_t oam_vram_row;      /* Retained source-bus row; UINT16_MAX releases the latch. */
+    uint16_t oam_search_word;   /* Last word sampled by the shared OAM port. */
+    bool stop_ppu_vram_blocked; /* STOP holds the sampled PPU access gate until wake. */
+    bool stop_ppu_oam_blocked;
+    bool stop_ppu_palette_blocked;
+    uint16_t ppu_transfer_end_dot; /* Palette access remains blocked after the last pixel. */
+    CupidGbObjectFetchStage object_fetch_stage;
+    CupidGbPowerOn power_on; /* Host startup policy; realized memory is serialized separately. */
+    CupidGbRtcPolicy rtc_policy; /* Host clock policy and provider, never serialized. */
+    uint32_t rtc_cycles;         /* Guest fractional phase in half-base-clock units. */
+    CupidGbDisplayClock display_clock;
+    CupidGbPixelTiming pixel_timing;
+    CupidGbVramBus vram_bus;
+    /* Host masks await the next delivered input sample, including after reset. */
+    bool joyp_sample_pending;
+    CupidGbCameraHost camera_host;
 } CupidGb;
 
 /* Optional host observation for one hardware step. This output is not stored
@@ -436,7 +629,8 @@ typedef struct CupidGb {
 typedef enum CupidGbStepEvent {
     CUPID_GB_STEP_IDLE = 0,
     CUPID_GB_STEP_INSTRUCTION,
-    CUPID_GB_STEP_INTERRUPT
+    CUPID_GB_STEP_INTERRUPT,
+    CUPID_GB_STEP_ILLEGAL_OPCODE
 } CupidGbStepEvent;
 
 typedef struct CupidGbStepTrace {
@@ -460,29 +654,67 @@ void cupid_gb_set_serial_output_callback(CupidGb *gb, CupidGbSerialOutputCallbac
  * subsequent bit after sampling on the falling clock edge. Missing samples
  * read high. The host may clock a peer from sample, but must not reenter gb.
  * Registrations survive reset and state loading; cleanup detaches the link.
- * Transport state, including an already launched bit, belongs to the host. */
+ * Ordinary cable state belongs to the host. A factory-tagged built-in printer
+ * has separate native device history, while its callbacks and ownership stay live. */
 void cupid_gb_set_serial_link(CupidGb *gb, CupidGbSerialLink link);
 /* Read an external-clock peer's outgoing bit before delivering the incoming
  * bit. An idle peer drives low and a peer using its own clock reads high.
  * Clock requests shift SB only while an external-clock transfer is armed. */
 bool cupid_gb_serial_external_bit(const CupidGb *gb);
 void cupid_gb_serial_external_clock(CupidGb *gb, bool incoming);
-/* MBC5 motor transitions are observed at the current base-cycle timestamp.
+/* Raw MBC5 and TPP1 motor on/off transitions are observed at the current
+ * base-cycle timestamp. Positive TPP1 strength changes do not notify this observer.
  * Callbacks must not mutate or reenter the core. Registration survives resets
- * and state loading; state loading emits no callback. Resynchronize host output
- * with the getter after loading a state, resetting, or changing cartridges. */
+ * and state loading; those operations emit no callback. Resynchronize host output
+ * after loading a state, resetting, or changing cartridges. */
 void cupid_gb_set_rumble_callback(CupidGb *gb, CupidGbRumbleCallback callback, void *user_data);
 bool cupid_gb_rumble_enabled(const CupidGb *gb);
+/* Effective cartridge feedback is 0..3: MBC5 uses 0 or 3; TPP1 honors its motor
+ * capability bit and retains all three nonzero strengths. This observer also
+ * receives positive-to-positive strength changes. It has the same ownership and
+ * non-reentrancy rules as the raw observer and is never included in state data. */
+uint8_t cupid_gb_rumble_strength(const CupidGb *gb);
+void cupid_gb_set_rumble_strength_callback(CupidGb *gb, CupidGbRumbleStrengthCallback callback,
+                                           void *user_data);
+/* Observe one effective motor level at the first nonfrozen oscillator portion
+ * of each CPU clock delivery, before its display events. Each
+ * delivery contributes one sample regardless of its duration; fully frozen
+ * oscillator spans contribute none. Host bulk ticks retain their M-cycle
+ * delivery cadence. The callback must only collect observations, without
+ * mutating or reentering the core. Registration survives reset and state loads,
+ * emits nothing during those operations, and is excluded from native states. */
+void cupid_gb_set_rumble_sample_callback(CupidGb *gb, CupidGbRumbleSampleCallback callback,
+                                         void *user_data);
+/* Observe every presentation after its handheld pixel buffers are finalized.
+ * Includes LCD-off, first-frame blank, repeat, and artificial presentations.
+ * CPU, interrupt, and SGB host-frame bookkeeping may still be in progress.
+ * Callback must not mutate or reenter the core or perform host device I/O.
+ * Registration survives init/reset/state loads and is never serialized. */
+void cupid_gb_set_presentation_callback(CupidGb *gb, CupidGbPresentationCallback callback,
+                                        void *user_data);
+/* Host observer of guest bus accesses. The registration survives reset and
+ * state loads and is excluded from native save states. Debugger registrations
+ * must be scoped to a guest step and detached after that step completes. */
+void cupid_gb_set_memory_access_callback(CupidGb *gb, CupidGbMemoryAccessCallback callback,
+                                         void *user_data);
 void cupid_gb_set_model(CupidGb *gb, CupidGbModel model);
 /* Physical base-speed T-cycles per second, independent of CGB double speed.
- * SGB uses its NTSC host-derived clock; other current models use 4194304 Hz.
+ * SGB uses its regional host-derived clock; other current models use 4194304 Hz.
  * A NULL instance returns the ordinary handheld clock. */
 uint32_t cupid_gb_base_clock_hz(const CupidGb *gb);
 const char *cupid_gb_model_name(CupidGbModel model);
+/** Return whether the profile contains an emulated SGB or SGB2 host. */
+bool cupid_gb_model_is_sgb(CupidGbModel model);
 bool cupid_gb_parse_header(const uint8_t *rom_data, size_t rom_size,
                            CupidGbCartridgeHeader *header);
 bool cupid_gb_load_rom_file(CupidGb *gb, const char *path);
 bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size);
+/* True means the hardware step completed, including an illegal opcode's fetch
+ * and halt. It does not imply instruction progress or successful gameplay.
+ * False reports an invalid instance, absent cartridge, or decoder failure.
+ * Observed stepping reports an illegal primary opcode once, at its actual fetch
+ * address. Later halted steps report IDLE and continue peripheral clocks.
+ * Adapter startup holds also report IDLE, advancing presentation time only. */
 bool cupid_gb_step(CupidGb *gb);
 bool cupid_gb_step_observed(CupidGb *gb, CupidGbStepTrace *trace);
 uint8_t cupid_gb_read_u8(const CupidGb *gb, uint16_t address);
@@ -499,7 +731,9 @@ const char *cupid_gb_mbc_name(CupidGbMbcType mbc_type);
 /*
  * Drain generated audio samples into `out` (int16_t stereo, L then R).
  * Returns the number of stereo frames written (max `max_frames`).
- * Call once per video frame after cupid_gb_step returns frame_ready.
+ * The stream includes handheld and adapter-startup output in delivery order.
+ * Drain until zero whenever startup output is pending, at the ordinary queue
+ * watermark, and before stopping. Use tagged chunks for handheld-only recording.
  */
 uint32_t cupid_gb_apu_drain(CupidGb *gb, int16_t *out, uint32_t max_frames);
 
@@ -507,9 +741,11 @@ void cupid_gb_set_save_path(CupidGb *gb, const char *rom_path);
 void cupid_gb_load_save(CupidGb *gb);
 void cupid_gb_save(CupidGb *gb);
 
-/* Boot ROM support: load an external boot ROM dump for authentic startup */
+/* Load an external boot ROM before initial execution via cupid_gb_start_boot_rom. */
 bool cupid_gb_load_boot_rom_file(CupidGb *gb, const char *path);
 void cupid_gb_clear_boot_rom(CupidGb *gb);
+/* Low-level firmware re-entry preserves WRAM, HRAM, OAM, VRAM, SRAM and RTC data.
+ * It resets boot-entry registers and wave/palette IO using the realized generation. */
 void cupid_gb_enter_boot_rom(CupidGb *gb);
 
 #endif

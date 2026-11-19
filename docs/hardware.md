@@ -9,52 +9,104 @@ CupidGB implements Game Boy and Game Boy Color execution in the same C core, wit
 | Game Boy | `CUPID_GB_MODEL_DMG_ABC` | Grouped monochrome profile |
 | Game Boy (DMG0) | `CUPID_GB_MODEL_DMG0` | Early monochrome startup profile |
 | Game Boy Pocket / Light | `CUPID_GB_MODEL_MGB` | Pocket-family profile |
-| Game Boy Color | `CUPID_GB_MODEL_CGB` | One color profile with monochrome compatibility mode |
-| Super Game Boy | `CUPID_GB_MODEL_SGB` | SGB NTSC clock, command, palette, attribute, mask, and border behavior |
+| Game Boy Color 0, A, B, C, D, E | `CUPID_GB_MODEL_CGB_0` through `CUPID_GB_MODEL_CGB_E` | Six selectable revisions with monochrome compatibility mode |
+| Super Game Boy (NTSC) | `CUPID_GB_MODEL_SGB` | First-generation adapter with the NTSC clock |
+| Super Game Boy (PAL) | `CUPID_GB_MODEL_SGB_PAL` | First-generation adapter with the PAL clock |
 | Super Game Boy 2 | `CUPID_GB_MODEL_SGB2` | Separate SGB2 startup profile |
 
-These are the six current profile tags. Individual CGB hardware revisions, separate SGB regional/host variants, and every model-specific startup or bus difference have not been qualified. Keep the physical hardware model separate from the cartridge's color capability: a header must not turn selected monochrome hardware into color hardware.
+Automatic color selection uses CGB-E. The [CGB revision validation](validation-cgb-revisions.md) records what differs by revision and what still needs qualification. Variants that integrate with an external SGB host remain pending. The cartridge header describes the program's color capability. Selecting monochrome hardware keeps the machine monochrome.
 
-The SGB profile uses a 4,295,454 Hz base clock. The other five profiles, including SGB2, use 4,194,304 Hz. A regular LCD frame still spans 70,224 base T-cycles; converting those cycles to wall time must use the selected clock. CPU, display, audio sample scheduling, and host pacing share that model choice. SGB PAL and separate SGB host-integration profiles remain unimplemented.
+SGB NTSC uses a 4,295,454 Hz base clock, and SGB PAL uses 4,256,274 Hz. SGB2 and the handheld profiles use 4,194,304 Hz. A regular LCD frame spans 70,224 base T-cycles. CPU, display, audio sampling and host pacing all use the selected model's clock.
 
 Automatic desktop selection is a convenience policy, not a new hardware profile. Reproducible comparisons should select the model explicitly and record whether startup used a boot binary or the approximate post-boot profile.
 
+## Cold-start memory
+
+Cold memory varies by model. An independent per-instance generator supplies the following distributions; the percentages describe each bit's probability of being set across seeds.
+
+| Profile | WRAM | HRAM | OAM | Wave RAM before firmware |
+| --- | --- | --- | --- | --- |
+| Grouped DMG and SGB | 75% where address bit 8 is clear, 25% where set | Even bytes 12.5%, odd bytes 87.5% | 87.5% where address bit 1 is clear, 12.5% where set | Even bytes 87.5%, odd bytes 12.5% |
+| Pocket | Uniform bytes | Same monochrome bias | Same monochrome bias | Even bytes 75%, odd bytes 25% |
+| SGB2 | `0x55` baseline, each bit flipped with 12.5% probability | Same monochrome bias | Same monochrome bias | Same grouped monochrome bias |
+| CGB | Uniform bytes | Uniform bytes | Zero | Zero |
+
+The wave biases cover FF30–FF3E; FF3F starts at zero. Cold VRAM is zero. Physical CGB palette bytes vary across their full eight-bit storage range, including the unused high color bit. RGB555 output masks that bit while palette reads and native states retain it. Unmapped monochrome backing banks remain zero.
+
+The grouped monochrome distribution corresponds to the audited DMG-B behavior, and the current uniform CGB distribution corresponds to CGB-E. DMG0 uses the grouped fallback without separate qualification. Other CGB revision distributions remain pending. The SGB comparison profile is itself unverified on physical hardware; matching its modeled distribution does not resolve that limit.
+
+Built-in startup clears physical CGB WRAM bank 2 for both color and monochrome cartridges before writing the boot title checksum, palette selection, and final background fade buffer. Color revisions A–E also receive the alternating `00`/`FF` wave pattern. Initial firmware startup reconstructs the cold generation so firmware can perform its own writes. Other post-boot memory effects and independently written startup firmware remain incomplete. [The core API](core-api.md#cold-memory-and-firmware-startup) [Color WRAM at cartridge entry](validation-startup.md#color-wram-at-cartridge-entry)
+
+SGB and SGB2 post-boot profiles enter VBlank on line 144 at dot 200. This gives the pixel pipeline a valid starting scanline and permits immediate native save/load followed by continued rendering. The approximate profile starts after the host introduction. Executed SGB/SGB2 firmware instead starts an independent host sequence: 106 presentations hold guest execution before boot instructions can run, and startup output continues through phase 200. Physical host presentation also applies to ordinary cartridges without enhancement flags. [SGB startup](sgb-startup.md) defines the timing, reset and output contracts; full firmware and physical-unit qualification remain open.
+
+The CGB WRAM selector retains its raw register value separately from the effective memory bank. At cold firmware entry FF70 reads `00` while bank 1 is selected. A write sets the unused upper bits: writing zero reads back `F8`, and writing one reads back `F9`; both select bank 1. Echo RAM uses that same physical bank. Native states already store the raw I/O byte and effective bank independently, so this correction does not change the V12 layout.
+
+Palette data ports FF69 and FF6B are accessible while the boot overlay is mapped, including on the current monochrome profiles. Monochrome palette storage starts at zero, but its index ports remain unavailable: index writes are ignored, so data writes address byte zero without auto-increment. Removing the overlay hides the data ports and ignores further writes in monochrome mode. Physical CGB retains its separate index, compatibility-mode, and PPU access rules.
+
+## LCD line register
+
+LY at `FF44` is read-only. Writes leave the line counter, display mode and coincidence interrupt logic unchanged apart from normal progress during the bus access. The access still reaches memory observers and settles deferred display work before the byte is ignored. This applies to all profiles, including color double speed and LCD-off operation.
+
+The STAT regression checks every written byte and actual CPU store and read/modify/write instructions across visible lines, VBlank, the shortened LY=153 interval and LCD-off. It also continues execution after the write to detect a disturbed line counter or interrupt latch.
+
 ## Cartridge controllers
 
-The core decodes ROM-only, MBC1, MBC2, MBC3, MBC5, MMM01, MBC6, MBC7, HuC1, HuC3, Camera, and TPP1 cartridges. Coverage differs by controller.
+The core decodes ROM-only, MBC1, MBC2, MBC3, MBC5, MMM01, MBC6, MBC7, HuC1, HuC3, Camera, TAMA5, and TPP1 cartridges. Coverage differs by controller.
 
 | Family | Current scope and limits |
 | --- | --- |
-| ROM-only | Fixed ROM and optional RAM, with battery files when the header identifies battery storage |
+| ROM-only | Fixed ROM; explicit ROM+RAM types `08` and `09` retain direct RAM, with battery storage for `09` |
 | MBC1 | ROM/RAM bank selection, wired bank aliases, and logo-detected multicart layouts; multicart RAM remains in bank 0 |
 | MBC2 | Address-dependent control and built-in 512 by 4-bit RAM |
 | MBC3 | Banked ROM/RAM, optional clock registers, live/latched clock persistence, halt and carry handling; extended MBC30-sized inputs use eight-bit ROM selection and up to eight RAM banks |
 | MBC5 | Nine-bit ROM selection, RAM banking, exact RAM-enable decoding and a motor latch/host observer for rumble cartridges; physical feedback remains unqualified |
-| MMM01 | Menu-first and menu-last dump layouts, one-way lock, ROM/RAM masks, multiplex mode, and battery SRAM |
-| MBC6 | Partial mapping; flash behavior remains pending |
+| MMM01 | Menu-first and menu-last dump layouts, menu-selected RAM capacity and battery metadata, one-way lock, ROM/RAM masks, multiplex mode, and battery SRAM |
+| MBC6 | Independent 8 KiB ROM/flash windows, independent 4 KiB SRAM windows, and persistent flash commands |
 | MBC7 | Dual access gates, motion latches, 256-byte serial EEPROM, battery files, and mid-command continuation. Physical motion input remains pending |
-| HuC1 | Independent six-bit ROM and three-bit RAM selection, RAM access outside infrared mode, and disconnected infrared register behavior; transport and startup mapping qualification remain pending |
-| HuC3 | ROM bank zero after selection, 16 SRAM banks, read-only and read/write modes, nibble commands, clock and alarm persistence, and timed infrared register input and output. Host infrared transport and alarm notification remain pending |
-| Camera | ROM/SRAM banking, shutter timing, generated sensor pixels, tile conversion, and capture continuation. Analog gain is approximate. Host camera input remains pending |
-| TPP1 | Extended header, mirrored bank registers, read-only and writable SRAM, RTC commands and persistence, and four guest rumble levels. Host feedback uses an on/off latch |
+| HuC1 | Independent six-bit ROM and three-bit RAM selection, RAM access outside infrared mode, and a shared timed infrared receiver with host input and output callbacks. Physical transport and startup mapping qualification remain pending |
+| HuC3 | ROM bank zero after selection, 16 SRAM banks, read-only and read/write modes, nibble commands, clock and alarm persistence, and the shared timed infrared receiver. Physical infrared transport and alarm notification remain pending |
+| Camera | ROM/SRAM banking, shutter timing, generated sensor pixels, calibrated gain, exposure and edge processing, tile conversion, and capture continuation. Paired digital-image checks cover all gain and edge selections. Qt captures from the default camera and keeps host images and requests outside native files. The storage/wave checkpoint passed injected native workflows with Qt 6.8.3 on Windows and Linux; physical devices remain unqualified. See [Camera cartridges](host-camera.md) |
+| TAMA5 | 32 ROM banks, 32 indirect save bytes, four calendar pages, and battery and command continuation. Physical alarm output and MCU timing remain open |
+| TPP1 | Extended header, mirrored bank registers, up to 2 MiB of read-only or writable SRAM, RTC commands and persistence, and four guest rumble levels. Motor feedback averages hardware deliveries at presentation boundaries; the frontend applies the configured strength response |
 
-MBC6 exposes partial mapping without flash support. The maximum cartridge image size is 8 MiB. The core supports up to 128 KiB of cartridge storage, including TPP1. Larger TPP1 SRAM configurations are rejected before cartridge replacement.
+MBC6 maps 32 KiB of battery SRAM and a separate 1 MiB flash array with a hidden 256-byte region. The implementation covers identification, buffered page program, erase and sector-zero protection. Flash operations report completion immediately. Physical polling and operation timings still need validation. TAMA5 uses a four-bit command interface to select ROM banks, access 32 save bytes, and read or write calendar digits. Physical command latency, alarm output and commercial operation still need qualification. The cartridge image limit is 1 GiB, covering the 65,536 bank addresses available through TPP1's two ROM registers. Allocation follows the actual input length with a 32 KiB minimum. Individual controllers retain their own bank-selection wiring. Cartridge RAM uses the 128 KiB inline array for ordinary populations; larger TPP1 populations allocate their declared SRAM length, through 2 MiB. These limits do not establish tested gameplay at every capacity. See [storage validation](validation-cartridge-storage.md) for the measured scope.
 
 Physical ROM bank population follows the actual file length, rounded to the next power of two with a minimum of two 16 KiB banks. Bytes in an unpopulated tail read as `0xff`. Header ROM-size metadata does not override the loaded bank population, and an unknown size code does not reject an otherwise loadable image. Cartridge identity and native-state hashes retain the original, unpadded input bytes. A ROM-only type-0 header on an image larger than 32 KiB selects an MBC3 banking fallback. An invalid header checksum is reported without necessarily rejecting the image.
 
-Two-KiB SRAM mirrors across the eight-KiB RAM window. Ordinary timer-equipped MBC3 RAM banks 4 through 7 are disconnected; the wider RAM wiring applies to extended inputs larger than 2 MiB ROM or 32 KiB RAM. These rules have targeted regression coverage, but do not qualify every undocumented board or decaying open-bus behavior.
+RAM capacity follows the resolved cartridge hardware. A nonzero RAM-size byte alone does not add storage to an ordinary ROM-only or unsupported cartridge. Recognized bank controllers can still expose RAM described by that byte even when their type byte says no RAM. MBC2 and MBC7 use their fixed internal storage; TPP1 uses its extended header. ROM and RAM address aliases use the power-of-two chip geometry established by the loader.
 
-The frontend saves battery SRAM, MBC3, TPP1 and HuC3 clock data, and MBC7 EEPROM to `.sav` files. See [battery saves](battery-saves.md) for the supported encodings.
+| TPP1 SRAM code | Banks of 8 KiB | Active bytes |
+| ---: | ---: | ---: |
+| 0 | 0 | 0 |
+| 1 | 1 | 8,192 |
+| 2 | 2 | 16,384 |
+| 3 | 4 | 32,768 |
+| 4 | 8 | 65,536 |
+| 5 | 16 | 131,072 |
+| 6 | 32 | 262,144 |
+| 7 | 64 | 524,288 |
+| 8 | 128 | 1,048,576 |
+| 9 | 256 | 2,097,152 |
+
+Other TPP1 SRAM codes declare no storage. Its eight-bit latch selects all 256 banks, with physical aliases for smaller populations. Mode 2 permits reads and mode 3 permits reads and writes. This geometry does not widen other controllers' RAM wiring.
+
+MMM01 menu detection uses the final 32 KiB of the padded physical ROM geometry, not the last 32 KiB of an incomplete file. Both menu-first and menu-last dumps retain their original bytes. The menu supplies RAM capacity and battery capability; a no-RAM menu's promotion also depends on the first game's RAM declaration. Menus declaring type `11` do not inherit a game's battery, timer or motor flags. Paired generated cases cover conflicting headers, both layouts, erased tails and truncated menu metadata.
+
+Two-KiB SRAM mirrors across the eight-KiB RAM window. On ordinary timer-equipped MBC3 cartridges, banks 4 through 7 return a driven `FF` only when SRAM is physically present; without SRAM, the bus retains its undriven behavior. Wider RAM wiring applies to extended inputs larger than 2 MiB ROM or 32 KiB RAM. These rules have targeted regression coverage, but do not qualify every undocumented board or decaying open-bus behavior.
+
+The frontend saves battery SRAM, MBC3, TPP1 and HuC3 clock data, and MBC7 EEPROM to `.sav` files. Clock cartridges support host-time synchronization or Accurate emulated-time scheduling. Counter and latch rules remain controller-specific, including HuC3 minute behavior and separate TPP1 clock status and motor strength. See [cartridge clocks](rtc.md) and [battery saves](battery-saves.md) for the policy, counter and persistence contracts.
 
 ## CPU, memory, and timing
 
 The CPU executes SM83 instructions with instruction-specific bus phases, interrupt dispatch, delayed interrupt enable, HALT, and STOP handling. CPU and timer work use machine cycles; elapsed guest time is counted in base-speed T-cycles. CGB double speed increases CPU-domain work without doubling LCD or sound generator clocks.
 
+The eleven illegal primary opcodes consume their fetch cycle, clear IE, and halt the CPU. Graphics, sound, timer, and serial clocks continue under the ordinary HALT rules; OAM DMA remains suspended until wakeup. Pending interrupt requests cannot wake the CPU while IE stays clear. Debugger execution reports the illegal fetch separately from a core failure. Every CB-prefixed sub-opcode remains valid.
+
 Interrupt entry samples enable and request state separately because either stack byte can target an I/O register. STAT transients and LCDC control phases can change which interrupt wins before the T18 acknowledgment. The entry still consumes 20 CPU T-cycles, including cancellation. [Timing and clock domains](timing.md) describes the tested stack-register phases and the limits of that coverage.
 
 The memory map includes cartridge windows, VRAM, banked WRAM, echo RAM, OAM, I/O, high RAM, and interrupt enable. Device access restrictions depend on LCD and DMA state. Open-bus decay, fine bus conflicts, interrupt races, and revision differences remain incomplete. Passing ordinary instruction tests cannot establish those behaviors.
 
-The timer derives edges from divider phase and models delayed TIMA reloads and register-write windows. Serial supports an internal slow clock and the color fast clock with disconnected incoming data. Completed transfers can notify a host callback without changing hardware execution or writing to a host stream. External serial transport, infrared, and attached devices remain pending.
+The timer derives edges from divider phase and models delayed TIMA reloads and register-write windows. Serial supports an internal slow clock, the color fast clock, external-clock stepping, and host endpoints. Completed transfers can notify a host callback without changing hardware execution or writing to a host stream. The built-in printer implements packet transfer, image output, and timed jobs. The Qt frontend exposes the printer; paired cable sessions and physical transport remain pending.
 
 OAM DMA and CGB general/HBlank DMA are implemented. CGB transfers retain the fetched opcode, schedule sixteen-byte blocks through two-dot slots, and preserve pending HBlank work across state capture. Shared-bus decay for undriven source ranges and PPU fetch-address conflicts with mode-3 destinations remain incomplete. See [DMA timing](timing.md#dma-and-serial-consequences) for scheduling and sleep behavior. Bus contention, OAM restarts, collisions, and revision combinations still need broader coverage.
 
@@ -62,9 +114,13 @@ OAM DMA and CGB general/HBlank DMA are implemented. CGB transfers retain the fet
 
 The pixel pipeline keeps background and object fetch queues across LCD dots. It handles scroll, window activation, object selection and priority, color attributes, palettes, and a latched color object-priority choice. The PPU owns scanline progression, access modes, LCD startup, STAT signaling, and DMA coordination.
 
+Window start handling retains the initial fractional position, early-window hold and pending zero-pixel insertion. Physical CGB still fetches hidden objects when a monochrome cartridge disables their display. Monochrome object-disable writes can interrupt a fetch while retaining its final pending step. These states survive native snapshots.
+
+VRAM reads at the first HBlank edge use retained fetch addresses and a separate read latch. The CPU-selected bank is independent of the PPU fetch bank. Quiet display rows can leave the earlier committed address history intact, so matching the completed image alone does not establish the correct guest read. See [display delivery and VRAM read history](timing.md#display-delivery-and-vram-read-history) for the access and ownership rules.
+
 Coincidence and mode sources feed one combined STAT interrupt line. A rising coincidence source must preserve a pending HBlank transition; suppressing a second interrupt edge does not cancel the display's mode change. LCD power cycling preserves the comparison and combined-line latches until startup refreshes them. Automatic refresh follows the measured model-specific startup edge, while explicit STAT and LYC writes can update the comparison earlier.
 
-SGB behavior includes packet reception, palette and attribute commands, screen masking, and four player input masks. Transfers capture rendered shades on the third host frame. Character and map uploads stage the next border while the active border transitions. Host frames also advance during modeled LCD-off and STOP intervals. SGB audio extensions, PAL timing, and remaining display phase differences are still open.
+SGB behavior includes packet reception, palette and attribute commands, screen masking, and four player input masks. Transfers capture rendered shades on the third host frame. Character and map uploads stage the next border while the active border transitions. Actual presentations advance startup and transfer state together, including modeled LCD-off and STOP intervals. Redraws leave both unchanged. Cartridge sound commands and wider PAL display and commercial firmware comparisons remain open.
 
 Complete fetcher timing, mid-scanline conflicts, broad pixel comparisons, model-specific startup, and hardware color response remain active accuracy work. Host scaling, optional blending, and palette presentation do not change those requirements.
 
@@ -84,4 +140,4 @@ Physical CGB hardware enters an actual boot overlay with color registers availab
 
 Changing KEY0 does not reset the physical VRAM or WRAM bank latches. CPU data accesses and WRAM echo aliases continue through the retained bank, even when compatibility mode blocks a later register write. A visible bank-register value alone is insufficient to validate this mapping; check which bank received the data.
 
-CGB register dispatch includes DMA status, palette indexes, infrared storage, undocumented storage/masks, and read-only PCM amplitude registers. A physical color model and color execution mode are separate gates. Disconnected infrared register behavior does not establish external infrared transport, and PCM register access does not establish complete audio accuracy.
+CGB register dispatch includes DMA status, palette indexes, the infrared port, undocumented storage/masks, and read-only PCM amplitude registers. The CGB, HuC1, and HuC3 receivers share charge, decay, detection, and host input. Each output latch reports changed levels through a host callback. Physical CGB hardware accepts output writes in monochrome compatibility mode while hiding port reads; the receiver still follows its model and cartridge gates. Native snapshots preserve receiver and display-delivery history while keeping the current host connection. Generated comparisons cover register/callback behavior, stable sensing and bounded transition histories. Wider transition sequences, hardware revisions and physical infrared transport remain unqualified. PCM register access does not establish complete audio accuracy.

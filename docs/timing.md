@@ -11,21 +11,26 @@ This guide describes the current timing contracts and the invariants needed when
 | CPU T-cycle | One CPU clock; four CPU T-cycles form one CPU machine cycle |
 | CPU M-cycle | The unit accepted by `cupid_gb_tick`; advances four base T-cycles at normal speed or two at CGB double speed |
 | Base T-cycle / LCD dot | One tick in the physical base-clock domain; the PPU and APU advance in this domain |
-| `elapsed_cycles` | Cumulative base T-cycles, including execution with the LCD disabled |
+| `elapsed_cycles` | Cumulative guest base T-cycles, including execution with the LCD disabled |
+| `sgb_startup.elapsed_cycles` | Adapter presentation cycles accumulated while startup holds guest execution |
+| `cupid_gb_presentation_cycles` | Guest cycles plus the separate adapter startup cycles |
+| RTC phase | Half-base-clock units delivered at logical CPU or bus boundaries, separately from divider phase |
 | PCM frame | One left/right output sample pair at the configured sample rate |
 | Host deadline | Monotonic host nanoseconds used by Qt to schedule more guest work |
 
-Call `cupid_gb_base_clock_hz(gb)` to convert base T-cycles to physical seconds. The SGB NTSC profile uses 4,295,454 Hz. DMG, DMG0, MGB, CGB, and SGB2 use 4,194,304 Hz. A null instance returns the latter default. SGB PAL is not implemented.
+Call `cupid_gb_base_clock_hz(gb)` to convert base T-cycles to physical seconds. The SGB NTSC profile uses 4,295,454 Hz. DMG, DMG0, MGB, CGB, and SGB2 use 4,194,304 Hz. A null instance returns the latter default. SGB PAL uses 4,256,274 Hz.
 
 CGB double speed doubles CPU-domain progress relative to the base clock. It does not double the LCD, channel oscillator, or output sample clocks. One double-speed M-cycle consumes two base T-cycles every time it executes. Alternating zero-dot and four-dot batches would preserve an average rate while moving intervening reads and interrupts to the wrong dots.
 
-A regular scanline occupies 456 base T-cycles, and a regular 154-line LCD interval occupies 70,224. Startup, LCD enable/disable, and an interval beginning partway through a frame need not produce an image after another full 70,224 cycles. Geometry, presentation events, VBlank interrupts, and elapsed guest time are different observations. rame_ready latches a presentation event, classified by display_frame_type. Synthetic LCD-off and STOP events do not request VBlank. The host observation counter blank_events records actual VBlank boundaries and stays outside guest snapshots.
+A regular scanline occupies 456 base T-cycles, and a regular 154-line LCD interval occupies 70,224. Startup, LCD enable/disable, and an interval beginning partway through a frame need not produce an image after another full 70,224 cycles. Geometry, presentation events, VBlank interrupts, and elapsed guest time are different observations. `frame_ready` latches a presentation event, classified by `display_frame_type`. Synthetic LCD-off and STOP events do not request VBlank. The host observation counter `vblank_events` records actual VBlank boundaries and stays outside guest snapshots.
 
 The headless runner's `--frames` limit and both input-trace formats use 70,224 base T-cycles per numbered interval. They do not count displayed images. The same cycle interval has a different physical duration on SGB NTSC.
 
+With executed firmware on physical SGB or SGB2, startup begins at phase -10 and holds guest execution until phase 96. Each held call advances 114 presentation dots without advancing CPU, divider, timer, serial, RTC, DMA or handheld audio clocks. Actual presentations advance the startup phase; a redraw does not. Approximate post-boot initialization starts at phase 200. The physical adapter owns this behavior even for a cartridge without SGB enhancements. See [adapter startup](sgb-startup.md) for output ordering, reset and state contracts.
+
 ## Execution and subsystem ordering
 
-The CPU decoder in [cpu.c](../src/gb/cpu.c) schedules bus accesses around calls into [timer.c](../src/gb/timer.c). An ordinary M-cycle advances the CPU divider/timer domain, services OAM DMA, advances the elapsed base-cycle count, and advances the PPU and APU by four or two dots. Helpers that expose a subcycle register edge split that work deliberately while retaining the complete cycle total.
+The CPU decoder in [cpu.c](../src/gb/cpu.c) schedules bus accesses around calls into [timer.c](../src/gb/timer.c). CPU spans advance a persistent divider remainder; each completed four-T-cycle period updates timer and serial state and supplies four or two base clocks to the APU. OAM DMA and the display retain their own phases. Camera PHI follows CPU spans independently of divider reset and hold. Helpers that expose a subcycle register edge split that work while retaining each domain's clocks.
 
 That ordering is part of the implementation contract. A register write between two PPU dots must not advance the divider twice or omit audio integration. Conversely, moving every device update to the end of an instruction can make a CPU read observe a future LCD mode or miss an interrupt that arrived before its sampling point.
 
@@ -69,11 +74,11 @@ IE is the interrupt-enable register, IF holds latched request bits, and IME is t
 
 Here B is T12 for the high byte and T16 for the low byte. The second register plan uses the state left by the completed first write. For example, a low non-CGB LCDC write samples requests at T15, while a low STAT write samples at T17. Both retain T18 acknowledgment and T20 completion. This table describes interrupt stack traffic; it does not establish the same conflict coverage for every ordinary instruction write.
 
-The initial two M-cycles account for the first eight CPU T-cycles. The tail clocks its CPU divider/timer domain and OAM DMA at T10, T14, and T18, after any write or acknowledgment scheduled at that phase and before the following LCD dot. Keep those updates separate from the register-plan cursor: changing a write phase must not add another M-cycle or move the acknowledge behind a later timer request.
+Divider events follow the incoming remainder, independently of the register-plan cursor and OAM DMA phase. With remainder zero and ordinary RAM stack targets, events occur at T4, T8, T12, T16 and T20. Remainder two moves them to T2, T6, T10, T14 and T18. An event on the T18 boundary completes before acknowledgment; a later event can request the interrupt again. A stack write to DIV restarts this cadence at its actual write phase.
 
-At double speed, an odd CPU T-cycle event can fall between two LCD dots. The tail keeps that position in a local cursor while advancing `elapsed_cycles`, the pixel pipeline, and APU clocks only on base-clock dots. It can synchronize the CGB startup comparison between those dots without advancing a pixel or oscillator. It consumes the complete sequence before returning, so no half-dot cursor becomes persistent guest state. This narrow synchronization does not establish general half-cycle accuracy for every device.
+At double speed, an odd CPU T-cycle event can fall between two LCD dots. The tail keeps that bus position in a local cursor while advancing `elapsed_cycles` and the pixel pipeline on their own dot boundaries. APU clocks come from completed divider periods. The tail can synchronize the CGB startup comparison between dots without advancing a pixel or oscillator. Its bus cursor is temporary; the divider remainder survives completed instructions and is retained by native version 13. This narrow synchronization does not establish general half-cycle accuracy for every device.
 
-Ordinary STAT stores use the same one-CPU-T-cycle transient and late commit as interrupt stack traffic. `CupidGbCpuBus` tracks the borrowed T-cycle within one instruction. A following stack or word-store byte consumes the remaining three T-cycles of its leading M-cycle; the final instruction tail repays the same credit. This cursor is local to execution and is never part of `CupidGb` or a native snapshot. LDH, indirect and absolute stores, memory read-modify-write instructions, PUSH, CALL, RST, and both bytes of `LD (a16),SP` use that schedule.
+Ordinary STAT stores use the same one-CPU-T-cycle transient and late commit as interrupt stack traffic. `CupidGbCpuBus` tracks signed credit for early or late accesses within an instruction. Following bytes and the final instruction tail consume the remaining clocks. This cursor is local to execution and is never part of `CupidGb` or a native snapshot. LDH, indirect and absolute stores, memory read-modify-write instructions, PUSH, CALL, RST, and both bytes of `LD (a16),SP` use that schedule. Other register-specific plans retain their own early exposure, commit and selection points; matching their RTC delivery alone does not qualify every pixel glitch.
 
 Non-CGB STAT writes temporarily enable all four interrupt sources, except at the LY boundary when an already enabled HBlank source blocks the transient OAM enable. The other temporary enables still take effect. CGB normal speed retains the old coincidence-enable bit for one CPU T-cycle, while double speed retains the old HBlank-enable bit. The CPU selects this control before the final write M-cycle. A pending KEY1 transition within that cycle changes the clock rate without changing the control already selected for the access. These register phases consume the instruction's existing clocks.
 
@@ -83,7 +88,7 @@ The CPU disables IME for dispatched entry and retains separate HALT wake behavio
 
 ## HALT, STOP, and divider edges
 
-HALT polling has model and first-cycle behavior. CGB and the first cycle after entering HALT sample pending requests before advancing that cycle. Later monochrome polls distinguish a midpoint LCD observation from timer/serial events that occur later in the cycle. Keep the first-HALT latch in resets and snapshots; removing it can change the wake instruction.
+HALT polling has model and first-cycle behavior. CGB and the first cycle after entering HALT sample pending requests before advancing that cycle. Later monochrome polls sample after the first two CPU T-cycles. A display request or a carried divider event completed by that midpoint participates in the poll; an event in the later half does not. Keep the first-HALT latch and divider remainder in resets and snapshots because either can change the wake instruction.
 
 With IME clear, an enabled request wakes HALT in that poll and leaves the next opcode for the following step. This differs from the HALT bug, where a request already pending when HALT executes prevents sleep and changes the next fetch. Expiry of a timed speed-switch wait follows another rule: the expiring poll can execute the next opcode in the same step.
 
@@ -93,7 +98,15 @@ On physical CGB hardware, prepared KEY1 and no selected held key enter speed-swi
 
 STOP resets DIV before switching. IME clear holds that reset for four further CPU T-cycles; EI maturing into STOP supplies the IME-set control behavior. A selected held key suppresses switching and leaves KEY1 prepared. A request sampled within STOP can leave the pad byte unconsumed. Ordinary STOP wakes from its selected input lines; the timed HALT instead uses enabled interrupt requests. Keep these paths separate from host focus and key-event policies.
 
-Short freeze intervals require care when observing sound. Divider work can queue audio clocks even while LCD progress is frozen. The current core advances that audio work eagerly. In seeded 44,100/192,000-Hz controls, it exposes one host PCM frame during a fully frozen poll where the comparison build defers its callback until a sound-register read or later poll. Guest PCM and total delivered frames agree after that flush. Exact frozen-poll host delivery ordering remains an open comparison gap. The pinned reverse-switch odd-mode rules also lack separate physical-hardware qualification.
+DIV reset clears the independent remainder. Its first new edge follows four unheld CPU T-cycles, so an additional four-T STOP hold places that edge at T8. A partial DMA interval can leave one to three clocks toward the next event; a later instruction must retain them. Short oscillator freeze suppresses display progress but still supplies divider and camera CPU clocks. Camera PHI stops during HALT and STOP, while ordinary HALT keeps the divider running.
+
+STOP samples the PPU's OAM, VRAM and palette access gates at entry. Those retained gates govern later fetches and output while the CPU is stopped; current mode bits cannot reconstruct them. Waking clears the gates. CGB palette RAM has its own ownership edges: it becomes inaccessible after readable mode 3 begins and remains inaccessible briefly after the final pixel. The retained final-pixel dot preserves that trailing phase through native snapshots.
+
+The VRAM sample follows retained display delivery. Quiet OAM work can still hold an open read gate when synchronized work at the same eager-renderer dot has claimed the port. STOP does not force that synchronization. Monochrome CPU reads retain the sampled ownership while stopped; physical CGB display work continues. An LCD power cycle releases the monochrome CPU read gate without replacing the complementary PPU STOP latch. The saved display reset phase distinguishes that power transition until execution resumes.
+
+Physical color hardware also reads background attributes for a monochrome cartridge. Tile-bank, flip and priority bits still affect fetching and mixing even though color-palette selection uses the monochrome compatibility path. Blocked VRAM reads return `FF` for the attribute byte too. Its bits still enter the FIFO; discarding them can put objects in front of a background that owns priority.
+
+Short freeze intervals require care when observing sound. Divider work can queue audio clocks even while LCD progress is frozen. The core retains pending digital clocks separately from rational sample credit and reconstruction phase. Register accesses and divider boundaries force the required work; a PCM drain only consumes samples already delivered. Paired checks must compare delivery steps as well as values and totals. The pinned reverse-switch odd-mode rules still lack separate physical-hardware qualification.
 
 TIMA uses falling edges of its selected divider input. Resetting DIV or changing TAC can therefore create a timer pulse without waiting for the next ordinary divider increment. Overflow exposes zero before the delayed reload and interrupt. TIMA and TMA writes in that reload window have different effects. Preserve the pending reload latch and its write rules when splitting a cycle.
 
@@ -107,7 +120,9 @@ Keep three observations distinct: the readable STAT mode bits, the interrupt con
 
 The line-tail OAM interrupt input becomes available to explicit STAT/LYC writes before the readable mode changes. Automatic latch edges remain separate: recomputing the combined line from readable HBlank mode on every intervening dot would create an extra interrupt after some mask changes. OAM mode also does not imply a continuously asserted OAM interrupt input. The automatic line-start update presents that source and then removes it while mode 2 stays readable. CGB double speed has an additional explicit STAT-write edge at the first OAM-search position.
 
-The LY=LYC interrupt input retains its previous value while the comparison is invalid. During that phase, monochrome profiles clear the readable coincidence bit and CGB retains it. These boundaries occur during line changes, the transition to VBlank, and line 153. During a STAT write that spans a speed switch, the divider's speed selection determines the audio clocks, even if the LCD consumes part of the cycle at each rate.
+The LY=LYC interrupt input retains its previous value while the comparison is invalid. Monochrome profiles normally clear the readable coincidence bit during those intervals. CGB can retain it, although revisions 0 through C clear it at specific normal-speed edges on line 153. During a STAT write that spans a speed switch, the divider's speed selection determines the audio clocks, even if the LCD consumes part of the cycle at each rate.
+
+On line 153, the LCD changes the readable LY, the comparison input and the STAT interrupt at separate edges. On all CGB revisions, an LYC write from dot 10 through dot 21 after LY first reads 153 can present line 153 and the previous LYC to the comparator before the new LYC is compared with zero. This can request an interrupt even if the resulting coincidence bit is clear. An already asserted mode source can mask the edge.
 
 At the final pixel, `stat_irq_delay` records a pending one-dot HBlank transition. Normal speed exposes mode 0 before that delayed interrupt input. Double speed keeps mode 3 visible until the delay is consumed, then exposes mode 0. A STAT or LYC write can raise the coincidence source during this interval. That independent edge must not cancel the pending HBlank transition or leave mode 3 latched after the transfer has finished.
 
@@ -115,9 +130,27 @@ The PPU consumes the delay; LCD reset or disable clears it. If coincidence keeps
 
 LCD power changes have their own startup state. The first enabled line skips the ordinary OAM search and uses a shortened startup interval. Access restrictions can change before a visible mode bit, so tests must check memory access as well as STAT readback. STAT's unused top bit reads high through the bus even when its stored power-on byte is zero.
 
+CGB startup uses a 452-dot first-line boundary in the local PPU coordinate system. A comparison scheduler can report an internal phase four dots ahead while exposing the same LY, STAT and interrupt edges. Compare those observable edges and elapsed clocks before changing a line budget. The generated normal-speed qualification in [the clock validation record](validation-rtc.md) retains both raw coordinates and their matched mapped transitions.
+
 Disabling and re-enabling the LCD preserves the coincidence and combined STAT latches until a startup refresh. Reading STAT immediately after enable does not force a new comparison. Automatic refresh occurs after the second processed LCD dot on non-CGB profiles and at the first advancing edge on CGB. During a double-speed interrupt tail, that CGB edge can be the first half-dot. An explicit STAT or LYC write still updates comparison immediately, even before the automatic refresh.
 
 `cupid_gb_sync_lcd_startup` exposes that CGB startup edge without advancing the pixel pipeline or counters. Clearing the fetch pipeline must retain `pixels.lyc_irq`; otherwise power cycling can fabricate a falling and rising comparison sequence. The HBlank delay and the frozen comparison latch have different reset rules.
+
+## Display delivery and VRAM read history
+
+[display_clock.c](../src/gb/display_clock.c) retains display delivery separately from the eager pixel pipeline. Its signed half-dot credit, row phase, pending batch, window state and frame age determine when quiet work becomes visible to another device. Every supported model retains this history, including cartridges without infrared hardware. Receiver availability remains a separate cartridge and hardware property.
+
+CPU execution supplies complete logical clock spans through `cupid_gb_deliver_cpu_cycles`. Display synchronization occurs at the guest accesses that require it; a passive debugger read cannot force it. VRAM, OAM, interrupt requests and the relevant display registers synchronize their pending work. DIV and infrared port accesses do not. On monochrome hardware, selecting an LCDC write conflict first samples the old value through the active bus path. Advancing the leading clocks before that sample changes later receiver observations.
+
+Frame age advances by the whole dots in each delivered span, after the scheduler's window split. At double speed, two separate one-half-dot deliveries therefore need not have the same frame-age increment as one two-half-dot delivery. This retained scheduler history does not replace `elapsed_cycles`, the divider remainder or the pixel pipeline's dot coordinate.
+
+[vram_bus.c](../src/gb/vram_bus.c) owns the committed map and tile-data addresses, the held read byte, and the pending addresses produced by eager fetching. Fine display work commits those pending addresses. A completed quiet row can leave the previous committed addresses in place. Keeping only the latest eager fetch would change a guest read at the first HBlank edge even when the completed image is correct.
+
+VRAM read and write ownership use separate predicates. On normal-speed CGB, the first scanline exposes STAT mode 3 before closing either port. On ordinary monochrome scanlines, the read port closes before the write port near the end of OAM search. CPU writes and CGB DMA's opposite-bank mirroring use the write predicate, so that early CGB interval cannot create an unintended second-bank write.
+
+At that edge, monochrome hardware can retain a low tile-address line. Normal-speed CGB can instead select the departing map or tile-data address, or return the preceding held byte while loading the newly requested byte. The physical CPU-selected VRAM bank remains independent of the bank recorded by the PPU fetch. Double-speed CGB bypasses this address alias. Successful CPU and OAM-DMA source reads update the held byte; blocked reads, writes, PPU fetches and passive peeks do not. An LCD power transition does not reset the VRAM latches, although the display synchronization before a power or VRAM write can commit pending addresses. A new hardware session clears the history.
+
+Native format 15 retains these display and VRAM records together with fractional pixel position, window-edge insertion and interrupted object-fetch state. Older formats can recover only history represented by their existing fields; their documented defaults cannot reproduce an unknown earlier bus read. Compare guest ports, completed pixels and intermediate surface writes separately. Some early surface publication positions still differ even where returned bytes and completed scanlines agree.
 
 ## Audio sample and filter units
 
@@ -125,11 +158,11 @@ The APU's channel state advances in base-clock dots. Divider events separately a
 
 The [audio subsystem guide](audio.md) describes channel power, DAC gating, held output, envelope and sweep pipelines, wave access, noise clocks, and model-specific limits.
 
-For an output rate R and physical base clock H, each base dot contributes R sample-phase units. One output stereo frame spans H phase units. `sample_acc` stores the current phase; `mix_left` and `mix_right` integrate channel amplitude over that phase. Splitting a dot interval at a CPU register edge must retain the partial sample, including both sides of a sample boundary.
+For an output rate R and physical base clock H, each delivered base dot contributes R units of rational sample credit. Delivering one stereo frame consumes H units. `apu.output.sample_acc` retains that credit independently of pending digital clocks and the rounded reconstruction fraction. Channel transitions enter per-channel rings at their fractional position; a register edge must preserve the contributions on both sides of an output boundary.
 
-The filter retains fixed-point capacitor state separately from channel power and uses a coefficient derived from the model clock and output rate. The default output is 44,100 stereo frames per physical second, including SGB NTSC. A double-speed CPU does not produce twice as much audio. Output-rate changes discard output that belongs to the old rate while retaining oscillators; ordinary timing splits must not perform that reset.
+The filter retains binary64 capacitor history separately from channel power and uses a coefficient derived from the model clock and output rate. The default output is 44,100 stereo frames per physical second, including SGB NTSC. A double-speed CPU does not produce twice as much audio. A rate change finishes pending hardware work at the old rate, then updates output coefficients while retaining queued PCM, reconstruction and capacitor history. A different rate is rejected before that work if adapter startup batches remain unread; drain them first. Ordinary timing splits preserve the same history.
 
-Drain the finite PCM buffer during LCD-off execution as well as ordinary images. A host that waits indefinitely for VBlank can lose samples even when the emulated channel timing is correct. Core PCM, host conversion, the audio-device queue, and a recording are separate stages. Clearing a host playback queue after a state load must not erase the snapshot's pending core PCM.
+Drain the finite PCM buffers during LCD-off execution as well as ordinary images. A host that waits indefinitely for VBlank can lose samples even when the emulated channel timing is correct. Drain pending adapter startup batches before the next hardware call, ordinary PCM at its watermark, and all remaining output before returning from an execution interval. Core PCM, host conversion, the audio-device queue, and a recording are separate stages. Exact state restoration preserves both output owners from the snapshot. Qt live restoration keeps both receiving output owners, then discards stale playback before generating sound on the restored guest timeline. Startup output has its own origin and does not enter handheld WAVE recordings.
 
 ## DMA and serial consequences
 
@@ -137,7 +170,7 @@ OAM DMA advances through CPU M-cycle calls, including startup/restart delay coun
 
 The CGB block-transfer paths and their HBlank triggers are separate from OAM DMA. Writing FF55 queues a request; it does not synchronously replace VRAM. The next CPU opcode is fetched and latched before pending transfer work runs. DMA may overwrite its backing memory while the CPU still executes the fetched byte.
 
-A block copies sixteen bytes at two base dots per byte. Its atomic scheduler advances the CPU divider, OAM DMA, serial, LCD, and sound clocks through two-dot slots. Startup and tail overhead differ with CPU speed. For an otherwise ordinary NOP and one ready block, the complete step consumes 40 base T-cycles at normal speed or 36 at double speed. A general transfer can run several blocks in that step; an armed HBlank transfer consumes one block per request. No frame skipping or reduced sound work substitutes for these stalls.
+A block normally copies sixteen bytes at two base dots per byte. The transfer captures its CPU slot width at entry: two T-cycles at normal speed or four at double speed. A delayed speed switch can change the base-clock duration while that captured width remains fixed. Divider, OAM DMA, serial, LCD and sound work retain their own phases through the slots. Startup and tail overhead differ with CPU speed. For an otherwise ordinary NOP and one ready block at a steady speed, the complete step consumes 40 base T-cycles at normal speed or 36 at double speed. A general transfer can run several blocks in that step; an armed HBlank transfer consumes one block per request. No frame skipping or reduced sound work substitutes for these stalls.
 
 The HBlank request settles three base dots after the final pixel. This delay is separate from STAT's readable mode and interrupt delay. Sleeping HALT/STOP suppresses newly arming that request. A sleep-entry latch records whether entry occurred outside HBlank; waking in HBlank can then request one block. Disabling the LCD while an armed transfer was in a nonzero mode requests one block. Canceling through FF55 clears ready work and delay, and the new control value supplies the canceled remaining-count status.
 
@@ -153,7 +186,7 @@ Save or restore at an instruction boundary with exclusive core access. An interr
 
 The native codec uses explicit field widths and byte order. A phase repair can change generated field values without changing a schema. Version 3 adds persistent DMA and audio latches that version 2 did not record. Do not add host-only helper cursors or temporary event lists to the guest structure merely to implement an atomic sequence. If a new persistent hardware latch is required, update the codec and validate its continuation deliberately. See [save states and rewind](save-states.md).
 
-CPU, PPU, and APU execution never sleep or use elapsed host time to decide how many hardware clocks to skip. Cartridge calendar time is a separate domain: MBC3 register/latch and battery helpers can use the host calendar, and explicit `_at` battery functions accept a supplied timestamp. Deterministic RTC checks must control that input. This exception must not turn host scheduling into a source of CPU or LCD clocks.
+CPU, PPU, and APU execution never sleep or use elapsed host time to decide how many hardware clocks to skip. Cartridge calendar time is a separate domain. Scheduled host-mode clock updates, policy changes, controller-specific stop/start writes and battery operations can observe host time; ordinary latch writes only copy clock registers. Explicit `_at` battery functions accept a supplied timestamp, and the RTC time-provider API controls other host-time observations. Deterministic checks must control both inputs. Accurate mode instead consumes delivered hardware clocks. Neither policy turns host scheduling into a source of CPU or LCD clocks. See [cartridge clocks](rtc.md).
 
 ## Joypad row release and clock snapshots
 
@@ -163,13 +196,15 @@ Every MBC3 write in 6000–7FFF refreshes the clock snapshot, including repeated
 
 ## Qt deadlines and measurements
 
-Qt calculates playback time from the base T-cycles consumed by its bounded work interval. `GuestClockPacer` divides by the selected physical model clock and playback rate, carrying the fractional nanoseconds across ordinary intervals. A clock/rate change or timeline rebase resets the applicable fraction. Partial LCD intervals are charged only for their consumed cycles.
+Qt calculates playback time from the presentation cycles consumed by its bounded work interval, including adapter startup holds. `GuestClockPacer` divides by the selected physical model clock and playback rate, carrying the fractional nanoseconds across ordinary intervals. A clock/rate change or timeline rebase resets the applicable fraction. Partial LCD intervals are charged only for their consumed cycles. Guest execution counters, scripted inputs and replayed guest-cycle totals retain their separate guest clock.
+
+Guest deadlines, bounded reports, paint intervals and rewind capture measurements share `HostElapsedTimer`. Linux uses `CLOCK_MONOTONIC_RAW`; Windows uses Qt's elapsed timer. Qt timer notifications wake the work loop, while elapsed host time determines its deadlines. A bounded run also checks its final deadline and five-second warmup on that host clock. The [desktop clock record](validation-host-clock.md) explains the independently measured discrepancy that motivated the Linux change.
 
 The work loop stops at a completed image or a bounded base-cycle interval, with a separate step budget. This keeps LCD-off programs and unusual instruction streams responsive. Turbo and rewind use explicit host policies. Audio backpressure can delay more guest work; it must not discard guest clocks or disable audio generation to hide timing errors.
 
 State loads and rewind replace the guest timeline. Reset deadlines and host audio/conversion history, reconcile physical input, and reject stale session measurements. A negative net cycle delta after a restore is not forward throughput. Rewind's duration limit converts stored cycle differences through the model clock.
 
-Runtime reports record `requested_model`, actual `hardware_model`, and `base_clock_hz`. Compute guest speed from base-cycle progress divided by H and measured host seconds. Report widget paints, completed images, audio samples, and physical presentation separately. Neither 60 widget paints per second nor a near-100% bounded guest rate establishes complete gameplay or audible accuracy.
+Runtime reports record `requested_model`, actual `hardware_model`, and `base_clock_hz`. Compute guest speed from guest base-cycle progress divided by H and measured host seconds. Presentation speed includes the adapter startup clock, so it can remain active while guest speed is zero. Audio counts identify handheld and startup output separately. Report widget paints, completed images, audio samples, and physical presentation separately. Neither 60 widget paints per second nor a near-100% bounded guest rate establishes complete gameplay or audible accuracy.
 
 ## Validating a timing change
 
@@ -181,7 +216,7 @@ Run the focused native targets before broader suites:
 
 ```sh
 ctest --test-dir build --output-on-failure \
-    -R 'cupidgb_(cpu_timing|ppu|stat|apu|serial|state|core_interop|guest_clock_pacer)$'
+    -R 'cupidgb_(cpu_timing|ppu|stat|apu|wave_retrigger|serial|serial_selection|serial_state|state|core_interop|guest_clock_pacer)$'
 ```
 
 For a Visual Studio build, add `-C Release`. Also run the Qt workflow smoke for deadline, state, audio, and session integration. Sanitizers and Release IPO exercise different host-code paths; neither replaces the other.
@@ -190,6 +225,6 @@ Use equivalent explicit models, boot binaries, settings, and inputs for external
 
 ## Remaining hardware work
 
-The timing helpers cover tested observations rather than every register conflict or hardware revision. Ordinary instruction writes and interrupt stack writes need separate coverage. HBlank/OAM boundary STAT-write qualification, fine LCDC/palette conflicts, OAM corruption, DMA contention/stalls, STOP behavior, serial clock changes and external transport, and revision-specific startup remain incomplete. Grouped CGB and monochrome profiles do not qualify each physical revision. SGB PAL and full SGB host integration remain pending.
+The timing helpers cover particular register conflicts and hardware revisions. Ordinary instruction writes and interrupt stack writes need separate coverage. HBlank/OAM boundary STAT-write qualification, fine LCDC/palette conflicts, OAM corruption, DMA contention/stalls, STOP behavior, further serial edge combinations, external transport and revision-specific startup remain incomplete. The retained serial clock selector, SC-write ordering, tested KEY0 transitions and native-state continuation have [separate regression coverage](validation-serial-selection.md). Grouped CGB and monochrome profiles do not qualify each physical revision. Wider SGB PAL qualification and full SGB host integration remain pending.
 
 Preserve failing and inconclusive cases. A narrow phase fix must not be described as complete interrupt, graphics, or audio accuracy without corresponding evidence.

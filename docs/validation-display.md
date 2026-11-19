@@ -1,0 +1,82 @@
+# Initial display sizing, 2026-11-16
+
+The Qt window now creates its status bar before calculating the initial guest
+canvas size. Previously, opening the first cartridge could create the bar after
+that calculation and take height from the display. On the tested Linux desktop,
+the resulting canvas could fit only a 1x integer image despite the 2x preference.
+Saved window geometry still takes precedence over the default size.
+
+This correction follows clock checkpoint
+`04da2e8310e7e604d58804b440c703c419bd1779`. The two changed build inputs are
+`main_window.cpp` and `main_window_session_tests.cpp`. The 208-input source
+manifest has SHA-256
+`33280bfc28fe941691a773cdd9753eb6ee40f3074222b899a3b6ed3d4a62f104`.
+The combined validation receipt has SHA-256
+`d0cff3e2d1a197de988aa5a910256713f2a5952f9af9feb885537d161631fd13`.
+Both core archives and both ROM runners retain their clock-checkpoint hashes.
+
+## Regression and installed checks
+
+The workflow checks the canvas before and after the first cartridge open. Both
+dimensions must accommodate a 320 by 288 logical image at the 2x default. A
+separate fixture saves a 517 by 389 custom window size and checks that a normally
+constructed window restores it. Existing explicit-scale, centering, fullscreen,
+custom-size and SGB transition assertions remain active.
+
+A private Linux executable links the retained old constructor with the new
+workflow fixture. Compilation and linking succeed, then the new first-cartridge
+assertion rejects a 320 by 266 canvas. The original wrapper expected the earlier
+empty-window diagnostic and therefore also failed its classifier. Its original
+logs and failure remain intact; a separate interpretation identifies the actual
+new assertion. No application rerun was used to change that result. All 54
+protected link inputs, 208 source inputs and both core archives remain unchanged.
+
+| Check | Windows | Linux/Xcb |
+| --- | --- | --- |
+| Release build | Passed | Passed |
+| Display pipeline, Qt CLI and Qt workflows | 3/3 passed, 37.69 seconds | 3/3 passed, 48.69 seconds |
+| Installed native UI workflow with required real audio | Passed, 18.91 seconds | Passed, 27.42 seconds |
+| Retained native UI captures | 11 | 11 |
+
+The fresh installations contain 295 files on Windows and 22 on Linux. The
+native runs verify the expected runtime paths and complete under the unchanged
+180-second guard. Source and installed-file hashes remain unchanged throughout
+the checks. The installed Windows executable has SHA-256
+`d0d725af026f8a272b73311d737e3c8761a347a0d80b4e87a7a1e6bb7e3ea84d`.
+The installed Linux executable has SHA-256
+`4270f9542ce3244e14368f1e2c8477526cf1d35f48df9c3e963e2c5b104fbc90`;
+installation removes the build's runtime search path, so its hash differs from
+the build executable.
+
+## Visible sizing result
+
+A generated solid-frame cartridge runs for three application seconds with
+isolated default settings, the DMG profile and startup seed zero. Its raw guest
+capture is identical before and after the correction on both hosts. Window
+captures distinguish the rendered image from menus, status text and black bars.
+
+| Host | Guest image before | Guest image after | Window capture before | Window capture after |
+| --- | --- | --- | --- | --- |
+| Linux/Xcb | 160 by 144 | 320 by 288 | 320 by 307 | 320 by 329 |
+| Windows, 120 DPI | 320 by 288 | 320 by 288 | 483 by 401 | 483 by 428 |
+
+The captures show the full guest image with readable menus and status text.
+Windows retains integer physical-pixel scaling on this desktop; the logical
+window preference and resulting physical-pixel factor are distinct. The Linux
+capture now fills the intended 2x guest canvas.
+
+## Scope
+
+The comparison source revision remains
+`ea667ad79aa28409f034b1fd6da7304e1844750d`. Its default-scale and resizing rules
+were inspected, but this correction has no paired native reference-UI run.
+The checks above qualify the tested local Windows and Linux environments, not
+every desktop theme, DPI setting or window manager.
+
+No 120-second gameplay measurement was repeated for this geometry correction.
+The earlier installed folders and performance receipt remain unchanged, and the
+[clock validation record](validation-rtc.md) retains its original render-size
+mismatch. Its timings do not become measurements of these new executables.
+The unchanged cores retain their earlier validation evidence; this focused
+frontend run does not add hardware, mapper, audible-quality or full-speed
+qualification.

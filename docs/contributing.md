@@ -24,6 +24,10 @@ git diff --check
 
 Format only the changed project sources. Do not reformat generated files or third-party libraries. Preserve unrelated edits. Explain hardware quirks, clock boundaries, invariants, and non-obvious decisions in comments; avoid comments that restate ordinary operations.
 
+Every owned source, header, build script, and packaging script starts with its filename, purpose, author, date, copyright, and complete GPL notice. Keep the interpreter line first in executable scripts. C and C++ files, included coefficient tables, and Windows resource templates must stay within 2,000 lines; split larger implementations by responsibility. Generated tables retain the header emitted by their generator.
+
+Run `python3 scripts/check_source_headers.py --list` to inspect the current source inventory and validate these requirements. CTest runs the same check on Windows and Linux. It scans the owned source directories and build entry points, including new files, without requiring Git or a cached manifest. Dependencies, private inputs, and build output directories are outside its inventory.
+
 ## Behavioral changes
 
 Derive requirements from observed source/runtime behavior, then implement them in CupidGB's own structure. Avoid special cases for test filenames, program counters, individual games, or expected output signatures in the emulation core. Test-success protocols belong in explicit validation tools.

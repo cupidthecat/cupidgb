@@ -1,9 +1,34 @@
+/**
+ * @file    test_cpu_timing.c
+ * @brief   Regression tests for CPU instruction timing, bus phases, and interrupts.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://gnu.org>.
+ */
+
+#include "cupid/gb/apu.h"
 #include "cupid/gb/gb.h"
+#include "cupid/gb/input.h"
 #include "cupid/gb/ppu.h"
 #include "cupid/gb/timer.h"
 
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static void prepare(CupidGb *gb, uint8_t opcode, uint8_t flags) {
@@ -339,7 +364,7 @@ static void test_interrupt_if_ie_stack_aliases(void) {
                     uint8_t final_if = alias == 1 ? (uint8_t)(low & 31u) : requested;
                     final_if &= (uint8_t)~selected;
                     if (divider == 0) {
-                        final_if |= 4; /* Reload at T19 survives the T18 acknowledge. */
+                        final_if |= 4; /* Reload at T20 survives the T18 acknowledge. */
                     }
                     assert(gb.cpu.pc == vector && gb.cpu.sp == (uint16_t)(stack[alias] - 2u));
                     assert(gb.interrupt_flags == final_if);
@@ -368,16 +393,41 @@ static void test_double_speed_clock_domains(void) {
     cupid_gb_write_u8(&gb, 0xff25, 0x22);
     CupidGb doubled = gb;
     doubled.double_speed = true;
+    CupidGb *normal_output = malloc(sizeof(*normal_output));
+    CupidGb *double_output = malloc(sizeof(*double_output));
+    assert(normal_output && double_output);
     for (unsigned cycle = 1; cycle <= 2200; ++cycle) {
         cupid_gb_tick(&doubled, 1);
+        if (cycle == 2049u)
+            assert(doubled.apu.envelope_delay == 0);
         assert(doubled.elapsed_cycles == cycle * 4u - 2u);
         cupid_gb_tick(&doubled, 1);
         cupid_gb_tick(&gb, 1);
         assert(gb.elapsed_cycles == cycle * 4u);
         assert(doubled.elapsed_cycles == gb.elapsed_cycles);
-        assert(memcmp(&gb.apu, &doubled.apu, sizeof(gb.apu)) == 0);
+        /* Two-clock delivery may render before the corresponding four-clock
+         * boundary. Flush copies to compare the same delivered hardware time
+         * without changing either scheduler's pending work. Only the distance
+         * since that last render may differ; credit, phase, PCM, filters and
+         * every digital channel latch still have to match. */
+        *normal_output = gb;
+        *double_output = doubled;
+        cupid_gb_apu_run(normal_output, true);
+        cupid_gb_apu_run(double_output, true);
+        CupidGbApu current = double_output->apu;
+        current.output.render_cycles = normal_output->apu.output.render_cycles;
+        if (cycle == 2048u) {
+            /* The first DIV fall leaves a double-speed envelope latch until
+             * the next timer period. This tone has no envelope clock pending;
+             * all other state matches and the following iteration rejoins. */
+            assert(gb.apu.envelope_delay == 0 && doubled.apu.envelope_delay == 2);
+            current.envelope_delay = 0;
+        }
+        assert(memcmp(&normal_output->apu, &current, sizeof(current)) == 0);
     }
-    assert(gb.apu.buf_write > 0 && gb.apu.fs_step != 0);
+    free(double_output);
+    free(normal_output);
+    assert(gb.apu.output.buf_write > 0 && gb.apu.fs_step != 0);
     assert(gb.div_counter == 2200u % 64u);
     assert(doubled.div_counter == 4400u % 64u);
     for (unsigned phase = 0; phase < 2; ++phase) {
@@ -431,7 +481,7 @@ static void test_halt_pending_enable_and_fetch_phase(void) {
 static void test_stop_clock_and_selected_input(void) {
     CupidGb gb = {0};
     prepare(&gb, 0x10, 0);
-    gb.joypad = 0xff;
+    cupid_gb_set_buttons(&gb, 0xff);
     cupid_gb_write_u8(&gb, 0xff00, 0x20); /* Select directions. */
     gb.div_counter = 7;
     step_cycles(&gb, 8);
@@ -452,10 +502,10 @@ static void test_stop_clock_and_selected_input(void) {
     gb.cpu.ime = true;
     step_cycles(&gb, 4);
     assert(gb.cpu.stopped && gb.cpu.pc == 0x102 && gb.cpu.ime);
-    gb.joypad = 0xef; /* A is held, but its P1 row is not selected. */
+    cupid_gb_set_buttons(&gb, 0xef); /* A is held, but its P1 row is not selected. */
     step_cycles(&gb, 4);
     assert(gb.cpu.stopped);
-    gb.joypad = 0xfe;
+    cupid_gb_set_buttons(&gb, 0xfe);
     step_cycles(&gb, 12);
     assert(!gb.cpu.stopped && gb.cpu.pc == 0x102);
     assert(gb.div_counter == 1 && gb.io_registers[5] == 0x42);
@@ -464,7 +514,7 @@ static void test_stop_clock_and_selected_input(void) {
 
     prepare(&gb, 0x10, 0);
     cupid_gb_write_u8(&gb, 0xff00, 0x20);
-    gb.joypad = 0xfe;
+    cupid_gb_set_buttons(&gb, 0xfe);
     gb.div_counter = 7;
     step_cycles(&gb, 8);
     assert(!gb.cpu.stopped && gb.cpu.halted && gb.cpu.just_halted && gb.cpu.pc == 0x102 &&
@@ -472,7 +522,7 @@ static void test_stop_clock_and_selected_input(void) {
 
     prepare(&gb, 0x10, 0);
     gb.interrupt_enable = gb.interrupt_flags = 4;
-    gb.joypad = 0xff;
+    cupid_gb_set_buttons(&gb, 0xff);
     step_cycles(&gb, 4);
     assert(gb.cpu.stopped && gb.cpu.pc == 0x101);
     cupid_gb_cleanup(&gb);
@@ -485,7 +535,7 @@ static void test_stop_key_prevents_speed_switch(void) {
     gb.speed_switch_armed = true;
     gb.interrupt_enable = gb.interrupt_flags = 4;
     cupid_gb_write_u8(&gb, 0xff00, 0x20);
-    gb.joypad = 0xfe;
+    cupid_gb_set_buttons(&gb, 0xfe);
     step_cycles(&gb, 4);
     assert(!gb.double_speed && gb.speed_switch_armed);
     assert(!gb.cpu.stopped && !gb.cpu.halted && gb.cpu.pc == 0x101);
@@ -1037,7 +1087,7 @@ static void test_cb_memory_bus_phases(void) {
             gb.cpu.l = 4;
             gb.div_counter = 62;
             const bool bit_test = group >= 8 && group < 16;
-            step_cycles(&gb, (bit_test ? 3 : 4) * (fast ? 2 : 4));
+            step_cycles(&gb, (bit_test ? 3u : 4u) * (fast ? 2u : 4u));
             /* All CB memory forms read DIV at M3. BIT leaves it running;
              * the other groups reset it with their M4 write. */
             assert(gb.io_registers[4] == (bit_test ? 1 : 0));
@@ -1056,7 +1106,38 @@ static void test_cb_memory_bus_phases(void) {
     cupid_gb_cleanup(&gb);
 }
 
+static void test_oam_conflicts_require_monochrome_search(void) {
+    static const uint8_t opcodes[] = {0x13, 0x1b, 0xc5, 0xd5, 0xe5, 0xf5, 0xc7, 0x22};
+    CupidGb gb = {0};
+    for (unsigned color = 0; color < 2; ++color) {
+        for (unsigned opcode = 0; opcode < sizeof(opcodes); ++opcode) {
+            for (unsigned dot = 0; dot < 80; ++dot) {
+                cupid_gb_set_model(&gb, color ? CUPID_GB_MODEL_CGB : CUPID_GB_MODEL_DMG_ABC);
+                prepare(&gb, opcodes[opcode], 0);
+                assert(!gb.cgb_mode);
+                gb.cpu.d = 0xfe;
+                gb.cpu.e = 0;
+                gb.cpu.h = 0xfe;
+                gb.cpu.l = 0xf0;
+                gb.cpu.sp = 0xfef0;
+                uint8_t before[160];
+                for (unsigned i = 0; i < sizeof(before); ++i)
+                    before[i] = gb.object_attribute_memory[i] =
+                        (uint8_t)(i * 73u + (i >> 3) * 9u + 5u);
+                cupid_gb_write_u8(&gb, 0xff40, 0x81);
+                /* The first monochrome row has no OAM scan. Physical color
+                 * hardware also stays immune after a real scan has begun. */
+                cupid_gb_tick_ppu_dots(&gb, (uint16_t)(dot + (color ? 452u : 0u)));
+                assert(cupid_gb_step(&gb));
+                assert(memcmp(before, gb.object_attribute_memory, sizeof(before)) == 0);
+            }
+        }
+    }
+    cupid_gb_cleanup(&gb);
+}
+
 int main(void) {
+    test_oam_conflicts_require_monochrome_search();
     test_conditional_control_flow();
     test_unconditional_control_flow();
     test_stack_bus_phases();

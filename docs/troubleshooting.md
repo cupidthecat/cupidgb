@@ -4,11 +4,11 @@ Record the CupidGB version or commit, operating system, selected hardware, start
 
 ## The cartridge does not open
 
-Use an extracted cartridge image. ZIP/archive loading is not an implemented workflow. A battery save or native state is not a cartridge: open the matching game first, then load its state.
+Open a cartridge image or a ZIP, 7z or RAR archive containing one unencrypted `.gb`, `.gbc` or `.sgb` file. Archive loading requires 7-Zip (`7z` or `7zz`); its codec support determines which archives can be read. A battery save or native state is not a cartridge: open the matching game first, then load its state.
 
-Check that the file is readable and its size/header are supported. The frontend accepts files from 336 bytes through 8 MiB. Physical ROM banks follow the actual loaded length rather than the header's ROM-size field, with missing tail bytes reading `0xff`. A checksum warning does not by itself establish a corrupted or compatible image.
+Check that the file is readable and its size/header are supported. The frontend accepts cartridge images from 336 bytes through 1 GiB. Raw files and archived members use the same limit; archive output must also match the member's declared length. Physical ROM banks follow the actual loaded length rather than the header's ROM-size field, with missing tail bytes reading `0xff`. A checksum warning does not by itself establish a corrupted or compatible image.
 
-If the game requires color hardware, select Automatic or Game Boy Color in Settings and retry. A `--model` launch override fixes the hardware selector for that session; restart without it to use saved settings, or use `--model auto` for automatic selection. Hardware changes apply on reset/open. Automatic selection can choose color hardware for some monochrome cartridges; use an explicit model for comparisons.
+If the game requires color hardware, select Automatic or Game Boy Color in Settings and retry. A `--model` launch override fixes the hardware selector for that session; restart without it to use saved settings, or use `--model auto` for automatic selection. Hardware changes apply on ordinary Reset or cartridge open. Quick Reset and Reload keep the active model. Automatic selection can choose color hardware for some monochrome cartridges; use an explicit model for comparisons.
 
 A configured boot directory makes the model's boot file mandatory. Clear the field to use approximate post-boot startup, or supply the correct filename and byte length listed in the [boot table](user-guide.md#boot-behavior). A correct size alone does not validate binary provenance or behavior.
 
@@ -32,15 +32,15 @@ CupidGB releases keyboard inputs on ordinary pause or application deactivation. 
 
 Open Emulation > Controllers and check Gameplay devices, the selected profile's enable checkbox and its player assignment. A generic joystick's raw button numbers can differ from standardized controller labels; use the live preview and capture the intended controls. Check axis press/release thresholds if a stick drifts or fails to engage. Single-player folds eligible devices into player 1; SGB multiplayer uses their assigned slots.
 
-Background controller input is an explicit preference. Settings/capture and menus suppress gameplay delivery even when background play is enabled. A paused debugger can retain its stopped guest mask while the physical preview changes; resume or an explicit state load reconciles it. Disconnect/reconnect changes the live connection ID. Identical devices without a serial/path share their saved profile, so verify preferred-device selection and per-connection player overrides after reconnecting.
+Background controller input is an explicit preference. Settings and capture dialogs suspend gameplay delivery. Menus retain existing holds and accept releases while suppressing new game presses and command shortcuts; controller navigation remains available. A paused debugger can retain its stopped guest mask while the physical preview changes; resume or an explicit state load reconciles it. Disconnect/reconnect changes the live connection ID. Identical devices without a serial/path share their saved profile, so verify preferred-device selection and per-connection player overrides after reconnecting.
 
 If Windows reports a missing SDL2 entry point or DLL, use the runtime copied from the SDL2 SDK selected by CMake. A different SDL2.dll found on a development PATH can be too old. Stage the application with the matching DLL and notices, then test with SDK paths removed. SDL3 cannot replace SDL2.dll. On Linux, verify that the session can access the actual device and driver; this is separate from installing development headers. Virtual tests can pass without any physical input device exposed.
 
-Rumble requires a supported device, enabled cartridge feedback, a nonzero strength and application focus. Only supported MBC5 motor cartridges drive ordinary feedback. Test rumble checks the request path without changing guest input. A successful software request does not prove physical motor behavior, and a device already disconnected may reject a stop command. Motion/tilt and synthesized feedback remain incomplete. See [controllers](controllers.md).
+Rumble requires a supported device, enabled cartridge feedback, a nonzero strength and application focus. MBC5 motor cartridges and TPP1 cartridges whose extended header declares a motor drive feedback. The core averages delivered motor samples at presentation boundaries, and the frontend applies the configured nonlinear strength response. Test rumble checks the request path without changing guest input. A successful software request does not prove physical motor behavior, and a device already disconnected may reject a stop command. Broader motor/display interactions, physical motion sensors and synthesized feedback remain incomplete. See [controllers](controllers.md).
 
 ## Sound is missing or unstable
 
-Check Audio > Mute, Settings volume, and Settings > Audio output. System Default follows the host default device. A saved unavailable device falls back to the default while retaining the saved request. Turbo, pause, and rewind intentionally suppress host playback. WAVE recording captures the core stream before mute and volume, so a nonempty recording does not prove the host device is audible.
+Check Audio > Mute, Settings volume, and Settings > Audio output. System Default follows the host default device. A saved unavailable device falls back to the default while retaining the saved request. Pause silences playback. Turbo plays selected audio segments, and rewind plays newly generated replay audio until history runs out. Mode changes clear stale queued samples before playback primes again. WAVE recording captures forward core samples before mute and volume and excludes rewind replay, so a nonempty recording does not prove the host device is audible.
 
 Run the native frontend with `--smoke-test --audio-check` from a working desktop session. The default smoke test and offscreen CTest workflow do not open a real device. An unavailable or unsupported device is reported by the application.
 
@@ -68,7 +68,7 @@ Version 1 states can export their supported battery data through File > Recover 
 
 Check Settings > Rewind history and Rewind memory limit. Disabled history captures nothing. The requested duration is capped by compressed storage; a game with less compressible state can reach the memory limit earlier. Settings show the actual retained duration and size.
 
-History resets after cartridge replacement, reset, successful disk-state loading, or relevant configuration changes. A newly opened game has no earlier frames. Rewind is an in-memory history and does not persist across application launches.
+Ordinary Reset, incompatible cartridge or firmware replacement, successful disk-state loading, and relevant configuration changes clear frame history. Quick Reset and Reload retain history when cartridge bytes, model and firmware match. Native console resets keep the loaded assets and their frame history. Failed resets and loads preserve it. Clock-policy changes keep snapshots; replay restores guest clocks while retaining the current policy. Rewind stays in memory. A newly opened game has no earlier frames, and history does not persist across application launches.
 
 ## Qt cannot be found, the executable does not launch, or a platform plugin fails
 

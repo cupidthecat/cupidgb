@@ -1,3 +1,25 @@
+/**
+ * @file    rom_runner.c
+ * @brief   Bounded headless ROM execution with explicit verdicts and timing reports.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://gnu.org>.
+ */
+
 #ifndef _WIN32
 #define _POSIX_C_SOURCE 200809L
 #endif
@@ -47,10 +69,39 @@ static bool positive_integer(const char *text, uint64_t *value) {
     return !errno && end && !*end && *value > 0 && *value <= UINT64_C(10000000000);
 }
 
-static int register_result(const CupidGb *gb) {
+static bool power_on_seed_value(const char *text, uint64_t *value) {
+    unsigned base = 10;
+    if (text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) {
+        base = 16;
+        text += 2;
+    }
+    if (!*text) {
+        return false;
+    }
+    uint64_t parsed = 0;
+    for (; *text; ++text) {
+        unsigned digit;
+        if (*text >= '0' && *text <= '9') {
+            digit = (unsigned)(*text - '0');
+        } else if (*text >= 'a' && *text <= 'f') {
+            digit = (unsigned)(*text - 'a') + 10;
+        } else if (*text >= 'A' && *text <= 'F') {
+            digit = (unsigned)(*text - 'A') + 10;
+        } else {
+            return false;
+        }
+        if (digit >= base || parsed > (UINT64_MAX - digit) / base) {
+            return false;
+        }
+        parsed = parsed * base + digit;
+    }
+    *value = parsed;
+    return true;
+}
+
+static int register_result(const CupidGb *gb, const CupidGbStepTrace *trace) {
     /* The debug opcode is meaningful only when this protocol is explicitly selected. */
-    if (gb->cpu.halted || gb->cpu.stopped || cupid_gb_read_u8(gb, gb->cpu.pc) != 0x40 ||
-        (gb->cpu.ime && (gb->interrupt_enable & gb->interrupt_flags & 0x1f))) {
+    if (trace->event != CUPID_GB_STEP_INSTRUCTION || trace->opcode != 0x40) {
         return 0;
     }
     const uint8_t registers[] = {gb->cpu.b, gb->cpu.c, gb->cpu.d, gb->cpu.e, gb->cpu.h, gb->cpu.l};
@@ -63,7 +114,7 @@ static int register_result(const CupidGb *gb) {
 }
 
 static int write_image(const CupidGb *gb, const char *path, uint32_t *crc) {
-    bool sgb = cupid_gb_sgb_active(gb);
+    bool sgb = cupid_gb_sgb_host_present(gb);
     unsigned width = sgb ? CUPID_SGB_SCREEN_WIDTH : CUPID_GB_SCREEN_WIDTH;
     unsigned height = sgb ? CUPID_SGB_SCREEN_HEIGHT : CUPID_GB_SCREEN_HEIGHT;
     uint32_t sgb_pixels[CUPID_SGB_SCREEN_WIDTH * CUPID_SGB_SCREEN_HEIGHT];
@@ -193,14 +244,18 @@ int main(int argc, char **argv) {
     const char *rom = NULL, *boot = NULL, *image_path = NULL, *audio_path = NULL;
     const char *protocol = "none", *model_name = "dmg", *trace_path = NULL;
     uint64_t frames = 600, max_steps = 0;
+    uint64_t power_on_seed = 0;
+    bool fixed_power_on_seed = false;
     bool serial_output = false;
     CupidGbModel model = CUPID_GB_MODEL_DMG_ABC;
     for (int i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "--help")) {
-            puts(
-                "CupidGB ROM runner: [--model dmg|mgb|cgb|sgb|sgb2] [--frames N] "
-                "[--max-steps N] [--protocol none|serial|register|fibonacci|memory] [--boot FILE] "
-                "[--image FILE.ppm] [--audio FILE.pcm] [--input-trace FILE] [--serial-output] ROM");
+            puts("CupidGB ROM runner: [--model dmg|dmg0|mgb|cgb|cgb-0|cgb-a|cgb-b|cgb-c|"
+                 "cgb-d|cgb-e|sgb|sgbpal|sgb2] [--frames N] "
+                 "[--max-steps N] [--protocol none|serial|register|fibonacci|memory] [--boot FILE] "
+                 "[--image FILE.ppm] [--audio FILE.pcm] [--input-trace FILE] "
+                 "[--power-on-seed auto|UINT64] [--serial-output] ROM\n"
+                 "Power-on seeds accept decimal or 0x hexadecimal; the default is auto.");
             return 0;
         }
         if (!strcmp(argv[i], "--serial-output")) {
@@ -217,6 +272,14 @@ int main(int argc, char **argv) {
             if (!strcmp(option, "--frames") || !strcmp(option, "--max-steps")) {
                 if (!positive_integer(value, !strcmp(option, "--frames") ? &frames : &max_steps)) {
                     fprintf(stderr, "Invalid numeric limit.\n");
+                    return 2;
+                }
+            } else if (!strcmp(option, "--power-on-seed")) {
+                fixed_power_on_seed = strcmp(value, "auto") != 0;
+                if (fixed_power_on_seed && !power_on_seed_value(value, &power_on_seed)) {
+                    fprintf(stderr,
+                            "Invalid power-on seed. Use auto or an unsigned 64-bit decimal or "
+                            "hexadecimal value.\n");
                     return 2;
                 }
             } else if (!strcmp(option, "--model")) {
@@ -242,13 +305,14 @@ int main(int argc, char **argv) {
             rom = argv[i];
         }
     }
-    const char *models[] = {"dmg", "mgb", "cgb", "sgb", "sgb2"};
-    const CupidGbModel model_ids[] = {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_MGB,
-                                      CUPID_GB_MODEL_CGB, CUPID_GB_MODEL_SGB, CUPID_GB_MODEL_SGB2};
-    bool known_model = false;
-    for (size_t i = 0; i < sizeof(model_ids) / sizeof(model_ids[0]); ++i) {
-        if (!strcmp(model_name, models[i])) {
-            model = model_ids[i];
+    bool known_model = !strcmp(model_name, "dmg");
+    if (!strcmp(model_name, "cgb-e")) {
+        model = CUPID_GB_MODEL_CGB_E;
+        known_model = true;
+    }
+    for (int id = CUPID_GB_MODEL_DMG_ABC; !known_model && id <= CUPID_GB_MODEL_CGB_D; ++id) {
+        if (!strcmp(model_name, cupid_gb_model_name((CupidGbModel)id))) {
+            model = (CupidGbModel)id;
             known_model = true;
         }
     }
@@ -277,13 +341,18 @@ int main(int argc, char **argv) {
         return 2;
     }
     cupid_gb_set_model(gb, model);
+    if (fixed_power_on_seed) {
+        cupid_gb_set_power_on_seed(gb, power_on_seed);
+    } else {
+        cupid_gb_clear_power_on_seed(gb);
+    }
     if (!cupid_gb_load_rom_file(gb, rom) || (boot && !cupid_gb_load_boot_rom_file(gb, boot))) {
         cupid_gb_cleanup(gb);
         free(gb);
         return 2;
     }
     if (boot) {
-        cupid_gb_enter_boot_rom(gb);
+        cupid_gb_start_boot_rom(gb);
     }
     FILE *audio = audio_path ? fopen(audio_path, "wb") : NULL;
     if (audio_path && !audio) {
@@ -297,6 +366,7 @@ int main(int argc, char **argv) {
     cupid_gb_set_serial_output_callback(gb, observe_serial, &serial);
     bool memory_running = false;
     int memory_code = -1;
+    int illegal_opcode = -1, illegal_address = -1;
     const char *status = "bounded";
     int result = 0;
     double start = host_seconds();
@@ -305,70 +375,81 @@ int main(int argc, char **argv) {
                gb->elapsed_cycles >= events[event_index].frame * UINT64_C(70224)) {
             cupid_gb_set_buttons(gb, events[event_index++].mask);
         }
-        if (protocol_register) {
-            int detected = register_result(gb);
-            if (detected) {
-                status = detected > 0 ? "pass" : "fail";
-                break;
-            }
-        }
-        if (!cupid_gb_step(gb)) {
+        CupidGbStepTrace trace;
+        if (!cupid_gb_step_observed(gb, &trace)) {
             status = "core_error";
             result = 2;
             break;
         }
         ++steps;
         bool test_finished = false;
-        if (protocol_memory && cupid_gb_read_u8(gb, 0xa001) == 0xde &&
-            cupid_gb_read_u8(gb, 0xa002) == 0xb0 && cupid_gb_read_u8(gb, 0xa003) == 0x61) {
-            memory_code = cupid_gb_read_u8(gb, 0xa000);
-            if (memory_code == 0x80) {
-                memory_running = true;
-            } else if (memory_code == 0x81) {
-                status = "reset_required";
-                test_finished = true;
-            } else if (memory_running && memory_code < 0x80) {
-                /* Observe running first: initialization writes the signature before status. */
-                status = memory_code == 0 ? "pass" : "fail";
+        if (trace.event == CUPID_GB_STEP_ILLEGAL_OPCODE) {
+            illegal_opcode = trace.opcode;
+            illegal_address = trace.address;
+            status = "illegal_opcode";
+            result = 1;
+        } else {
+            if (protocol_register) {
+                int detected = register_result(gb, &trace);
+                if (detected) {
+                    status = detected > 0 ? "pass" : "fail";
+                    test_finished = true;
+                }
+            }
+            if (protocol_memory && cupid_gb_read_u8(gb, 0xa001) == 0xde &&
+                cupid_gb_read_u8(gb, 0xa002) == 0xb0 && cupid_gb_read_u8(gb, 0xa003) == 0x61) {
+                memory_code = cupid_gb_read_u8(gb, 0xa000);
+                if (memory_code == 0x80) {
+                    memory_running = true;
+                } else if (memory_code == 0x81) {
+                    status = "reset_required";
+                    test_finished = true;
+                } else if (memory_running && memory_code < 0x80) {
+                    /* Observe running first: initialization writes the signature before status. */
+                    status = memory_code == 0 ? "pass" : "fail";
+                    test_finished = true;
+                }
+            }
+            if (protocol_serial && serial.changed) {
+                serial.changed = false;
+                if (strstr(serial.text, "Failed") || strstr(serial.text, "FAILED")) {
+                    status = "fail";
+                    test_finished = true;
+                } else if (strstr(serial.text, "Passed") || strstr(serial.text, "PASSED")) {
+                    status = "pass";
+                    test_finished = true;
+                }
+            }
+            if (protocol_fibonacci && serial.signature_result) {
+                status = serial.signature_result > 0 ? "pass" : "fail";
                 test_finished = true;
             }
         }
         if (serial.output_error) {
             status = "output_error";
             result = 2;
-            break;
-        }
-        if (protocol_serial && serial.changed) {
-            serial.changed = false;
-            if (strstr(serial.text, "Failed") || strstr(serial.text, "FAILED")) {
-                status = "fail";
-                test_finished = true;
-            } else if (strstr(serial.text, "Passed") || strstr(serial.text, "PASSED")) {
-                status = "pass";
-                test_finished = true;
-            }
-        }
-        if (protocol_fibonacci && serial.signature_result) {
-            status = serial.signature_result > 0 ? "pass" : "fail";
-            test_finished = true;
         }
         if (gb->frame_ready) {
             ++presentation_events;
             gb->frame_ready = false;
         }
-        /* Drain per instruction, including with the LCD off, to avoid audio overflow. */
+        /* The final fetch can produce PCM or a frame even when it locks the CPU. */
         int16_t samples[128];
-        uint32_t count = cupid_gb_apu_drain(gb, samples, 64);
-        audio_frames += count;
-        for (uint32_t i = 0; i < count * 2; ++i) {
-            uint16_t sample = (uint16_t)samples[i];
-            uint8_t bytes[] = {(uint8_t)sample, (uint8_t)(sample >> 8)};
-            audio_crc = crc_byte(crc_byte(audio_crc, bytes[0]), bytes[1]);
-            if (audio && fwrite(bytes, 1, 2, audio) != 2) {
-                status = "output_error";
-                result = 2;
-                break;
+        uint32_t count;
+        while ((count = cupid_gb_apu_drain(gb, samples, 64)) != 0) {
+            audio_frames += count;
+            for (uint32_t i = 0; i < count * 2; ++i) {
+                uint16_t sample = (uint16_t)samples[i];
+                uint8_t bytes[] = {(uint8_t)sample, (uint8_t)(sample >> 8)};
+                audio_crc = crc_byte(crc_byte(audio_crc, bytes[0]), bytes[1]);
+                if (audio && fwrite(bytes, 1, 2, audio) != 2) {
+                    status = "output_error";
+                    result = 2;
+                    break;
+                }
             }
+            if (result)
+                break;
         }
         if (result || test_finished) {
             break;
@@ -411,10 +492,13 @@ int main(int argc, char **argv) {
            "\"audio_frames\":%" PRIu64 ",\"serial_bytes\":%" PRIu64 ","
            "\"audio_crc32\":\"%08" PRIx32 "\","
            "\"image_crc32\":\"%08" PRIx32 "\",\"host_seconds\":%.9f,"
-           "\"memory_result_code\":%d,\"memory_text_hex\":\"%s\"}\n",
+           "\"power_on_seed_hex\":\"%016" PRIx64 "\","
+           "\"memory_result_code\":%d,\"memory_text_hex\":\"%s\","
+           "\"illegal_opcode\":%d,\"illegal_address\":%d}\n",
            status, model_name, protocol, steps, gb->elapsed_cycles, cupid_gb_base_clock_hz(gb),
            vblank_frames, presentation_events, audio_frames, serial.bytes, audio_crc ^ UINT32_MAX,
-           image_crc, elapsed, memory_code, memory_text);
+           image_crc, elapsed, cupid_gb_get_power_on_seed(gb), memory_code, memory_text,
+           illegal_opcode, illegal_address);
     if (!strcmp(status, "fail")) {
         result = 1;
     } else if (strcmp(protocol, "none") && strcmp(status, "pass") && !result) {

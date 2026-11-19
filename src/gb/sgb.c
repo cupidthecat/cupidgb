@@ -1,21 +1,27 @@
 /**
- * @file sgb.c
- * @brief Super Game Boy (SGB/SGB2) enhancement emulation.
+ * @file    sgb.c
+ * @brief   Super Game Boy packets, palettes, attributes, borders, and multiplayer selection.
+ * @author  cupidthecat
+ * @date    2026-11-16
  *
- * Implements the SGB command protocol, attribute/palette management,
- * border rendering, and the JOYP-based serial packet interface.
+ * The packet receiver clocks commands from JOYP writes while SGB hardware
+ * accepts commands. The command handlers manage palettes, tile attributes,
+ * borders, screen masks, and multiplayer controller selection.
  *
- * Supported SGB commands:
- *   - PAL01/23/03/12, PAL_SET, PAL_TRN  – palette programming
- *   - ATTR_BLK, ATTR_LIN, ATTR_DIV, ATTR_CHR, ATTR_TRN, ATTR_SET
- *                                         – per-tile attribute map editing
- *   - CHR_TRN, PCT_TRN                   – border tile and tilemap upload
- *   - MLT_REQ                            – multi-player controller select
- *   - MASK_EN                            – screen mask control
+ * Copyright (C) 2026 cupidthecat
  *
- * The SGB command stream is clocked in via writes to the P1/JOYP register
- * (0xFF00). @ref cupid_gb_sgb_write_joyp should be called on every JOYP
- * write while the SGB is active.
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://gnu.org>.
  */
 
 #include "cupid/gb/sgb.h"
@@ -24,7 +30,6 @@
 
 #include "cupid/common/log.h"
 #include "cupid/gb/gb.h"
-#include "cupid/gbc/cgb.h"
 
 enum {
     CUPID_SGB_CMD_PAL01 = 0x00,
@@ -79,20 +84,71 @@ static uint32_t cupid_gb_sgb_rgb15_to_argb(uint16_t color) {
     return 0xff000000u | (r << 16u) | (g << 8u) | b;
 }
 
-/**
- * @brief Fills all four SGB screen palettes with the default greyscale ramp.
- *
- * Writes the four standard DMG shades (white → black) into every palette
- * slot so the screen has sensible colors before any PAL command is received.
- *
- * @param gb Pointer to the Game Boy state.
- */
-static void cupid_gb_sgb_set_default_palettes(CupidGb *gb) {
+void cupid_gb_sgb_reset_screen_palettes(CupidGb *gb) {
+    static const uint16_t adapter_palette[4] = {0x67bf, 0x265b, 0x10b5, 0x2866};
     static const uint16_t default_palette[4] = {0x7fffu, 0x56b5u, 0x2d6bu, 0x0000u};
-    unsigned palette;
 
-    for (palette = 0u; palette < 4u; ++palette) {
+    if (cupid_gb_sgb_host_present(gb)) {
+        memset(gb->sgb.screen_palettes, 0, sizeof(gb->sgb.screen_palettes));
+        memcpy(gb->sgb.screen_palettes, adapter_palette, sizeof(adapter_palette));
+        return;
+    }
+
+    for (unsigned palette = 0; palette < 4; ++palette) {
         memcpy(&gb->sgb.screen_palettes[palette * 4u], default_palette, sizeof(default_palette));
+    }
+}
+
+static void apply_title_palette(CupidGbSgb *sgb, const uint8_t *title) {
+    /* The adapter checks the complete 16-byte title field and changes palette 0 only. */
+    enum { TITLE_BYTES = 16 };
+
+    static const struct {
+        char title[TITLE_BYTES];
+        uint16_t colors[4];
+    } measured_palettes[] = {
+        {"ALLEY WAY", {0x65ef, 0x7dbf, 0x035f, 0x2108}},
+        {"BASEBALL", {0x1eed, 0x215c, 0x42fc, 0x0060}},
+        {"DR.MARIO", {0x637b, 0x121c, 0x0140, 0x0840}},
+        {"F1RACE", {0x6b57, 0x6e1b, 0x5010, 0x0007}},
+        {"GBWARS", {0x63ff, 0x36dc, 0x11f6, 0x392a}},
+        {"GOLF", {0x53fc, 0x1f2f, 0x0e29, 0x0061}},
+        {"HOSHINOKA-BI", {0x7f1f, 0x463d, 0x74cf, 0x4ca5}},
+        {"KAERUNOTAMENI", {0x533e, 0x2638, 0x01e5, 0x0000}},
+        {"KID ICARUS", {0x7ffa, 0x2a5f, 0x0014, 0x0003}},
+        {"KIRBY DREAM LAND", {0x7f1f, 0x463d, 0x74cf, 0x4ca5}},
+        {"KIRBY'S PINBALL", {0x7f1f, 0x2a7d, 0x30f3, 0x4ce7}},
+        {"MARIO & YOSHI", {0x53ff, 0x03e0, 0x00df, 0x2800}},
+        {"MARIOLAND2", {0x5ffe, 0x3ebc, 0x0321, 0x0000}},
+        {"METROID2", {0x0f96, 0x2c97, 0x0045, 0x3200}},
+        {"QIX", {0x36be, 0x7eaf, 0x681a, 0x3c00}},
+        {"SOLARSTRIKER", {0x2800, 0x7680, 0x01ef, 0x2fff}},
+        {"SUPER MARIOLAND", {0x7fbb, 0x2a3c, 0x0015, 0x0900}},
+        {"SUPERMARIOLAND3", {0x637b, 0x3ad9, 0x0956, 0x0000}},
+        {"TENNIS", {0x2b6c, 0x7fff, 0x1cd9, 0x0007}},
+        {"TETRIS", {0x4f5f, 0x630e, 0x159f, 0x3126}},
+        {"X", {0x5fff, 0x6732, 0x3da9, 0x2481}},
+        {"YAKUMAN", {0x66bc, 0x3fff, 0x7ee0, 0x2c84}},
+        {"YOSHI'S COOKIE", {0x57ff, 0x2618, 0x001f, 0x006a}},
+        {"YOSSY NO COOKIE", {0x57ff, 0x2618, 0x001f, 0x006a}},
+        {"YOSSY NO TAMAGO", {0x53ff, 0x03e0, 0x00df, 0x2800}},
+        {"ZELDA", {0x5b7f, 0x3f0f, 0x222d, 0x10eb}},
+    };
+
+    const size_t count = sizeof(measured_palettes) / sizeof(measured_palettes[0]);
+    for (size_t index = 0; index < count; ++index) {
+        if (memcmp(title, measured_palettes[index].title, TITLE_BYTES) == 0) {
+            memcpy(sgb->screen_palettes, measured_palettes[index].colors,
+                   sizeof(measured_palettes[index].colors));
+            return;
+        }
+    }
+}
+
+void cupid_gb_sgb_apply_cartridge_palette(CupidGb *gb) {
+    /* Approximate handoff already resolved permission from the cartridge header. */
+    if (gb->sgb.commands_disabled && gb->rom_size >= 0x144u) {
+        apply_title_palette(&gb->sgb, gb->rom + 0x134u);
     }
 }
 
@@ -236,24 +292,26 @@ static void advance_host_frame(CupidGb *gb, bool complete) {
     }
 }
 
-void cupid_gb_sgb_clock(CupidGb *gb, uint32_t dots, bool lcd_idle) {
+void cupid_gb_sgb_clock(CupidGb *gb, uint32_t dots) {
     CupidGbSgbTransfer *transfer = &gb->sgb.transfer;
-    uint32_t total = transfer->frame_dots + dots;
-    if (lcd_idle) {
-        /* The adapter's frame cadence continues with the handheld LCD
-         * disabled or stopped. These frames retain the last complete screen. */
-        while (total >= CUPID_SGB_FRAME_DOTS) {
-            advance_host_frame(gb, false);
-            total -= CUPID_SGB_FRAME_DOTS;
-        }
-    }
-    transfer->frame_dots = total > CUPID_SGB_FRAME_DOTS ? CUPID_SGB_FRAME_DOTS : total;
+    const uint64_t total = (uint64_t)transfer->frame_dots + dots;
+    transfer->frame_dots = total > CUPID_SGB_FRAME_DOTS ? CUPID_SGB_FRAME_DOTS : (uint32_t)total;
 }
 
-void cupid_gb_sgb_vblank(CupidGb *gb, uint32_t dots_after_vblank) {
-    advance_host_frame(gb, true);
-    gb->sgb.transfer.frame_dots =
-        dots_after_vblank > CUPID_SGB_FRAME_DOTS ? CUPID_SGB_FRAME_DOTS : dots_after_vblank;
+void cupid_gb_sgb_present(CupidGb *gb, bool complete, uint32_t dots_after_frame) {
+    if (!cupid_gb_sgb_host_present(gb))
+        return;
+    cupid_gb_sgb_startup_present(gb);
+    advance_host_frame(gb, complete);
+    /* The retained transfer age is independent of the publication scheduler.
+     * Idle publications keep the last complete screen and consume its age;
+     * a real VBlank starts the next transfer interval at the delivered remainder. */
+    if (complete) {
+        gb->sgb.transfer.frame_dots =
+            dots_after_frame > CUPID_SGB_FRAME_DOTS ? CUPID_SGB_FRAME_DOTS : dots_after_frame;
+    } else if (gb->sgb.transfer.frame_dots >= CUPID_SGB_FRAME_DOTS) {
+        gb->sgb.transfer.frame_dots -= CUPID_SGB_FRAME_DOTS;
+    }
 }
 
 /* Decode six-byte rectangle records without relying on host structure layout. */
@@ -320,7 +378,42 @@ static void cupid_gb_sgb_attribute_characters(CupidGb *gb) {
     }
 }
 
+static bool handle_boot_header(CupidGb *gb) {
+    CupidGbSgb *sgb = &gb->sgb;
+    const uint8_t identifier = sgb->command[0];
+    if ((identifier & 0xf1u) != 0xf1u)
+        return false;
+
+    /* The completed boot handoff makes header packets inert, including a bad
+     * checksum. Ordinary commands still use the existing receiver permission. */
+    if (!gb->boot_rom_enabled)
+        return true;
+
+    uint8_t sum = 0;
+    for (unsigned byte = 2; byte < CUPID_SGB_PACKET_BYTES; ++byte)
+        sum = (uint8_t)(sum + sgb->command[byte]);
+    if (sum != sgb->command[1]) {
+        sgb->commands_disabled = true;
+        return true;
+    }
+
+    const unsigned section = (identifier & 0x0eu) / 2u;
+    if (section < CUPID_SGB_HEADER_BYTES / 14u) {
+        memcpy(sgb->received_header + section * 14u, sgb->command + 2, 14u);
+        /* Only the final section examines permission. Missing, repeated and
+         * reordered sections use the cache as it stands; there is no bitmap. */
+        if (section == 5u &&
+            (sgb->received_header[0x42] != 3u || sgb->received_header[0x47] != 0x33u)) {
+            sgb->commands_disabled = true;
+            apply_title_palette(sgb, sgb->received_header + 0x30u);
+        }
+    }
+    return true;
+}
+
 static void cupid_gb_sgb_handle_command(CupidGb *gb) {
+    if (handle_boot_header(gb))
+        return;
     uint8_t command = (uint8_t)(gb->sgb.command[0] >> 3u);
 
     if ((gb->sgb.command[0] & 0x07u) == 0u) {
@@ -470,7 +563,7 @@ static void cupid_gb_sgb_handle_command(CupidGb *gb) {
 /**
  * @brief Initializes the SGB subsystem state.
  *
- * Zeroes all SGB fields and sets the default greyscale palettes.
+ * Zeroes all SGB fields and sets the power-on screen palettes.
  * The player count is reset to 1 (single-player mode).
  *
  * @param gb Pointer to the Game Boy state.
@@ -484,55 +577,42 @@ void cupid_gb_sgb_init(CupidGb *gb) {
 
     memset(&gb->sgb, 0, sizeof(gb->sgb));
     gb->sgb.player_count = 1u;
-    cupid_gb_sgb_set_default_palettes(gb);
+    cupid_gb_sgb_reset_screen_palettes(gb);
+}
+
+void cupid_gb_sgb_begin_boot(CupidGb *gb) {
+    if (!cupid_gb_sgb_host_present(gb))
+        return;
+    CupidGbSgb *sgb = &gb->sgb;
+    sgb->commands_disabled = false;
+    memset(sgb->received_header, 0, sizeof(sgb->received_header));
+    memset(sgb->command, 0, sizeof(sgb->command));
+    sgb->command_write_index = 0;
+    sgb->ready_for_pulse = false;
+    sgb->ready_for_write = false;
+    sgb->ready_for_stop = false;
+    sgb->player_count = 1;
+    sgb->current_player = 0;
+    /* Explicit firmware reentry restarts reception and pad selection. Palette,
+     * border and transfer storage retain the enclosing memory-preserving policy. */
 }
 
 /**
- * @brief Applies a CGB compatibility palette to the SGB screen palettes.
+ * @brief Reports the cartridge's SGB declaration on the selected hardware.
  *
- * Queries the CGB compatibility palette for the loaded ROM via
- * @ref cupid_cgb_get_compatibility_palette and writes the background
- * palette into all four SGB screen palette slots.
- *
- * Called after loading a ROM on an SGB/SGB2 when the cartridge does not
- * natively support SGB enhancements but should still display with
- * hardware-accurate colors.
+ * This metadata is set during cartridge initialization. Physical packet reception
+ * has a separate permission latch and does not depend on this declaration.
  *
  * @param gb Pointer to the Game Boy state.
  *
- * @note Does nothing if @p gb is NULL or no compatibility palette is found.
- */
-void cupid_gb_sgb_apply_compatibility_palette(CupidGb *gb) {
-    uint16_t bg[4];
-    uint16_t obj0[4];
-    uint16_t obj1[4];
-    unsigned palette;
-
-    if (gb == NULL) {
-        return;
-    }
-
-    if (!cupid_cgb_get_compatibility_palette(gb, bg, obj0, obj1)) {
-        return;
-    }
-
-    for (palette = 0u; palette < 4u; ++palette) {
-        memcpy(&gb->sgb.screen_palettes[palette * 4u], bg, sizeof(bg));
-    }
-}
-
-/**
- * @brief Returns whether the SGB enhancement layer is active.
- *
- * The SGB is considered active when the emulator is in SGB/SGB2 mode
- * and the cartridge declared SGB support (SGB flag byte = 0x03).
- *
- * @param gb Pointer to the Game Boy state.
- *
- * @return `true` if SGB enhancements are active, `false` otherwise.
+ * @return `true` if the selected adapter cartridge declares enhancements.
  */
 bool cupid_gb_sgb_active(const CupidGb *gb) {
     return gb != NULL && gb->sgb.enabled;
+}
+
+bool cupid_gb_sgb_commands_enabled(const CupidGb *gb) {
+    return cupid_gb_sgb_host_present(gb) && !gb->sgb.commands_disabled;
 }
 
 /* A data pulse is sampled when both select lines return high. The reset
@@ -540,7 +620,7 @@ bool cupid_gb_sgb_active(const CupidGb *gb) {
  * Keeping the pending pulse in JOYP itself also preserves it across snapshots.
  */
 void cupid_gb_sgb_write_joyp(CupidGb *gb, uint8_t value) {
-    if (!cupid_gb_sgb_active(gb)) {
+    if (!cupid_gb_sgb_commands_enabled(gb)) {
         return;
     }
     CupidGbSgb *receiver = &gb->sgb;
@@ -602,7 +682,7 @@ void cupid_gb_sgb_write_joyp(CupidGb *gb, uint8_t value) {
     }
 }
 
-static uint32_t border_color_argb(uint16_t rgb555, unsigned fade) {
+static uint16_t fade_border_color(uint16_t rgb555, unsigned fade) {
     uint16_t adjusted = 0;
     for (unsigned shift = 0; shift < 15; shift += 5) {
         const unsigned channel = ((unsigned)rgb555 >> shift) & 31u;
@@ -610,7 +690,11 @@ static uint32_t border_color_argb(uint16_t rgb555, unsigned fade) {
             adjusted |= (uint16_t)((channel - fade) << shift);
         }
     }
-    return cupid_gb_sgb_rgb15_to_argb(adjusted);
+    return adjusted;
+}
+
+static uint32_t render_color(uint16_t rgb555, const uint32_t *color_table) {
+    return color_table ? color_table[rgb555 & 0x7fffu] : cupid_gb_sgb_rgb15_to_argb(rgb555);
 }
 
 /**
@@ -638,36 +722,58 @@ static uint32_t border_color_argb(uint16_t rgb555, unsigned fade) {
  *                    `uint32_t` elements.
  * @param pixel_count Total number of elements in @p pixels; must be at least
  *                    `CUPID_SGB_SCREEN_WIDTH * CUPID_SGB_SCREEN_HEIGHT`.
+ * @param color_table Optional 32,768-entry RGB555 lookup table for output pixels.
  *
  * @note Does nothing if @p gb or @p pixels is NULL, or @p pixel_count
  *       is too small.
  */
-void cupid_gb_sgb_render_argb(const CupidGb *gb, uint32_t *pixels, size_t pixel_count) {
+void cupid_gb_sgb_render_with_color_table(const CupidGb *gb, uint32_t *pixels, size_t pixel_count,
+                                          const uint32_t *color_table) {
     if (!gb || !pixels || pixel_count < CUPID_SGB_SCREEN_WIDTH * CUPID_SGB_SCREEN_HEIGHT) {
         return;
     }
 
     const CupidGbSgb *sgb = &gb->sgb;
-    const uint32_t backdrop = cupid_gb_sgb_rgb15_to_argb(sgb->screen_palettes[0]);
+    const uint32_t backdrop = render_color(sgb->screen_palettes[0], color_table);
+    const uint32_t black = render_color(0, color_table);
     const uint8_t *screen = sgb->freeze_buffer;
     const unsigned transition = sgb->transfer.border_transition;
-    const unsigned fade = transition >= 64 ? 0 : (transition > 32 ? 64 - transition : transition);
+    const bool startup = cupid_gb_sgb_startup_active(gb);
+    const unsigned fade =
+        startup || transition >= 64 ? 0 : (transition > 32 ? 64 - transition : transition);
+    if (startup) {
+        cupid_gb_sgb_startup_render(gb, pixels, pixel_count);
+        if (color_table) {
+            /* Startup artwork is already expanded to ARGB. Map it before
+             * compositing so the border can use the same output palette. */
+            for (unsigned y = 0; y < CUPID_GB_SCREEN_HEIGHT; ++y) {
+                uint32_t *row = pixels + (y + CUPID_SGB_VIEWPORT_Y) * CUPID_SGB_SCREEN_WIDTH +
+                                CUPID_SGB_VIEWPORT_X;
+                for (unsigned x = 0; x < CUPID_GB_SCREEN_WIDTH; ++x) {
+                    const uint32_t argb = row[x];
+                    const unsigned rgb555 =
+                        ((argb >> 19u) & 31u) | ((argb >> 6u) & 0x3e0u) | ((argb << 7u) & 0x7c00u);
+                    row[x] = color_table[rgb555];
+                }
+            }
+        }
+    }
     uint32_t screen_colors[4][4];
     uint32_t border_colors[4][16];
     for (unsigned palette = 0; palette < 4; ++palette) {
         for (unsigned color = 0; color < 4; ++color) {
             if (sgb->mask_mode == CUPID_SGB_MASK_BLACK) {
-                screen_colors[palette][color] = 0xff000000u;
-            } else if (sgb->mask_mode == CUPID_SGB_MASK_COLOR0 || color == 0) {
+                screen_colors[palette][color] = black;
+            } else if (sgb->mask_mode == CUPID_SGB_MASK_COLOR0) {
                 screen_colors[palette][color] = backdrop;
             } else {
                 screen_colors[palette][color] =
-                    cupid_gb_sgb_rgb15_to_argb(sgb->screen_palettes[palette * 4u + color]);
+                    render_color(sgb->screen_palettes[palette * 4u + color], color_table);
             }
         }
         for (unsigned color = 1; color < 16; ++color) {
-            border_colors[palette][color] =
-                border_color_argb(sgb->border_palettes[palette * 16u + color], fade);
+            border_colors[palette][color] = render_color(
+                fade_border_color(sgb->border_palettes[palette * 16u + color], fade), color_table);
         }
     }
 
@@ -714,12 +820,17 @@ void cupid_gb_sgb_render_argb(const CupidGb *gb, uint32_t *pixels, size_t pixel_
                     if (color) {
                         output_row[x] = palette[color];
                     } else if (lcd_row) {
-                        output_row[x] = lcd_palette[lcd_row[x] & 3u];
+                        if (!startup)
+                            output_row[x] = lcd_palette[lcd_row[x] & 3u];
                     } else {
-                        output_row[x] = tile_available ? backdrop : 0xff000000u;
+                        output_row[x] = tile_available ? backdrop : black;
                     }
                 }
             }
         }
     }
+}
+
+void cupid_gb_sgb_render_argb(const CupidGb *gb, uint32_t *pixels, size_t pixel_count) {
+    cupid_gb_sgb_render_with_color_table(gb, pixels, pixel_count, NULL);
 }

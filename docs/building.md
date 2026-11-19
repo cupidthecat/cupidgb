@@ -8,7 +8,7 @@ CupidGB uses CMake for the hardware core, command-line ROM runner, Qt desktop ap
 | --- | --- |
 | CMake | 3.21 or newer |
 | Compilers | C11 and C++17 |
-| Qt | 6.4 or newer, Widgets, Multimedia, and Print Support modules |
+| Qt | 6.4 or newer APIs; desktop validation uses 6.8.3 with Widgets, Multimedia, and Print Support |
 | SDL2 | 2.24 or newer for the Qt desktop controller backend |
 | Python | 3.9 or newer when tests are enabled |
 | Build tool | Ninja, Make, or the matching Visual Studio generator |
@@ -37,6 +37,14 @@ ctest --test-dir build --output-on-failure
 Install `libssl-dev` as well to enable the optional native hashing path on Debian/Ubuntu. A build without it remains supported and uses the same hash format.
 
 If Qt is outside the system search paths, add `-DCMAKE_PREFIX_PATH=/path/to/Qt/6.x/gcc_64` when configuring. Use the actual installation path.
+
+Desktop CI uses Qt 6.8.3 on both platforms. For that Linux SDK, install its
+Multimedia module and point `CMAKE_PREFIX_PATH` at the `gcc_64` directory. The Xcb
+platform plugin also needs `libxcb-cursor0` on Debian/Ubuntu. Distribution Qt 6.4.2
+can compile the application, but local short-lived playback tests reproduce an
+intermittent PulseAudio shutdown abort, including in a clean preceding build.
+The same checks pass with the 6.8.3 SDK. Keep the toolkit version in runtime
+receipts; passing core checks does not qualify a particular audio backend.
 
 The desktop application needs a working graphical session and a usable audio output backend. An offscreen workflow check can run without a visible desktop:
 
@@ -71,6 +79,7 @@ For Ninja, first open an x64 Visual Studio developer shell so compiler, linker, 
 cmake -S . -B build-ninja -G Ninja -DCMAKE_BUILD_TYPE=Release `
     "-DCMAKE_PREFIX_PATH=C:/Qt/6.8.3/msvc2022_64;C:/Libraries/SDL2-2.28.5"
 cmake --build build-ninja --parallel 4
+$env:PATH = "C:/Qt/6.8.3/msvc2022_64/bin;$env:PATH"
 ctest --test-dir build-ninja --output-on-failure
 ./build-ninja/cupidgb.exe C:/Games/cartridge.gb
 ```
@@ -122,7 +131,7 @@ The MSVC configuration rejects this sanitizer option. Enabling sanitizers suppre
 
 ## Installation and deployment
 
-The desktop configuration installs the executable, project license and supplied SDL2 notices. Windows installation also copies the selected SDL2 runtime. Linux installation supplies a desktop entry, GB/GBC MIME descriptions, and an SVG application icon:
+The desktop configuration installs the executable, project license and supplied SDL2 notices. Windows installation also copies the selected SDL2 runtime and optional per-user Open With scripts. The executable includes CupidGB icon and version resources. Linux installation supplies a desktop entry, MIME descriptions for GB/GBC cartridges and GBS music, and an SVG application icon:
 
 ```sh
 cmake --install build --prefix /path/to/install
@@ -140,10 +149,14 @@ C:/Qt/6.8.3/msvc2022_64/bin/windeployqt.exe --release package/cupidgb.exe
 Copy-Item LICENSE package/LICENSE
 Copy-Item third_party/SDL2-LICENSE.txt package/SDL2-LICENSE.txt
 Copy-Item third_party/SDL2-COPYING.txt package/SDL2-COPYING.txt
+Copy-Item packaging/windows/Register-CupidGB.ps1, packaging/windows/Unregister-CupidGB.ps1, `
+    packaging/windows/CupidGB.FileAssociations.psm1 package/
 ./package/cupidgb.exe --smoke-test --audio-check
 ```
 
 Include the notices and license material required by the libraries actually shipped. Test the staged folder with development Qt paths removed from its environment. Check launch, dialogs, images, audio, and clean shutdown; dependency copying alone does not qualify deployment.
+
+The optional Windows scripts add CupidGB to Open With choices for `.gb`, `.gbc` and `.gbs`, preserving current defaults and `UserChoice` entries. They are not run during installation or application startup. [Windows integration](../packaging/windows/README.md) describes registration, removal, private-hive checks, and icon regeneration.
 
 Qt continues to own video, audio and its event loop. SDL2 initializes only controller-related subsystems. The controller virtual-device tests need no physical gamepad, but their success does not qualify real drivers, motors or motion devices. See [controllers](controllers.md) for the input boundary and test limits.
 
@@ -155,11 +168,15 @@ On Linux, the executable can use distribution-provided Qt and runtime packages. 
 cmake --install build --prefix "$HOME/.local"
 ```
 
-Make sure `$HOME/.local/bin` is in your session's `PATH`, because the desktop entry launches `cupidgb` by name. If the desktop does not refresh its application or MIME databases automatically, run the tools provided by your distribution:
+Make sure `$HOME/.local/bin` is in your session's `PATH`, because the desktop entry launches `cupidgb` by name. If the desktop does not refresh its application, MIME and icon databases automatically, run the tools provided by your distribution:
 
 ```sh
 update-desktop-database "$HOME/.local/share/applications"
 update-mime-database "$HOME/.local/share/mime"
+gtk-update-icon-cache --force --ignore-theme-index --index-only "$HOME/.local/share/icons/hicolor"
+gtk-update-icon-cache --validate "$HOME/.local/share/icons/hicolor"
 ```
 
-These commands require the corresponding desktop-file and shared-MIME utilities. They update the user's installed metadata; they do not make CupidGB the default handler. The repository does not currently supply an installer or portable Linux bundle. Staged-install checks do not establish behavior in every desktop environment. See [troubleshooting](troubleshooting.md) for plugin and runtime path problems.
+These commands require the corresponding desktop-file, shared-MIME and GTK icon-cache utilities. They update the user's installed metadata; they do not make CupidGB the default handler. For another installation prefix, use its `share` directory instead. A missing icon cache caused very slow Qt dialog creation in a private prefix on a Windows-mounted WSL filesystem; generating the cache resolved that measured delay without changing the application or removing the prefix from icon discovery.
+
+The repository does not currently supply an installer or portable Linux bundle. Staged-install checks do not establish behavior in every desktop environment. See [troubleshooting](troubleshooting.md) for plugin and runtime path problems.

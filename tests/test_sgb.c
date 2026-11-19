@@ -1,3 +1,25 @@
+/**
+ * @file    test_sgb.c
+ * @brief   Regression tests for Super Game Boy commands, borders, and input selection.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://gnu.org>.
+ */
+
 #include "cupid/gb/gb.h"
 #include "cupid/gb/input.h"
 #include "cupid/gb/ppu.h"
@@ -11,14 +33,15 @@
 static CupidGb *screen(void) {
     CupidGb *gb = calloc(1, sizeof(*gb));
     assert(gb);
+    gb->model = CUPID_GB_MODEL_SGB;
+    cupid_gb_sgb_startup_reset(gb, false);
     gb->sgb.enabled = true;
     gb->sgb.player_count = 1;
     return gb;
 }
 
 static void write_port(CupidGb *gb, uint8_t value) {
-    cupid_gb_sgb_write_joyp(gb, value);
-    gb->io_registers[0] = value;
+    cupid_gb_input_select(gb, value);
 }
 
 static void send_command(CupidGb *gb, const uint8_t *command) {
@@ -405,7 +428,7 @@ static void test_border_compositor(void) {
     gb->sgb.screen_palettes[10] = 0x7c00;
     gb->sgb.attribute_map[0] = gb->sgb.attribute_map[1] = 2;
     memset(gb->frame_buffer, 1, sizeof(gb->frame_buffer));
-    cupid_gb_sgb_vblank(gb, 0);
+    cupid_gb_sgb_present(gb, true, 0);
 
     gb->sgb.border_map[0] = (uint16_t)(0x1c00u | index);
     gb->sgb.border_map[1] = (uint16_t)(0x5400u | index);
@@ -440,11 +463,17 @@ static void test_border_compositor(void) {
     assert(pixel_at(pixels, view_x + 4, view_y) == 0xff00ff00u);
     assert(pixel_at(pixels, view_x + 8, view_y) == 0xff00ff00u);
 
+    gb->sgb.screen_palettes[8] = 0x7c00;
+    gb->sgb.freeze_buffer[8] = 0;
+    cupid_gb_sgb_render_argb(gb, pixels, count);
+    assert(pixel_at(pixels, view_x + 8, view_y) == 0xff0000ffu);
+    gb->sgb.freeze_buffer[8] = 1;
+
     const uint32_t transparent[] = {0xff00ff00u, 0xff0000ffu, 0xff000000u, 0xff180000u};
     for (unsigned mask = CUPID_SGB_MASK_DISABLED; mask <= CUPID_SGB_MASK_COLOR0; ++mask) {
         if (mask == CUPID_SGB_MASK_FREEZE) {
             memset(gb->frame_buffer, 2, sizeof(gb->frame_buffer));
-            cupid_gb_sgb_vblank(gb, 0);
+            cupid_gb_sgb_present(gb, true, 0);
         }
         gb->sgb.mask_mode = (uint8_t)mask;
         cupid_gb_sgb_render_argb(gb, pixels, count);
@@ -455,6 +484,31 @@ static void test_border_compositor(void) {
                0xff180000u);
     }
 
+    uint32_t *mapped = malloc(count * sizeof(*mapped));
+    uint32_t *color_table = malloc(32768u * sizeof(*color_table));
+    assert(mapped && color_table);
+    for (unsigned i = 0; i < 32768u; ++i) {
+        color_table[i] = 0xff115577u ^ (i * 17u);
+    }
+    gb->sgb.screen_palettes[0] |= 0x8000u;
+    gb->sgb.transfer.border_transition = 16;
+    for (unsigned startup = 0; startup < 2; ++startup) {
+        gb->sgb_startup.phase = startup ? 80 : 200;
+        for (unsigned mask = CUPID_SGB_MASK_DISABLED; mask <= CUPID_SGB_MASK_COLOR0; ++mask) {
+            gb->sgb.mask_mode = (uint8_t)mask;
+            cupid_gb_sgb_render_argb(gb, pixels, count);
+            cupid_gb_sgb_render_with_color_table(gb, mapped, count, color_table);
+            for (size_t i = 0; i < count; ++i) {
+                const unsigned red = ((pixels[i] >> 16u) & 0xffu) / 8u;
+                const unsigned green = ((pixels[i] >> 8u) & 0xffu) / 8u;
+                const unsigned blue = (pixels[i] & 0xffu) / 8u;
+                assert(mapped[i] == color_table[red + green * 32u + blue * 1024u]);
+            }
+        }
+    }
+
+    free(color_table);
+    free(mapped);
     free(pixels);
     free(gb);
 }
