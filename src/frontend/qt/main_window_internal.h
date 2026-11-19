@@ -251,7 +251,8 @@ class InputKeyEdit final : public QKeySequenceEdit {
 bool isStatePath(const QString &path) {
     const QString extension = QFileInfo(path).suffix().toLower();
     const auto digit = [](QChar character) { return character >= '0' && character <= '9'; };
-    return (extension.size() == 2 && extension[0] == 's' && digit(extension[1])) ||
+    return extension == "bess" ||
+           (extension.size() == 2 && extension[0] == 's' && digit(extension[1])) ||
            (extension.size() == 3 && extension.startsWith("sn") && digit(extension[2]));
 }
 

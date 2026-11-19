@@ -38,8 +38,12 @@ typedef enum CupidGbStateResult {
     CUPID_GB_STATE_WRONG_BOOT_ROM,
     CUPID_GB_STATE_BUFFER_TOO_SMALL,
     CUPID_GB_STATE_OUT_OF_MEMORY,
-    CUPID_GB_STATE_NO_ROM
+    CUPID_GB_STATE_NO_ROM,
+    CUPID_GB_STATE_UNSUPPORTED_FEATURE
 } CupidGbStateResult;
+
+/* Recognize the native container even if its length or integrity is invalid. */
+bool cupid_gb_state_has_magic(const uint8_t *data, size_t length);
 
 #define CUPID_GB_STATE_VERSION 30u
 

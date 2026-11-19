@@ -342,6 +342,15 @@ bool MainWindow::smokeTest(SmokeWorkflow workflow) {
     if (dropFile(slotPath(2)) || !paused_ || captureState() != beforeInvalid)
         return smokeFailure(__FILE__, __LINE__);
     failed_ = false; // A damaged dropped state must preserve the running cartridge.
+    const QString portable = directory.filePath("cartridge.bess");
+    const uint16_t portablePc = emulator_->gb.cpu.pc;
+    const uint8_t portableByte = emulator_->gb.work_ram[0x37];
+    if (!savePortableStateFile(portable) || captureState() != beforeInvalid)
+        return smokeFailure(__FILE__, __LINE__);
+    emulator_->gb.work_ram[0x37] ^= 0xff;
+    if (!dropFile(portable) || !paused_ || emulator_->gb.work_ram[0x37] != portableByte ||
+        emulator_->gb.cpu.pc != portablePc || !restoreState(beforeInvalid, false))
+        return smokeFailure(__FILE__, __LINE__);
     setPaused(false);
     QApplication::sendEvent(display_, &down);
     if (!saveSlot(3))

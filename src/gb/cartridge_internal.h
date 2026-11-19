@@ -55,6 +55,7 @@ bool cupid_gb_reset_with_allocator(CupidGb *gb, CupidGbResetKind kind, void *(*a
  * The caller restores audio at its required point relative to register writes.
  * Commit transfers candidate ownership and releases the old writable SRAM. The
  * caller separately releases an old ROM when replacing the program image. */
+void cupid_gb_reset_restore_cartridge(CupidGb *next, const CupidGb *previous);
 void cupid_gb_reset_restore_host(CupidGb *next, const CupidGb *previous);
 void cupid_gb_reset_commit(CupidGb *gb, CupidGb *next);
 

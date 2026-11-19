@@ -229,13 +229,26 @@ void MainWindow::buildMenus() {
         });
         const QString path = QFileDialog::getOpenFileName(
             this, "Load State File", QFileInfo(romPath_).absolutePath(),
-            "State files (*.s? *.sn?);;All files (*)");
+            "State files (*.s? *.sn? *.bess);;All files (*)");
         if (!self)
             return;
         if (!path.isEmpty())
             loadStateFile(path);
         if (self)
             resetPacing();
+    });
+    savePortableStateAction_ = file->addAction("Export Portable State…");
+    connect(savePortableStateAction_, &QAction::triggered, this, [this] {
+        const QPointer<MainWindow> self(this);
+        const QFileInfo rom(romPath_);
+        QString path = QFileDialog::getSaveFileName(
+            this, "Export Portable State", rom.dir().filePath(rom.completeBaseName() + ".bess"),
+            "Portable Game Boy states (*.bess)");
+        if (!self || path.isEmpty())
+            return;
+        if (QFileInfo(path).suffix().isEmpty())
+            path += ".bess";
+        savePortableStateFile(path);
     });
     auto *recover = file->addAction("Recover Battery from Older State…");
     connect(recover, &QAction::triggered, this, [this] {
@@ -1066,6 +1079,7 @@ void MainWindow::refreshActions() {
                          copyScreenshotAction_, loadStateFileAction_, recordingAction_})
         action->setEnabled(bool(emulator_));
     reloadAction_->setEnabled(bool(emulator_) && !musicInfo_);
+    savePortableStateAction_->setEnabled(bool(emulator_) && !musicInfo_);
     for (auto *action : {screenshotAction_, screenshotAsAction_, copyScreenshotAction_})
         action->setEnabled(bool(emulator_) && !musicInfo_);
     for (auto *action : windowSizeActions_)

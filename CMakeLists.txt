@@ -59,6 +59,7 @@ add_library(cupidgb_core STATIC
     src/common/log.c src/common/sha256.c src/core/emulator.c src/core/system.c
     src/compat/native_v1.c src/gb/battery.c
     src/gb/gb.c src/gb/startup.c src/gb/reset.c src/gb/rtc.c src/gb/state.c src/gb/cpu.c
+    src/gb/bess.c src/gb/bess_write.c
     src/gb/oam_bus.c src/gb/ppu.c src/gb/pixels.c src/gb/apu.c src/gb/timer.c
     src/gb/cartridge.c src/gb/gbs.c src/gb/camera.c src/gb/mbc6.c src/gb/mbc7.c src/gb/tama5.c
     src/gb/input.c
@@ -244,7 +245,7 @@ if(CUPIDGB_ENABLE_TESTS)
         serial serial_selection serial_state link printer printer_state ppu pixel_timing
         pixel_timing_state scy_latch stat apu wave_retrigger wave_history wave_history_state
         audio_synthesis audio_filter audio_state audio_publication audio_clock cpu_timing cpu_lockup
-        dma oam_bus video_bus vram_bus vram_quiet bus state state_ram battery native_v1_recovery
+        dma oam_bus video_bus vram_bus vram_quiet bus state state_ram bess battery native_v1_recovery
         sgb sgb_protocol sgb_protocol_state sgb_startup sgb_startup_audio sgb_startup_state
         input input_sampling cartridge mapper_guest mmm01 mbc3_bus camera camera_host camera_state mbc6 mbc7 tama5 cgb_revision
         tpp1 rumble rumble_sampling presentation_observer huc3 infrared infrared_state

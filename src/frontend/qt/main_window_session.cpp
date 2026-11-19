@@ -20,6 +20,7 @@
  * along with this program. If not, see <https://gnu.org>.
  */
 
+#include "cupid/gb/bess.h"
 #include "main_window_internal.h"
 #include "rewind_compression.h"
 
@@ -365,21 +366,22 @@ QByteArray MainWindow::captureState(bool reportFailure, bool rewindSnapshot) {
 bool MainWindow::restoreState(const QByteArray &bytes, bool reportFailure, bool rewindSnapshot) {
     if (!emulator_)
         return false;
-    if (cupid_native_v1_is_state(reinterpret_cast<const uint8_t *>(bytes.constData()),
-                                 size_t(bytes.size()))) {
+    const auto *data = reinterpret_cast<const uint8_t *>(bytes.constData());
+    const auto size = size_t(bytes.size());
+    if (cupid_native_v1_is_state(data, size)) {
         if (reportFailure)
             reportError("This older state cannot resume with the current pixel pipeline. "
                         "Use File > Recover Battery from Older State to export its battery data.");
         return false;
     }
-    const auto result =
-        rewindSnapshot
-            ? cupid_gb_load_state_live_with_context(
-                  &emulator_->gb, reinterpret_cast<const uint8_t *>(bytes.constData()),
-                  size_t(bytes.size()), rewindContext_.get())
-            : cupid_gb_load_state_live(&emulator_->gb,
-                                       reinterpret_cast<const uint8_t *>(bytes.constData()),
-                                       size_t(bytes.size()));
+    CupidGbStateResult result;
+    if (rewindSnapshot)
+        result =
+            cupid_gb_load_state_live_with_context(&emulator_->gb, data, size, rewindContext_.get());
+    else if (!cupid_gb_state_has_magic(data, size) && cupid_gb_bess_has_footer(data, size))
+        result = cupid_gb_bess_load(&emulator_->gb, data, size);
+    else
+        result = cupid_gb_load_state_live(&emulator_->gb, data, size);
     if (result != CUPID_GB_STATE_OK) {
         if (reportFailure)
             reportError("Cannot load emulator state: " +
@@ -453,6 +455,45 @@ bool MainWindow::loadSlot(int slot) {
         return true;
     statusBar()->showMessage(QString("State loaded from slot %1").arg(slot ? slot : 10), 3000);
     notifyOnScreen(QString("State loaded from slot %1").arg(slot ? slot : 10));
+    return true;
+}
+
+bool MainWindow::savePortableStateFile(const QString &path) {
+    if (!emulator_)
+        return false;
+    const QString canonical = QFileInfo(path).canonicalFilePath();
+#ifdef _WIN32
+    constexpr auto pathCase = Qt::CaseInsensitive;
+#else
+    constexpr auto pathCase = Qt::CaseSensitive;
+#endif
+    if (!canonical.isEmpty() &&
+        (canonical.compare(QFileInfo(romPath_).canonicalFilePath(), pathCase) == 0 ||
+         canonical.compare(QFileInfo(savePath_).canonicalFilePath(), pathCase) == 0)) {
+        reportError("Export the portable state to a separate file.");
+        return false;
+    }
+    const size_t size = cupid_gb_bess_size(&emulator_->gb);
+    if (!size) {
+        reportError("Portable export is unavailable for this cartridge, model, or boot state.");
+        return false;
+    }
+    QByteArray bytes(qsizetype(size), Qt::Uninitialized);
+    size_t written = 0;
+    const auto result = cupid_gb_bess_save(
+        &emulator_->gb, reinterpret_cast<uint8_t *>(bytes.data()), size, &written);
+    if (result != CUPID_GB_STATE_OK || written != size) {
+        reportError("Cannot export portable state: " +
+                    QString::fromUtf8(cupid_gb_state_result_name(result)));
+        return false;
+    }
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly) || file.write(bytes) != bytes.size() || !file.commit()) {
+        reportError("Cannot export portable state: " + file.errorString());
+        return false;
+    }
+    statusBar()->showMessage("Portable state exported", 3000);
+    resetPacing();
     return true;
 }
 

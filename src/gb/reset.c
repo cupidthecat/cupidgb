@@ -46,7 +46,7 @@ static bool valid_request(const CupidGb *gb, CupidGbResetKind kind) {
            gb->boot_rom_size == (cupid_gb_model_is_cgb(gb->model) ? 0x900u : 0x100u);
 }
 
-static void restore_cartridge(CupidGb *next, const CupidGb *previous) {
+void cupid_gb_reset_restore_cartridge(CupidGb *next, const CupidGb *previous) {
     next->header = previous->header;
     next->rom_size = previous->rom_size;
     next->cartridge_ram_size = previous->cartridge_ram_size;
@@ -123,7 +123,7 @@ bool cupid_gb_reset_with_allocator(CupidGb *gb, CupidGbResetKind kind, void *(*a
     /* The candidate has no attached accessory or observers. Initialization cannot
      * mutate the live printer or publish an intermediate machine through callbacks. */
     cupid_gb_init(next);
-    restore_cartridge(next, gb);
+    cupid_gb_reset_restore_cartridge(next, gb);
     /* Reset clears command latches, while nonvolatile flash retains its bytes
      * and software protection. The candidate never writes the borrowed array. */
     next->mbc6_flash = gb->mbc6_flash;

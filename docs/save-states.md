@@ -10,7 +10,35 @@ Load a native state file through File > Load State File or drop a `.s0` through 
 
 Writes use an atomic file replacement. Loading checks the complete cartridge identity and hardware model. A state captured with an active boot overlay requires the matching local boot binary. Failed validation preserves the running session and its host audio queue. A successful load replaces the emulated state, reapplies current physical input, clears queued host audio, and realigns pacing.
 
-New files use CupidGB native version 30. Earlier cartridge states, including both supported version 19 development layouts, remain loadable on their original hardware profiles when they contain the required hardware history and SRAM. GBS programs require version 23 or newer and the matching music file already loaded. Desktop loads retain current listening settings, reconstruction and filter history, and the receiving startup synthesis and queued batches. Saved hardware startup phase, host-only time and command-receiver history still restore. Interoperable BESS state imports remain pending.
+Native files use CupidGB version 30. Earlier cartridge states, including both supported version 19 development layouts, remain loadable on their original hardware profiles when they contain the required hardware history and SRAM. GBS programs require version 23 or newer and the matching music file already loaded. Desktop loads retain current listening settings, reconstruction and filter history, and the receiving startup synthesis and queued batches. Saved hardware startup phase, host-only time and command-receiver history still restore.
+
+## Portable cartridge states
+
+Use **File > Export Portable State** to write a `.bess` file. Open the
+matching cartridge before loading a portable state with **Load State File**
+or by dropping the file on the window. The loader also reads BESS data
+embedded in a foreign state container. A file with a CupidGB native header
+must pass native validation.
+
+Portable states support completed cartridge boot on DMG, Pocket, and
+CGB with ROM-only or ROM+RAM, MBC1, MBC2, standard MBC3 with optional
+RTC, and MBC5. The importer checks the model family and, when present,
+the saved cartridge title and global checksum. It validates every
+referenced memory range before replacing the running state.
+
+BESS restores CPU registers, memory, mapped banks, and register values.
+Portable loads restart missing LCD, audio oscillator, and peripheral
+timing from a deterministic phase. Active firmware, SGB, GBS and other
+mapper extensions remain outside this portable workflow. Native slots
+continue to preserve exact timing, including pending transfers.
+
+The portable regression covers 75 model, cartridge and mode combinations,
+normal and double speed, malformed files, and native saves of imported
+checkpoints. Twelve fixture pairs exchanged registers, physical RAM and
+bank selection with an independent runtime. Three additional exchanges
+checked distinct live and latched RTC values. Donkey Kong and Super Mario
+Bros. Deluxe resumed on CGB-C after exchange in both directions. Both
+responded to further scripted inputs after import.
 
 Host camera images and pending device requests stay with the receiving session. Saving a pending host capture writes an idle camera to the file while the live request continues. After full validation, a load into host-camera mode cancels obsolete requests and clears imported busy state while retaining the current image. This also applies to a saved generated countdown. Without a provider, generated captures retain their countdown, while a host-origin snapshot starts idle. The existing 64-byte camera section and strict busy/countdown validator are unchanged. See [Camera cartridges](host-camera.md) for reset, rewind and embedding rules.
 

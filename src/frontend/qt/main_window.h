@@ -250,6 +250,7 @@ class MainWindow final : public QMainWindow {
     bool saveSlot(int slot);
     bool loadSlot(int slot);
     bool loadStateFile(const QString &path);
+    bool savePortableStateFile(const QString &path);
     bool recoverBattery(const QString &statePath, const QString &outputPath);
     void resetRewind();
     void rebaseRewindAfterReset(uint64_t previousPresentationCycles);
@@ -406,6 +407,7 @@ class MainWindow final : public QMainWindow {
     QAction *screenshotAsAction_ = nullptr;
     QAction *copyScreenshotAction_ = nullptr;
     QAction *loadStateFileAction_ = nullptr;
+    QAction *savePortableStateAction_ = nullptr;
     std::array<QAction *, 3> scalingActions_{};
     std::array<QAction *, 3> scalingFilterActions_{};
     std::array<QAction *, 12> turboCapActions_{};

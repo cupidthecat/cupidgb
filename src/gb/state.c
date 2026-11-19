@@ -125,6 +125,10 @@ enum {
 
 static const uint8_t state_magic[8] = {'C', 'U', 'P', 'I', 'D', 'G', 'B', 0};
 
+bool cupid_gb_state_has_magic(const uint8_t *data, size_t length) {
+    return data && length >= sizeof(state_magic) && !memcmp(data, state_magic, sizeof(state_magic));
+}
+
 static void state_noise_envelope(StateIo *io, CupidGb *gb, unsigned version) {
     CupidGbApu *apu = &gb->apu;
     CupidGbEnvelopeGate *gate = &apu->noise_timing.envelope;
@@ -1254,7 +1258,7 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
     CupidGbPrinter *printer = cupid_gb_printer_attached(gb);
     if (!data || !cupid_gb_cartridge_source_fits(gb, data, length) ||
         (printer && overlaps(data, length, printer, sizeof(*printer))) ||
-        length < STATE_HEADER_SIZE || memcmp(data, state_magic, sizeof(state_magic))) {
+        length < STATE_HEADER_SIZE || !cupid_gb_state_has_magic(data, length)) {
         return CUPID_GB_STATE_INVALID;
     }
     const uint32_t version = get_u32(data + 8);
@@ -1911,6 +1915,8 @@ const char *cupid_gb_state_result_name(CupidGbStateResult result) {
             return "Cannot allocate state storage";
         case CUPID_GB_STATE_NO_ROM:
             return "No program is loaded";
+        case CUPID_GB_STATE_UNSUPPORTED_FEATURE:
+            return "This state requires unsupported hardware or boot state";
         default:
             return "Unknown state error";
     }
