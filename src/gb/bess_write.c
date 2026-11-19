@@ -34,6 +34,7 @@
 enum {
     BESS_CORE_BYTES = 0xd0,
     BESS_RTC_BYTES = 0x30,
+    BESS_HUC3_BYTES = 17,
     BESS_MBC7_BYTES = 10,
     BESS_XOAM_BYTES = 0x60,
     BESS_SGB_BYTES = 0x39,
@@ -94,6 +95,13 @@ static CupidGbStateResult supported(const CupidGb *gb) {
             if (gb->current_rom_bank > 255u || !cupid_gb_mbc7_serial_valid(&gb->mbc7))
                 return CUPID_GB_STATE_INVALID;
             break;
+        case CUPID_GB_HUC3:
+            if (gb->huc3_mode > 15u || gb->huc3.rtc_base_time < 0 ||
+                gb->current_rom_bank > CUPID_GB_HUC3_STARTUP_BANK ||
+                (gb->current_rom_bank == CUPID_GB_HUC3_STARTUP_BANK &&
+                 (gb->huc3_mode || gb->current_ram_bank)))
+                return CUPID_GB_STATE_INVALID;
+            break;
         case CUPID_GB_MBC3:
             if (cupid_gb_has_extended_mbc3(gb))
                 return CUPID_GB_STATE_UNSUPPORTED_FEATURE;
@@ -128,6 +136,10 @@ static size_t mapper_bytes(const CupidGb *gb) {
             return 15;
         case CUPID_GB_MBC7:
             return 9;
+        case CUPID_GB_HUC3:
+            /* An omitted mapper block leaves the initial bank 1 mapping and
+             * zero raw latch intact until the first control write. */
+            return gb->current_rom_bank == CUPID_GB_HUC3_STARTUP_BANK ? 0 : 9;
         default:
             return 12;
     }
@@ -145,6 +157,7 @@ size_t cupid_gb_bess_size(const CupidGb *gb) {
            (gb->header.mbc_type == CUPID_GB_MBC3 && gb->header.has_timer ? 8u + BESS_RTC_BYTES
                                                                          : 0) +
            (gb->header.mbc_type == CUPID_GB_MBC7 ? 8u + BESS_MBC7_BYTES : 0) +
+           (gb->header.mbc_type == CUPID_GB_HUC3 ? 8u + BESS_HUC3_BYTES : 0) +
            (cupid_gb_extra_oam_size(gb->model) ? 8u + BESS_XOAM_BYTES : 0) +
            (cupid_gb_sgb_commands_enabled(gb) ? BESS_SGB_MEMORY_BYTES + 8u + BESS_SGB_BYTES : 0) +
            8u + 8u;
@@ -227,9 +240,12 @@ static void mapper_pair(uint8_t *data, size_t *cursor, uint16_t address, uint8_t
 static void write_mapper(uint8_t *data, size_t *cursor, const CupidGb *gb) {
     uint8_t pairs[15];
     size_t count = 0;
-    if (gb->header.mbc_type == CUPID_GB_MBC_NONE)
+    if (!mapper_bytes(gb))
         return;
-    mapper_pair(pairs, &count, 0x0000, gb->ram_enabled ? 0x0a : 0);
+    mapper_pair(pairs, &count, 0x0000,
+                gb->header.mbc_type == CUPID_GB_HUC3 ? gb->huc3_mode
+                : gb->ram_enabled                    ? 0x0a
+                                                     : 0);
     switch (gb->header.mbc_type) {
         case CUPID_GB_MBC1:
             mapper_pair(pairs, &count, 0x2000, gb->mbc1_bank_low5);
@@ -251,6 +267,10 @@ static void write_mapper(uint8_t *data, size_t *cursor, const CupidGb *gb) {
         case CUPID_GB_MBC7:
             mapper_pair(pairs, &count, 0x2000, (uint8_t)gb->current_rom_bank);
             mapper_pair(pairs, &count, 0x4000, gb->mbc7.registers_enabled ? 0x40 : 0);
+            break;
+        case CUPID_GB_HUC3:
+            mapper_pair(pairs, &count, 0x2000, (uint8_t)gb->current_rom_bank);
+            mapper_pair(pairs, &count, 0x4000, (uint8_t)gb->current_ram_bank);
             break;
         default:
             mapper_pair(pairs, &count, 0x2000, (uint8_t)gb->mbc5_rom_bank);
@@ -274,6 +294,17 @@ static void write_mbc7(uint8_t *data, size_t *cursor, const CupidGb *gb) {
     put_word(payload + 6, gb->mbc7_sensor_x);
     put_word(payload + 8, gb->mbc7_sensor_y);
     write_block(data, cursor, "MBC7", payload, sizeof(payload));
+}
+
+static void write_huc3(uint8_t *data, size_t *cursor, const CupidGbHuc3 *clock) {
+    uint8_t payload[BESS_HUC3_BYTES];
+    put_qword(payload, (uint64_t)clock->rtc_base_time);
+    put_word(payload + 8, clock->minutes);
+    put_word(payload + 10, clock->days);
+    put_word(payload + 12, clock->alarm_minutes);
+    put_word(payload + 14, clock->alarm_days);
+    payload[16] = clock->alarm_enabled;
+    write_block(data, cursor, "HUC3", payload, sizeof(payload));
 }
 
 CupidGbStateResult cupid_gb_bess_save(const CupidGb *gb, uint8_t *data, size_t capacity,
@@ -364,6 +395,8 @@ CupidGbStateResult cupid_gb_bess_save(const CupidGb *gb, uint8_t *data, size_t c
         write_block(data, &cursor, "SGB ", sgb_payload, sizeof(sgb_payload));
     if (gb->header.mbc_type == CUPID_GB_MBC7)
         write_mbc7(data, &cursor, gb);
+    if (gb->header.mbc_type == CUPID_GB_HUC3)
+        write_huc3(data, &cursor, &gb->huc3);
     write_block(data, &cursor, "END ", NULL, 0);
     put_dword(data + cursor, (uint32_t)blocks_start);
     memcpy(data + cursor + 4, "BESS", 4);

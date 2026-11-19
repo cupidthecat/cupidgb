@@ -445,13 +445,8 @@ void cupid_gb_huc1_write(CupidGb *gb, uint16_t address, uint8_t value) {
     gb->current_rom_bank = gb->mbc5_rom_bank;
 }
 
-/* Before the first control write, the upper window shows bank 1 even
- * though the cartridge's seven-bit bank latch is zero. Keep this initial
- * mapping in the existing snapshot field using an impossible bank value. */
-enum { HUC3_STARTUP_BANK = 0x80 };
-
 void cupid_gb_huc3_write(CupidGb *gb, uint16_t address, uint8_t value) {
-    if (gb->current_rom_bank == HUC3_STARTUP_BANK)
+    if (gb->current_rom_bank == CUPID_GB_HUC3_STARTUP_BANK)
         gb->current_rom_bank = 0u;
 
     if (address < 0x2000u) {
@@ -526,7 +521,7 @@ size_t cupid_gb_selected_rom_bank(const CupidGb *gb, bool lower_region) {
             bank = lower_region ? 0u : gb->current_rom_bank;
             break;
         case CUPID_GB_HUC3:
-            bank = gb->current_rom_bank == HUC3_STARTUP_BANK ? 1u : gb->current_rom_bank;
+            bank = gb->current_rom_bank == CUPID_GB_HUC3_STARTUP_BANK ? 1u : gb->current_rom_bank;
             if (lower_region)
                 bank = 0u;
             break;
@@ -940,7 +935,7 @@ void cupid_gb_cartridge_reset_controls(CupidGb *gb) {
     memset(&gb->mbc6, 0, sizeof(gb->mbc6));
     gb->mbc6.sector_protected = flash_protected;
     if (gb->header.mbc_type == CUPID_GB_HUC3)
-        gb->current_rom_bank = HUC3_STARTUP_BANK;
+        gb->current_rom_bank = CUPID_GB_HUC3_STARTUP_BANK;
     if (gb->header.mbc_type == CUPID_GB_MBC7) {
         gb->current_rom_bank = 0;
         cupid_gb_mbc7_reset(gb);

@@ -22,6 +22,7 @@
 
 #include "cupid/common/sha256.h"
 #include "cupid/gb/battery.h"
+#include "cupid/gb/bess.h"
 #include "cupid/gb/cartridge.h"
 #include "cupid/gb/huc3.h"
 #include "cupid/gb/state.h"
@@ -36,6 +37,7 @@ static CupidGb *new_cartridge(CupidGbModel model) {
     rom[0x143] = 0x80;
     rom[0x147] = 0xfe;
     rom[0x149] = 2;
+    rom[0x4000] = 0xa4;
     for (unsigned i = 0x134; i <= 0x14c; ++i)
         rom[0x14d] = (uint8_t)(rom[0x14d] - rom[i] - 1);
     CupidGb *gb = calloc(1, sizeof(*gb));
@@ -333,12 +335,88 @@ static void test_registers_do_not_poll(CupidGbModel model) {
     destroy(gb);
 }
 
+static unsigned little_u32(const uint8_t *data) {
+    return (unsigned)data[0] | (unsigned)data[1] << 8 | (unsigned)data[2] << 16 |
+           (unsigned)data[3] << 24;
+}
+
+static void test_portable(CupidGbModel model) {
+    CupidGb *source = new_cartridge(model);
+    CupidGb *target = new_cartridge(model);
+    unsigned calls = 0;
+    cupid_gb_set_rtc_time_source(target, observe_clock, &calls);
+    size_t size = cupid_gb_bess_size(source);
+    uint8_t *data = malloc(size);
+    assert(size && data && cupid_gb_bess_save(source, data, size, NULL) == CUPID_GB_STATE_OK);
+    cupid_gb_write_u8(target, 0x2000, 0);
+    assert(cupid_gb_read_u8(target, 0x4000) == 0);
+    assert(cupid_gb_bess_load(target, data, size) == CUPID_GB_STATE_OK);
+    assert(calls == 1 && cupid_gb_read_u8(target, 0x4000) == 0xa4);
+    cupid_gb_write_u8(target, 0x6000, 0);
+    assert(cupid_gb_read_u8(target, 0x4000) == 0);
+    free(data);
+
+    source->huc3 = (CupidGbHuc3){.rtc_base_time = 60000,
+                                 .minutes = 0x0fff,
+                                 .days = 0xffff,
+                                 .alarm_minutes = 22,
+                                 .alarm_days = 0x2003,
+                                 .alarm_enabled = true};
+    cupid_gb_write_u8(source, 0x0000, CUPID_GB_HUC3_SRAM);
+    cupid_gb_write_u8(source, 0x2000, 1);
+    cupid_gb_write_u8(source, 0x4000, 2);
+    cupid_gb_write_u8(source, 0xa012, 0x6e);
+    read_window(source, CUPID_GB_HUC3_COMMAND);
+    set_index(source, 2);
+    command(source, 0x10);
+    read_window(source, CUPID_GB_HUC3_RESPONSE);
+    size = cupid_gb_bess_size(source);
+    data = malloc(size);
+    assert(size && data && cupid_gb_bess_save(source, data, size, NULL) == CUPID_GB_STATE_OK);
+    uint8_t *block = data + little_u32(data + size - 8u);
+    while (block + 8u <= data + size - 8u && memcmp(block, "HUC3", 4))
+        block += 8u + little_u32(block + 4);
+    assert(block + 25u <= data + size - 8u && little_u32(block + 4) == 17);
+    uint8_t *payload = block + 8;
+
+    assert(cupid_gb_bess_load(target, data, size) == CUPID_GB_STATE_OK && calls == 2);
+    assert(target->huc3.rtc_base_time == 60000 && target->huc3.minutes == 0x0fff &&
+           target->huc3.days == 0xffff && target->huc3.alarm_minutes == 22 &&
+           target->huc3.alarm_days == 0x2003 && target->huc3.alarm_enabled);
+    assert(target->huc3_mode == CUPID_GB_HUC3_RESPONSE && !target->huc3.index &&
+           !target->huc3.flags && !target->huc3_value);
+    assert(target->current_ram_bank == 2 && cupid_gb_read_u8(target, 0x4000) == 0xa4);
+
+    payload[16] = 2;
+    assert(cupid_gb_bess_load(target, data, size) == CUPID_GB_STATE_INVALID && calls == 2);
+    assert(target->huc3.alarm_enabled && target->huc3.rtc_base_time == 60000);
+    payload[16] = 1;
+    memset(payload, 0xff, 8);
+    assert(cupid_gb_bess_load(target, data, size) == CUPID_GB_STATE_OK && calls == 3);
+    assert(target->huc3.rtc_base_time == 90000 && target->huc3.alarm_enabled &&
+           target->huc3.minutes == 0x0fff);
+    memcpy(block, "TEST", 4);
+    assert(cupid_gb_bess_load(target, data, size) == CUPID_GB_STATE_OK && calls == 4);
+    assert(target->huc3.rtc_base_time == 90000 && !target->huc3.alarm_enabled &&
+           !target->huc3.minutes && !target->huc3.days);
+    memcpy(block, "HUC3", 4);
+    memset(payload, 0, 8);
+    assert(cupid_gb_set_rtc_mode(target, CUPID_GB_RTC_ACCURATE) && calls == 5);
+    assert(cupid_gb_bess_load(target, data, size) == CUPID_GB_STATE_OK && calls == 6);
+    assert(target->huc3.rtc_base_time == 90000 && target->huc3.alarm_enabled &&
+           target->huc3.minutes == 0x0fff);
+    free(data);
+    destroy(target);
+    destroy(source);
+}
+
 int main(void) {
     const CupidGbModel models[] = {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_CGB};
     for (size_t model = 0; model < sizeof(models) / sizeof(*models); ++model) {
         test_command_bus(models[model]);
         test_clock_and_battery(models[model]);
         test_registers_do_not_poll(models[model]);
+        test_portable(models[model]);
     }
     test_infrared_and_state();
     test_infrared_during_speed_switch();

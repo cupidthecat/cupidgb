@@ -26,6 +26,9 @@
 #include "cupid/gb/gb.h"
 #include "cupid/gb/reset.h"
 
+/* An untouched HuC3 maps bank 1 even though its raw ROM latch is zero. */
+enum { CUPID_GB_HUC3_STARTUP_BANK = 0x80 };
+
 /* Validate the active SRAM span and its exclusive host ownership representation. */
 bool cupid_gb_cartridge_storage_valid(const CupidGb *gb);
 
