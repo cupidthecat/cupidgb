@@ -29,6 +29,7 @@
 #include <QElapsedTimer>
 #include <QPointer>
 #include <QScopeGuard>
+#include <cmath>
 
 bool MainWindow::displayFilesSmokeTest(const QString &directory) {
     MainWindow session(true, true);
@@ -85,6 +86,51 @@ bool MainWindow::displayFilesSmokeTest(const QString &directory) {
         filterProbe.filteredSourceKey != filterProbe.image.cacheKey() ||
         resized.pixel(200, 150) != qRgb(255, 0, 0))
         return smokeFailure(__FILE__, __LINE__);
+    QImage white(160, 144, QImage::Format_RGB32);
+    QImage black(160, 144, QImage::Format_RGB32);
+    white.fill(Qt::white);
+    black.fill(Qt::black);
+    filterProbe.filter = ScalingFilter::Bilinear;
+    for (auto size : {QSize(320, 288), QSize(401, 359)}) {
+        filterProbe.resize(size);
+        for (bool odd : {false, true}) {
+            filterProbe.setFrames(white, black, FrameBlending::Accurate, odd);
+            const QSize output =
+                (QSizeF(filterProbe.size()) * filterProbe.devicePixelRatioF()).toSize();
+            QImage painted(output, QImage::Format_RGB32);
+            painted.setDevicePixelRatio(filterProbe.devicePixelRatioF());
+            filterProbe.render(&painted);
+            for (int y = 0; y < output.height(); ++y) {
+                const int sourceRow = int((y + 0.5) * white.height() / output.height());
+                const double weight = ((sourceRow & 1) != int(odd)) ? 2.0 / 3.0 : 1.0 / 3.0;
+                const int expected = int(std::lround(255 * std::pow(1 - weight, 1.0 / 2.2)));
+                if (std::abs(qRed(painted.pixel(output.width() / 2, y)) - expected) > 1)
+                    return smokeFailure(__FILE__, __LINE__);
+            }
+        }
+    }
+    filterProbe.setFrames({}, {}, FrameBlending::Disabled, false);
+    filterProbe.resize(360, 324);
+    QImage cleared((QSizeF(filterProbe.size()) * filterProbe.devicePixelRatioF()).toSize(),
+                   QImage::Format_RGB32);
+    cleared.setDevicePixelRatio(filterProbe.devicePixelRatioF());
+    filterProbe.render(&cleared);
+    if (!filterProbe.image.isNull() || !filterProbe.filteredImage.isNull())
+        return smokeFailure(__FILE__, __LINE__);
+    filterProbe.setFrames(white, black, FrameBlending::Simple, false);
+    filterProbe.render(&cleared);
+    if (cleared.pixel(cleared.width() / 2, cleared.height() / 2) != qRgb(186, 186, 186))
+        return smokeFailure(__FILE__, __LINE__);
+    // Display-only interpolation never replaces the native capture source.
+    session.display_->filter = ScalingFilter::Bilinear;
+    session.display_->setFrames(white, black, FrameBlending::Accurate, false);
+    session.copyScreenshot();
+    const QString nativeCapture = QDir(directory).filePath("filtered-native.png");
+    if (QApplication::clipboard()->image().convertToFormat(QImage::Format_RGB32) != image ||
+        !session.saveScreenshot(nativeCapture) || QImage(nativeCapture) != image ||
+        session.captureState() != state)
+        return smokeFailure(__FILE__, __LINE__);
+    session.applyDisplaySettings();
     const QVariant originalFilter = settings_.value("video/filter");
     const auto restoreFilter = qScopeGuard([&] {
         if (originalFilter.isValid())

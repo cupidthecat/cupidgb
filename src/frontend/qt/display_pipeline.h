@@ -34,6 +34,8 @@ enum class FrameBlending { Disabled = 0, Simple = 1, Accurate = 2 };
 QRectF displayViewport(QSize source, QSizeF available, DisplayScaling scaling,
                        qreal devicePixelRatio = 1.0);
 QImage filterDisplayImage(const QImage &source, QSize output, ScalingFilter filter);
+QImage renderDisplayFrames(const QImage &current, const QImage &previous, QSize output,
+                           ScalingFilter filter, FrameBlending blending, bool oddFrame);
 std::array<QRgb, 4> monochromeColors(MonochromePalette palette, const std::array<QRgb, 4> &custom);
 QRgb monochromeOffColor(MonochromePalette palette, QRgb custom);
 QImage blendDisplayFrames(const QImage &current, const QImage &previous, FrameBlending mode,

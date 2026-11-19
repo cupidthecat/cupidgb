@@ -32,3 +32,23 @@ reopened and saved byte for byte before the next write. Each completed
 correctly after resuming. The state layout also preserves a sparse pending
 buffer across a save and load. Programming and erasing still complete
 immediately in the emulation.
+
+## Frame blending with bilinear filters
+
+Bilinear and Smooth Bilinear now filter the current and previous images in
+linear light before blending them. Accurate mode uses the nearest source
+row to choose the previous frame's weight. This keeps the alternating LCD
+row weights distinct through scaling. Simple mode uses an even mix.
+
+The scaler caches the two horizontally filtered rows used by consecutive
+output rows. At 8×, the component took 7.67–8.02 ms per frame across three
+synthetic patterns on WSL. Two adjacent Donkey Kong framebuffer captures
+took 3.90–3.95 ms per frame at 8× across the two filters, including the
+native-size blend. Unblended output matched the earlier scaler across
+24,341,056 pixels.
+
+The Qt workflow paints both filters with each row polarity and changes the
+viewport size. Closing a session clears both frames. Screenshot exports use
+the native-size image. Widget checks also covered device pixel
+ratios of 1 and 1.25. Nearest-neighbor sampling at exact fractional-size
+ties still needs work.

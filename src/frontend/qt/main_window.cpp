@@ -1050,7 +1050,7 @@ bool MainWindow::closeRom() {
     currentDisplayFrame_ = {};
     previousMessageFrame_ = {};
     currentMessageFrame_ = {};
-    display_->image = {};
+    display_->setFrames({}, {}, FrameBlending::Disabled, false);
     display_->messages.clear();
     display_->setMinimumSize(160, 144);
     display_->update();

@@ -30,12 +30,21 @@
 #include <vector>
 
 QImage filterDisplayImage(const QImage &source, QSize output, ScalingFilter filter) {
+    return renderDisplayFrames(source, {}, output, filter, FrameBlending::Disabled, false);
+}
+
+QImage renderDisplayFrames(const QImage &source, const QImage &previous, QSize output,
+                           ScalingFilter filter, FrameBlending blending, bool oddFrame) {
     if (source.isNull() || output.isEmpty())
         return {};
-    if (source.size() == output)
-        return source;
-    if (filter == ScalingFilter::Nearest)
-        return source.scaled(output, Qt::IgnoreAspectRatio, Qt::FastTransformation);
+    if (source.size() == output || filter == ScalingFilter::Nearest) {
+        const auto mixed = blendDisplayFrames(source, previous, blending, oddFrame);
+        return source.size() == output
+                   ? mixed
+                   : mixed.scaled(output, Qt::IgnoreAspectRatio, Qt::FastTransformation);
+    }
+    const bool blend = blending != FrameBlending::Disabled && !previous.isNull() &&
+                       previous.size() == source.size() && previous.cacheKey() != source.cacheKey();
 
     struct Coordinate {
         int first;
@@ -74,33 +83,92 @@ QImage filterDisplayImage(const QImage &source, QSize output, ScalingFilter filt
     const auto horizontal = coordinates(source.width(), output.width());
     const auto vertical = coordinates(source.height(), output.height());
     const QImage pixels = source.convertToFormat(QImage::Format_RGB32);
+    const QImage history = blend ? previous.convertToFormat(QImage::Format_RGB32) : QImage();
     QImage result(output, QImage::Format_RGB32);
     if (result.isNull())
         return {};
-    for (int y = 0; y < output.height(); ++y) {
-        const auto &v = vertical[size_t(y)];
-        const auto *upper = reinterpret_cast<const QRgb *>(pixels.constScanLine(v.first));
-        const auto *lower = reinterpret_cast<const QRgb *>(pixels.constScanLine(v.second));
-        auto *row = reinterpret_cast<QRgb *>(result.scanLine(y));
+
+    struct LinearPixel {
+        std::array<double, 3> channels{};
+        QRgb flatColor = 0;
+    };
+
+    struct HorizontalRow {
+        int sourceRow = -1;
+        std::vector<LinearPixel> current;
+        std::vector<LinearPixel> previous;
+    };
+
+    HorizontalRow top, bottom;
+    for (auto *row : {&top, &bottom}) {
+        row->current.resize(size_t(output.width()));
+        if (blend)
+            row->previous.resize(size_t(output.width()));
+    }
+    const auto horizontalRow = [&](const QImage &image, int sourceRow,
+                                   std::vector<LinearPixel> &destination) {
+        const auto *row = reinterpret_cast<const QRgb *>(image.constScanLine(sourceRow));
         for (int x = 0; x < output.width(); ++x) {
             const auto &h = horizontal[size_t(x)];
-            const QRgb first = upper[h.first];
-            if (first == upper[h.second] && first == lower[h.first] && first == lower[h.second]) {
-                // Preserve flat fields exactly, including the darkest encoded
-                // shades that occupy less than one linear-light table step.
-                row[x] = first;
+            const QRgb first = row[h.first], second = row[h.second];
+            auto &pixel = destination[size_t(x)];
+            pixel.flatColor = first == second ? first : 0;
+            for (size_t channel = 0; channel < pixel.channels.size(); ++channel) {
+                const unsigned shift = unsigned(16 - channel * 8);
+                pixel.channels[channel] = ((1.0 - h.weight) * linear[(first >> shift) & 255] +
+                                           h.weight * linear[(second >> shift) & 255]);
+            }
+        }
+    };
+    const auto prepareRow = [&](HorizontalRow &row, int sourceRow) {
+        horizontalRow(pixels, sourceRow, row.current);
+        if (blend)
+            horizontalRow(history, sourceRow, row.previous);
+        row.sourceRow = sourceRow;
+    };
+    for (int y = 0; y < output.height(); ++y) {
+        const auto &v = vertical[size_t(y)];
+        // Each source row is horizontally sampled once while this pair serves
+        // several physical output rows. Exchanging the caches retains the overlap.
+        if (top.sourceRow != v.first) {
+            if (bottom.sourceRow == v.first)
+                std::swap(top, bottom);
+            else
+                prepareRow(top, v.first);
+        }
+        if (v.second != v.first && bottom.sourceRow != v.second)
+            prepareRow(bottom, v.second);
+        const auto &lower = v.first == v.second ? top : bottom;
+        // LCD polarity follows the nearest source row, independently of the
+        // spatial kernel. All four weights apply before the one final encoding.
+        const int sourceRow = int((y + 0.5) * source.height() / output.height());
+        const double oldWeight = !blend                               ? 0.0
+                                 : blending == FrameBlending::Simple  ? 0.5
+                                 : ((sourceRow & 1) != int(oddFrame)) ? 2.0 / 3.0
+                                                                      : 1.0 / 3.0;
+        const double currentTop = ((1 - v.weight) * (1 - oldWeight));
+        const double currentBottom = (v.weight * (1 - oldWeight));
+        const double previousTop = ((1 - v.weight) * oldWeight);
+        const double previousBottom = (v.weight * oldWeight);
+        auto *row = reinterpret_cast<QRgb *>(result.scanLine(y));
+        for (int x = 0; x < output.width(); ++x) {
+            const auto &a = top.current[size_t(x)], &b = lower.current[size_t(x)];
+            const auto &c = blend ? top.previous[size_t(x)] : a;
+            const auto &d = blend ? lower.previous[size_t(x)] : b;
+            if (a.flatColor && a.flatColor == b.flatColor && a.flatColor == c.flatColor &&
+                a.flatColor == d.flatColor) {
+                // Preserve exact flat fields, including dark encoded shades
+                // whose emitted light occupies less than one table step.
+                row[x] = a.flatColor;
                 continue;
             }
-            const auto channel = [&](int shift) {
-                const auto sample = [&](QRgb color) { return linear[(color >> shift) & 255]; };
-                const double top =
-                    (1.0 - h.weight) * sample(upper[h.first]) + h.weight * sample(upper[h.second]);
-                const double bottom =
-                    (1.0 - h.weight) * sample(lower[h.first]) + h.weight * sample(lower[h.second]);
-                const double light = (1.0 - v.weight) * top + v.weight * bottom;
+            const auto channel = [&](size_t index) {
+                const double light =
+                    currentTop * a.channels[index] + currentBottom * b.channels[index] +
+                    previousTop * c.channels[index] + previousBottom * d.channels[index];
                 return encoded[size_t(light * 65535.0 + 0.5)];
             };
-            row[x] = qRgb(channel(16), channel(8), channel(0));
+            row[x] = qRgb(channel(0), channel(1), channel(2));
         }
     }
     return result;

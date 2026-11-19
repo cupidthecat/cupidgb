@@ -279,6 +279,20 @@ class DisplayWidget final : public QWidget {
         paintClock.start();
     }
 
+    // The native-sized image keeps the fast nearest-neighbor path. Filtered
+    // paints retain both original frames until spatial sampling is complete.
+    void setFrames(const QImage &current, const QImage &previous, FrameBlending blending,
+                   bool oddFrame) {
+        currentFrame_ = current;
+        previousFrame_ = previous;
+        blending_ = blending;
+        oddFrame_ = oddFrame;
+        image = blendDisplayFrames(current, previous, blending, oddFrame);
+        filteredSourceKey = 0;
+        if (current.isNull())
+            filteredImage = {};
+    }
+
     QImage image;
     ScreenMessages messages;
     DisplayScaling scaling = DisplayScaling::Integer;
@@ -333,10 +347,19 @@ class DisplayWidget final : public QWidget {
         const QSize output = (target.size() * devicePixelRatioF()).toSize();
         if (filteredSourceKey != image.cacheKey() || filteredImage.size() != output ||
             cachedFilter != filter) {
-            filteredImage = filterDisplayImage(image, output, filter);
+            filteredImage = currentFrame_.isNull()
+                                ? filterDisplayImage(image, output, filter)
+                                : renderDisplayFrames(currentFrame_, previousFrame_, output, filter,
+                                                      blending_, oddFrame_);
             filteredSourceKey = image.cacheKey();
             cachedFilter = filter;
         }
         painter.drawImage(target, filteredImage);
     }
+
+  private:
+    QImage currentFrame_;
+    QImage previousFrame_;
+    FrameBlending blending_ = FrameBlending::Disabled;
+    bool oddFrame_ = false;
 };

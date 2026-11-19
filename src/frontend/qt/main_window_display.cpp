@@ -297,13 +297,13 @@ void MainWindow::present(Presentation presentation) {
     const auto mode =
         sgb && frameBlending_ == FrameBlending::Accurate ? FrameBlending::Simple : frameBlending_;
     if (currentMessageFrame_.isNull() && previousMessageFrame_.isNull()) {
-        display_->image = blendDisplayFrames(image_, previousDisplayFrame_, mode, gb.lcd_frame_odd);
+        display_->setFrames(image_, previousDisplayFrame_, mode, gb.lcd_frame_odd);
     } else {
         // Draw before blending so appearing and expiring text uses the same
         // weights as LCD pixels. Repeat events retain the submitted composite.
         const QImage current = composeScreenMessage(image_, currentMessageFrame_);
         const QImage previous = composeScreenMessage(previousDisplayFrame_, previousMessageFrame_);
-        display_->image = blendDisplayFrames(current, previous, mode, gb.lcd_frame_odd);
+        display_->setFrames(current, previous, mode, gb.lcd_frame_odd);
     }
     display_->setMinimumSize(image_.size());
     if (resizeWindow)

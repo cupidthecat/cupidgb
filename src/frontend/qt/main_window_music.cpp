@@ -134,7 +134,7 @@ void MainWindow::setMusicSession(const std::optional<CupidGbGbsInfo> &info, uint
     currentDisplayFrame_ = {};
     previousMessageFrame_ = {};
     currentMessageFrame_ = {};
-    display_->image = {};
+    display_->setFrames({}, {}, FrameBlending::Disabled, false);
 }
 
 bool MainWindow::startMusicTrack(uint8_t track) {

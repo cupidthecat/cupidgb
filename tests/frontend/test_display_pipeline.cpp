@@ -27,7 +27,101 @@
 #include <cassert>
 #include <cmath>
 
+namespace {
+void testFilteredFrameBlending() {
+    QImage white(160, 144, QImage::Format_RGB32);
+    QImage black(160, 144, QImage::Format_RGB32);
+    white.fill(Qt::white);
+    black.fill(Qt::black);
+    for (auto filter : {ScalingFilter::Bilinear, ScalingFilter::SmoothBilinear}) {
+        for (auto size : {QSize(320, 288), QSize(401, 359), QSize(79, 71)}) {
+            for (bool odd : {false, true}) {
+                const auto output =
+                    renderDisplayFrames(white, black, size, filter, FrameBlending::Accurate, odd);
+                for (int y = 0; y < size.height(); ++y) {
+                    const int sourceRow = int((y + 0.5) * white.height() / size.height());
+                    const double oldWeight = ((sourceRow & 1) != int(odd)) ? 2.0 / 3.0 : 1.0 / 3.0;
+                    const int expected =
+                        int(std::lround(255 * std::pow(1.0 - oldWeight, 1.0 / 2.2)));
+                    assert(std::abs(qRed(output.pixel(size.width() / 2, y)) - expected) <= 1);
+                }
+            }
+            const auto simple =
+                renderDisplayFrames(white, black, size, filter, FrameBlending::Simple, false);
+            assert(simple.pixel(size.width() / 2, size.height() / 2) == qRgb(186, 186, 186));
+            assert(renderDisplayFrames(white, black, size, filter, FrameBlending::Disabled,
+                                       false) == filterDisplayImage(white, size, filter));
+        }
+    }
+    QImage current(3, 4, QImage::Format_RGB32);
+    QImage previous(3, 4, QImage::Format_RGB32);
+    for (int y = 0; y < 4; ++y)
+        for (int x = 0; x < 3; ++x) {
+            current.setPixel(x, y, qRgb(12 + x * 70, 30 + y * 50, 230 - x * 60 - y * 10));
+            previous.setPixel(x, y, qRgb(220 - y * 40, 20 + x * 80, 20 + y * 45));
+        }
+    for (auto size : {QSize(6, 8), QSize(7, 11), QSize(2, 2), current.size()}) {
+        for (auto mode :
+             {FrameBlending::Disabled, FrameBlending::Simple, FrameBlending::Accurate}) {
+            for (bool odd : {false, true}) {
+                assert(renderDisplayFrames(current, previous, size, ScalingFilter::Nearest, mode,
+                                           odd) ==
+                       blendDisplayFrames(current, previous, mode, odd)
+                           .scaled(size, Qt::IgnoreAspectRatio, Qt::FastTransformation));
+                for (auto filter : {ScalingFilter::Bilinear, ScalingFilter::SmoothBilinear}) {
+                    const auto output =
+                        renderDisplayFrames(current, previous, size, filter, mode, odd);
+                    for (int y = 0; y < size.height(); ++y)
+                        for (int x = 0; x < size.width(); ++x) {
+                            const double px = (x + 0.5) * current.width() / size.width() - 0.5;
+                            const double py = (y + 0.5) * current.height() / size.height() - 0.5;
+                            const int left = int(std::floor(px)), top = int(std::floor(py));
+                            double wx = px - left, wy = py - top;
+                            if (filter == ScalingFilter::SmoothBilinear) {
+                                wx = wx * wx * (3 - 2 * wx);
+                                wy = wy * wy * (3 - 2 * wy);
+                            }
+                            const int sourceRow = int((y + 0.5) * current.height() / size.height());
+                            const double weight = mode == FrameBlending::Disabled ? 0
+                                                  : mode == FrameBlending::Simple ? 0.5
+                                                  : ((sourceRow & 1) != int(odd)) ? 2.0 / 3.0
+                                                                                  : 1.0 / 3.0;
+                            const QRgb observed = output.pixel(x, y);
+                            for (int shift : {0, 8, 16}) {
+                                double light = 0;
+                                for (int dy = 0; dy < 2; ++dy)
+                                    for (int dx = 0; dx < 2; ++dx) {
+                                        const int sx =
+                                            std::clamp(left + dx, 0, current.width() - 1);
+                                        const int sy =
+                                            std::clamp(top + dy, 0, current.height() - 1);
+                                        const double a = std::pow(
+                                            ((current.pixel(sx, sy) >> shift) & 255) / 255.0, 2.2);
+                                        const double b = std::pow(
+                                            ((previous.pixel(sx, sy) >> shift) & 255) / 255.0, 2.2);
+                                        light += (dx ? wx : 1 - wx) * (dy ? wy : 1 - wy) *
+                                                 ((1 - weight) * a + weight * b);
+                                    }
+                                const int expected =
+                                    int(std::lround(255 * std::pow(light, 1.0 / 2.2)));
+                                assert(std::abs(int((observed >> shift) & 255) - expected) <= 1);
+                            }
+                        }
+                }
+            }
+        }
+    }
+    assert(renderDisplayFrames(current, {}, {}, ScalingFilter::Bilinear, FrameBlending::Accurate,
+                               false)
+               .isNull());
+    assert(renderDisplayFrames(current, QImage(1, 1, QImage::Format_RGB32), {7, 11},
+                               ScalingFilter::Bilinear, FrameBlending::Accurate, false) ==
+           filterDisplayImage(current, {7, 11}, ScalingFilter::Bilinear));
+}
+} // namespace
+
 int main() {
+    testFilteredFrameBlending();
     QImage corners(2, 2, QImage::Format_RGB32);
     corners.setPixel(0, 0, qRgb(0, 0, 0));
     corners.setPixel(1, 0, qRgb(255, 0, 0));
