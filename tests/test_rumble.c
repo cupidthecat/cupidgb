@@ -113,7 +113,7 @@ static void test_levels(CupidGb *gb, uint8_t *rom, CupidGbModel model) {
             expected_raw_calls += (previous != 0) != (level != 0);
             expected_strength_calls += (features[feature] & 1u) && previous != level;
             gb->elapsed_cycles += 28u;
-            cupid_gb_write_u8(gb, 0x7fff, (uint8_t)(0x20u + level));
+            cupid_gb_write_u8(gb, 0x3fff, (uint8_t)(0x20u + level));
             assert((cupid_gb_read_u8(gb, 0xa003) & 3u) == level);
             assert(gb->tpp1.motor_strength == level);
             assert(cupid_gb_rumble_enabled(gb) == (level != 0));

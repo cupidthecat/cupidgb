@@ -792,7 +792,7 @@ int main(void) {
                     if (gb->header.mbc_type == CUPID_GB_TPP1) {
                         CHECK(cupid_gb_read_u8(gb, 0xa000) == 0 &&
                               cupid_gb_selected_rom_bank(gb, false) == 1);
-                        cupid_gb_write_u8(gb, 0x6003, 0);
+                        cupid_gb_write_u8(gb, 0x2003, 0);
                         CHECK(cupid_gb_selected_rom_bank(gb, false) == 0);
                     }
                     ++cases;

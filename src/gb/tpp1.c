@@ -120,6 +120,10 @@ static void motor_command(CupidGb *gb, uint8_t command) {
 }
 
 void cupid_gb_tpp1_write_register(CupidGb *gb, uint16_t address, uint8_t value) {
+    /* The banked window sends writes to cartridge ROM or flash. Ordinary ROM
+     * ignores them. Only the fixed window selects mapper registers. */
+    if (address >= 0x4000u)
+        return;
     CupidGbTpp1 *device = &gb->tpp1;
     switch (address & 3u) {
         case 0:

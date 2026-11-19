@@ -55,7 +55,84 @@ static void make_rom(uint8_t *rom, bool color) {
 }
 
 static void command(CupidGb *gb, uint8_t value) {
-    cupid_gb_write_u8(gb, 0x7fff, value);
+    cupid_gb_write_u8(gb, 0x3fff, value);
+}
+
+static void test_write_decode(CupidGb *gb) {
+    const CupidGbRtcPolicy original_policy = gb->rtc_policy;
+    assert(cupid_gb_set_rtc_mode(gb, CUPID_GB_RTC_ACCURATE));
+    cupid_gb_write_u8(gb, 0xff40, 0);
+    cupid_gb_write_u8(gb, 0xffff, 0);
+    gb->cpu.ime = false;
+    cupid_gb_write_u8(gb, 0x0000, 3);
+    cupid_gb_write_u8(gb, 0x0001, 0);
+    cupid_gb_write_u8(gb, 0x0002, 2);
+    command(gb, 0x18);
+    command(gb, 3);
+    cupid_gb_write_u8(gb, 0xa010, 0x6d);
+    command(gb, 5);
+    static const uint8_t clock[] = {0xa5, 0x31, 0x37, 0x39};
+    for (unsigned port = 0; port < sizeof(clock); ++port)
+        cupid_gb_write_u8(gb, (uint16_t)(0xa000u + port), clock[port]);
+    command(gb, 0x11);
+    command(gb, 0x22);
+    command(gb, 0);
+    uint8_t before[sizeof(gb->tpp1)];
+    memcpy(before, &gb->tpp1, sizeof(before));
+    const uint64_t generation = gb->battery_write_generation;
+
+    /* Only the fixed ROM window decodes mapper registers. A store to any
+     * banked-ROM address must leave the latches, SRAM, clock and motor alone. */
+    for (unsigned address = 0x4000; address < 0x8000; ++address) {
+        const uint8_t program[] = {
+            0x3e,
+            (uint8_t)(address >> 2),
+            0xea,
+            (uint8_t)address,
+            (uint8_t)(address >> 8),
+            0xfa,
+            0x00,
+            0xa0,
+            0xea,
+            0x00,
+            0xc8,
+            0xfa,
+            0x01,
+            0xa0,
+            0xea,
+            0x01,
+            0xc8,
+            0xfa,
+            0x02,
+            0xa0,
+            0xea,
+            0x02,
+            0xc8,
+            0xfa,
+            0x03,
+            0xa0,
+            0xea,
+            0x03,
+            0xc8,
+        };
+        for (unsigned byte = 0; byte < sizeof(program); ++byte)
+            cupid_gb_write_u8(gb, (uint16_t)(0xc100u + byte), program[byte]);
+        gb->cpu.pc = 0xc100;
+        for (unsigned steps = 0; gb->cpu.pc != 0xc100u + sizeof(program); ++steps) {
+            assert(steps < 16);
+            assert(cupid_gb_step(gb));
+        }
+        assert(cupid_gb_read_u8(gb, 0xc800) == 3);
+        assert(cupid_gb_read_u8(gb, 0xc801) == 0);
+        assert(cupid_gb_read_u8(gb, 0xc802) == 2);
+        assert(cupid_gb_read_u8(gb, 0xc803) == 2);
+        assert(!memcmp(&gb->tpp1, before, sizeof(before)));
+        assert(gb->current_rom_bank == 3 && gb->current_ram_bank == 2 && !gb->ram_enabled);
+        assert(cupid_gb_read_u8(gb, 0x4000) == 3);
+        assert(cupid_gb_cartridge_ram_const(gb)[2u * RAM_BANK_SIZE + 0x10u] == 0x6d);
+        assert(gb->battery_write_generation == generation);
+    }
+    gb->rtc_policy = original_policy;
 }
 
 typedef struct RumbleProbe {
@@ -86,9 +163,9 @@ static void test_bank_modes_and_rumble(CupidGb *gb) {
     assert(gb->header.mbc_type == CUPID_GB_TPP1 && gb->header.has_battery);
     assert(gb->ram_bank_count == 4 && gb->cartridge_ram_size == 4 * RAM_BANK_SIZE);
     assert(cupid_gb_read_u8(gb, 0x4000) == 1 && cupid_gb_read_u8(gb, 0xa004) == 1);
-    cupid_gb_write_u8(gb, 0x401c, 0x37);
-    cupid_gb_write_u8(gb, 0x51fd, 0x89);
-    cupid_gb_write_u8(gb, 0x6ffe, 0xfd);
+    cupid_gb_write_u8(gb, 0x001c, 0x37);
+    cupid_gb_write_u8(gb, 0x11fd, 0x89);
+    cupid_gb_write_u8(gb, 0x2ffe, 0xfd);
     assert(cupid_gb_read_u8(gb, 0x4000) == 7 && cupid_gb_read_u8(gb, 0x0000) == 0);
     assert(cupid_gb_read_u8(gb, 0xbffc) == 0x37);
     assert(cupid_gb_read_u8(gb, 0xbffd) == 0x89);
@@ -346,7 +423,7 @@ static void test_supported_sram_populations(CupidGb *gb, uint8_t *rom, size_t le
 
         const uint64_t writes = gb->battery_write_generation;
         for (unsigned bank = 0; bank < 256; ++bank) {
-            cupid_gb_write_u8(gb, 0x5002, (uint8_t)bank);
+            cupid_gb_write_u8(gb, 0x1002, (uint8_t)bank);
             command(gb, 0);
             assert(cupid_gb_read_u8(gb, 0xbffe) == bank);
             command(gb, 2);
@@ -364,7 +441,7 @@ static void test_supported_sram_populations(CupidGb *gb, uint8_t *rom, size_t le
             const unsigned slot = bank % SLOTS;
             const uint8_t value = (uint8_t)(0x5au ^ bank);
             command(gb, 3);
-            cupid_gb_write_u8(gb, 0x7002, (uint8_t)bank);
+            cupid_gb_write_u8(gb, 0x3002, (uint8_t)bank);
             const uint64_t generation = gb->battery_write_generation;
             const bool changed = expected[bank % banks][slot] != value;
             cupid_gb_write_u8(gb, addresses[slot], value);
@@ -417,7 +494,7 @@ static void test_full_rom_bank_addressing(CupidGb *gb, bool color) {
     assert(gb->rom_size == length && gb->rom_bank_count == banks);
     unsigned previous = 1;
     for (unsigned bank = 0; bank <= 0xffff; ++bank) {
-        const uint16_t port = (uint16_t)((bank & 0x1fffu) << 2u);
+        const uint16_t port = (uint16_t)((bank & 0x0fffu) << 2u);
         if (bank & 1u) {
             cupid_gb_write_u8(gb, (uint16_t)(port | 1u), (uint8_t)(bank >> 8u));
             assert_large_rom_bank(gb, (bank & 0xff00u) | (previous & 0xffu));
@@ -457,6 +534,9 @@ int main(void) {
     for (unsigned color = 0; color < 2; ++color) {
         make_rom(rom, color != 0);
         cupid_gb_set_model(gb, color ? CUPID_GB_MODEL_CGB : CUPID_GB_MODEL_DMG_ABC);
+        assert(cupid_gb_load_rom(gb, rom, length));
+        test_write_decode(gb);
+        assert(!memcmp(gb->rom, rom, length));
         assert(cupid_gb_load_rom(gb, rom, length));
         test_bank_modes_and_rumble(gb);
         test_clock_and_battery(gb);

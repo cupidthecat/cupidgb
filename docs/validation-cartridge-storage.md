@@ -66,3 +66,15 @@ At `92cd698`, all 131,072 HuC3 cases matched. The test exercised every command b
 Four Linux headless runs matched every pixel after 1,800 frame-equivalents. They reached the file menu with a modified MBC7 image on CGB-E, the new-game and date menu with HuC3 on CGB-E, and the camera capture and contrast controls on DMG and CGB-E. Both builds used the same per-model firmware and ten-event input trace. CupidGB used startup seed 0, and the comparison used seed 1. The camera cases used the same grayscale input and immediate capture completion.
 
 The local library scan found no commercial HuC1, MMM01, MBC6, TAMA5 or TPP1 inputs. Physical camera capture, motion and infrared still need separate tests.
+
+## TPP1 mapper write range
+
+Addresses `0000–3FFF` select the mapper registers using the low two address
+bits. The upper ROM window delegates writes to the mapped cartridge memory.
+CupidGB treats that window as ordinary ROM for TPP1. [TPP1 address blocks](https://github.com/aaaaaa123456789/tpp1/blob/1932f7be2ebe19503bb684c9a82d79f9b8e4af6c/specification.md#address-blocks)
+
+The DMG and CGB regression executes a guest store at every address from
+`4000` through `7FFF`, for 32,768 stores. It checks register readback, selected
+banks, SRAM, the RTC, motor state and battery generation after each store.
+The previous build changed the low ROM bank on the first store at `4000`.
+Physical flash behavior and commercial TPP1 carts remain unverified.

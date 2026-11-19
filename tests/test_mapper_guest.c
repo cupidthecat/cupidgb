@@ -78,9 +78,9 @@ static const BankStep huc1_steps[] = {{0x0000, 0, 0, 0},   {0x3fff, 255, 0, 63},
 static const BankStep huc3_steps[] = {{0x7fff, 0, 0, 0},   {0x3fff, 255, 0, 127},
                                       {0x2000, 128, 0, 0}, {0x2fff, 129, 0, 1},
                                       {0x5fff, 3, 0, 1},   {0x1fff, 10, 0, 1}};
-static const BankStep tpp1_steps[] = {{0x401c, 255, 0, 255}, {0x51fd, 1, 0, 511},
-                                      {0x0000, 0, 0, 256},   {0x7ffd, 2, 0, 0},
-                                      {0x0001, 255, 0, 256}, {0x4000, 7, 0, 263}};
+static const BankStep tpp1_steps[] = {{0x001c, 255, 0, 255}, {0x11fd, 1, 0, 511},
+                                      {0x0000, 0, 0, 256},   {0x3ffd, 2, 0, 0},
+                                      {0x0001, 255, 0, 256}, {0x2000, 7, 0, 263}};
 
 #define MAPPER_CASE(type, banks, steps)                                                            \
     {type, banks, steps, sizeof(steps) / sizeof(*(steps)), false}

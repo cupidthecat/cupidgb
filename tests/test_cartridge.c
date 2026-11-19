@@ -800,7 +800,7 @@ static void test_extended_ram_ownership(CupidGbModel model) {
 
     assert(cupid_gb_load_rom(other, large, 0x8000));
     assert(other->rom != gb->rom && other->cartridge_ram_heap != gb->cartridge_ram_heap);
-    cupid_gb_write_u8(gb, 0x7fff, 3);
+    cupid_gb_write_u8(gb, 0x3fff, 3);
     cupid_gb_write_u8(gb, 0x0002, 255);
     cupid_gb_write_u8(gb, 0xbfff, 0x58);
     assert(gb->cartridge_ram_heap[CUPID_GB_MAX_RAM_SIZE - 1] == 0x58);
