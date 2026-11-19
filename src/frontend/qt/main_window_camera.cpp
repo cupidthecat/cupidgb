@@ -44,13 +44,17 @@ void MainWindow::commitCameraSession(CupidGb *candidate, ResetWorkflow workflow)
         cupid_gb_set_camera_callback(candidate, nullptr, nullptr);
         cameraError_.clear();
     }
-    if (candidate->header.mbc_type != CUPID_GB_CAMERA) {
+    applyCameraSource(candidate);
+}
+
+void MainWindow::applyCameraSource(CupidGb *gb) {
+    if (gb->header.mbc_type != CUPID_GB_CAMERA || cameraSource_ == CameraSource::Generated) {
         hostCamera_.reset();
-        cupid_gb_set_camera_callback(candidate, nullptr, nullptr);
+        cupid_gb_set_camera_callback(gb, nullptr, nullptr);
         return;
     }
     cupid_gb_set_camera_callback(
-        candidate,
+        gb,
         [](CupidGb *gb, uint64_t request, void *user) {
             static_cast<MainWindow *>(user)->queueCameraCapture(gb, request);
         },
@@ -65,8 +69,9 @@ void MainWindow::queueCameraCapture(CupidGb *gb, uint64_t request) {
         this,
         [this, gb, request, session, timeline] {
             const auto current = [this, gb, request, session, timeline] {
-                return emulator_ && &emulator_->gb == gb && sessionId_ == session &&
-                       timelineId_ == timeline && gb->camera_host.pending_request == request &&
+                return cameraSource_ == CameraSource::System && emulator_ && &emulator_->gb == gb &&
+                       sessionId_ == session && timelineId_ == timeline &&
+                       gb->camera_host.pending_request == request &&
                        gb->camera_host.request_callback;
             };
             if (!current())

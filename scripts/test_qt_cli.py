@@ -131,6 +131,28 @@ def check_selection(run, binary, environment, root, plain, licensed, color):
                    ("0x", "1"), ("auto", "1_000"), ("0", "-1", "1")):
         run(plain, *seed_options(values), expected=1)
 
+    for sources, expected in ((("system",), "system"), (("generated",), "generated"),
+                              (("system", "generated"), "generated"),
+                              (("generated", "system"), "system")):
+        options = tuple(argument for source in sources for argument in ("--camera-source", source))
+        result = run(plain, *options)
+        assert result["camera_source"] == expected, result
+    for sources in (("invalid",), ("invalid", "generated"), ("generated", "")):
+        options = tuple(argument for source in sources for argument in ("--camera-source", source))
+        run(plain, *options, expected=1, reject_before_session=True)
+    assert run(plain)["camera_source"] == "system"
+    camera = root / "generated-camera.gb"
+    camera_rom = make_rom(bytes((0x3E, 0x10, 0xEA, 0, 0x40,
+                                 0x3E, 1, 0xEA, 0, 0xA0, 0x18, 0xFE)))
+    camera_rom[0x147] = 0xFC
+    camera_rom[0x149] = 4
+    camera_rom[0x14D] = (-sum(camera_rom[0x134:0x14D]) - 25) & 255
+    camera.write_bytes(camera_rom)
+    result = run(camera, "--camera-source", "generated", duration="0.12")
+    assert result["camera_source"] == "generated", result
+    assert result["camera_capture_count"] == 1, result
+    assert result["camera_host_provider_registered"] is False, result
+
     for requested, actual in (("dmg", "dmgabc"), ("dmgabc", "dmgabc"),
                               ("dmg0", "dmg0"), ("mgb", "mgb"),
                               ("cgb", "cgb"), ("cgb-e", "cgb"),
@@ -163,7 +185,8 @@ def check_selection(run, binary, environment, root, plain, licensed, color):
         assert post_warmup["reason"] == "warmup_sample_unavailable"
     for requested in ("dmg", "dmg0", "mgb", "sgb", "sgb2", "sgbpal"):
         run(color, "--model", requested, expected=1)
-    for options in (("--model", "invalid"), ("--model", "cgb-f"),
+    for options in (("--camera-source", "generated", "--smoke-test"),
+                    ("--model", "invalid"), ("--model", "cgb-f"),
                     ("--model", "cgb", "--smoke-test"),
                     ("--smoke-workflow", "storage"),
                     ("--smoke-test", "--smoke-workflow", "invalid"),

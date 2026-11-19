@@ -56,6 +56,8 @@ int main(int argc, char **argv) {
                       "cgb, cgb-0, cgb-a, cgb-b, cgb-c, cgb-d, cgb-e, sgb, sgbpal, sgb2.",
                       "profile"});
     parser.addOption(
+        {"camera-source", "Use camera input for this session: system or generated.", "source"});
+    parser.addOption(
         {"run-seconds", "Run the frontend for a bounded duration and exit.", "seconds"});
     parser.addOption({"report", "Write bounded frontend measurements as JSON.", "path"});
     parser.addOption(
@@ -132,7 +134,19 @@ int main(int argc, char **argv) {
             return 1;
         }
     }
-    if ((audioCheck && !smoke) || (smoke && (bootOverride || modelOverride || seedOverride)))
+    std::optional<MainWindow::CameraSource> cameraSourceOverride;
+    for (const QString &source : parser.values("camera-source")) {
+        if (source == "system")
+            cameraSourceOverride = MainWindow::CameraSource::System;
+        else if (source == "generated")
+            cameraSourceOverride = MainWindow::CameraSource::Generated;
+        else {
+            qCritical("Invalid camera input. Use --camera-source system|generated.");
+            return 1;
+        }
+    }
+    if ((audioCheck && !smoke) ||
+        (smoke && (bootOverride || modelOverride || seedOverride || cameraSourceOverride)))
         parser.showHelp(1);
     const bool bounded = parser.isSet("run-seconds");
     double seconds = 0;
@@ -158,8 +172,8 @@ int main(int argc, char **argv) {
             return 1;
         }
     }
-    MainWindow window(smoke, bounded, audioCheck, bootDirectory, modelOverride,
-                      powerOnSeedOverride);
+    MainWindow window(smoke, bounded, audioCheck, bootDirectory, modelOverride, powerOnSeedOverride,
+                      cameraSourceOverride);
     window.show();
     if (smoke)
         return window.smokeTest(smokeWorkflow) ? 0 : 1;

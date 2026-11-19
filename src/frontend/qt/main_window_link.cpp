@@ -164,7 +164,7 @@ void MainWindow::applyControllerConfiguration(
 
 MainWindow *MainWindow::newWindow() {
     auto *window = new MainWindow(isolated_, automated_, audioCheck_, bootDirectoryOverride_,
-                                  modelOverride_, powerOnSeedOverride_);
+                                  modelOverride_, powerOnSeedOverride_, cameraSourceOverride_);
     window->setAttribute(Qt::WA_DeleteOnClose);
     window->move(pos() + QPoint(32, 32));
     window->show();

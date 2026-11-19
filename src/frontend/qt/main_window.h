@@ -80,10 +80,12 @@ class GbsPlayer;
 
 class MainWindow final : public QMainWindow {
   public:
+    enum class CameraSource { System, Generated };
     explicit MainWindow(bool isolated = false, bool automated = false, bool audioCheck = false,
                         const QString &bootDirectoryOverride = QString(),
                         std::optional<int> modelOverride = std::nullopt,
-                        std::optional<uint64_t> powerOnSeedOverride = std::nullopt);
+                        std::optional<uint64_t> powerOnSeedOverride = std::nullopt,
+                        std::optional<CameraSource> cameraSourceOverride = std::nullopt);
     ~MainWindow() override;
     bool openRom(const QString &path);
     MainWindow *newWindow();
@@ -184,8 +186,10 @@ class MainWindow final : public QMainWindow {
     enum class ResetWorkflow { Open, Normal, Quick, Reload };
     void queueCameraCapture(CupidGb *gb, uint64_t request);
     void cancelCameraCapture();
+    void applyCameraSource(CupidGb *gb);
     void commitCameraSession(CupidGb *candidate, ResetWorkflow workflow);
     bool cameraSmokeTest(const QString &directory);
+    bool cameraSourceSmokeTest(const QString &directory);
     bool restart();
     bool quickReset();
     bool resetCartridge(ResetWorkflow workflow);
@@ -309,6 +313,8 @@ class MainWindow final : public QMainWindow {
     QString bootDirectoryOverride_;
     const std::optional<int> modelOverride_;
     const std::optional<uint64_t> powerOnSeedOverride_;
+    const std::optional<CameraSource> cameraSourceOverride_;
+    CameraSource cameraSource_ = CameraSource::System;
     std::unique_ptr<CupidEmulator> emulator_;
     struct LinkSession;
     std::shared_ptr<LinkSession> linkSession_;

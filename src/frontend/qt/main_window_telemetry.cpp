@@ -284,6 +284,13 @@ void MainWindow::beginBoundedRun(double seconds, const QString &reportPath) {
                                     clockHz);
             report.insert("rewind_capture_failed", rewindFailed_);
             report.insert("hardware_model", cupid_gb_model_name(emulator_->gb.model));
+            report.insert("camera_source",
+                          cameraSource_ == CameraSource::Generated ? "generated" : "system");
+            if (emulator_->gb.header.mbc_type == CUPID_GB_CAMERA) {
+                report.insert("camera_capture_count", double(emulator_->gb.camera.capture_number));
+                report.insert("camera_host_provider_registered",
+                              emulator_->gb.camera_host.request_callback != nullptr);
+            }
             QJsonValue requestedModel;
             if (modelOverride_)
                 requestedModel =

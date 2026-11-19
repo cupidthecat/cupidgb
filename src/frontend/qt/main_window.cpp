@@ -29,10 +29,14 @@
 
 MainWindow::MainWindow(bool isolated, bool automated, bool audioCheck,
                        const QString &bootDirectoryOverride, std::optional<int> modelOverride,
-                       std::optional<uint64_t> powerOnSeedOverride)
+                       std::optional<uint64_t> powerOnSeedOverride,
+                       std::optional<CameraSource> cameraSourceOverride)
     : bootDirectoryOverride_(bootDirectoryOverride), modelOverride_(modelOverride),
-      powerOnSeedOverride_(powerOnSeedOverride), isolated_(isolated), automated_(automated),
-      audioCheck_(audioCheck) {
+      powerOnSeedOverride_(powerOnSeedOverride), cameraSourceOverride_(cameraSourceOverride),
+      isolated_(isolated), automated_(automated), audioCheck_(audioCheck) {
+    cameraSource_ = cameraSourceOverride_.value_or(
+        settings_.value("camera/source").toString() == "generated" ? CameraSource::Generated
+                                                                   : CameraSource::System);
     setWindowTitle("CupidGB");
     setAcceptDrops(true);
     display_ = new DisplayWidget(this);

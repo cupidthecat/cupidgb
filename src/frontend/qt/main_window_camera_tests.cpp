@@ -292,3 +292,196 @@ bool MainWindow::cameraSmokeTest(const QString &directory) {
     }
     return closeRom();
 }
+
+bool MainWindow::cameraSourceSmokeTest(const QString &directory) {
+    std::vector<std::pair<QString, QVariant>> savedSettings;
+    for (const auto &key : settings_.allKeys())
+        savedSettings.emplace_back(key, settings_.value(key));
+    const auto restore = qScopeGuard([&] {
+        settings_.clear();
+        for (const auto &[key, value] : savedSettings)
+            settings_.setValue(key, value);
+    });
+    settings_.remove("camera/source");
+    MainWindow session(true, true);
+    session.timer_.stop();
+    if (session.cameraSource_ != CameraSource::System || session.hostCamera_)
+        return smokeFailure(__FILE__, __LINE__);
+    const QString path = QDir(directory).filePath("camera-source.gb");
+    if (!QFile::copy(QDir(directory).filePath("camera-workflow.gb"), path) ||
+        !session.openRom(path) || !session.emulator_->gb.camera_host.request_callback ||
+        session.hostCamera_)
+        return smokeFailure(__FILE__, __LINE__);
+    std::vector<HostCamera::FrameReady> replies;
+    unsigned cancellations = 0;
+    const auto sourceCleanup = qScopeGuard([&] {
+        session.cancelCameraCapture();
+        session.hostCamera_.reset();
+    });
+    session.hostCamera_ = std::make_unique<HostCamera>(
+        &session, [&replies](HostCamera::FrameReady ready) { replies.push_back(std::move(ready)); },
+        [&cancellations] { ++cancellations; });
+    const auto configureSource = [&](MainWindow &window, int expected, int selected, bool accept,
+                                     bool enabled = true,
+                                     const std::function<void()> &beforeAccept = {}) {
+        bool checked = false, timedOut = false;
+        QTimer driver;
+        driver.setInterval(10);
+        connect(&driver, &QTimer::timeout, &window, [&] {
+            auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+            if (!dialog || dialog->objectName() != "settings" || dialog->parentWidget() != &window)
+                return;
+            driver.stop();
+            auto *choice = dialog->findChild<QComboBox *>("cameraSource");
+            auto *buttons = dialog->findChild<QDialogButtonBox *>();
+            checked = choice && buttons && choice->count() == 2 &&
+                      choice->currentIndex() == expected && choice->isEnabled() == enabled;
+            if (checked) {
+                if (enabled)
+                    choice->setCurrentIndex(selected);
+                const QString output = qEnvironmentVariable("CUPIDGB_UI_CAPTURE_DIR");
+                if (accept && !output.isEmpty() && (selected == 1 || !enabled)) {
+                    if (auto *scroll = dialog->findChild<QScrollArea *>())
+                        scroll->ensureWidgetVisible(choice);
+                    const QString name = enabled    ? "camera-generated-settings.png"
+                                         : expected ? "camera-generated-override-settings.png"
+                                                    : "camera-system-override-settings.png";
+                    if (!QDir().mkpath(output) ||
+                        !dialog->grab().save(QDir(output).filePath(name))) {
+                        checked = false;
+                        dialog->reject();
+                        return;
+                    }
+                }
+                if (accept && beforeAccept)
+                    beforeAccept();
+                buttons->button(accept ? QDialogButtonBox::Ok : QDialogButtonBox::Cancel)->click();
+            } else
+                dialog->reject();
+        });
+        QTimer watchdog;
+        watchdog.setSingleShot(true);
+        connect(&watchdog, &QTimer::timeout, &window, [&] {
+            timedOut = true;
+            if (auto *dialog = window.findChild<QDialog *>("settings"))
+                dialog->reject();
+        });
+        driver.start();
+        watchdog.start(3000);
+        window.configure();
+        driver.stop();
+        watchdog.stop();
+        return checked && !timedOut;
+    };
+    const auto shutter = [&] {
+        auto &gb = session.emulator_->gb;
+        cupid_gb_write_u8(&gb, 0x4000, 0x10);
+        cupid_gb_write_u8(&gb, 0xa000, 1);
+    };
+    shutter();
+    QCoreApplication::sendPostedEvents(&session, QEvent::MetaCall);
+    if (replies.size() != 1)
+        return smokeFailure(__FILE__, __LINE__);
+    replies.back()(cameraTestFrame(0x73), {});
+    shutter();
+    QCoreApplication::sendPostedEvents(&session, QEvent::MetaCall);
+    const uint64_t queued = session.emulator_->gb.camera_host.pending_request;
+    HostCamera *const oldSource = session.hostCamera_.get();
+    if (!queued || !configureSource(session, 0, 1, false) ||
+        session.emulator_->gb.camera_host.pending_request != queued ||
+        session.hostCamera_.get() != oldSource || settings_.contains("camera/source"))
+        return smokeFailure(__FILE__, __LINE__);
+    if (!configureSource(session, 0, 1, true) || session.hostCamera_ ||
+        session.cameraSource_ != CameraSource::Generated ||
+        settings_.value("camera/source").toString() != "generated" ||
+        session.emulator_->gb.camera_host.request_callback ||
+        session.emulator_->gb.camera_host.pending_request ||
+        (session.emulator_->gb.camera.registers[0] & 1u) || !cancellations)
+        return smokeFailure(__FILE__, __LINE__);
+    QCoreApplication::sendPostedEvents(&session, QEvent::MetaCall);
+    replies.back()(cameraTestFrame(0xee), {});
+    if (session.hostCamera_ || replies.size() != 2 || session.emulator_->gb.camera_host.image[0])
+        return smokeFailure(__FILE__, __LINE__);
+    shutter();
+    const unsigned busy = session.emulator_->gb.camera.busy_tcycles;
+    const auto generatedState = session.captureState();
+    if (!busy || session.emulator_->gb.camera_host.pending_request || generatedState.isEmpty() ||
+        !configureSource(session, 1, 1, true) ||
+        session.emulator_->gb.camera.busy_tcycles != busy ||
+        !session.restoreState(generatedState, false) ||
+        session.emulator_->gb.camera.busy_tcycles != busy || session.hostCamera_ ||
+        session.emulator_->gb.camera_host.request_callback)
+        return smokeFailure(__FILE__, __LINE__);
+    session.setPaused(false);
+    for (unsigned frame = 0; frame < 3; ++frame)
+        if (!session.runFrame())
+            return smokeFailure(__FILE__, __LINE__);
+    if ((session.emulator_->gb.camera.registers[0] & 1u) ||
+        session.emulator_->gb.camera.busy_tcycles)
+        return smokeFailure(__FILE__, __LINE__);
+    for (unsigned workflow = 0; workflow < 3; ++workflow) {
+        const bool reset = workflow == 0   ? session.restart()
+                           : workflow == 1 ? session.quickReset()
+                                           : session.reloadRom();
+        if (!reset || session.cameraSource_ != CameraSource::Generated || session.hostCamera_ ||
+            session.emulator_->gb.camera_host.request_callback)
+            return smokeFailure(__FILE__, __LINE__);
+        shutter();
+        if (!session.emulator_->gb.camera.busy_tcycles ||
+            session.emulator_->gb.camera_host.pending_request)
+            return smokeFailure(__FILE__, __LINE__);
+    }
+    if (!session.closeRom() || !session.openRom(path) ||
+        session.emulator_->gb.camera_host.request_callback || session.hostCamera_)
+        return smokeFailure(__FILE__, __LINE__);
+    MainWindow restored(true, true);
+    restored.timer_.stop();
+    if (restored.cameraSource_ != CameraSource::Generated || restored.hostCamera_)
+        return smokeFailure(__FILE__, __LINE__);
+    shutter();
+    if (!session.emulator_->gb.camera.busy_tcycles || !configureSource(session, 1, 0, true) ||
+        !session.emulator_->gb.camera_host.request_callback ||
+        session.emulator_->gb.camera.busy_tcycles || session.hostCamera_ ||
+        settings_.value("camera/source").toString() != "system")
+        return smokeFailure(__FILE__, __LINE__);
+    session.hostCamera_ =
+        std::make_unique<HostCamera>(&session, [&replies](HostCamera::FrameReady ready) {
+            replies.push_back(std::move(ready));
+        });
+    // Queue a guest request immediately before Apply, so the source change
+    // happens before the queued device dispatch can enter the event loop.
+    if (!configureSource(session, 0, 1, true, true, shutter))
+        return smokeFailure(__FILE__, __LINE__);
+    QCoreApplication::sendPostedEvents(&session, QEvent::MetaCall);
+    if (replies.size() != 2 || session.hostCamera_ || session.emulator_->gb.camera_host.image[0] ||
+        session.emulator_->gb.camera_host.pending_request || !configureSource(session, 1, 0, true))
+        return smokeFailure(__FILE__, __LINE__);
+    // Session overrides remain fixed even when settings are accepted or a new
+    // window is opened; accepting the dialog cannot persist the override.
+    MainWindow overridden(true, true, false, QString(), std::nullopt, std::nullopt,
+                          CameraSource::Generated);
+    overridden.timer_.stop();
+    if (!configureSource(overridden, 1, 0, true, false) ||
+        settings_.value("camera/source").toString() != "system")
+        return smokeFailure(__FILE__, __LINE__);
+    std::unique_ptr<MainWindow> child(overridden.newWindow());
+    child->timer_.stop();
+    if (child->cameraSource_ != CameraSource::Generated || !child->cameraSourceOverride_ ||
+        !session.closeRom() || !overridden.openRom(path) || overridden.hostCamera_ ||
+        overridden.emulator_->gb.camera_host.request_callback)
+        return smokeFailure(__FILE__, __LINE__);
+    settings_.setValue("camera/source", "invalid");
+    MainWindow malformed(true, true);
+    malformed.timer_.stop();
+    if (malformed.cameraSource_ != CameraSource::System)
+        return smokeFailure(__FILE__, __LINE__);
+    settings_.setValue("camera/source", "generated");
+    MainWindow systemOverride(true, true, false, QString(), std::nullopt, std::nullopt,
+                              CameraSource::System);
+    systemOverride.timer_.stop();
+    if (!configureSource(systemOverride, 0, 1, true, false) ||
+        settings_.value("camera/source").toString() != "generated")
+        return smokeFailure(__FILE__, __LINE__);
+    qInfo("CupidGB camera input selection, persistence and session override checks passed");
+    return true;
+}

@@ -1,10 +1,16 @@
 # Camera cartridges
 
-CupidGB's Qt frontend uses the system default camera when a Camera cartridge
-requests a capture. Opening the cartridge does not start a camera. The first
-shutter request starts an asynchronous, in-memory capture; it does not create an
-image file or open a preview window. Device selection follows the operating
-system default.
+In Qt, open **Settings** and choose **Camera input**. **System Camera** uses
+the operating system's default camera. **Generated Pattern** uses the core's
+deterministic sensor and guest-clock exposure timing. The setting is saved
+when you apply the dialog. Changing input cancels a capture in progress.
+
+Use `--camera-source generated` or `--camera-source system` to select input
+for one launch, including any new windows opened from that session.
+
+In System Camera mode, the first shutter request opens the device and starts
+an asynchronous, in-memory capture. The frontend opens no preview window and
+creates no image file.
 
 If camera permission is denied, no device is available, or capture fails, the
 cartridge keeps its last accepted image and its busy bit clears. Before the first
@@ -50,9 +56,9 @@ The cartridge's busy bit blocks camera SRAM until the host completes the
 request. A second shutter write can change its mode bits but does not cancel an
 outstanding capture.
 
-An embedding application without a camera provider retains the existing
-deterministic generated sensor and guest-clock exposure countdown. The generated
-path does not enumerate cameras or require Qt.
+The generated sensor works in the Qt frontend and in applications that embed
+the core without a camera provider. It runs without opening or enumerating
+camera devices.
 
 ## Save states, reset and rewind
 

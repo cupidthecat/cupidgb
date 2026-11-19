@@ -455,6 +455,20 @@ void MainWindow::configure() {
     messages->setObjectName("onScreenMessages");
     messages->setChecked(settings_.value("video/osd", false).toBool());
     form->addRow("Notifications", messages);
+    auto *cameraSource = new QComboBox;
+    cameraSource->setObjectName("cameraSource");
+    cameraSource->addItem("System Camera", "system");
+    cameraSource->addItem("Generated Pattern", "generated");
+    cameraSource->setCurrentIndex(cameraSource_ == CameraSource::Generated ? 1 : 0);
+    cameraSource->setToolTip("System Camera uses the operating system default device when the "
+                             "cartridge requests an image. Generated Pattern does not access a "
+                             "camera. Changing input cancels the current capture.");
+    if (cameraSourceOverride_) {
+        cameraSource->setEnabled(false);
+        cameraSource->setToolTip("Set by --camera-source for this session.");
+    }
+    form->addRow(cameraSourceOverride_ ? "Camera input (session override)" : "Camera input",
+                 cameraSource);
     auto *outputDevice = new QComboBox;
     outputDevice->setObjectName("audioOutputDevice");
     outputDevice->addItem("System Default", QByteArray());
@@ -673,6 +687,18 @@ void MainWindow::configure() {
         for (size_t i = 0; i < colorNames.size(); ++i)
             settings_.setValue(QString("video/customPalette/%1").arg(i), colorNames[i]);
         settings_.setValue("video/customPalette/off", offColorValue.name());
+        if (!cameraSourceOverride_) {
+            settings_.setValue("camera/source", cameraSource->currentData());
+            const auto selected =
+                cameraSource->currentIndex() == 1 ? CameraSource::Generated : CameraSource::System;
+            if (selected != cameraSource_) {
+                cancelCameraCapture();
+                cameraError_.clear();
+                cameraSource_ = selected;
+                if (emulator_)
+                    applyCameraSource(&emulator_->gb);
+            }
+        }
         const bool outputChanged = requestedOutput != outputDevice->currentData().toByteArray();
         settings_.setValue("audio/outputDevice", outputDevice->currentData().toByteArray());
         settings_.setValue("audio/volume", volume->value());

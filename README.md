@@ -40,7 +40,7 @@ New states use CupidGB native version 27. They retain hardware and peripheral st
 
 Audio settings include Accurate, waveform-preserving and disabled high-pass filtering, optional interference and individual channel toggles. [The audio guide](docs/audio.md) explains how these controls affect playback and recording.
 
-Camera cartridges can request an in-memory capture from the system default camera. Capture starts at the guest's first shutter request, and a failed request retains the previous image. Host images stay outside save files and rewind history. See [Camera cartridges](docs/host-camera.md) for conversion, device lifetime and validation limits.
+Camera cartridges can use the system camera or a generated pattern. Choose **Camera input** in Settings. System capture starts at the guest's first shutter request, and a failed request retains the previous image. Host images stay outside save files and rewind history. See [Camera cartridges](docs/host-camera.md) for device and save-state behavior.
 
 For [link play](docs/link-play.md), open a second cartridge with File > New Window, then choose Emulation > Connect > Link Cable. Use separate writable cartridge copies for two players using the same game. Pause and playback speed apply to the pair; saves and recordings belong to each window.
 
