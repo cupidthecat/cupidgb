@@ -458,8 +458,13 @@ CupidGbStateResult cupid_gb_bess_load(CupidGb *gb, const uint8_t *data, size_t l
     cupid_gb_init(next);
     cupid_gb_reset_restore_cartridge(next, gb);
     cupid_gb_cartridge_reset_controls(next);
-    if (next->header.mbc_type == CUPID_GB_CAMERA)
+    if (next->header.mbc_type == CUPID_GB_CAMERA || next->header.mbc_type == CUPID_GB_MBC5 ||
+        next->header.mbc_type == CUPID_GB_MBC7) {
+        /* Portable defaults differ from the real cartridge reset path. Keep
+         * raw zero and the initially visible bank one as separate latches. */
         next->mbc5_rom_bank = 0;
+        next->current_rom_bank = 1;
+    }
     next->power_on = gb->power_on;
     /* An omitted RTC block has no portable timestamp. Keep the receiver's
      * clock rather than treating its counters as having run since the epoch. */

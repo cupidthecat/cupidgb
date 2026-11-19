@@ -95,10 +95,16 @@ static CupidGbStateResult supported(const CupidGb *gb) {
         case CUPID_GB_MBC1:
         case CUPID_GB_MBC2:
         case CUPID_GB_MBC3:
+            break;
         case CUPID_GB_MBC5:
+            if (cupid_gb_has_startup_bank_alias(gb) &&
+                (gb->ram_enabled || gb->current_ram_bank || gb->mbc5_rumble_on))
+                return CUPID_GB_STATE_INVALID;
             break;
         case CUPID_GB_MBC7:
-            if (gb->current_rom_bank > 255u || !cupid_gb_mbc7_serial_valid(&gb->mbc7))
+            if (gb->current_rom_bank > 255u || !cupid_gb_mbc7_serial_valid(&gb->mbc7) ||
+                (cupid_gb_has_startup_bank_alias(gb) &&
+                 (gb->ram_enabled || gb->mbc7.registers_enabled)))
                 return CUPID_GB_STATE_INVALID;
             break;
         case CUPID_GB_MMM01:
@@ -122,7 +128,7 @@ static CupidGbStateResult supported(const CupidGb *gb) {
             break;
         case CUPID_GB_CAMERA:
             if (gb->current_rom_bank > 255u || gb->camera.registers[0] > 7u ||
-                (cupid_gb_camera_has_startup_alias(gb) &&
+                (cupid_gb_has_startup_bank_alias(gb) &&
                  (gb->ram_enabled || gb->current_ram_bank || gb->camera.mapped)))
                 return CUPID_GB_STATE_INVALID;
             break;
@@ -165,8 +171,10 @@ static size_t mapper_bytes(const CupidGb *gb) {
             return 6;
         case CUPID_GB_MBC3:
             return 15;
+        case CUPID_GB_MBC5:
+            return cupid_gb_has_startup_bank_alias(gb) ? 0 : 12;
         case CUPID_GB_MBC7:
-            return 9;
+            return cupid_gb_has_startup_bank_alias(gb) ? 0 : 9;
         case CUPID_GB_MMM01:
             return BESS_MMM01_MAPPER_BYTES;
         case CUPID_GB_HUC1:
@@ -178,7 +186,7 @@ static size_t mapper_bytes(const CupidGb *gb) {
              * zero raw latch intact until the first control write. */
             return gb->current_rom_bank == CUPID_GB_HUC3_STARTUP_BANK ? 0 : 9;
         case CUPID_GB_CAMERA:
-            return cupid_gb_camera_has_startup_alias(gb)
+            return cupid_gb_has_startup_bank_alias(gb)
                        ? 0
                        : 3u * (3u + BESS_CAMERA_REGISTERS + !gb->camera.mapped);
         case CUPID_GB_TPP1:

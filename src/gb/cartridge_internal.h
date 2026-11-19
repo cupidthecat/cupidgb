@@ -29,9 +29,9 @@
 /* An untouched HuC3 maps bank 1 even though its raw ROM latch is zero. */
 enum { CUPID_GB_HUC3_STARTUP_BANK = 0x80 };
 
-/* A portable Camera load starts with raw bank zero and bank one visible.
- * The generic MBC5 field preserves that distinction in native snapshots. */
-static inline bool cupid_gb_camera_has_startup_alias(const CupidGb *gb) {
+/* Portable imports can map bank one before any write commits raw bank zero.
+ * The existing MBC5 field retains that distinction in native snapshots. */
+static inline bool cupid_gb_has_startup_bank_alias(const CupidGb *gb) {
     return gb->current_rom_bank == 1u && gb->mbc5_rom_bank == 0u;
 }
 

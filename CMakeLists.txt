@@ -245,7 +245,7 @@ if(CUPIDGB_ENABLE_TESTS)
         serial serial_selection serial_state link printer printer_state ppu pixel_timing
         pixel_timing_state scy_latch stat apu wave_retrigger wave_history wave_history_state
         audio_synthesis audio_filter audio_state audio_publication audio_clock cpu_timing cpu_lockup
-        dma oam_bus video_bus vram_bus vram_quiet bus state state_ram bess bess_mmm01 battery
+        dma oam_bus video_bus vram_bus vram_quiet bus state state_ram bess bess_bank_defaults bess_mmm01 battery
         native_v1_recovery
         sgb sgb_protocol sgb_protocol_state sgb_startup sgb_startup_audio sgb_startup_state
         input input_sampling cartridge mapper_guest mmm01 mbc3_bus camera camera_host camera_state mbc6 mbc7 tama5 cgb_revision

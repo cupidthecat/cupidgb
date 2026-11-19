@@ -511,7 +511,9 @@ size_t cupid_gb_selected_rom_bank(const CupidGb *gb, bool lower_region) {
             break;
         }
         case CUPID_GB_MBC5: {
-            bank = lower_region ? 0u : (size_t)(gb->mbc5_rom_bank & 0x01ffu);
+            bank = lower_region                          ? 0u
+                   : cupid_gb_has_startup_bank_alias(gb) ? 1u
+                                                         : (size_t)(gb->mbc5_rom_bank & 0x01ffu);
             break;
         }
         case CUPID_GB_HUC1:

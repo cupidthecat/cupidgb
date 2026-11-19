@@ -45,6 +45,11 @@ read, and the guest's latched motion readings. A later guest latch uses
 live motion from the receiving session. When the optional MBC7 block is
 absent, the serial interface and motion latches start clear.
 
+For MBC5, MBC7 and Camera, a portable file without mapper-control writes
+starts with ROM bank one visible. The next mapper-control write applies
+the initially zero raw bank latch. An explicit bank write in the file
+selects its specified bank during import.
+
 MMM01 checkpoints identify the cartridge by its menu header. They work
 with both menu-first and menu-last dumps. They restore the raw controller
 latches, including bits held by masks, and apply the lock after restoring
@@ -67,9 +72,7 @@ switches back to SRAM. The receiving session supplies the live input.
 Camera checkpoints carry banking, SRAM, and all 54 Camera registers. An
 export clears the shutter's busy bit so loading it does not start a new
 exposure. Host images stay with the receiving session. Use a native slot
-to preserve a pending generated exposure. If the file supplies no mapper
-writes, ROM bank one is visible until the next mapper write applies the
-raw bank-zero latch.
+to preserve a pending generated exposure.
 
 TPP1 checkpoints carry banking, up to 2 MiB of SRAM, both clock copies,
 the stored MR4 value, and motor strength. The initial bank-one view is

@@ -27,6 +27,7 @@
 #include "cupid/gb/gb.h"
 #include "../gbc/cgb_internal.h"
 #include "audio_output.h"
+#include "cartridge_internal.h"
 #include "cupid/gb/battery.h"
 #include "cupid/gb/infrared.h"
 #include "display_clock.h"
@@ -1268,6 +1269,14 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
         return;
     }
 
+    if (address < 0x8000u &&
+        (gb->header.mbc_type == CUPID_GB_MBC5 || gb->header.mbc_type == CUPID_GB_MBC7) &&
+        cupid_gb_has_startup_bank_alias(gb)) {
+        /* Only a delivered cartridge-control write commits the portable raw
+         * bank. Ordinary memory accesses retain the initial visible bank. */
+        gb->current_rom_bank = 0;
+    }
+
     if (address <= 0x3fffu && gb->header.mbc_type == CUPID_GB_MBC2) {
         if ((address & 0x0100u) == 0u) {
             gb->ram_enabled = (value & 0x0fu) == 0x0au;
@@ -1322,6 +1331,9 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
                 break;
             case CUPID_GB_MBC7:
                 gb->current_rom_bank = value;
+                /* A write of bank one must not recreate the portable alias.
+                 * Older native states keep their unused field until this write. */
+                gb->mbc5_rom_bank = value;
                 break;
             default:
                 break;
