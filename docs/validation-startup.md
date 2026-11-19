@@ -412,6 +412,20 @@ their measured offsets through the following scanline and frame. Rapidly
 turning the LCD off and back on during this interval delivers a repeat-frame
 event at the same cycle as supplied firmware.
 
+Original CGB0 firmware uses the same cartridge-entry phase. Native color
+starts at line 144, dot 168. Monochrome startup advances from that phase by
+the selected palette and logo-map setup time. Windows and Linux each matched
+18 CGB0 and 18 CGB-E timelines against original firmware, including whole-frame
+LY, STAT, and IF traces and controlled LYC writes. Initial state tests cover
+cartridge load, both resets, and immediate save and restore.
+
+An unpaced Super Mario Bros. Deluxe replay on CGB0 used the same battery
+copy and 105 inputs from cartridge entry. The Windows and Linux builds
+completed 272,469,120 guest cycles per run and reached the same World 1-1
+frame with built-in and original firmware. The original-firmware path
+produced one additional post-entry audio sample frame and a different PCM
+checksum on both hosts.
+
 Thirty color cases used both color header flags and three title and
 license combinations on each revision. The comparisons checked the first
 guest reads, the following dot-level LY and STAT transitions, and the first
@@ -553,8 +567,8 @@ executed on the same model. The built-in divider uses that offset with
 the existing title lookup and compatibility timing. Rejecting the first
 extended-license byte still gives `2884` in monochrome mode. The regression
 uses nine headers and six timed guest reads after cartridge load, Quick
-Reset, and Hard Reset. The CGB0 display and audio handoff need separate
-qualification.
+Reset, and Hard Reset. The display and pulse channel checks cover their own
+timing and register state at the same boundary.
 
 ### CGB-0 wave RAM at cartridge entry
 
@@ -572,12 +586,24 @@ Cumulative audio checksums differed in 56 runs.
 
 ### CGB pulse 1 at cartridge entry
 
-Built-in startup on CGB A through E restores pulse 1's oscillator phase,
+Built-in Color startup restores pulse 1's oscillator phase,
 length, sweep, envelope lock and register latches at cartridge entry.
 Monochrome startup gives the oscillator more time to run after the last
-trigger. On A and B, the length depends on the sequencer phase at both
+trigger. On revisions 0, A, and B, the length depends on the sequencer phase at both
 trigger writes. The first PCM12 read now returns `00`, with pulse 1
 still active in NR52.
+
+On CGB0, the frame sequencer starts at step 1, including native headers that
+reject the first extended-license byte. Windows and Linux matched 14 CGB0
+cases and 28 A/E controls against executed firmware. The 7,324-cycle guest
+traces include reads after envelope, frequency, and trigger writes.
+
+CGB0 also uses the settled Color filter baseline. In the 44.1 kHz output
+probe, the largest sample error against executed firmware fell from 4,080
+to one unit in Accurate mode and from 4,082 to three units in Preserve
+Waveform mode. Disabled stayed within three units. Fractional first-frame
+timing and exact DAC reconstruction history still differ. Tests save and
+restore the pending baseline before audio output starts.
 
 The compiled state matched 300 supplied-firmware handoffs across both
 cartridge modes, all 26 measured monochrome setup durations and the
@@ -675,7 +701,10 @@ The regression covers cartridge load, Quick Reset, and Hard Reset for all six
 Color revisions across native and compatibility headers. Quick Reset keeps the
 other WRAM banks. Cold firmware startup restores the raw generation, and Quick
 Reset with installed firmware retains live WRAM until firmware writes.
-Palette scratch buffers at `D900–D959` and `DA00–DCFF` still need modeling.
+The selected palette triplet occupies 24 bytes at `DA00 + 24 × slot`, and
+the final six palette entries at `DCD0–DCFF` use the first palette. Each host
+matched these 72 bytes in 600 cases using existing CupidGB palette values.
+The descriptor bytes at `D900–D959` and the other triplets still need modeling.
 
 An unpaced Robopon Sun Version replay on CGB-E applied the 317-input cold route
 on Windows and Linux. Both matched the earlier build's final 160 × 144 image,

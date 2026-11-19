@@ -26,10 +26,10 @@
 
 enum { CUPID_GB_POST_BOOT_NR50 = 0x77, CUPID_GB_POST_BOOT_NR51 = 0xf3 };
 
-/* Only built-in CGB A–E cartridge entry supplies settled filter history. */
+/* Built-in Color cartridge entry supplies settled filter history. */
 static inline bool cupid_gb_audio_startup_filter_supported(const CupidGb *gb) {
-    return cupid_gb_model_is_cgb(gb->model) && gb->model != CUPID_GB_MODEL_CGB_0 &&
-           gb->program_kind == CUPID_GB_PROGRAM_CARTRIDGE && !gb->boot_rom_enabled;
+    return cupid_gb_model_is_cgb(gb->model) && gb->program_kind == CUPID_GB_PROGRAM_CARTRIDGE &&
+           !gb->boot_rom_enabled;
 }
 
 void cupid_gb_audio_configure(CupidGb *gb);

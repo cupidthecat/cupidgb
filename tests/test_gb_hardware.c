@@ -572,6 +572,13 @@ static void test_cgb_cartridge_palette_metadata(void) {
             assert(gb.work_ram[0x200b] == cases[index].flags);
             assert(gb.work_ram[0x2006] == (revision_zero ? cases[index].slot : 0));
             assert(gb.work_ram[0x2009] == (revision_zero ? cases[index].flags : 0));
+            const uint8_t *triplet = gb.work_ram + 0x2a00 + 24u * cases[index].slot;
+            assert(!memcmp(triplet, gb.cgb_obj_palette_ram, 16));
+            assert(!memcmp(triplet + 16, gb.cgb_bg_palette_ram, 8));
+            const uint8_t palette_zero[] = {0xff, 0x7f, 0xbf, 0x32, 0xd0, 0, 0, 0};
+            for (unsigned tail = 0; tail < 6; ++tail)
+                assert(
+                    !memcmp(gb.work_ram + 0x2cd0 + 8u * tail, palette_zero, sizeof(palette_zero)));
             if (cases[index].checksum == 0x9c) {
                 const uint16_t expected_bg[] = {0x7fff, 0x6e31, 0x454a, 0};
                 const uint16_t expected_obj1[] = {0x231f, 0x035f, 0x00f2, 0x0009};

@@ -270,7 +270,7 @@ static void check_boundary(const CupidGb *gb, const CupidGb *before, CupidGbRese
                            bool firmware, Host *host, unsigned clock_calls,
                            const uint8_t *entry_vram) {
     const bool quick = kind == CUPID_GB_RESET_QUICK;
-    const bool native_color_phase = !firmware && gb->cgb_mode && gb->model != CUPID_GB_MODEL_CGB_0;
+    const bool native_color_phase = !firmware && gb->cgb_mode;
     CHECK(gb->rom == before->rom && gb->rom_size == before->rom_size &&
           gb->rom_capacity == before->rom_capacity &&
           gb->rom_generation == before->rom_generation && gb->loaded);
@@ -364,6 +364,14 @@ static void check_boundary(const CupidGb *gb, const CupidGb *before, CupidGbRese
                 bank2[offset] = 0xff;
                 bank2[offset + 1] = 0x7f;
             }
+            const uint8_t objects[] = {0xff, 0x7f, 0x1f, 0x42, 0xf2, 0x1c, 0, 0};
+            const uint8_t background[] = {0xff, 0x7f, 0xef, 0x1b, 0x80, 0x61, 0, 0};
+            const uint8_t palette_zero[] = {0xff, 0x7f, 0xbf, 0x32, 0xd0, 0, 0, 0};
+            memcpy(bank2 + 0xca0, objects, sizeof(objects));
+            memcpy(bank2 + 0xca8, objects, sizeof(objects));
+            memcpy(bank2 + 0xcb0, background, sizeof(background));
+            for (unsigned tail = 0; tail < 6; ++tail)
+                memcpy(bank2 + 0xcd0 + 8u * tail, palette_zero, sizeof(palette_zero));
             CHECK(!memcmp(gb->work_ram, before->work_ram, 0x2000) &&
                   !memcmp(gb->work_ram + 0x2000, bank2, sizeof(bank2)) &&
                   !memcmp(gb->work_ram + 0x3000, before->work_ram + 0x3000, 0x5000));

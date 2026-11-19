@@ -79,6 +79,14 @@ the saved character, while the same inputs with erased storage entered the
 New Game introduction. After loading the slot, Right moved the character 56
 pixels on both platforms. The test covers the initial arena and save slot.
 
+Native Qt repeated that route on Windows and WSLg at `053d1ce`. Both
+83-second Save sessions produced the same 512-byte battery, and separate
+30-second Continue runs loaded their own desktop-written batteries and
+returned to controllable movement. Both platforms finished each route with
+identical 160 × 144 pixels. After warmup, guest speed during Save was 100.005%
+on Windows and 99.999% on WSLg. All four sessions recorded zero audio idle or
+error events after warmup.
+
 Robopon Sun Version on CGB-E confirmed its own Save command after the player
 reached the kitchen. Both builds wrote the same 32,785-byte HuC3 battery with
 a fixed clock. Cold Continue restored the named player, one Robopon, and

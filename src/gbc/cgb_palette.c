@@ -705,11 +705,36 @@ static CupidCgbPaletteMatch cupid_cgb_find_palette(const CupidGb *gb) {
     return match;
 }
 
+/**
+ * @brief Writes four RGB555 colors into a CGB palette RAM block.
+ *
+ * Each color occupies 2 bytes in palette RAM (little-endian). The
+ * block for @p palette_index starts at byte offset `palette_index * 8`.
+ *
+ * @param palette_ram   Pointer to the 64-byte BG or OBJ palette RAM.
+ * @param palette_index Which palette slot to write (0–7).
+ * @param colors        Array of exactly 4 RGB555 color values.
+ */
+static void cupid_cgb_store_palette(uint8_t *palette_ram, unsigned int palette_index,
+                                    const uint16_t colors[4]) {
+    unsigned int color_index;
+    size_t base_offset = (size_t)palette_index * 8u;
+
+    for (color_index = 0u; color_index < 4u; ++color_index) {
+        uint16_t color = colors[color_index];
+        size_t color_offset = base_offset + (size_t)color_index * 2u;
+
+        palette_ram[color_offset] = (uint8_t)(color & 0xffu);
+        palette_ram[color_offset + 1u] = (uint8_t)(color >> 8u);
+    }
+}
+
 unsigned cupid_cgb_apply_cartridge_handoff(CupidGb *gb) {
     enum { FIRST_CONDITIONAL_KEY = 65, CONDITIONAL_GROUP_SIZE = 14 };
 
     const bool extended_license = gb->header.old_licensee_code == 0x33u;
     const bool palette_search = cupid_cgb_has_nintendo_licensee(gb);
+    const bool revision_zero = gb->model == CUPID_GB_MODEL_CGB_0;
     unsigned phase = 0x1ea0u;
     const CupidCgbCompatPaletteSet *palette = &cupid_cgb_compat_auto_00;
     unsigned tilemap_cycles = 0u;
@@ -750,7 +775,7 @@ unsigned cupid_cgb_apply_cartridge_handoff(CupidGb *gb) {
     boot_work_ram[0] = cupid_cgb_boot_title_checksum(gb);
     boot_work_ram[8] = palette->boot_compatibility_slot;
     boot_work_ram[11] = palette->boot_shuffle_flags;
-    if (gb->model == CUPID_GB_MODEL_CGB_0) {
+    if (revision_zero) {
         /* The first firmware revision also saves copies of both selection bytes. */
         boot_work_ram[6] = boot_work_ram[8];
         boot_work_ram[9] = boot_work_ram[11];
@@ -760,6 +785,14 @@ unsigned cupid_cgb_apply_cartridge_handoff(CupidGb *gb) {
         boot_work_ram[offset] = 0xff;
         boot_work_ram[offset + 1] = 0x7f;
     }
+
+    const unsigned selected = 3u * palette->boot_compatibility_slot;
+    cupid_cgb_store_palette(boot_work_ram + 0xa00, selected, palette->obj0);
+    cupid_cgb_store_palette(boot_work_ram + 0xa00, selected + 1u, palette->obj1);
+    cupid_cgb_store_palette(boot_work_ram + 0xa00, selected + 2u, palette->bg);
+    /* The final six unused descriptor bytes each select palette zero. */
+    for (unsigned index = 0; index < 6; ++index)
+        cupid_cgb_store_palette(boot_work_ram + 0xcd0, index, cupid_cgb_compat_auto_05.bg);
 
     /* Startup calls leave their last return addresses and saved registers
      * below SP. The final compatibility call depends on the tilemap path. */
@@ -777,44 +810,20 @@ unsigned cupid_cgb_apply_cartridge_handoff(CupidGb *gb) {
      * also wait for the firmware's legacy tilemap transfer. */
     const unsigned extra_cycles =
         gb->cgb_mode ? 0u : 1116u + 32u * palette->boot_compatibility_slot + tilemap_cycles;
-    if (gb->model == CUPID_GB_MODEL_CGB_0) {
+    if (revision_zero) {
         /* Revision 0 reaches the palette-dependent boundary 524 T-cycles later. */
         phase += 524u;
-    } else {
-        cupid_gb_apu_apply_cgb_boot_pulse(gb, phase, extra_cycles);
-        gb->apu.fs_step = palette_search || extra_cycles ? 1u : 0u;
-        gb->apu.fs_skip_div_event = 0u;
     }
+    cupid_gb_apu_apply_cgb_boot_pulse(gb, phase, extra_cycles);
+    /* CGB0 has clocked the sequencer even when the native title check rejects. */
+    gb->apu.fs_step = revision_zero || palette_search || extra_cycles ? 1u : 0u;
+    gb->apu.fs_skip_div_event = 0u;
     phase += extra_cycles;
     /* Install the complete phase before the first cartridge clock. */
     gb->io_registers[0x04] = (uint8_t)(phase >> 8u);
     gb->div_counter = (uint16_t)((phase >> 2u) & 63u);
     gb->divider_subcycle = (uint8_t)(phase & 3u);
     return extra_cycles;
-}
-
-/**
- * @brief Writes four RGB555 colors into a CGB palette RAM block.
- *
- * Each color occupies 2 bytes in palette RAM (little-endian). The
- * block for @p palette_index starts at byte offset `palette_index * 8`.
- *
- * @param palette_ram   Pointer to the 64-byte BG or OBJ palette RAM.
- * @param palette_index Which palette slot to write (0–7).
- * @param colors        Array of exactly 4 RGB555 color values.
- */
-static void cupid_cgb_store_palette(uint8_t *palette_ram, unsigned int palette_index,
-                                    const uint16_t colors[4]) {
-    unsigned int color_index;
-    size_t base_offset = (size_t)palette_index * 8u;
-
-    for (color_index = 0u; color_index < 4u; ++color_index) {
-        uint16_t color = colors[color_index];
-        size_t color_offset = base_offset + (size_t)color_index * 2u;
-
-        palette_ram[color_offset] = (uint8_t)(color & 0xffu);
-        palette_ram[color_offset + 1u] = (uint8_t)(color >> 8u);
-    }
 }
 
 /**

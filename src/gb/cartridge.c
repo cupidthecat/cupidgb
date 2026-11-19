@@ -862,7 +862,6 @@ void cupid_gb_cartridge_post_boot(CupidGb *gb) {
     /* Cartridge requirements cannot change the selected physical model. */
     const bool color = cupid_gb_model_is_cgb(gb->model);
     gb->cgb_mode = color && (gb->header.cgb_flag & 0x80u) != 0;
-    const bool cgb_vblank = color && gb->model != CUPID_GB_MODEL_CGB_0;
     /* A recognized tail-first menu has the same logo bytes as bank zero. */
     const uint8_t *logo = gb->rom + CUPID_GB_LOGO_START;
     cupid_gb_startup_logo_tiles(gb, logo);
@@ -870,7 +869,7 @@ void cupid_gb_cartridge_post_boot(CupidGb *gb) {
         memcpy(gb->high_ram, logo, CUPID_GB_STARTUP_LOGO_BYTES);
     else
         cupid_gb_startup_logo_tilemap(gb);
-    if (!cgb_vblank)
+    if (!color)
         cupid_gb_display_clock_import_legacy(gb);
     gb->sgb.enabled = cupid_gb_model_is_sgb(gb->model) && gb->header.sgb_flag == 3;
     /* Without executed firmware, project the two header permission bytes into
@@ -907,8 +906,7 @@ void cupid_gb_cartridge_post_boot(CupidGb *gb) {
     }
     if (color) {
         const unsigned compatibility_cycles = cupid_cgb_apply_cartridge_handoff(gb);
-        if (cgb_vblank)
-            cupid_gb_apply_cgb_boot_display(gb, compatibility_cycles);
+        cupid_gb_apply_cgb_boot_display(gb, compatibility_cycles);
     }
 }
 

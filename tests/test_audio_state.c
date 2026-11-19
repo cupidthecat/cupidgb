@@ -474,13 +474,13 @@ static void read_first_frame(CupidGb *gb, int16_t sample[2]) {
     assert(!"No audio frame delivered");
 }
 
-static void test_startup_filter_history(void) {
+static void test_startup_filter_history(CupidGbModel model) {
     const uint32_t rates[] = {8000, 48000, 192000};
     const CupidGbAudioFrame expected[] = {{4080, 4080}, {0, 0}, {4080, 0}};
     for (unsigned rate = 0; rate < sizeof(rates) / sizeof(rates[0]); ++rate) {
         for (unsigned mode = 0; mode < sizeof(expected) / sizeof(expected[0]); ++mode) {
-            CupidGb *source = load_machine(CUPID_GB_MODEL_CGB_E, rates[rate], 1);
-            CupidGb *target = load_machine(CUPID_GB_MODEL_CGB_E, rates[rate], 2);
+            CupidGb *source = load_machine(model, rates[rate], 1);
+            CupidGb *target = load_machine(model, rates[rate], 2);
             assert(source->apu.output.filter.startup_pending);
             assert(cupid_gb_reset(source, CUPID_GB_RESET_QUICK));
             assert(source->apu.output.filter.startup_pending);
@@ -512,9 +512,9 @@ static void test_startup_filter_history(void) {
     }
 }
 
-static void test_startup_filter_after_guest_write(void) {
-    CupidGb *source = load_machine(CUPID_GB_MODEL_CGB_E, 44100, 1);
-    CupidGb *seeded = load_machine(CUPID_GB_MODEL_CGB_E, 44100, 1);
+static void test_startup_filter_after_guest_write(CupidGbModel model) {
+    CupidGb *source = load_machine(model, 44100, 1);
+    CupidGb *seeded = load_machine(model, 44100, 1);
     assert(cupid_gb_apu_set_filter_mode(source, CUPID_GB_AUDIO_FILTER_PRESERVE_WAVEFORM));
     assert(cupid_gb_apu_set_filter_mode(seeded, CUPID_GB_AUDIO_FILTER_PRESERVE_WAVEFORM));
     seeded->apu.output.filter.capacitor[1] = 4080;
@@ -689,8 +689,10 @@ int main(void) {
     test_live_rate_changes();
     test_v13_import();
     test_live_combination();
-    test_startup_filter_history();
-    test_startup_filter_after_guest_write();
+    test_startup_filter_history(CUPID_GB_MODEL_CGB_E);
+    test_startup_filter_after_guest_write(CUPID_GB_MODEL_CGB_E);
+    test_startup_filter_history(CUPID_GB_MODEL_CGB_0);
+    test_startup_filter_after_guest_write(CUPID_GB_MODEL_CGB_0);
     test_v29_filter_history();
     test_firmware_restore_cancels_pending_filter();
     test_malformed_history();

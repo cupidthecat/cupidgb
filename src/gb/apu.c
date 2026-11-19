@@ -97,8 +97,9 @@ void cupid_gb_apu_apply_cgb_boot_pulse(CupidGb *gb, unsigned native_divider,
     apu->ch1_freq = BOOT_FREQUENCY;
     apu->ch1_timer = (uint16_t)(PERIOD - duty_phase % PERIOD);
     apu->ch1_len = 64u;
-    if (gb->model == CUPID_GB_MODEL_CGB_A || gb->model == CUPID_GB_MODEL_CGB_B) {
-        /* Both trigger writes can clock length on A/B. During this interval
+    if (gb->model == CUPID_GB_MODEL_CGB_0 || gb->model == CUPID_GB_MODEL_CGB_A ||
+        gb->model == CUPID_GB_MODEL_CGB_B) {
+        /* Both trigger writes can clock length on 0/A/B. During this interval
          * the parity of the sequencer step follows divider bit 13. */
         const unsigned first = native_divider - 0xaf08u + (compatibility_cycles ? 16u : 0u);
         const unsigned second = native_divider - 0x65b8u + (compatibility_cycles ? 8u : 0u);
@@ -116,7 +117,7 @@ void cupid_gb_apu_apply_cgb_boot_pulse(CupidGb *gb, unsigned native_divider,
     gb->io_registers[0x14] = (uint8_t)(0x80u | (BOOT_FREQUENCY >> 8u));
     /* Seed the existing output path from the cartridge-entry DAC level. */
     cupid_gb_audio_import_legacy(gb);
-    gb->apu.output.filter.startup_pending = true;
+    gb->apu.output.filter.startup_pending = cupid_gb_audio_startup_filter_supported(gb);
 }
 
 static bool pulse_gate_off(CupidGbApu *apu, unsigned channel) {

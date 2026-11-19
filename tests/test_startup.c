@@ -1407,7 +1407,8 @@ static void compare_color_phase_continuation(CupidGb *a, CupidGb *b) {
 }
 
 static void test_cgb_startup_clock(void) {
-    const CupidGbModel models[] = {CUPID_GB_MODEL_CGB_A, CUPID_GB_MODEL_CGB_B, CUPID_GB_MODEL_CGB_C,
+    const CupidGbModel models[] = {CUPID_GB_MODEL_CGB_0, CUPID_GB_MODEL_CGB_A,
+                                   CUPID_GB_MODEL_CGB_B, CUPID_GB_MODEL_CGB_C,
                                    CUPID_GB_MODEL_CGB_D, CUPID_GB_MODEL_CGB_E};
 
     const struct {
@@ -1416,24 +1417,24 @@ static void test_cgb_startup_clock(void) {
         uint16_t divider;
         uint8_t apu_step;
         uint16_t compatibility_cycles;
-        uint8_t pulse_position, pulse_length_ab;
+        uint8_t pulse_position, pulse_length_ab, pulse_length_0;
         uint16_t pulse_timer;
     } cases[] = {
-        {0x80, 0, 0, 0x01, {'0', '1'}, 8440, 1, 0, 6, 62, 148},
-        {0xc0, 0, 0, 0x33, {'0', '1'}, 8472, 1, 0, 6, 62, 148},
-        {0x80, 0xb3, 'B', 0x01, {'0', '1'}, 13432, 1, 0, 6, 64, 148},
-        {0xc0, 0xb3, 'U', 0x01, {'0', '1'}, 11724, 1, 0, 6, 63, 148},
-        {0x80, 0xb3, '?', 0x33, {'0', '1'}, 11900, 1, 0, 6, 63, 148},
-        {0xc0, 0x46, '?', 0x01, {'0', '1'}, 11824, 1, 0, 6, 63, 148},
-        {0x80, 0x5a, 'A', 0x01, {'0', '1'}, 12200, 1, 0, 6, 64, 148},
-        {0xc0, 0, 0, 0x33, {'0', '2'}, 7872, 0, 0, 6, 62, 148},
-        {0xc0, 0, 0, 0x33, {'Z', '1'}, 7836, 0, 0, 6, 62, 148},
-        {0x80, 0, 0, 0x00, {'0', '1'}, 7840, 0, 0, 6, 62, 148},
-        {0x00, 0, 'A', 0x00, {'0', '1'}, 9852, 1, 2012, 6, 62, 160},
-        {0x00, 0, 'A', 0x01, {'0', '1'}, 10452, 1, 2012, 6, 62, 160},
-        {0x00, 0x43, 'A', 0x01, {'0', '1'}, 13492, 1, 3036, 2, 63, 144},
-        {0x00, 0x58, 'A', 0x01, {'0', '1'}, 13676, 1, 3220, 3, 63, 212},
-        {0x00, 0x70, 'A', 0x01, {'0', '1'}, 12620, 1, 1660, 4, 63, 8},
+        {0x80, 0, 0, 0x01, {'0', '1'}, 8440, 1, 0, 6, 62, 62, 148},
+        {0xc0, 0, 0, 0x33, {'0', '1'}, 8472, 1, 0, 6, 62, 62, 148},
+        {0x80, 0xb3, 'B', 0x01, {'0', '1'}, 13432, 1, 0, 6, 64, 64, 148},
+        {0xc0, 0xb3, 'U', 0x01, {'0', '1'}, 11724, 1, 0, 6, 63, 64, 148},
+        {0x80, 0xb3, '?', 0x33, {'0', '1'}, 11900, 1, 0, 6, 63, 64, 148},
+        {0xc0, 0x46, '?', 0x01, {'0', '1'}, 11824, 1, 0, 6, 63, 64, 148},
+        {0x80, 0x5a, 'A', 0x01, {'0', '1'}, 12200, 1, 0, 6, 64, 64, 148},
+        {0xc0, 0, 0, 0x33, {'0', '2'}, 7872, 0, 0, 6, 62, 62, 148},
+        {0xc0, 0, 0, 0x33, {'Z', '1'}, 7836, 0, 0, 6, 62, 62, 148},
+        {0x80, 0, 0, 0x00, {'0', '1'}, 7840, 0, 0, 6, 62, 62, 148},
+        {0x00, 0, 'A', 0x00, {'0', '1'}, 9852, 1, 2012, 6, 62, 62, 160},
+        {0x00, 0, 'A', 0x01, {'0', '1'}, 10452, 1, 2012, 6, 62, 62, 160},
+        {0x00, 0x43, 'A', 0x01, {'0', '1'}, 13492, 1, 3036, 2, 63, 63, 144},
+        {0x00, 0x58, 'A', 0x01, {'0', '1'}, 13676, 1, 3220, 3, 63, 63, 212},
+        {0x00, 0x70, 'A', 0x01, {'0', '1'}, 12620, 1, 1660, 4, 63, 63, 8},
     };
 
     uint8_t rom[32768] = {0};
@@ -1445,6 +1446,7 @@ static void test_cgb_startup_clock(void) {
     cupid_gb_set_power_on_seed(gb, 0);
     for (size_t model = 0; model < sizeof(models) / sizeof(models[0]); ++model) {
         cupid_gb_set_model(gb, models[model]);
+        const bool revision_zero = models[model] == CUPID_GB_MODEL_CGB_0;
         for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
             rom[0x134] = (uint8_t)(cases[i].checksum - cases[i].fourth - cases[i].flag);
             rom[0x137] = cases[i].fourth;
@@ -1455,14 +1457,20 @@ static void test_cgb_startup_clock(void) {
             for (unsigned byte = 0x134; byte < 0x14d; ++byte)
                 rom[0x14d] = (uint8_t)(rom[0x14d] - rom[byte] - 1u);
             assert(cupid_gb_load_rom(gb, rom, sizeof(rom)));
+            const unsigned expected_step = revision_zero ? 1u : cases[i].apu_step;
             for (unsigned reset = 0; reset < 3; ++reset) {
                 const unsigned divider = cupid_gb_read_u8(gb, 0xff04) * 256u +
                                          gb->div_counter * 4u + gb->divider_subcycle;
-                assert(divider == cases[i].divider);
-                assert(gb->apu.fs_step == cases[i].apu_step && !gb->apu.fs_skip_div_event);
+                assert(divider == cases[i].divider + (revision_zero ? 524u : 0u));
+                assert(gb->apu.fs_step == expected_step && !gb->apu.fs_skip_div_event);
                 const bool early_length =
                     gb->model == CUPID_GB_MODEL_CGB_A || gb->model == CUPID_GB_MODEL_CGB_B;
-                assert(gb->apu.ch1_len == (early_length ? cases[i].pulse_length_ab : 64u));
+                const unsigned expected_length = revision_zero  ? cases[i].pulse_length_0
+                                                 : early_length ? cases[i].pulse_length_ab
+                                                                : 64u;
+                assert(gb->apu.ch1_len == expected_length);
+                if (!reset)
+                    assert(gb->apu.output.filter.startup_pending);
                 assert(gb->apu.ch1_duty_pos == cases[i].pulse_position);
                 assert(gb->apu.ch1_freq == 1985u && gb->apu.ch1_timer == cases[i].pulse_timer);
                 assert(gb->apu.ch1_vol == 0 && gb->apu.pulse_timing[0].envelope.locked);
@@ -1518,10 +1526,10 @@ static void test_cgb_startup_clock(void) {
                 const unsigned remaining =
                     8192u - ((divider + (unsigned)gb->elapsed_cycles) & 8191u);
                 cupid_gb_tick(gb, (uint16_t)(remaining / 4u - 1u));
-                assert(gb->apu.fs_step == cases[i].apu_step);
+                assert(gb->apu.fs_step == expected_step);
                 cupid_gb_tick(gb, 1);
-                assert(gb->apu.fs_step == cases[i].apu_step + 1u);
-                assert(((cupid_gb_read_u8(gb, 0xff26) & 2u) != 0) == (cases[i].apu_step != 0));
+                assert(gb->apu.fs_step == expected_step + 1u);
+                assert(((cupid_gb_read_u8(gb, 0xff26) & 2u) != 0) == (expected_step != 0));
                 if (reset < 2)
                     assert(cupid_gb_reset(gb, reset ? CUPID_GB_RESET_HARD : CUPID_GB_RESET_QUICK));
             }
@@ -1554,12 +1562,9 @@ static void test_native_color_startup_phase(void) {
             cupid_gb_set_power_on_seed(b, 0);
             assert(cupid_gb_load_rom(a, rom, sizeof(rom)) &&
                    cupid_gb_load_rom(b, rom, sizeof(rom)));
-            const bool native =
-                cupid_gb_model_is_cgb(a->model) && a->model != CUPID_GB_MODEL_CGB_0 && flag;
+            const bool native = cupid_gb_model_is_cgb(a->model) && flag;
             if (native)
                 require_native_color_startup_phase(a);
-            else if (a->model == CUPID_GB_MODEL_CGB_0)
-                assert(a->io_registers[0x44] == 0 && a->ppu_counter == 0);
             else if (cupid_gb_model_is_cgb(a->model))
                 assert(a->io_registers[0x44] == 148 && a->pixels.dot == 356);
             compare_color_phase_continuation(a, b);
@@ -1576,16 +1581,17 @@ static void test_native_color_startup_phase(void) {
                     assert(cupid_gb_read_u8(a, 0xff80) == 144 &&
                            cupid_gb_read_u8(a, 0xff81) == 0x81 &&
                            cupid_gb_read_u8(a, 0xff82) == 0xe1);
-                }
+                } else if (cupid_gb_model_is_cgb(a->model))
+                    assert(a->io_registers[0x44] == 148 && a->pixels.dot == 356);
                 compare_color_phase_continuation(a, b);
                 ++cases;
             }
         }
     }
     /* Use complete machine cycles for guest-visible IRQ delivery and save states. */
-    const CupidGbModel revisions[] = {CUPID_GB_MODEL_CGB_A, CUPID_GB_MODEL_CGB_B,
-                                      CUPID_GB_MODEL_CGB_C, CUPID_GB_MODEL_CGB_D,
-                                      CUPID_GB_MODEL_CGB_E};
+    const CupidGbModel revisions[] = {CUPID_GB_MODEL_CGB_0, CUPID_GB_MODEL_CGB_A,
+                                      CUPID_GB_MODEL_CGB_B, CUPID_GB_MODEL_CGB_C,
+                                      CUPID_GB_MODEL_CGB_D, CUPID_GB_MODEL_CGB_E};
     for (unsigned i = 0; i < sizeof(revisions) / sizeof(revisions[0]); ++i) {
         CupidGbModel rev = revisions[i];
         cupid_gb_set_model(a, rev);
