@@ -267,7 +267,8 @@ static void install_history(CupidGb *gb, unsigned rate) {
 }
 
 static void check_boundary(const CupidGb *gb, const CupidGb *before, CupidGbResetKind kind,
-                           bool firmware, Host *host, unsigned clock_calls) {
+                           bool firmware, Host *host, unsigned clock_calls,
+                           const uint8_t *entry_vram) {
     const bool quick = kind == CUPID_GB_RESET_QUICK;
     const bool native_color_phase = !firmware && gb->cgb_mode && gb->model != CUPID_GB_MODEL_CGB_0;
     CHECK(gb->rom == before->rom && gb->rom_size == before->rom_size &&
@@ -280,7 +281,10 @@ static void check_boundary(const CupidGb *gb, const CupidGb *before, CupidGbRese
           !gb->speed_switch_armed);
     CHECK(!gb->dma_active && !gb->hdma_active && !gb->hdma_pending && !gb->serial_bits_remaining &&
           !gb->tima_overflow_delay);
-    CHECK(filled(gb->video_ram, sizeof(gb->video_ram), 0));
+    if (firmware)
+        CHECK(filled(gb->video_ram, sizeof(gb->video_ram), 0));
+    else
+        CHECK(!memcmp(gb->video_ram, entry_vram, sizeof(gb->video_ram)));
     CHECK(!gb->huc3.minutes && !gb->huc3.days && !gb->huc3.alarm_minutes && !gb->huc3.alarm_days &&
           !gb->huc3.alarm_enabled && !gb->huc3.index && !gb->huc3.flags && !gb->huc3.ir_warmup &&
           !gb->huc3.ir_decay && !gb->huc3.ir_output && !gb->huc3.ir_detected && !gb->huc3_ir_input);
@@ -704,6 +708,8 @@ static void test_extended_sram_reset_case(CupidGbModel model, unsigned code, boo
     gb->rom[0x153] = battery ? 8 : 0;
     CHECK(cupid_gb_load_rom(gb, gb->rom, gb->rom_size));
     CHECK(gb->cartridge_ram_heap && cupid_gb_cartridge_storage_valid(gb));
+    uint8_t entry_vram[sizeof(gb->video_ram)];
+    memcpy(entry_vram, gb->video_ram, sizeof(entry_vram));
     if (firmware)
         install_firmware(gb);
     install_history(gb, 48000);
@@ -746,7 +752,7 @@ static void test_extended_sram_reset_case(CupidGbModel model, unsigned code, boo
         CHECK(!memcmp(gb->cartridge_ram_heap, ram_before, gb->cartridge_ram_size));
     else
         CHECK(filled(gb->cartridge_ram_heap, gb->cartridge_ram_size, 0xff));
-    check_boundary(gb, before, kind, firmware, &host, calls);
+    check_boundary(gb, before, kind, firmware, &host, calls, entry_vram);
     CHECK(gb->rom_generation == before->rom_generation &&
           !memcmp(gb->rom, rom_before, gb->rom_capacity));
     if (firmware)
@@ -787,6 +793,8 @@ int main(void) {
                     current_firmware = firmware;
                     Host host = {.now = 1800000000};
                     CupidGb *gb = create_machine((CupidGbModel)model, cartridges[index], &host);
+                    uint8_t entry_vram[sizeof(gb->video_ram)];
+                    memcpy(entry_vram, gb->video_ram, sizeof(entry_vram));
                     if (firmware)
                         install_firmware(gb);
                     install_history(gb, rates[index % 3]);
@@ -795,7 +803,8 @@ int main(void) {
                     *before = *gb;
                     const unsigned calls = host.clock_calls;
                     CHECK(cupid_gb_reset(gb, (CupidGbResetKind)kind));
-                    check_boundary(gb, before, (CupidGbResetKind)kind, firmware != 0, &host, calls);
+                    check_boundary(gb, before, (CupidGbResetKind)kind, firmware != 0, &host, calls,
+                                   entry_vram);
                     if (firmware)
                         execute_firmware(gb);
                     if (gb->header.mbc_type == CUPID_GB_TPP1) {

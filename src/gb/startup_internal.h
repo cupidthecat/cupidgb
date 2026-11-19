@@ -25,8 +25,13 @@
 
 #include "cupid/gb/gb.h"
 
+enum { CUPID_GB_STARTUP_LOGO_BYTES = 48 };
+
 void cupid_gb_startup_memory(CupidGb *gb);
 void cupid_gb_startup_boot_io(CupidGb *gb);
+/* The built-in handoff writes the logo onto cleared VRAM. */
+void cupid_gb_startup_logo_tiles(CupidGb *gb, const uint8_t logo[CUPID_GB_STARTUP_LOGO_BYTES]);
+void cupid_gb_startup_logo_tilemap(CupidGb *gb);
 /* Reset CPU, I/O and hardware clocks before either firmware or a native music
  * entry point. The caller establishes memory and the final overlay ownership. */
 void cupid_gb_startup_hardware(CupidGb *gb);

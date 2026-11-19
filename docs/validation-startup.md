@@ -461,6 +461,30 @@ probe also confirms that the sequencer step affects the first length edge
 when the divider phase is identical. CGB revision 0 and wider APU handoff
 state remain open.
 
+### Cartridge logo VRAM at entry
+
+Built-in startup expands the 48-byte cartridge header logo into the low
+bitplane of tiles at `8010–818F` in VRAM bank 0. Each source pixel becomes a
+2 by 2 block. The registration mark follows at `8190–819F`. DMG0 leaves
+that tile and its map cell clear. [Original monochrome firmware disassembly](https://codeberg.org/ISSOtm/gb-bootroms/src/commit/443d7f057ae06e8d1d76fa8083650cf0be2cd0ae/src/dmg.asm#L102-L140)
+
+Monochrome and adapter profiles place the logo at `9904–990F` and
+`9924–992F`, with the mark at `9910` where applicable. Color profiles
+retain the expanded tiles. They install the map only for the licensed
+monochrome compatibility titles selected by checksums `43` and `58`.
+Those handoffs also leave `HL` at `991A`. [Adapter firmware disassembly](https://codeberg.org/ISSOtm/gb-bootroms/src/commit/443d7f057ae06e8d1d76fa8083650cf0be2cd0ae/src/sgb.asm#L110-L132), [Color firmware disassembly](https://codeberg.org/ISSOtm/gb-bootroms/src/commit/443d7f057ae06e8d1d76fa8083650cf0be2cd0ae/src/cgb.asm#L1130-L1164)
+
+The regression checks both VRAM banks after cartridge load, Quick Reset, and
+Hard Reset for all twelve modeled profiles. Cold firmware entry clears VRAM
+before execution. Memory-preserving firmware re-entry retains live VRAM.
+
+Windows and Linux each matched 96 full VRAM images. The comparison used the
+installed DMG and Color firmware, plus replacement firmware for Pocket and
+adapter profiles. Two DMG0 expectations follow the original disassembly.
+The CGB0 comparison ran the installed Color firmware on the CGB0 model, and
+its legacy map rules also match the revision-specific disassembly. Original
+DMG0 and CGB0 binary verification remains open.
+
 ### CGB monochrome compatibility handoff
 
 Built-in startup on CGB A through E enters monochrome cartridges in

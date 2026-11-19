@@ -510,6 +510,7 @@ static void load_legacy_sgb_profile(CupidGb *gb, CupidGbModel model) {
     cupid_gb_set_model(gb, model);
     cupid_gb_set_power_on_seed(gb, 0);
     assert(cupid_gb_load_rom(gb, rom, sizeof(rom)));
+    memset(gb->video_ram, 0, sizeof(gb->video_ram));
     memset(gb->work_ram, 0, sizeof(gb->work_ram));
     memset(gb->high_ram, 0, sizeof(gb->high_ram));
     memset(gb->object_attribute_memory, 0, sizeof(gb->object_attribute_memory));
@@ -980,6 +981,71 @@ static void test_firmware_entry_oam_dma(void) {
             assert(!cupid_gb_oam_dma_blocks_bus(gb));
             for (unsigned i = 0; i < sizeof(oam); ++i)
                 assert(gb->object_attribute_memory[i] == 0x76);
+        }
+    }
+    cupid_gb_cleanup(gb);
+    free(gb);
+}
+
+static void test_cartridge_entry_logo(void) {
+    const CupidGbModel models[] = {
+        CUPID_GB_MODEL_DMG0,  CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_MGB,   CUPID_GB_MODEL_SGB,
+        CUPID_GB_MODEL_SGB2,  CUPID_GB_MODEL_SGB_PAL, CUPID_GB_MODEL_CGB_0, CUPID_GB_MODEL_CGB_A,
+        CUPID_GB_MODEL_CGB_B, CUPID_GB_MODEL_CGB_C,   CUPID_GB_MODEL_CGB_D, CUPID_GB_MODEL_CGB_E,
+    };
+    uint8_t rom[0x8000] = {0};
+    rom[0x104] = 0xa5;
+    rom[0x105] = 0x96;
+    rom[0x133] = 0xf1;
+    rom[0x14b] = 1;
+    CupidGb *gb = calloc(1, sizeof(*gb));
+    assert(gb);
+    cupid_gb_set_power_on_seed(gb, 0);
+
+    for (size_t model = 0; model < sizeof(models) / sizeof(models[0]); ++model) {
+        const bool color = cupid_gb_model_is_cgb(models[model]);
+        const bool mark = models[model] != CUPID_GB_MODEL_DMG0;
+        cupid_gb_set_model(gb, models[model]);
+        for (unsigned native = 0; native <= (unsigned)color; ++native) {
+            /* Title sum 43 selects the legacy map in CGB compatibility mode. */
+            rom[0x143] = native ? 0x80 : 0;
+            rom[0x134] = (uint8_t)(0x43u - rom[0x143]);
+            rom[0x14d] = 0;
+            for (unsigned address = 0x134; address < 0x14d; ++address)
+                rom[0x14d] = (uint8_t)(rom[0x14d] - rom[address] - 1);
+            assert(cupid_gb_load_rom(gb, rom, sizeof(rom)));
+            uint8_t expected[sizeof(gb->video_ram)] = {
+                [0x010] = 0xcc, [0x012] = 0xcc, [0x014] = 0x33, [0x016] = 0x33,
+                [0x018] = 0xc3, [0x01a] = 0xc3, [0x01c] = 0x3c, [0x01e] = 0x3c,
+                [0x188] = 0xff, [0x18a] = 0xff, [0x18c] = 0x03, [0x18e] = 0x03,
+            };
+            if (mark) {
+                const uint8_t mark_tile[] = {0x3c, 0, 0x42, 0, 0xb9, 0, 0xa5, 0,
+                                             0xb9, 0, 0xa5, 0, 0x42, 0, 0x3c, 0};
+                memcpy(expected + 0x190, mark_tile, sizeof(mark_tile));
+            }
+            if (!native) {
+                for (unsigned tile = 0; tile < 12; ++tile) {
+                    expected[0x1904 + tile] = (uint8_t)(tile + 1);
+                    expected[0x1924 + tile] = (uint8_t)(tile + 13);
+                }
+                expected[0x1910] = mark ? 25 : 0;
+            }
+            assert(memcmp(gb->video_ram, expected, sizeof(expected)) == 0);
+            if (color && !native)
+                assert(gb->cpu.h == 0x99 && gb->cpu.l == 0x1a);
+            memset(gb->video_ram, 0x87, sizeof(gb->video_ram));
+            assert(cupid_gb_reset(gb, CUPID_GB_RESET_QUICK));
+            assert(memcmp(gb->video_ram, expected, sizeof(expected)) == 0);
+            memset(gb->video_ram, 0x87, sizeof(gb->video_ram));
+            assert(cupid_gb_reset(gb, CUPID_GB_RESET_HARD));
+            assert(memcmp(gb->video_ram, expected, sizeof(expected)) == 0);
+
+            gb->boot_rom_size = color ? 0x900 : 0x100;
+            cupid_gb_start_boot_rom(gb);
+            memset(expected, 0, sizeof(expected));
+            assert(gb->boot_rom_enabled && memcmp(gb->video_ram, expected, sizeof(expected)) == 0);
+            cupid_gb_clear_boot_rom(gb);
         }
     }
     cupid_gb_cleanup(gb);
@@ -1597,6 +1663,7 @@ static void test_color_target_initialization(void) {
 }
 
 int main(void) {
+    test_cartridge_entry_logo();
     test_cgb0_rejected_license_divider();
     test_seeded_generations();
     test_model_distributions();

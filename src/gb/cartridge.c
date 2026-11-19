@@ -41,6 +41,7 @@
 #include "cupid/gb/ppu.h"
 #include "display_clock.h"
 #include "rtc_internal.h"
+#include "startup_internal.h"
 #include "tama5_internal.h"
 
 #ifdef _WIN32
@@ -55,7 +56,7 @@ enum {
     CUPID_GB_HEADER_START = 0x0134,
     CUPID_GB_HEADER_END = 0x014c,
     CUPID_GB_LOGO_START = 0x0104,
-    CUPID_GB_LOGO_END = 0x0133,
+    CUPID_GB_LOGO_END = CUPID_GB_LOGO_START + CUPID_GB_STARTUP_LOGO_BYTES - 1,
     CUPID_GB_TITLE_START = 0x0134,
     CUPID_GB_CGB_FLAG = 0x0143,
     CUPID_GB_NEW_LICENSEE_0 = 0x0144,
@@ -862,6 +863,10 @@ void cupid_gb_cartridge_post_boot(CupidGb *gb) {
     const bool color = cupid_gb_model_is_cgb(gb->model);
     gb->cgb_mode = color && (gb->header.cgb_flag & 0x80u) != 0;
     const bool cgb_vblank = color && gb->model != CUPID_GB_MODEL_CGB_0;
+    /* A recognized tail-first menu has the same logo bytes as bank zero. */
+    cupid_gb_startup_logo_tiles(gb, gb->rom + CUPID_GB_LOGO_START);
+    if (!color)
+        cupid_gb_startup_logo_tilemap(gb);
     if (!cgb_vblank)
         cupid_gb_display_clock_import_legacy(gb);
     gb->sgb.enabled = cupid_gb_model_is_sgb(gb->model) && gb->header.sgb_flag == 3;
@@ -905,9 +910,10 @@ void cupid_gb_cartridge_post_boot(CupidGb *gb) {
     } else if (cupid_gb_sgb_host_present(gb)) {
         cupid_gb_sgb_apply_cartridge_palette(gb);
     }
-    if (cgb_vblank) {
+    if (color) {
         const unsigned compatibility_cycles = cupid_cgb_apply_cartridge_handoff(gb);
-        cupid_gb_apply_cgb_boot_display(gb, compatibility_cycles);
+        if (cgb_vblank)
+            cupid_gb_apply_cgb_boot_display(gb, compatibility_cycles);
     }
 }
 

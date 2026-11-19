@@ -165,6 +165,34 @@ void cupid_gb_startup_memory(CupidGb *gb) {
         memset(gb->work_ram + 0x2000u, 0, 0x1000u);
 }
 
+void cupid_gb_startup_logo_tiles(CupidGb *gb, const uint8_t logo[CUPID_GB_STARTUP_LOGO_BYTES]) {
+    /* Each nibble describes four pixels. Double each pixel horizontally and
+     * repeat each row vertically. The other tile bitplane remains clear. */
+    static const uint8_t expanded[] = {0x00, 0x03, 0x0c, 0x0f, 0x30, 0x33, 0x3c, 0x3f,
+                                       0xc0, 0xc3, 0xcc, 0xcf, 0xf0, 0xf3, 0xfc, 0xff};
+    static const uint8_t mark[] = {0x3c, 0x42, 0xb9, 0xa5, 0xb9, 0xa5, 0x42, 0x3c};
+
+    uint8_t *tiles = gb->video_ram + 0x10;
+    for (size_t index = 0; index < CUPID_GB_STARTUP_LOGO_BYTES; ++index, tiles += 8) {
+        const uint8_t data = logo[index];
+        tiles[0] = tiles[2] = expanded[data >> 4];
+        tiles[4] = tiles[6] = expanded[data & 0x0f];
+    }
+    /* DMG0 leaves the registration mark tile clear. */
+    if (gb->model != CUPID_GB_MODEL_DMG0)
+        for (size_t row = 0; row < sizeof(mark); ++row)
+            tiles[row * 2] = mark[row];
+}
+
+void cupid_gb_startup_logo_tilemap(CupidGb *gb) {
+    for (unsigned column = 0; column < 12; ++column) {
+        gb->video_ram[0x1904 + column] = (uint8_t)(1 + column);
+        gb->video_ram[0x1924 + column] = (uint8_t)(13 + column);
+    }
+    if (gb->model != CUPID_GB_MODEL_DMG0)
+        gb->video_ram[0x1910] = 25;
+}
+
 void cupid_gb_startup_boot_io(CupidGb *gb) {
     StartupNoise noise = noise_after_memory(gb);
     fill_wave(gb, &noise, true);

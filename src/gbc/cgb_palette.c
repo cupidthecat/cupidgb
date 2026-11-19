@@ -25,6 +25,7 @@
 #include "cupid/gbc/cgb.h"
 
 #include "../gb/audio_output.h"
+#include "../gb/startup_internal.h"
 #include "cgb_internal.h"
 #include "cupid/gb/gb.h"
 #include "cupid/gb/ppu.h"
@@ -724,6 +725,16 @@ unsigned cupid_cgb_apply_cartridge_handoff(CupidGb *gb) {
         phase = gb->header.new_licensee_code[0] == '0' ? 0x1ec0u : 0x1e9cu;
     }
 
+    const bool legacy_tilemap = !gb->cgb_mode && tilemap_cycles != 0;
+    if (legacy_tilemap) {
+        cupid_gb_startup_logo_tilemap(gb);
+        gb->cpu.h = 0x99u;
+        gb->cpu.l = 0x1au;
+    }
+    /* Revision 0 uses its own divider and LCD handoff. */
+    if (gb->model == CUPID_GB_MODEL_CGB_0)
+        return 0;
+
     /* The monochrome setup cost follows the selected palette slot. Two keys
      * also wait for the firmware's legacy tilemap transfer. */
     const unsigned extra_cycles =
@@ -736,16 +747,6 @@ unsigned cupid_cgb_apply_cartridge_handoff(CupidGb *gb) {
     gb->divider_subcycle = (uint8_t)(phase & 3u);
     gb->apu.fs_step = palette_search || extra_cycles ? 1u : 0u;
     gb->apu.fs_skip_div_event = 0u;
-    if (extra_cycles && tilemap_cycles) {
-        /* The legacy path leaves two rows of tile indices in VRAM bank 0. */
-        for (unsigned tile = 0; tile < 12; ++tile) {
-            gb->video_ram[0x1904u + tile] = (uint8_t)(1u + tile);
-            gb->video_ram[0x1924u + tile] = (uint8_t)(13u + tile);
-        }
-        gb->video_ram[0x1910u] = 25u;
-        gb->cpu.h = 0x99u;
-        gb->cpu.l = 0x1au;
-    }
     return extra_cycles;
 }
 
