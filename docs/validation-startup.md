@@ -433,9 +433,33 @@ on CGB-C with built-in startup and normal audio. Both sessions applied all
 cycle with identical framebuffer captures and matching 8 KiB saves.
 Both audio sinks reported zero idle or error events.
 
-CGB revision 0, monochrome-compatibility handoff phases and firmware-dependent
-divider values remain open. See [VBlank comparison timing](validation-timing.md#cgb-stat-coincidence-across-scanlines)
+CGB revision 0 and monochrome-compatibility display handoff phases remain
+open. See [VBlank comparison timing](validation-timing.md#cgb-stat-coincidence-across-scanlines)
 for the early color coincidence bit transition.
+
+### CGB native-color divider at cartridge entry
+
+Built-in startup for CGB A through E sets the divider and APU sequencer
+phase from the cartridge's license bytes and the timed compatibility
+palette search. This covers the ordinary checksum match, fourth-byte
+selection, and fallback paths.
+
+The full divider and APU sequencer step matched 384 native-color CGB-C
+handoffs with the supplied firmware. The cases cover all 256 title
+checksums, conditional keys, both native-color flag values and the license
+checks. Another 64 held-out cases across CGB A, B, D and E matched the
+entry state and the first three APU falling edges.
+
+Six commercial cartridges also matched the divider and sequencer phase
+on both CGB-C and CGB-E. A separate set of 45 supplied-firmware runs
+reproduced the prior build's entry and cartridge snapshots, frame
+callbacks and ten-frame continuation.
+
+The startup regression checks the first guest DIV read, TIMA advance,
+and pulse length behavior after load, quick reset and hard reset. A guest
+probe also confirms that the sequencer step affects the first length edge
+when the divider phase is identical. CGB revision 0, monochrome
+compatibility and wider APU handoff state remain open.
 
 ### Monochrome cartridge in Qt
 

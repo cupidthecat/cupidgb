@@ -1266,6 +1266,87 @@ static void compare_color_phase_continuation(CupidGb *a, CupidGb *b) {
     free(y);
 }
 
+static void test_native_color_startup_clock(void) {
+    const CupidGbModel models[] = {CUPID_GB_MODEL_CGB_A, CUPID_GB_MODEL_CGB_B, CUPID_GB_MODEL_CGB_C,
+                                   CUPID_GB_MODEL_CGB_D, CUPID_GB_MODEL_CGB_E};
+
+    const struct {
+        uint8_t flag, checksum, fourth, old_licensee;
+        char new_licensee[2];
+        uint16_t divider;
+        uint8_t apu_step;
+    } cases[] = {
+        {0x80, 0, 0, 0x01, {'0', '1'}, 8440, 1},
+        {0xc0, 0, 0, 0x33, {'0', '1'}, 8472, 1},
+        {0x80, 0xb3, 'B', 0x01, {'0', '1'}, 13432, 1},
+        {0xc0, 0xb3, 'U', 0x01, {'0', '1'}, 11724, 1},
+        {0x80, 0xb3, '?', 0x33, {'0', '1'}, 11900, 1},
+        {0xc0, 0x46, '?', 0x01, {'0', '1'}, 11824, 1},
+        {0x80, 0x5a, 'A', 0x01, {'0', '1'}, 12200, 1},
+        {0xc0, 0, 0, 0x33, {'0', '2'}, 7872, 0},
+        {0xc0, 0, 0, 0x33, {'Z', '1'}, 7836, 0},
+        {0x80, 0, 0, 0x00, {'0', '1'}, 7840, 0},
+    };
+
+    uint8_t rom[32768] = {0};
+    const uint8_t entry[] = {0xf0, 0x04, 0xe0, 0x80, 0x18, 0xfe}; /* DIV to HRAM. */
+    memcpy(rom + 0x100, entry, sizeof(entry));
+    CupidGb *gb = calloc(1, sizeof(*gb));
+    assert(gb);
+    cupid_gb_set_power_on_seed(gb, 0);
+    for (size_t model = 0; model < sizeof(models) / sizeof(models[0]); ++model) {
+        cupid_gb_set_model(gb, models[model]);
+        for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+            rom[0x134] = (uint8_t)(cases[i].checksum - cases[i].fourth - cases[i].flag);
+            rom[0x137] = cases[i].fourth;
+            rom[0x143] = cases[i].flag;
+            memcpy(rom + 0x144, cases[i].new_licensee, sizeof(cases[i].new_licensee));
+            rom[0x14b] = cases[i].old_licensee;
+            rom[0x14d] = 0;
+            for (unsigned byte = 0x134; byte < 0x14d; ++byte)
+                rom[0x14d] = (uint8_t)(rom[0x14d] - rom[byte] - 1u);
+            assert(cupid_gb_load_rom(gb, rom, sizeof(rom)));
+            for (unsigned reset = 0; reset < 3; ++reset) {
+                const unsigned divider = cupid_gb_read_u8(gb, 0xff04) * 256u +
+                                         gb->div_counter * 4u + gb->divider_subcycle;
+                assert(divider == cases[i].divider);
+                assert(gb->apu.fs_step == cases[i].apu_step && !gb->apu.fs_skip_div_event);
+                assert(cupid_gb_step(gb) && cupid_gb_step(gb));
+                /* LDH samples the register after the opcode and immediate byte. */
+                assert(cupid_gb_read_u8(gb, 0xff80) == (divider + 8u) / 256u);
+
+                const unsigned timer_phase = divider + (unsigned)gb->elapsed_cycles;
+                cupid_gb_write_u8(gb, 0xff05, 0x47);
+                cupid_gb_write_u8(gb, 0xff07, 0x05);
+                const unsigned ticks_to_tima = (16u - (timer_phase & 15u)) / 4u;
+                cupid_gb_tick(gb, (uint16_t)(ticks_to_tima - 1u));
+                assert(cupid_gb_read_u8(gb, 0xff05) == 0x47);
+                cupid_gb_tick(gb, 1);
+                assert(cupid_gb_read_u8(gb, 0xff05) == 0x48);
+                cupid_gb_write_u8(gb, 0xff07, 0);
+
+                /* A one-unit pulse length exposes which sequencer step is next. */
+                cupid_gb_write_u8(gb, 0xff16, 0xbf);
+                cupid_gb_write_u8(gb, 0xff17, 0xf0);
+                cupid_gb_write_u8(gb, 0xff18, 0);
+                cupid_gb_write_u8(gb, 0xff19, 0xc0);
+                assert(cupid_gb_read_u8(gb, 0xff26) & 2u);
+                const unsigned remaining =
+                    8192u - ((divider + (unsigned)gb->elapsed_cycles) & 8191u);
+                cupid_gb_tick(gb, (uint16_t)(remaining / 4u - 1u));
+                assert(gb->apu.fs_step == cases[i].apu_step);
+                cupid_gb_tick(gb, 1);
+                assert(gb->apu.fs_step == cases[i].apu_step + 1u);
+                assert(((cupid_gb_read_u8(gb, 0xff26) & 2u) != 0) == (cases[i].apu_step != 0));
+                if (reset < 2)
+                    assert(cupid_gb_reset(gb, reset ? CUPID_GB_RESET_HARD : CUPID_GB_RESET_QUICK));
+            }
+        }
+    }
+    cupid_gb_cleanup(gb);
+    free(gb);
+}
+
 static void test_native_color_startup_phase(void) {
     static uint8_t rom[32768];
     const uint8_t entry[] = {0xf0, 0x44, 0xe0, 0x80, 0xf0, 0x41, 0xe0,
@@ -1426,6 +1507,7 @@ int main(void) {
     test_legacy_sgb_startup_recovery();
     test_legacy_sgb_startup_signature();
     test_printer_state_policy();
+    test_native_color_startup_clock();
     test_native_color_startup_phase();
     test_color_target_initialization();
     test_cgb_cartridge_entry_registers();

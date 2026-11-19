@@ -865,6 +865,7 @@ void cupid_gb_cartridge_post_boot(CupidGb *gb) {
     if (gb->cgb_mode) {
         gb->cpu.a = 0x11;
         if (native_color_vblank) {
+            cupid_cgb_apply_native_boot_clock(gb);
             /* Revisions A through E enter native-color software during VBlank.
              * Pixel delivery and the display scheduler reach their edges at
              * different offsets from the final firmware instruction. */

@@ -31,6 +31,7 @@
 #include <string.h>
 
 typedef struct CupidCgbCompatPaletteSet {
+    uint8_t boot_palette_periods; /* Palette-specific handoff time in 360-T periods. */
     uint16_t bg[4];
     uint16_t obj0[4];
     uint16_t obj1[4];
@@ -48,6 +49,7 @@ typedef struct CupidCgbCompatPaletteKey {
                ((uint16_t)((r) >> 3u)))
 
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_00 = {
+    23u,
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x7b, 0xff, 0x31),
      CUPID_CGB_RGB8(0x00, 0x63, 0xc5), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
@@ -55,6 +57,7 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_00 = {
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
      CUPID_CGB_RGB8(0x94, 0x3a, 0x3a), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_02 = {
+    27u,
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x9c, 0x00),
      CUPID_CGB_RGB8(0xff, 0x00, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x9c, 0x00),
@@ -62,6 +65,7 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_02 = {
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x9c, 0x00),
      CUPID_CGB_RGB8(0xff, 0x00, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_03 = {
+    27u,
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0xff, 0x00),
      CUPID_CGB_RGB8(0xff, 0x00, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0xff, 0x00),
@@ -69,12 +73,14 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_03 = {
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0xff, 0x00),
      CUPID_CGB_RGB8(0xff, 0x00, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_default_palette = {
+    0u,
     {0x7fffu, 0x56b5u, 0x2d6bu, 0x0000u},
     {0x7fffu, 0x56b5u, 0x2d6bu, 0x0000u},
     {0x7fffu, 0x56b5u, 0x2d6bu, 0x0000u}};
 static const CupidCgbCompatPaletteSet *const cupid_cgb_compat_default =
     &cupid_cgb_compat_default_palette;
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_04 = {
+    27u,
     {CUPID_CGB_RGB8(0xa5, 0x9c, 0xff), CUPID_CGB_RGB8(0xff, 0xff, 0x00),
      CUPID_CGB_RGB8(0x00, 0x63, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
     {CUPID_CGB_RGB8(0xa5, 0x9c, 0xff), CUPID_CGB_RGB8(0xff, 0xff, 0x00),
@@ -82,6 +88,7 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_04 = {
     {CUPID_CGB_RGB8(0xa5, 0x9c, 0xff), CUPID_CGB_RGB8(0xff, 0xff, 0x00),
      CUPID_CGB_RGB8(0x00, 0x63, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_05 = {
+    27u,
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0xad, 0x63),
      CUPID_CGB_RGB8(0x84, 0x31, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0xad, 0x63),
@@ -89,6 +96,7 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_05 = {
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0xad, 0x63),
      CUPID_CGB_RGB8(0x84, 0x31, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_06 = {
+    27u,
     {CUPID_CGB_RGB8(0x00, 0x00, 0x00), CUPID_CGB_RGB8(0x00, 0x84, 0x84),
      CUPID_CGB_RGB8(0xff, 0xde, 0x00), CUPID_CGB_RGB8(0xff, 0xff, 0xff)},
     {CUPID_CGB_RGB8(0x00, 0x00, 0x00), CUPID_CGB_RGB8(0x00, 0x84, 0x84),
@@ -96,6 +104,7 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_06 = {
     {CUPID_CGB_RGB8(0x00, 0x00, 0x00), CUPID_CGB_RGB8(0x00, 0x84, 0x84),
      CUPID_CGB_RGB8(0xff, 0xde, 0x00), CUPID_CGB_RGB8(0xff, 0xff, 0xff)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_07 = {
+    27u,
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xa5, 0xa5, 0xa5),
      CUPID_CGB_RGB8(0x52, 0x52, 0x52), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xa5, 0xa5, 0xa5),
@@ -103,6 +112,7 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_07 = {
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xa5, 0xa5, 0xa5),
      CUPID_CGB_RGB8(0x52, 0x52, 0x52), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_09 = {
+    27u,
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0xce, 0x00),
      CUPID_CGB_RGB8(0x9c, 0x63, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0xce, 0x00),
@@ -110,6 +120,7 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_09 = {
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0xce, 0x00),
      CUPID_CGB_RGB8(0x9c, 0x63, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_10 = {
+    25u,
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xad, 0xad, 0x84),
      CUPID_CGB_RGB8(0x42, 0x73, 0x7b), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x73, 0x00),
@@ -117,6 +128,7 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_10 = {
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xad, 0xad, 0x84),
      CUPID_CGB_RGB8(0x42, 0x73, 0x7b), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_11 = {
+    25u,
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x63, 0xa5, 0xff),
      CUPID_CGB_RGB8(0x00, 0x00, 0xff), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
@@ -124,6 +136,7 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_11 = {
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x63, 0xa5, 0xff),
      CUPID_CGB_RGB8(0x00, 0x00, 0xff), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_12 = {
+    25u,
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x8c, 0x8c, 0xde),
      CUPID_CGB_RGB8(0x52, 0x52, 0x8c), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
@@ -131,6 +144,7 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_12 = {
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x8c, 0x8c, 0xde),
      CUPID_CGB_RGB8(0x52, 0x52, 0x8c), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_13 = {
+    25u,
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
      CUPID_CGB_RGB8(0x94, 0x3a, 0x3a), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x7b, 0xff, 0x31),
@@ -138,6 +152,7 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_13 = {
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
      CUPID_CGB_RGB8(0x94, 0x3a, 0x3a), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_14 = {
+    25u,
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x7b, 0xff, 0x31),
      CUPID_CGB_RGB8(0x00, 0x63, 0xc5), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
@@ -145,6 +160,7 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_14 = {
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x7b, 0xff, 0x31),
      CUPID_CGB_RGB8(0x00, 0x63, 0xc5), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_15 = {
+    25u,
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x63, 0xa5, 0xff),
      CUPID_CGB_RGB8(0x00, 0x00, 0xff), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x63, 0xa5, 0xff),
@@ -152,6 +168,7 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_15 = {
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
      CUPID_CGB_RGB8(0x94, 0x3a, 0x3a), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_16 = {
+    25u,
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x8c, 0x8c, 0xde),
      CUPID_CGB_RGB8(0x52, 0x52, 0x8c), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
     {CUPID_CGB_RGB8(0xff, 0xc5, 0x42), CUPID_CGB_RGB8(0xff, 0xd6, 0x00),
@@ -159,6 +176,7 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_16 = {
     {CUPID_CGB_RGB8(0xff, 0xc5, 0x42), CUPID_CGB_RGB8(0xff, 0xd6, 0x00),
      CUPID_CGB_RGB8(0x94, 0x3a, 0x00), CUPID_CGB_RGB8(0x4a, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_17 = {
+    23u,
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xad, 0xad, 0x84),
      CUPID_CGB_RGB8(0x42, 0x73, 0x7b), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x73, 0x00),
@@ -166,6 +184,7 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_17 = {
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x73, 0x00),
      CUPID_CGB_RGB8(0x94, 0x42, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_18 = {
+    23u,
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x7b, 0xff, 0x00),
      CUPID_CGB_RGB8(0xb5, 0x73, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
@@ -173,6 +192,7 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_18 = {
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
      CUPID_CGB_RGB8(0x94, 0x3a, 0x3a), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_19 = {
+    23u,
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x52, 0xff, 0x00),
      CUPID_CGB_RGB8(0xff, 0x42, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
@@ -180,6 +200,7 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_19 = {
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
      CUPID_CGB_RGB8(0x94, 0x3a, 0x3a), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_20 = {
+    23u,
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x9c, 0x00),
      CUPID_CGB_RGB8(0xff, 0x00, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
@@ -187,6 +208,7 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_20 = {
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
      CUPID_CGB_RGB8(0x94, 0x3a, 0x3a), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_21 = {
+    23u,
     {CUPID_CGB_RGB8(0xa5, 0x9c, 0xff), CUPID_CGB_RGB8(0xff, 0xff, 0x00),
      CUPID_CGB_RGB8(0x00, 0x63, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
     {CUPID_CGB_RGB8(0xff, 0x63, 0x52), CUPID_CGB_RGB8(0xd6, 0x00, 0x00),
@@ -194,6 +216,7 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_21 = {
     {CUPID_CGB_RGB8(0xff, 0x63, 0x52), CUPID_CGB_RGB8(0xd6, 0x00, 0x00),
      CUPID_CGB_RGB8(0x63, 0x00, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_22 = {
+    23u,
     {CUPID_CGB_RGB8(0xb5, 0xb5, 0xff), CUPID_CGB_RGB8(0xff, 0xff, 0x94),
      CUPID_CGB_RGB8(0xad, 0x5a, 0x42), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
     {CUPID_CGB_RGB8(0x00, 0x00, 0x00), CUPID_CGB_RGB8(0xff, 0xff, 0xff),
@@ -201,6 +224,7 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_22 = {
     {CUPID_CGB_RGB8(0x00, 0x00, 0x00), CUPID_CGB_RGB8(0xff, 0xff, 0xff),
      CUPID_CGB_RGB8(0xff, 0x84, 0x84), CUPID_CGB_RGB8(0x94, 0x3a, 0x3a)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_23 = {
+    23u,
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x8c, 0x8c, 0xde),
      CUPID_CGB_RGB8(0x52, 0x52, 0x8c), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
     {CUPID_CGB_RGB8(0xff, 0xc5, 0x42), CUPID_CGB_RGB8(0xff, 0xd6, 0x00),
@@ -208,6 +232,7 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_23 = {
     {CUPID_CGB_RGB8(0xff, 0xc5, 0x42), CUPID_CGB_RGB8(0xff, 0xd6, 0x00),
      CUPID_CGB_RGB8(0x94, 0x3a, 0x00), CUPID_CGB_RGB8(0x4a, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_24 = {
+    23u,
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x8c, 0x8c, 0xde),
      CUPID_CGB_RGB8(0x52, 0x52, 0x8c), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
@@ -215,6 +240,7 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_24 = {
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
      CUPID_CGB_RGB8(0x94, 0x3a, 0x3a), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_25 = {
+    23u,
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x7b, 0xff, 0x31),
      CUPID_CGB_RGB8(0x00, 0x84, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
@@ -222,6 +248,7 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_25 = {
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
      CUPID_CGB_RGB8(0x94, 0x3a, 0x3a), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_26 = {
+    23u,
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0xad, 0x63),
      CUPID_CGB_RGB8(0x84, 0x31, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x63, 0xa5, 0xff),
@@ -229,6 +256,7 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_26 = {
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x63, 0xa5, 0xff),
      CUPID_CGB_RGB8(0x00, 0x00, 0xff), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_27 = {
+    23u,
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0xad, 0x63),
      CUPID_CGB_RGB8(0x84, 0x31, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x7b, 0xff, 0x31),
@@ -236,6 +264,7 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_27 = {
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x7b, 0xff, 0x31),
      CUPID_CGB_RGB8(0x00, 0x84, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_29 = {
+    30u,
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x52, 0xff, 0x00),
      CUPID_CGB_RGB8(0xff, 0x42, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x52, 0xff, 0x00),
@@ -243,6 +272,7 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_29 = {
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x5a, 0xbd, 0xff),
      CUPID_CGB_RGB8(0xff, 0x00, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0xff)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_30 = {
+    30u,
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x9c, 0x00),
      CUPID_CGB_RGB8(0xff, 0x00, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x9c, 0x00),
@@ -250,6 +280,7 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_30 = {
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x5a, 0xbd, 0xff),
      CUPID_CGB_RGB8(0xff, 0x00, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0xff)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_31 = {
+    30u,
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0xff, 0x00),
      CUPID_CGB_RGB8(0xff, 0x00, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0xff, 0x00),
@@ -257,6 +288,7 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_31 = {
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x5a, 0xbd, 0xff),
      CUPID_CGB_RGB8(0xff, 0x00, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0xff)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_32 = {
+    28u,
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xad, 0xad, 0x84),
      CUPID_CGB_RGB8(0x42, 0x73, 0x7b), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x73, 0x00),
@@ -264,6 +296,7 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_32 = {
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x5a, 0xbd, 0xff),
      CUPID_CGB_RGB8(0xff, 0x00, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0xff)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_33 = {
+    28u,
     {CUPID_CGB_RGB8(0xff, 0xff, 0x9c), CUPID_CGB_RGB8(0x94, 0xb5, 0xff),
      CUPID_CGB_RGB8(0x63, 0x94, 0x73), CUPID_CGB_RGB8(0x00, 0x3a, 0x3a)},
     {CUPID_CGB_RGB8(0xff, 0xc5, 0x42), CUPID_CGB_RGB8(0xff, 0xd6, 0x00),
@@ -271,6 +304,7 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_33 = {
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
      CUPID_CGB_RGB8(0x94, 0x3a, 0x3a), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_34 = {
+    28u,
     {CUPID_CGB_RGB8(0x6b, 0xff, 0x00), CUPID_CGB_RGB8(0xff, 0xff, 0xff),
      CUPID_CGB_RGB8(0xff, 0x52, 0x4a), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0xff, 0xff),
@@ -278,6 +312,7 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_34 = {
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0xad, 0x63),
      CUPID_CGB_RGB8(0x84, 0x31, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_35 = {
+    28u,
     {CUPID_CGB_RGB8(0x52, 0xde, 0x00), CUPID_CGB_RGB8(0xff, 0x84, 0x00),
      CUPID_CGB_RGB8(0xff, 0xff, 0x00), CUPID_CGB_RGB8(0xff, 0xff, 0xff)},
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0xff, 0xff),
@@ -285,6 +320,7 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_35 = {
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
      CUPID_CGB_RGB8(0x94, 0x3a, 0x3a), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_36 = {
+    28u,
     {CUPID_CGB_RGB8(0xa5, 0x9c, 0xff), CUPID_CGB_RGB8(0xff, 0xff, 0x00),
      CUPID_CGB_RGB8(0x00, 0x63, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
     {CUPID_CGB_RGB8(0xff, 0x63, 0x52), CUPID_CGB_RGB8(0xd6, 0x00, 0x00),
@@ -292,6 +328,7 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_36 = {
     {CUPID_CGB_RGB8(0x00, 0x00, 0xff), CUPID_CGB_RGB8(0xff, 0xff, 0xff),
      CUPID_CGB_RGB8(0xff, 0xff, 0x7b), CUPID_CGB_RGB8(0x00, 0x84, 0xff)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_37 = {
+    28u,
     {CUPID_CGB_RGB8(0xff, 0xff, 0xce), CUPID_CGB_RGB8(0x63, 0xef, 0xef),
      CUPID_CGB_RGB8(0x9c, 0x84, 0x31), CUPID_CGB_RGB8(0x5a, 0x5a, 0x5a)},
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x73, 0x00),
@@ -299,6 +336,7 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_37 = {
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x63, 0xa5, 0xff),
      CUPID_CGB_RGB8(0x00, 0x00, 0xff), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_38 = {
+    28u,
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x63, 0xa5, 0xff),
      CUPID_CGB_RGB8(0x00, 0x00, 0xff), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
@@ -306,6 +344,7 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_38 = {
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0xff, 0x7b),
      CUPID_CGB_RGB8(0x00, 0x84, 0xff), CUPID_CGB_RGB8(0xff, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_39 = {
+    28u,
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x8c, 0x8c, 0xde),
      CUPID_CGB_RGB8(0x52, 0x52, 0x8c), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
     {CUPID_CGB_RGB8(0xff, 0xc5, 0x42), CUPID_CGB_RGB8(0xff, 0xd6, 0x00),
@@ -313,6 +352,7 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_39 = {
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x5a, 0xbd, 0xff),
      CUPID_CGB_RGB8(0xff, 0x00, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0xff)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_40 = {
+    28u,
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x8c, 0x8c, 0xde),
      CUPID_CGB_RGB8(0x52, 0x52, 0x8c), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
@@ -320,6 +360,7 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_40 = {
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0xad, 0x63),
      CUPID_CGB_RGB8(0x84, 0x31, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_41 = {
+    28u,
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x7b, 0xff, 0x31),
      CUPID_CGB_RGB8(0x00, 0x84, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
@@ -327,6 +368,7 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_41 = {
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x63, 0xa5, 0xff),
      CUPID_CGB_RGB8(0x00, 0x00, 0xff), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_42 = {
+    28u,
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0xad, 0x63),
      CUPID_CGB_RGB8(0x84, 0x31, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x63, 0xa5, 0xff),
@@ -334,6 +376,7 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_42 = {
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x7b, 0xff, 0x31),
      CUPID_CGB_RGB8(0x00, 0x84, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_44 = {
+    28u,
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
      CUPID_CGB_RGB8(0x94, 0x3a, 0x3a), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x00, 0xff, 0x00),
@@ -341,6 +384,7 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_44 = {
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x63, 0xa5, 0xff),
      CUPID_CGB_RGB8(0x00, 0x00, 0xff), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_45 = {
+    28u,
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0xad, 0x63),
      CUPID_CGB_RGB8(0x84, 0x31, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x7b, 0xff, 0x31),
@@ -348,6 +392,7 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_45 = {
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x63, 0xa5, 0xff),
      CUPID_CGB_RGB8(0x00, 0x00, 0xff), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_46 = {
+    28u,
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x63, 0xa5, 0xff),
      CUPID_CGB_RGB8(0x00, 0x00, 0xff), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
     {CUPID_CGB_RGB8(0xff, 0xff, 0x00), CUPID_CGB_RGB8(0xff, 0x00, 0x00),
@@ -355,6 +400,7 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_46 = {
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x7b, 0xff, 0x31),
      CUPID_CGB_RGB8(0x00, 0x84, 0x00), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_47 = {
+    28u,
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xad, 0xad, 0x84),
      CUPID_CGB_RGB8(0x42, 0x73, 0x7b), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0xad, 0x63),
@@ -362,6 +408,7 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_47 = {
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x63, 0xa5, 0xff),
      CUPID_CGB_RGB8(0x00, 0x00, 0xff), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_50 = {
+    28u,
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x7b, 0xff, 0x31),
      CUPID_CGB_RGB8(0x00, 0x63, 0xc5), CUPID_CGB_RGB8(0x00, 0x00, 0x00)},
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0xff, 0x84, 0x84),
@@ -369,6 +416,7 @@ static const CupidCgbCompatPaletteSet cupid_cgb_compat_auto_50 = {
     {CUPID_CGB_RGB8(0xff, 0xff, 0xff), CUPID_CGB_RGB8(0x63, 0xa5, 0xff),
      CUPID_CGB_RGB8(0x00, 0x00, 0xff), CUPID_CGB_RGB8(0x00, 0x00, 0x00)}};
 
+/* The handoff clock uses the position of each key in the palette search. */
 static const CupidCgbCompatPaletteKey cupid_cgb_compat_palette_keys[] = {
     {0x00u, 0x00u, false, &cupid_cgb_compat_auto_00},
     {0x88u, 0x00u, false, &cupid_cgb_compat_auto_04},
@@ -539,6 +587,36 @@ static uint8_t cupid_cgb_title_fourth_letter(const CupidGb *gb) {
     return gb->rom[0x0137u];
 }
 
+typedef struct CupidCgbPaletteMatch {
+    const CupidCgbCompatPaletteKey *key;
+    size_t first_rejected;
+    unsigned rejected;
+} CupidCgbPaletteMatch;
+
+static CupidCgbPaletteMatch cupid_cgb_find_palette(const CupidGb *gb) {
+    const uint8_t checksum = cupid_cgb_title_checksum(gb);
+    const uint8_t fourth_letter = cupid_cgb_title_fourth_letter(gb);
+    CupidCgbPaletteMatch match = {0};
+    for (size_t index = 0;
+         index < sizeof(cupid_cgb_compat_palette_keys) / sizeof(cupid_cgb_compat_palette_keys[0]);
+         ++index) {
+        const CupidCgbCompatPaletteKey *key = &cupid_cgb_compat_palette_keys[index];
+        if (key->title_checksum != checksum)
+            continue;
+        if (!key->require_fourth_letter) {
+            match.key = key;
+        } else if (key->fourth_letter == fourth_letter) {
+            match.key = key;
+            break;
+        } else {
+            if (!match.rejected)
+                match.first_rejected = index;
+            ++match.rejected;
+        }
+    }
+    return match;
+}
+
 /**
  * @brief Looks up the CGB compatibility palette for the loaded ROM.
  *
@@ -556,35 +634,49 @@ static uint8_t cupid_cgb_title_fourth_letter(const CupidGb *gb) {
  * @return Pointer to the matched @ref CupidCgbCompatPaletteSet (never NULL).
  */
 static const CupidCgbCompatPaletteSet *cupid_cgb_lookup_compat_palette(const CupidGb *gb) {
-    uint8_t checksum;
-    uint8_t fourth_letter;
-    size_t index;
-    const CupidCgbCompatPaletteSet *fallback = cupid_cgb_compat_default;
-
-    if (gb == 0 || !cupid_cgb_has_nintendo_licensee(gb)) {
+    if (!cupid_cgb_has_nintendo_licensee(gb))
         return cupid_cgb_compat_default;
-    }
+    const CupidCgbPaletteMatch match = cupid_cgb_find_palette(gb);
+    return match.key ? match.key->palette_set : cupid_cgb_compat_default;
+}
 
-    checksum = cupid_cgb_title_checksum(gb);
-    fourth_letter = cupid_cgb_title_fourth_letter(gb);
-    for (index = 0u;
-         index < sizeof(cupid_cgb_compat_palette_keys) / sizeof(cupid_cgb_compat_palette_keys[0]);
-         ++index) {
-        const CupidCgbCompatPaletteKey *key = &cupid_cgb_compat_palette_keys[index];
+void cupid_cgb_apply_native_boot_clock(CupidGb *gb) {
+    enum { FIRST_CONDITIONAL_KEY = 65, CONDITIONAL_GROUP_SIZE = 14 };
 
-        if (key->title_checksum != checksum) {
-            continue;
-        }
-        if (key->require_fourth_letter) {
-            if (key->fourth_letter == fourth_letter) {
-                return key->palette_set;
+    const bool extended_license = gb->header.old_licensee_code == 0x33u;
+    const bool palette_search = cupid_cgb_has_nintendo_licensee(gb);
+    unsigned phase = 0x1ea0u;
+    if (palette_search) {
+        const CupidCgbPaletteMatch match = cupid_cgb_find_palette(gb);
+        if (match.key) {
+            /* The ordered title search charges 48 T-cycles per entry. Each
+             * fourth-byte group shifts the palette transfer to a different phase. */
+            const unsigned index = (unsigned)(match.key - cupid_cgb_compat_palette_keys);
+            phase = 160u + 360u * match.key->palette_set->boot_palette_periods + 48u * index;
+            if (match.key->require_fourth_letter) {
+                const unsigned group = (index - FIRST_CONDITIONAL_KEY) / CONDITIONAL_GROUP_SIZE;
+                phase = phase + 72u - 580u * group;
             }
-            continue;
+        } else if (match.rejected) {
+            /* A rejected fourth byte resumes at the next group for this checksum. */
+            phase = 11776u + 48u * (unsigned)(match.first_rejected - FIRST_CONDITIONAL_KEY);
+            if (match.rejected == 3)
+                phase += 92u;
+        } else {
+            phase = 0x2fa8u;
         }
-        fallback = key->palette_set;
+        if (extended_license)
+            phase += 32u;
+    } else if (extended_license) {
+        phase = gb->header.new_licensee_code[0] == '0' ? 0x1ec0u : 0x1e9cu;
     }
 
-    return fallback;
+    /* Install the complete phase before the first cartridge clock. */
+    gb->io_registers[0x04] = (uint8_t)(phase >> 8u);
+    gb->div_counter = (uint16_t)((phase >> 2u) & 63u);
+    gb->divider_subcycle = (uint8_t)(phase & 3u);
+    gb->apu.fs_step = palette_search ? 1u : 0u;
+    gb->apu.fs_skip_div_event = 0u;
 }
 
 /**
