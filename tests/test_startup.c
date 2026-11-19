@@ -1005,7 +1005,14 @@ static void test_cartridge_entry_logo(void) {
     for (size_t model = 0; model < sizeof(models) / sizeof(models[0]); ++model) {
         const bool color = cupid_gb_model_is_cgb(models[model]);
         const bool mark = models[model] != CUPID_GB_MODEL_DMG0;
+        const bool has_boot_stack = color && models[model] != CUPID_GB_MODEL_CGB_0;
         cupid_gb_set_model(gb, models[model]);
+        cupid_gb_init(gb);
+        uint8_t power_on_hram[sizeof(gb->high_ram)], expected_hram[sizeof(gb->high_ram)];
+        memcpy(power_on_hram, gb->high_ram, sizeof(power_on_hram));
+        memcpy(expected_hram, power_on_hram, sizeof(expected_hram));
+        const size_t logo_bytes = color ? 0x30u : 0u;
+        memcpy(expected_hram, rom + 0x104, logo_bytes);
         for (unsigned native = 0; native <= (unsigned)color; ++native) {
             /* Title sum 43 selects the legacy map in CGB compatibility mode. */
             rom[0x143] = native ? 0x80 : 0;
@@ -1031,20 +1038,37 @@ static void test_cartridge_entry_logo(void) {
                 }
                 expected[0x1910] = mark ? 25 : 0;
             }
+            uint8_t quick_hram[sizeof(gb->high_ram)];
+            memset(quick_hram, 0x5a, sizeof(quick_hram));
+            memcpy(quick_hram, expected_hram, logo_bytes);
+            if (has_boot_stack) {
+                static const uint8_t stack[2][12] = {
+                    {0x71, 0x02, 0x4d, 0x01, 0x00, 0xff, 0x0d, 0x00, 0x03, 0x06, 0xf9, 0x00},
+                    {0x71, 0x02, 0x4d, 0x01, 0xc1, 0xff, 0x0d, 0x00, 0xd3, 0x05, 0xf9, 0x00},
+                };
+                memcpy(expected_hram + 0x72, stack[native], sizeof(stack[native]));
+                memcpy(quick_hram + 0x72, stack[native], sizeof(stack[native]));
+            }
             assert(memcmp(gb->video_ram, expected, sizeof(expected)) == 0);
+            assert(memcmp(gb->high_ram, expected_hram, sizeof(expected_hram)) == 0);
             if (color && !native)
                 assert(gb->cpu.h == 0x99 && gb->cpu.l == 0x1a);
             memset(gb->video_ram, 0x87, sizeof(gb->video_ram));
+            memset(gb->high_ram, 0x5a, sizeof(gb->high_ram));
             assert(cupid_gb_reset(gb, CUPID_GB_RESET_QUICK));
             assert(memcmp(gb->video_ram, expected, sizeof(expected)) == 0);
+            assert(memcmp(gb->high_ram, quick_hram, sizeof(quick_hram)) == 0);
             memset(gb->video_ram, 0x87, sizeof(gb->video_ram));
+            memset(gb->high_ram, 0x87, sizeof(gb->high_ram));
             assert(cupid_gb_reset(gb, CUPID_GB_RESET_HARD));
             assert(memcmp(gb->video_ram, expected, sizeof(expected)) == 0);
+            assert(memcmp(gb->high_ram, expected_hram, sizeof(expected_hram)) == 0);
 
             gb->boot_rom_size = color ? 0x900 : 0x100;
             cupid_gb_start_boot_rom(gb);
             memset(expected, 0, sizeof(expected));
             assert(gb->boot_rom_enabled && memcmp(gb->video_ram, expected, sizeof(expected)) == 0);
+            assert(memcmp(gb->high_ram, power_on_hram, sizeof(power_on_hram)) == 0);
             cupid_gb_clear_boot_rom(gb);
         }
     }
@@ -1407,6 +1431,10 @@ static void test_cgb_startup_clock(void) {
                 const bool legacy_tilemap =
                     cases[i].compatibility_cycles &&
                     (cases[i].checksum == 0x43 || cases[i].checksum == 0x58);
+                assert(gb->high_ram[0x76] == (gb->cgb_mode ? 0xc1u : 0));
+                const unsigned compatibility_return_low = legacy_tilemap ? 0x03u : 0xf5u;
+                assert(gb->high_ram[0x7a] == (gb->cgb_mode ? 0xd3u : compatibility_return_low));
+                assert(gb->high_ram[0x7b] == (legacy_tilemap ? 6u : 5u));
                 if (cases[i].compatibility_cycles) {
                     const unsigned hl = (unsigned)gb->cpu.h * 256u + gb->cpu.l;
                     assert(hl == (legacy_tilemap ? 0x991au : 0x007cu));

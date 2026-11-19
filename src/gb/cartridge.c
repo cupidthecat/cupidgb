@@ -864,8 +864,11 @@ void cupid_gb_cartridge_post_boot(CupidGb *gb) {
     gb->cgb_mode = color && (gb->header.cgb_flag & 0x80u) != 0;
     const bool cgb_vblank = color && gb->model != CUPID_GB_MODEL_CGB_0;
     /* A recognized tail-first menu has the same logo bytes as bank zero. */
-    cupid_gb_startup_logo_tiles(gb, gb->rom + CUPID_GB_LOGO_START);
-    if (!color)
+    const uint8_t *logo = gb->rom + CUPID_GB_LOGO_START;
+    cupid_gb_startup_logo_tiles(gb, logo);
+    if (color)
+        memcpy(gb->high_ram, logo, CUPID_GB_STARTUP_LOGO_BYTES);
+    else
         cupid_gb_startup_logo_tilemap(gb);
     if (!cgb_vblank)
         cupid_gb_display_clock_import_legacy(gb);

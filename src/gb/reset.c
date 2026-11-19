@@ -31,6 +31,7 @@
 #include "cupid/gb/startup.h"
 #include "printer_internal.h"
 #include "rtc_internal.h"
+#include "startup_internal.h"
 #include "tama5_internal.h"
 
 #include <stdlib.h>
@@ -66,7 +67,17 @@ void cupid_gb_reset_restore_cartridge(CupidGb *next, const CupidGb *previous) {
 
 static void restore_retained_memory(CupidGb *next, const CupidGb *previous) {
     memcpy(next->work_ram, previous->work_ram, sizeof(next->work_ram));
-    memcpy(next->high_ram, previous->high_ram, sizeof(next->high_ram));
+    if (next->boot_rom_size || !cupid_gb_model_is_cgb(next->model)) {
+        memcpy(next->high_ram, previous->high_ram, sizeof(next->high_ram));
+    } else {
+        /* Keep the bytes already written by the built-in Color handoff. */
+        const size_t start = CUPID_GB_STARTUP_LOGO_BYTES;
+        const size_t end = next->model == CUPID_GB_MODEL_CGB_0 ? CUPID_GB_CGB_BOOT_STACK_END
+                                                               : CUPID_GB_CGB_BOOT_STACK_START;
+        memcpy(next->high_ram + start, previous->high_ram + start, end - start);
+        next->high_ram[CUPID_GB_CGB_BOOT_STACK_END] =
+            previous->high_ram[CUPID_GB_CGB_BOOT_STACK_END];
+    }
     memcpy(next->object_attribute_memory, previous->object_attribute_memory,
            sizeof(next->object_attribute_memory));
     memcpy(next->extra_oam, previous->extra_oam, sizeof(next->extra_oam));

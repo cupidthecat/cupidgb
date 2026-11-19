@@ -25,7 +25,11 @@
 
 #include "cupid/gb/gb.h"
 
-enum { CUPID_GB_STARTUP_LOGO_BYTES = 48 };
+enum {
+    CUPID_GB_STARTUP_LOGO_BYTES = 48,
+    CUPID_GB_CGB_BOOT_STACK_START = 0x72,
+    CUPID_GB_CGB_BOOT_STACK_END = 0x7e,
+};
 
 void cupid_gb_startup_memory(CupidGb *gb);
 void cupid_gb_startup_boot_io(CupidGb *gb);

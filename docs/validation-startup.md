@@ -485,6 +485,31 @@ The CGB0 comparison ran the installed Color firmware on the CGB0 model, and
 its legacy map rules also match the revision-specific disassembly. Original
 DMG0 and CGB0 binary verification remains open.
 
+### Color HRAM at cartridge entry
+
+The Color startup firmware copies the 48 logo bytes from the cartridge
+header into `FF80–FFAF` before expanding the tiles. Built-in startup writes
+that buffer on all six Color profiles. [Original firmware disassembly](https://codeberg.org/ISSOtm/gb-bootroms/src/commit/443d7f057ae06e8d1d76fa8083650cf0be2cd0ae/src/cgb.asm#L222-L234)
+
+On revisions A–E, the default handoff also leaves 12 stack bytes at
+`FFF2–FFFD`. The bytes follow the native-color, monochrome compatibility, or
+legacy tilemap path. Quick Reset without installed firmware reproduces those
+writes and retains the other HRAM bytes. At the immediate reset boundary,
+installed firmware receives the retained HRAM and performs its own writes
+when it runs. Hard Reset and cold firmware startup start from the selected
+power-on generation.
+
+Windows and Linux each matched all 127 HRAM bytes in 126 revision A–E
+handoffs against the installed Color firmware. Twelve additional CGB0
+handoffs matched the 48-byte buffer using the installed Color firmware on
+the CGB0 model. The cases use two power-on seeds, both color flags, and
+ordinary and legacy monochrome compatibility. Eighteen guest runs on
+each host also read the modeled bytes at cartridge entry.
+
+These stack checks use the installed Color firmware with no held buttons.
+The original CGB0 stack still needs verification. Manual boot-time palette
+choices use installed firmware.
+
 ### CGB monochrome compatibility handoff
 
 Built-in startup on CGB A through E enters monochrome cartridges in

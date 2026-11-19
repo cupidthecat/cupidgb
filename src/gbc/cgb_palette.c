@@ -735,6 +735,18 @@ unsigned cupid_cgb_apply_cartridge_handoff(CupidGb *gb) {
     if (gb->model == CUPID_GB_MODEL_CGB_0)
         return 0;
 
+    /* Startup calls leave their last return addresses and saved registers
+     * below SP. The final compatibility call depends on the tilemap path. */
+    static const uint8_t boot_stack[CUPID_GB_CGB_BOOT_STACK_END - CUPID_GB_CGB_BOOT_STACK_START] = {
+        0x71, 0x02, 0x4d, 0x01, 0x00, 0xff, 0x0d, 0x00, 0x00, 0x00, 0xf9, 0x00,
+    };
+    uint8_t *stack = gb->high_ram + CUPID_GB_CGB_BOOT_STACK_START;
+    memcpy(stack, boot_stack, sizeof(boot_stack));
+    const uint16_t return_address = gb->cgb_mode ? 0x05d3u : legacy_tilemap ? 0x0603u : 0x05f5u;
+    stack[4] = gb->cgb_mode ? 0xc1u : 0;
+    stack[8] = (uint8_t)return_address;
+    stack[9] = (uint8_t)(return_address >> 8);
+
     /* The monochrome setup cost follows the selected palette slot. Two keys
      * also wait for the firmware's legacy tilemap transfer. */
     const unsigned extra_cycles =

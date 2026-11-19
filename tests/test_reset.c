@@ -345,7 +345,14 @@ static void check_boundary(const CupidGb *gb, const CupidGb *before, CupidGbRese
     else
         CHECK(filled(cupid_gb_cartridge_ram_const(gb), gb->cartridge_ram_size, 0xff));
     if (quick) {
-        CHECK(!memcmp(gb->high_ram, before->high_ram, sizeof(gb->high_ram)));
+        if (!firmware && cupid_gb_model_is_cgb(gb->model)) {
+            const size_t retained_end = gb->model == CUPID_GB_MODEL_CGB_0 ? 0x7eu : 0x72u;
+            CHECK(!memcmp(gb->high_ram, gb->rom + 0x104, 0x30));
+            CHECK(!memcmp(gb->high_ram + 0x30, before->high_ram + 0x30, retained_end - 0x30));
+            CHECK(gb->high_ram[0x7e] == before->high_ram[0x7e]);
+        } else {
+            CHECK(!memcmp(gb->high_ram, before->high_ram, sizeof(gb->high_ram)));
+        }
         CHECK(!memcmp(gb->cgb_bg_palette_ram, before->cgb_bg_palette_ram,
                       sizeof(gb->cgb_bg_palette_ram)) &&
               !memcmp(gb->cgb_obj_palette_ram, before->cgb_obj_palette_ram,
