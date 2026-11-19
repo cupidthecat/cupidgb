@@ -124,3 +124,14 @@ Every recorded guest result other than host elapsed time agrees across the paire
 | ROM-only, SGB | 0.953 | 5.86–5.99× | 1.002 | 5.86–6.27× |
 
 The timing corrections cost 3.5–7.6% of measured Windows throughput in these workloads. Linux medians range from a 3.8% reduction to a 0.2% increase; the SGB samples vary enough that the near-unity ratio does not establish an improvement. This checkpoint establishes no general speedup. The runners use Windows performance-counter timing and Linux monotonic timing; these measurements do not qualify independent wall-clock calibration, physical presentation, audible stability or full speed for every game. The remaining optimization work must preserve the verified guest results and retained timing history.
+
+## Pocket and SGB2 timing with firmware
+
+At `df1c073`, all 124 non-boot acceptance cases passed on Pocket and SGB2. The
+cores agreed on terminal CPU timing after accounting for SGB2's 7,443,744-cycle
+presentation-only hold. Seven boot cases gave three passes and four shared
+failures with the supplied firmware.
+
+A separate probe executed scroll, window-position and window-enable writes
+at 13 CPU alignments. All 156 cases matched PC, LY, STAT and terminal cycles.
+The completed framebuffers also matched across all 3,594,240 pixels.
