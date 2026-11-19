@@ -367,7 +367,8 @@ static void check_sgb(CupidGbModel model, const char tag[4], bool declares_enhan
     assert(cupid_gb_bess_load(target, data, size) == CUPID_GB_STATE_OK);
     assert(loaded->player_count == 3 && loaded->current_player == 2);
     assert(loaded->border_map[0] == 1 && loaded->border_map[1] == 0);
-    assert(loaded->screen_palettes[0] == 0x7fff && loaded->screen_palettes[3] == 0);
+    for (size_t color = 0; color < 16; ++color)
+        assert(loaded->screen_palettes[color] == 0);
     assert(loaded->attribute_map[359] == 3);
     check_native_snapshot(target);
     block[0x38] = 0x4f;

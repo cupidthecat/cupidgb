@@ -18,7 +18,15 @@ Packets take effect only when the stop pulse returns high. Partial bits, a pendi
 
 Without executed firmware, approximate post-boot initialization derives permission from both cartridge bytes: enhancement `03` and old license `33`. Its received-header cache starts empty because no packet transfer occurred. Cold initialization, Hard Reset and Quick Reset restart receiver history; firmware entry begins with permission available. Explicit memory-preserving boot reentry clears the disable latch, header cache, partial command and controller selection, while retaining palette, border, mask and transfer storage.
 
-Native version 22 retains the receiver latch and cache alongside the existing partial packet fields. Older imports preserve their former receiver eligibility and start with an empty cache; they cannot recover packets that were never stored. See [the version 22 protocol layout](save-states.md#adapter-header-protocol-in-version-22). Title-selected fallback palettes, commercial firmware qualification and other adapter variants remain open work.
+Native version 22 retains the receiver latch and cache alongside the partial packet fields. Older imports preserve their former receiver eligibility and start with an empty cache. See [the version 22 protocol layout](save-states.md#adapter-header-protocol-in-version-22).
+
+## Startup palettes
+
+SGB NTSC, PAL and SGB2 start with the adapter's default colors in screen palette 0. If a valid final header packet rejects enhancements, the adapter checks the 16-byte title field in the received header. It replaces palette 0 for 26 title signatures, including Tetris, Kirby's Dream Land and Super Mario Land. An unknown title leaves the current colors in place. A bad packet checksum skips title selection.
+
+The approximate handoff uses the same title lookup when the cartridge header rejects enhancements. Cold firmware entry starts with the adapter's default colors and waits for the actual header transfer. Memory-preserving firmware reentry retains the current colors. Native saves retain all four screen palettes. A portable state with an SGB block and an empty active-palette region restores zeroes for that region.
+
+The palette check covered 737 headers on each of the two handoff paths. All 1,474 observations of screen palettes and command permission matched on Windows and WSL. The inputs included generated permission and title controls and 386 local cartridge headers. Five commercial cartridges also matched at entry on each of the three models with executable replacement boot binaries. Authentic adapter firmware and the remaining SGB variants still need qualification.
 
 ## Phases and clocks
 

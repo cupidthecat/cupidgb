@@ -544,7 +544,7 @@ static void test_cgb_dmg_compatibility_palette_requires_nintendo_licensee(void) 
     cupid_gb_cleanup(&gb);
 }
 
-static void test_sgb_uses_cgb_compatibility_palette_as_initial_colors(void) {
+static void test_sgb_uses_adapter_colors_for_unlisted_title(void) {
     uint8_t rom[32u * 1024u];
     CupidGb gb = {0};
 
@@ -559,9 +559,10 @@ static void test_sgb_uses_cgb_compatibility_palette_as_initial_colors(void) {
     cupid_gb_set_model(&gb, CUPID_GB_MODEL_SGB);
     assert(cupid_gb_load_rom(&gb, rom, sizeof(rom)));
     assert(gb.sgb.enabled);
-    assert(gb.sgb.screen_palettes[0] == 0x7fffu);
-    assert(gb.sgb.screen_palettes[1] == 0x421fu);
-    assert(gb.sgb.screen_palettes[2] == 0x1cf2u);
+    assert(gb.sgb.screen_palettes[0] == 0x67bfu);
+    assert(gb.sgb.screen_palettes[1] == 0x265bu);
+    assert(gb.sgb.screen_palettes[2] == 0x10b5u);
+    assert(gb.sgb.screen_palettes[3] == 0x2866u);
     cupid_gb_cleanup(&gb);
 }
 
@@ -1701,7 +1702,7 @@ void test_gb_hardware(void) {
     test_color_boot_preserves_selected_memory_banks();
     test_cgb_dmg_compatibility_palette_for_pokemon_red();
     test_cgb_dmg_compatibility_palette_requires_nintendo_licensee();
-    test_sgb_uses_cgb_compatibility_palette_as_initial_colors();
+    test_sgb_uses_adapter_colors_for_unlisted_title();
     test_cgb_double_speed_slows_timer_domain();
     test_ei_sequence_enables_interrupts_after_next_instruction();
     test_interrupt_ie_push_can_cancel_dispatch();

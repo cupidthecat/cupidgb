@@ -103,7 +103,8 @@ void cupid_gb_sgb_init(struct CupidGb *gb);
 /* Firmware reentry clears packet history and pad selection while retaining
  * palette, border, mask and transfer storage. Cold/reset initialization clears all. */
 void cupid_gb_sgb_begin_boot(struct CupidGb *gb);
-void cupid_gb_sgb_apply_compatibility_palette(struct CupidGb *gb);
+void cupid_gb_sgb_reset_screen_palettes(struct CupidGb *gb);
+void cupid_gb_sgb_apply_cartridge_palette(struct CupidGb *gb);
 void cupid_gb_sgb_write_joyp(struct CupidGb *gb, uint8_t value);
 void cupid_gb_sgb_clock(struct CupidGb *gb, uint32_t dots);
 void cupid_gb_sgb_present(struct CupidGb *gb, bool complete, uint32_t dots_after_frame);

@@ -29,6 +29,8 @@
 #include <string.h>
 #include <time.h>
 
+#include "cupid/gb/sgb_startup.h"
+
 #define STARTUP_NOISE_STRIDE UINT64_C(0x9e3779b97f4a7c15)
 
 typedef struct StartupNoise {
@@ -181,6 +183,8 @@ void cupid_gb_start_boot_rom(CupidGb *gb) {
     if (!gb || !gb->boot_rom_size)
         return;
     (void)fill_memory(gb);
+    if (cupid_gb_sgb_host_present(gb))
+        cupid_gb_sgb_reset_screen_palettes(gb);
     cupid_gb_enter_boot_rom(gb);
 }
 

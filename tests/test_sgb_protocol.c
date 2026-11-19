@@ -31,9 +31,11 @@
 #include <stdlib.h>
 #include <string.h>
 
-static CupidGb *machine(CupidGbModel model, bool declared, uint8_t license, bool firmware) {
+static CupidGb *machine_with_title(CupidGbModel model, bool declared, uint8_t license,
+                                   bool firmware, const char *title) {
     uint8_t rom[0x8000] = {0};
-    memcpy(rom + 0x134, "CUPID PROTOCOL", 14);
+    assert(strlen(title) <= 16);
+    memcpy(rom + 0x134, title, strlen(title));
     rom[0x146] = declared ? 3 : 0;
     rom[0x14b] = license;
     for (unsigned address = 0x134; address <= 0x14c; ++address)
@@ -53,6 +55,10 @@ static CupidGb *machine(CupidGbModel model, bool declared, uint8_t license, bool
         cupid_gb_sgb_startup_reset(gb, false);
     }
     return gb;
+}
+
+static CupidGb *machine(CupidGbModel model, bool declared, uint8_t license, bool firmware) {
+    return machine_with_title(model, declared, license, firmware, "CUPID PROTOCOL");
 }
 
 static void release(CupidGb *gb) {
@@ -149,6 +155,52 @@ static void physical_receiver(CupidGbModel model, bool declared) {
     assert(cupid_gb_sgb_active(gb) == declared);
     set_color(gb, 0x03e0);
     expect_color(gb, 0xff00ff00u);
+    release(gb);
+}
+
+static void title_palette(CupidGbModel model) {
+    const uint16_t power_on[] = {0x67bf, 0x265b, 0x10b5, 0x2866};
+    const uint16_t tetris[] = {0x4f5f, 0x630e, 0x159f, 0x3126};
+
+    const struct {
+        uint8_t flag, license, title_tail;
+        bool checksum_error, select_palette;
+    } cases[] = {
+        {0, 1, 0, false, true},     {3, 1, 0, false, true}, {0, 0x33, 0, false, true},
+        {3, 0x33, 0, false, false}, {0, 1, 0, true, false}, {0, 1, 0x20, false, false},
+    };
+
+    for (size_t index = 0; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        /* Firmware uses the title it received, even when the ROM title differs. */
+        CupidGb *gb = machine(model, false, 1, true);
+        uint8_t header[CUPID_SGB_HEADER_BYTES];
+        make_header(header, cases[index].flag, cases[index].license);
+        memset(header + 0x30, 0, 16);
+        memcpy(header + 0x30, "TETRIS", 6);
+        header[0x3f] = cases[index].title_tail;
+        send_section(gb, header, 3, false);
+        send_section(gb, header, 4, false);
+        uint8_t packet[16];
+        make_section(packet, header, 5, cases[index].checksum_error);
+        packet_prefix(gb, packet, 128);
+        assert(memcmp(gb->sgb.screen_palettes, power_on, sizeof(power_on)) == 0);
+        gb->sgb.screen_palettes[4] = 0x001f;
+        stop_packet(gb);
+        const uint16_t *expected = cases[index].select_palette ? tetris : power_on;
+        assert(memcmp(gb->sgb.screen_palettes, expected, sizeof(power_on)) == 0);
+        assert(gb->sgb.screen_palettes[4] == 0x001f);
+        release(gb);
+    }
+
+    CupidGb *gb = machine_with_title(model, false, 1, false, "TETRIS");
+    assert(memcmp(gb->sgb.screen_palettes, tetris, sizeof(tetris)) == 0);
+    assert(!cupid_gb_sgb_commands_enabled(gb));
+    expect_empty_header(gb);
+    release(gb);
+
+    gb = machine_with_title(model, false, 1, true, "TETRIS");
+    assert(memcmp(gb->sgb.screen_palettes, power_on, sizeof(power_on)) == 0);
+    assert(cupid_gb_sgb_commands_enabled(gb));
     release(gb);
 }
 
@@ -372,7 +424,7 @@ static void approximate_handoff(CupidGbModel model) {
             assert(cupid_gb_sgb_active(gb) == (declared != 0));
             expect_empty_header(gb);
             set_color(gb, 0x7c00);
-            expect_color(gb, accepts ? 0xff0000ffu : 0xffffffffu);
+            expect_color(gb, accepts ? 0xff0000ffu : 0xffffefceu);
             release(gb);
         }
 }
@@ -406,6 +458,7 @@ int main(void) {
             retained_player_after_disable(models[model], declared != 0);
         }
         replacement_and_ignored_sections(models[model]);
+        title_palette(models[model]);
         handoff_ignores_headers(models[model], false);
         handoff_ignores_headers(models[model], true);
         packet_commit_edge(models[model]);

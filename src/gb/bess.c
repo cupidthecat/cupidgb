@@ -231,8 +231,7 @@ static void restore_sgb(CupidGb *gb, const BessState *state) {
     memcpy(sgb->transfer.tiles, sgb->border_tiles, sizeof(sgb->transfer.tiles));
     memcpy(sgb->transfer.map, sgb->border_map, sizeof(sgb->transfer.map));
     memcpy(sgb->border_palettes, sgb->transfer.palettes, sizeof(sgb->transfer.palettes));
-    if (region[3].size)
-        copy_words(sgb->screen_palettes, sizeof(sgb->screen_palettes), region[3]);
+    copy_words(sgb->screen_palettes, sizeof(sgb->screen_palettes), region[3]);
     for (unsigned index = 4; index < 16; index += 4)
         sgb->screen_palettes[index] = sgb->screen_palettes[0];
     copy_words(sgb->ram_palettes, sizeof(sgb->ram_palettes), region[4]);

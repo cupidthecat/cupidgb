@@ -463,6 +463,12 @@ static void test_border_compositor(void) {
     assert(pixel_at(pixels, view_x + 4, view_y) == 0xff00ff00u);
     assert(pixel_at(pixels, view_x + 8, view_y) == 0xff00ff00u);
 
+    gb->sgb.screen_palettes[8] = 0x7c00;
+    gb->sgb.freeze_buffer[8] = 0;
+    cupid_gb_sgb_render_argb(gb, pixels, count);
+    assert(pixel_at(pixels, view_x + 8, view_y) == 0xff0000ffu);
+    gb->sgb.freeze_buffer[8] = 1;
+
     const uint32_t transparent[] = {0xff00ff00u, 0xff0000ffu, 0xff000000u, 0xff180000u};
     for (unsigned mask = CUPID_SGB_MASK_DISABLED; mask <= CUPID_SGB_MASK_COLOR0; ++mask) {
         if (mask == CUPID_SGB_MASK_FREEZE) {

@@ -902,8 +902,8 @@ void cupid_gb_cartridge_post_boot(CupidGb *gb) {
             gb->div_counter = 0x21;
             gb->divider_subcycle = 0;
         }
-    } else if (gb->sgb.enabled) {
-        cupid_gb_sgb_apply_compatibility_palette(gb);
+    } else if (cupid_gb_sgb_host_present(gb)) {
+        cupid_gb_sgb_apply_cartridge_palette(gb);
     }
     if (cgb_vblank) {
         const unsigned compatibility_cycles = cupid_cgb_apply_cartridge_handoff(gb);

@@ -521,6 +521,10 @@ static void load_legacy_sgb_profile(CupidGb *gb, CupidGbModel model) {
     gb->rtc.base_time = 0;
     gb->tpp1.rtc_base_time = 0;
     gb->huc3.rtc_base_time = 0;
+    /* The archived writer stored the previous grayscale palette in every slot. */
+    const uint16_t palette[] = {0x7fff, 0x56b5, 0x2d6b, 0};
+    for (unsigned slot = 0; slot < 4; ++slot)
+        memcpy(gb->sgb.screen_palettes + 4 * slot, palette, sizeof(palette));
 }
 
 static uint8_t *encode_legacy_sgb_profile(const CupidGb *gb, size_t *length) {
