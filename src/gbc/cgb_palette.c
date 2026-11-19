@@ -4,6 +4,8 @@
  * @author  cupidthecat
  * @date    2026-11-16
  *
+ * Compatibility colors and CPU palette ports share the same physical palette RAM.
+ *
  * Copyright (C) 2026 cupidthecat
  *
  * This program is free software: you can redistribute it and/or modify
@@ -20,7 +22,6 @@
  * along with this program.  If not, see <https://gnu.org>.
  */
 
-/* Compatibility colors and CPU palette ports share the same physical palette RAM. */
 #include "cupid/gbc/cgb.h"
 
 #include "cgb_internal.h"

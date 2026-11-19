@@ -20,7 +20,6 @@
  * along with this program.  If not, see <https://gnu.org>.
  */
 
-/* Color hardware reset, bank addressing and register dispatch. */
 #include "cupid/gbc/cgb.h"
 
 #include "cgb_internal.h"

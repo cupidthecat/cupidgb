@@ -4,6 +4,8 @@
  * @author  cupidthecat
  * @date    2026-11-16
  *
+ * Included after the common snapshot helpers in test_state.c.
+ *
  * Copyright (C) 2026 cupidthecat
  *
  * This program is free software: you can redistribute it and/or modify
@@ -20,7 +22,6 @@
  * along with this program.  If not, see <https://gnu.org>.
  */
 
-/* Included after the common snapshot helpers in test_state.c. */
 static void test_boot_entry_object_abort(void) {
     CupidGb *source = calloc(1, sizeof(*source)), *target = calloc(1, sizeof(*target));
     assert(source && target);
