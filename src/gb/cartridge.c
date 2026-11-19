@@ -38,6 +38,7 @@
 #include "cupid/gb/gb.h"
 #include "cupid/gb/huc3.h"
 #include "cupid/gb/mbc7.h"
+#include "cupid/gb/ppu.h"
 #include "display_clock.h"
 #include "rtc_internal.h"
 #include "tama5_internal.h"
@@ -836,11 +837,11 @@ bool cupid_gb_load_rom_file(CupidGb *gb, const char *path) {
 }
 
 void cupid_gb_cartridge_post_boot(CupidGb *gb) {
-    /* Approximate post-boot startup has no earlier display-access history.
-     * Establish a canonical phase for this new cartridge session. */
-    cupid_gb_display_clock_import_legacy(gb);
     /* Cartridge requirements cannot change the selected physical model. */
     gb->cgb_mode = cupid_gb_model_is_cgb(gb->model) && (gb->header.cgb_flag & 0x80u) != 0;
+    const bool native_color_vblank = gb->cgb_mode && gb->model != CUPID_GB_MODEL_CGB_0;
+    if (!native_color_vblank)
+        cupid_gb_display_clock_import_legacy(gb);
     gb->sgb.enabled = cupid_gb_model_is_sgb(gb->model) && gb->header.sgb_flag == 3;
     /* Without executed firmware, project the two header permission bytes into
      * the post-boot latch. No received packet history is invented. */
@@ -863,6 +864,26 @@ void cupid_gb_cartridge_post_boot(CupidGb *gb) {
     }
     if (gb->cgb_mode) {
         gb->cpu.a = 0x11;
+        if (native_color_vblank) {
+            /* Revisions A through E enter native-color software during VBlank.
+             * Pixel delivery and the display scheduler reach their edges at
+             * different offsets from the final firmware instruction. */
+            gb->io_registers[CUPID_GB_IO_LY] = 144u;
+            gb->io_registers[CUPID_GB_IO_STAT] = 0x80u | CUPID_GB_PPU_MODE_VBLANK;
+            gb->pixels = (CupidGbPixels){.initialized = true, .line = 144u, .dot = 168u};
+            gb->ppu_counter = gb->pixels.dot / 4u;
+            cupid_gb_pixels_begin_line(gb);
+            gb->pixels.window_armed = true;
+            gb->display_cycles_since_frame = 166u;
+            gb->lcd_repeat_countdown = 67317u;
+            gb->lcd_frame_odd = false;
+            gb->display_clock = (CupidGbDisplayClock){
+                .row = 144u,
+                .phase = CUPID_GB_DISPLAY_CLOCK_VBLANK_GAP,
+                .credit_half_dots = -568,
+                .frame_age_dots = 164u,
+            };
+        }
     } else if (cupid_gb_model_is_cgb(gb->model)) {
         /* The monochrome handoff leaves both the palette checksum and different
          * DE and HL values for the cartridge's first instruction. */

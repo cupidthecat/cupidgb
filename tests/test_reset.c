@@ -269,6 +269,7 @@ static void install_history(CupidGb *gb, unsigned rate) {
 static void check_boundary(const CupidGb *gb, const CupidGb *before, CupidGbResetKind kind,
                            bool firmware, Host *host, unsigned clock_calls) {
     const bool quick = kind == CUPID_GB_RESET_QUICK;
+    const bool native_color_phase = !firmware && gb->cgb_mode && gb->model != CUPID_GB_MODEL_CGB_0;
     CHECK(gb->rom == before->rom && gb->rom_size == before->rom_size &&
           gb->rom_capacity == before->rom_capacity &&
           gb->rom_generation == before->rom_generation && gb->loaded);
@@ -298,7 +299,8 @@ static void check_boundary(const CupidGb *gb, const CupidGb *before, CupidGbRese
     CHECK(cupid_gb_audio_state_valid(gb));
     CHECK(cupid_gb_display_clock_state_valid(gb) && cupid_gb_pixels_timing_valid(gb) &&
           cupid_gb_vram_bus_state_valid(gb));
-    CHECK(before->display_clock.frame_age_dots && !gb->display_clock.frame_age_dots &&
+    CHECK(before->display_clock.frame_age_dots &&
+          gb->display_clock.frame_age_dots == (native_color_phase ? 164u : 0u) &&
           !gb->display_clock.batch_half_dots && !gb->display_clock.fine_wait_half_dots);
     CHECK(!gb->pixel_timing.logical_x && !gb->pixel_timing.flags && !gb->pixel_timing.fetch_y &&
           !gb->vram_bus.map_address && !gb->vram_bus.data_address && !gb->vram_bus.read_value &&
@@ -307,6 +309,10 @@ static void check_boundary(const CupidGb *gb, const CupidGb *before, CupidGbRese
         CHECK(gb->display_clock.phase == CUPID_GB_DISPLAY_CLOCK_RESET &&
               !gb->display_clock.credit_half_dots && !gb->display_clock.row &&
               !gb->display_clock.flags);
+    else if (native_color_phase)
+        CHECK(gb->display_clock.phase == CUPID_GB_DISPLAY_CLOCK_VBLANK_GAP &&
+              gb->display_clock.credit_half_dots == -568 && gb->display_clock.row == 144 &&
+              !gb->display_clock.flags && gb->pixels.dot == 168);
     else
         CHECK((gb->display_clock.flags & CUPID_GB_DISPLAY_CLOCK_FORCED_FINE) &&
               gb->display_clock.row == gb->io_registers[0x44]);

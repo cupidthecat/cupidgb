@@ -30,6 +30,7 @@
 #include "cupid/gb/ppu.h"
 #include "cupid/gb/reset.h"
 #include "cupid/gb/state.h"
+#include "cupid/gb/timer.h"
 
 static CupidGb *machine(CupidGbModel model) {
     CupidGb *gb = calloc(1, sizeof(*gb));
@@ -329,8 +330,9 @@ static void test_bus_old_and_bad_conditions(void) {
     gb->cgb_mode = true;
     gb->cgb_vram_bank = 1;
     gb->video_ram[0x2000] = 0x22;
-    gb->io_registers[0x40] = 0x80;
-    gb->io_registers[0x41] = 3;
+    cupid_gb_write_u8(gb, 0xff40, 0x91);
+    for (unsigned tick = 0; tick < 100 && !cupid_gb_ppu_vram_write_blocked(gb); ++tick)
+        cupid_gb_tick(gb, 1);
     assert(cupid_gb_debug_peek(gb, 0x8000) == 0x22);
     assert(cupid_gb_read_bus_u8(gb, 0x8000) == 0xff);
     assert(cupid_gb_debugger_watchpoint_add(&debugger, gb, 1, 0x8000, 0x8000,

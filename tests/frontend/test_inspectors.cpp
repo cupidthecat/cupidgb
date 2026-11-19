@@ -43,7 +43,9 @@
 extern "C" {
 #include "cupid/gb/cartridge.h"
 #include "cupid/gb/debugger.h"
+#include "cupid/gb/ppu.h"
 #include "cupid/gb/state.h"
+#include "cupid/gb/timer.h"
 }
 
 namespace {
@@ -498,9 +500,10 @@ void testWindowWorkflows() {
     go->click();
     assert(!(memory->item(0, 0)->flags() & Qt::ItemIsEditable));
 
-    gb->io_registers[0x41] = 0x83;
-    gb->io_registers[0x44] = 0;
-    gb->io_registers[0x40] |= 0x80;
+    cupid_gb_write_u8(gb.get(), 0xff40, 0);
+    cupid_gb_write_u8(gb.get(), 0xff40, 0x91);
+    for (unsigned tick = 0; tick < 100 && !cupid_gb_ppu_vram_read_blocked(gb.get()); ++tick)
+        cupid_gb_tick(gb.get(), 1);
     gb->video_ram[0x2000] = 0x36;
     gb->cgb_vram_bank = 1;
     assert(cupid_gb_read_u8(gb.get(), 0x8000) == 0xff);

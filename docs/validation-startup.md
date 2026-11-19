@@ -402,6 +402,41 @@ first, enters the overlay, and verifies the initial mappings with the same
 backing memory. A quick reset carries forward the live DMA page and the two
 DMG sprite palette bytes.
 
+### CGB color LCD phase at cartridge entry
+
+Built-in startup on CGB A through E now enters native-color cartridges at
+VBlank line 144. The first cartridge reads return `LY=90`, `STAT=81` and
+`IF=E1` in hexadecimal. The pixel clock and the display scheduler keep
+their measured offsets through the following scanline and frame. Rapidly
+turning the LCD off and back on during this interval delivers a repeat-frame
+event at the same cycle as supplied firmware.
+
+Thirty color cases used both color header flags and three title and
+license combinations on each revision. The comparisons checked the first
+guest reads, the following dot-level LY and STAT transitions, and the first
+presentation after an immediate LCD toggle. Reset tests also check the
+initial state, later IRQs, and continuation through saved states.
+
+Starting supplied firmware resets the LCD pipeline, blank-frame clock and
+repeat countdown. In 45 executed-firmware comparisons, the initial
+snapshot, presentation sequence, cartridge-entry snapshot and snapshot
+after ten more frames matched the previous build byte for byte.
+
+Windows and Linux each passed 177 acceptance and mapper cases. Both
+retained the previous guest instruction counts, clock totals, framebuffer
+checksums and audio checksums. The 121 paired firmware cases still matched
+the comparison run's terminal guest clocks.
+
+Native Windows and WSLg each ran Super Mario Bros. Deluxe for 65 seconds
+on CGB-C with built-in startup and normal audio. Both sessions applied all
+105 scripted inputs and reached World 1-1. They ended at the same guest
+cycle with identical framebuffer captures and matching 8 KiB saves.
+Both audio sinks reported zero idle or error events.
+
+CGB revision 0, monochrome-compatibility handoff phases and firmware-dependent
+divider values remain open. Early color revisions still clear the readable
+coincidence bit later than the measured edge at a VBlank row boundary.
+
 ### Monochrome cartridge in Qt
 
 Windows and WSLg each ran Donkey Kong for 60 seconds at `0d898fa` on CGB-C

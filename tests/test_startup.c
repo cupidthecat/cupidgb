@@ -993,6 +993,10 @@ static void test_firmware_entry_vram_dma(void) {
         load_generated_profile(gb, (CupidGbModel)model, 0, true);
         gb->boot_rom_size = 0x900;
         memcpy(gb->boot_rom, entry, sizeof(entry));
+        /* This fixture requires an immediately pending HBlank request.
+         * Establish that state explicitly instead of inheriting startup LY. */
+        cupid_gb_write_u8(gb, 0xff40, 0);
+        cupid_gb_write_u8(gb, 0xff40, 0x91);
         memset(gb->work_ram, 0x37, sizeof(gb->work_ram));
         memset(gb->video_ram, 0xa5, sizeof(gb->video_ram));
 
@@ -1225,6 +1229,174 @@ static void test_printer_state_policy(void) {
     free(before);
 }
 
+typedef struct StartupPresentation {
+    uint64_t cycle;
+    uint8_t type;
+} StartupPresentation;
+
+static void capture_first_startup_frame(const CupidGb *gb, uint8_t type, void *user) {
+    StartupPresentation *first = user;
+    if (!first->cycle)
+        *first = (StartupPresentation){.cycle = gb->elapsed_cycles, .type = type};
+}
+
+static void require_native_color_startup_phase(const CupidGb *g) {
+    assert(g->io_registers[0x44] == 144 && g->io_registers[0x41] == 0x81);
+    assert(g->pixels.initialized && g->pixels.line == 144 && g->pixels.dot == 168);
+    assert(g->pixels.window_armed && g->ppu_counter == 42);
+    assert(g->display_clock.row == 144 &&
+           g->display_clock.phase == CUPID_GB_DISPLAY_CLOCK_VBLANK_GAP);
+    assert(g->display_clock.credit_half_dots == -568 && g->display_clock.frame_age_dots == 164);
+    assert(g->display_cycles_since_frame == 166 && g->lcd_repeat_countdown == 67317 &&
+           !g->lcd_frame_odd);
+}
+
+static void compare_color_phase_continuation(CupidGb *a, CupidGb *b) {
+    size_t n = cupid_gb_state_size(a), written = 0;
+    uint8_t *x = malloc(n), *y = malloc(n);
+    assert(x && y);
+    assert(cupid_gb_save_state(a, x, n, &written) == CUPID_GB_STATE_OK && written == n);
+    assert(cupid_gb_load_state(b, x, n) == CUPID_GB_STATE_OK);
+    for (unsigned i = 0; i < 128; ++i)
+        assert(cupid_gb_step(a) && cupid_gb_step(b));
+    assert(cupid_gb_save_state(a, x, n, &written) == CUPID_GB_STATE_OK);
+    assert(cupid_gb_save_state(b, y, n, &written) == CUPID_GB_STATE_OK);
+    assert(!memcmp(x, y, n));
+    free(x);
+    free(y);
+}
+
+static void test_native_color_startup_phase(void) {
+    static uint8_t rom[32768];
+    const uint8_t entry[] = {0xf0, 0x44, 0xe0, 0x80, 0xf0, 0x41, 0xe0,
+                             0x81, 0xf0, 0x0f, 0xe0, 0x82, 0x18, 0xfe};
+    rom[0x100] = 0xc3;
+    rom[0x101] = 0x50;
+    rom[0x102] = 1;
+    memcpy(rom + 0x150, entry, sizeof(entry));
+    CupidGb *a = calloc(1, sizeof(*a)), *b = calloc(1, sizeof(*b));
+    assert(a && b);
+    unsigned cases = 0;
+    for (unsigned model = 0; model <= CUPID_GB_MODEL_CGB_D; ++model) {
+        for (unsigned flag = 0; flag < 3; ++flag) {
+            rom[0x143] = flag == 0 ? 0 : flag == 1 ? 0x80 : 0xc0;
+            rom[0x14d] = 0;
+            for (unsigned k = 0x134; k <= 0x14c; ++k)
+                rom[0x14d] -= rom[k] + 1;
+            cupid_gb_set_model(a, (CupidGbModel)model);
+            cupid_gb_set_model(b, (CupidGbModel)model);
+            cupid_gb_set_power_on_seed(a, 0);
+            cupid_gb_set_power_on_seed(b, 0);
+            assert(cupid_gb_load_rom(a, rom, sizeof(rom)) &&
+                   cupid_gb_load_rom(b, rom, sizeof(rom)));
+            const bool native =
+                cupid_gb_model_is_cgb(a->model) && a->model != CUPID_GB_MODEL_CGB_0 && flag;
+            if (native)
+                require_native_color_startup_phase(a);
+            else if (cupid_gb_model_is_cgb(a->model))
+                assert(a->io_registers[0x44] == 0 && a->ppu_counter == 0);
+            compare_color_phase_continuation(a, b);
+            for (unsigned kind = 0; kind < 2; ++kind) {
+                a->work_ram[0x12] = 0x5a;
+                a->high_ram[0x43] = 0xa6;
+                assert(cupid_gb_reset(a, (CupidGbResetKind)kind));
+                if (native) {
+                    require_native_color_startup_phase(a);
+                    if (kind == CUPID_GB_RESET_QUICK)
+                        assert(a->work_ram[0x12] == 0x5a && a->high_ram[0x43] == 0xa6);
+                    for (unsigned i = 0; i < 7; ++i)
+                        assert(cupid_gb_step(a));
+                    assert(cupid_gb_read_u8(a, 0xff80) == 144 &&
+                           cupid_gb_read_u8(a, 0xff81) == 0x81 &&
+                           cupid_gb_read_u8(a, 0xff82) == 0xe1);
+                }
+                compare_color_phase_continuation(a, b);
+                ++cases;
+            }
+        }
+    }
+    /* Use complete machine cycles for guest-visible IRQ delivery and save states. */
+    const CupidGbModel revisions[] = {CUPID_GB_MODEL_CGB_A, CUPID_GB_MODEL_CGB_B,
+                                      CUPID_GB_MODEL_CGB_C, CUPID_GB_MODEL_CGB_D,
+                                      CUPID_GB_MODEL_CGB_E};
+    for (unsigned i = 0; i < sizeof(revisions) / sizeof(revisions[0]); ++i) {
+        CupidGbModel rev = revisions[i];
+        cupid_gb_set_model(a, rev);
+        cupid_gb_set_model(b, rev);
+        rom[0x143] = 0x80;
+        rom[0x14d] = 0;
+        for (unsigned k = 0x134; k <= 0x14c; ++k)
+            rom[0x14d] -= rom[k] + 1;
+        assert(cupid_gb_load_rom(a, rom, sizeof(rom)) && cupid_gb_load_rom(b, rom, sizeof(rom)));
+        cupid_gb_write_u8(a, 0xff45, 145);
+        cupid_gb_write_u8(a, 0xff41, 0x40);
+        cupid_gb_write_u8(a, 0xff0f, 0);
+        cupid_gb_tick(a, 71);
+        assert(cupid_gb_read_u8(a, 0xff44) == 144 && !(a->interrupt_flags & 2));
+        cupid_gb_tick(a, 1);
+        assert(cupid_gb_read_u8(a, 0xff44) == 145 && !(a->interrupt_flags & 2));
+        cupid_gb_tick(a, 1);
+        assert((cupid_gb_read_u8(a, 0xff41) & 4) && (a->interrupt_flags & 2));
+        compare_color_phase_continuation(a, b);
+        assert(cupid_gb_reset(a, CUPID_GB_RESET_HARD));
+        cupid_gb_write_u8(a, 0xff0f, 0);
+        for (unsigned i = 0; i < 17514; ++i)
+            cupid_gb_tick(a, 1);
+        assert(!(a->interrupt_flags & 1));
+        cupid_gb_tick(a, 1);
+        assert(a->interrupt_flags & 1);
+        compare_color_phase_continuation(a, b);
+        assert(cupid_gb_reset(a, CUPID_GB_RESET_HARD));
+        cupid_gb_tick(a, 984);
+        assert(cupid_gb_read_u8(a, 0xff44) == 153);
+        compare_color_phase_continuation(a, b);
+        assert(cupid_gb_reset(a, CUPID_GB_RESET_HARD));
+        cupid_gb_tick(a, 986);
+        assert(cupid_gb_read_u8(a, 0xff44) == 0);
+        compare_color_phase_continuation(a, b);
+    }
+    for (unsigned i = 0; i < sizeof(revisions) / sizeof(revisions[0]); ++i) {
+        cupid_gb_set_model(a, revisions[i]);
+        assert(cupid_gb_load_rom(a, rom, sizeof(rom)));
+        require_native_color_startup_phase(a);
+        a->boot_rom_size = 0x900;
+        memset(a->boot_rom, 0, sizeof(a->boot_rom));
+        a->boot_rom[0] = 0x18;
+        a->boot_rom[1] = 0xfe;
+        StartupPresentation first = {0};
+        cupid_gb_set_presentation_callback(a, capture_first_startup_frame, &first);
+        cupid_gb_start_boot_rom(a);
+        assert(!a->pixels.initialized && !a->pixels.line && !a->pixels.dot &&
+               !a->pixels.window_armed && !a->display_cycles_since_frame &&
+               !a->lcd_repeat_countdown);
+        assert(!a->display_clock.phase && !a->display_clock.frame_age_dots);
+        while (!first.cycle && a->elapsed_cycles < 70240)
+            assert(cupid_gb_step(a));
+        assert(first.cycle == 70224 && first.type == CUPID_GB_FRAME_LCD_OFF);
+        cupid_gb_set_presentation_callback(a, NULL, NULL);
+        cupid_gb_clear_boot_rom(a);
+    }
+    /* Disable and re-enable LCDC through guest writes within the initial VBlank. */
+    const uint8_t toggle_lcd[] = {0x3e, 0x00, 0xe0, 0x40, 0x3e, 0x91, 0xe0, 0x40, 0x40, 0x18, 0xfe};
+    memcpy(rom + 0x150, toggle_lcd, sizeof(toggle_lcd));
+    for (unsigned i = 0; i < sizeof(revisions) / sizeof(revisions[0]); ++i) {
+        cupid_gb_set_model(a, revisions[i]);
+        assert(cupid_gb_load_rom(a, rom, sizeof(rom)));
+        StartupPresentation first = {0};
+        cupid_gb_set_presentation_callback(a, capture_first_startup_frame, &first);
+        while (!first.cycle && a->elapsed_cycles < 65732)
+            assert(cupid_gb_step(a));
+        assert(first.cycle == 65716 && first.type == CUPID_GB_FRAME_REPEAT);
+        cupid_gb_set_presentation_callback(a, NULL, NULL);
+    }
+    cupid_gb_cleanup(a);
+    cupid_gb_cleanup(b);
+    free(a);
+    free(b);
+    printf("Color startup phase: %u reset cases, snapshot continuation and IRQ checks passed.\n",
+           cases);
+}
+
 static void test_color_target_initialization(void) {
     CupidEmulator *emulator = calloc(1, sizeof(*emulator));
     assert(emulator);
@@ -1254,6 +1426,7 @@ int main(void) {
     test_legacy_sgb_startup_recovery();
     test_legacy_sgb_startup_signature();
     test_printer_state_policy();
+    test_native_color_startup_phase();
     test_color_target_initialization();
     test_cgb_cartridge_entry_registers();
     puts("Startup memory and lifecycle checks passed.");

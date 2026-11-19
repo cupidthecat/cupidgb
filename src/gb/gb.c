@@ -549,7 +549,7 @@ void cupid_gb_startup_hardware(CupidGb *gb) {
     gb->ppu_transfer_end_dot = 0;
     gb->object_fetch_stage = CUPID_GB_OBJECT_IDLE;
     /* Boot entry aborts an in-flight object transaction, including legacy imports. */
-    gb->pixels.object_delay = 0;
+    gb->pixels = (CupidGbPixels){0};
     gb->pixel_timing = (CupidGbPixelTiming){0};
     gb->vram_bus = (CupidGbVramBus){0};
     gb->cpu.ime = false;
@@ -609,6 +609,8 @@ void cupid_gb_startup_hardware(CupidGb *gb) {
     gb->div_counter = 2u;
     gb->divider_subcycle = 0u;
     gb->ppu_counter = 0u;
+    gb->display_cycles_since_frame = 0u;
+    gb->lcd_repeat_countdown = 0u;
     /* A new firmware entry cannot inherit guest peripheral transactions. */
     gb->timer_counter = 0u;
     gb->tima_overflow_delay = 0u;

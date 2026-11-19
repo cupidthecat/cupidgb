@@ -124,6 +124,7 @@ static void test_video_bus_history(void) {
         a->model = unused == 0 ? CUPID_GB_MODEL_DMG_ABC : CUPID_GB_MODEL_CGB;
         a->cgb_mode = a->model == CUPID_GB_MODEL_CGB;
         /* This synthetic model change needs a canonical display-clock origin. */
+        a->lcd_repeat_countdown = 0;
         cupid_gb_pixels_import_legacy(a);
         cupid_gb_display_clock_import_legacy(a);
         cupid_gb_vram_bus_import_legacy(a);
@@ -437,6 +438,10 @@ static void test_object_fetch_stage_history(void) {
     assert(a && b && before);
     prepare(a, CUPID_GB_MODEL_CGB, false);
     prepare(b, CUPID_GB_MODEL_CGB, false);
+    /* Object transactions require a visible transfer. */
+    a->pixels.line = 0;
+    a->io_registers[CUPID_GB_IO_LY] = 0;
+    a->io_registers[CUPID_GB_IO_STAT] = 0x80 | CUPID_GB_PPU_MODE_TRANSFER;
     a->pixels.object_count = 1;
     a->pixels.object_index = 0;
     a->pixels.fetched_objects = 1;
@@ -444,6 +449,8 @@ static void test_object_fetch_stage_history(void) {
     a->pixels.count = 8;
     a->pixels.delay = 7;
     a->pixels.phase = 6;
+    cupid_gb_pixels_import_legacy(a);
+    cupid_gb_display_clock_import_legacy(a);
     const unsigned stages[][2] = {{CUPID_GB_OBJECT_IDLE, 0},
                                   {CUPID_GB_OBJECT_IDLE, 5},
                                   {CUPID_GB_OBJECT_WAIT_BACKGROUND, 0},

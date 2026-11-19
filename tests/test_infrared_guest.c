@@ -103,6 +103,10 @@ static CupidGb *create_machine(const Profile *profile, unsigned warmup) {
     for (unsigned index = 0x134; index <= 0x14c; ++index)
         rom[0x14d] = (uint8_t)(rom[0x14d] - rom[index] - 1u);
     assert(cupid_gb_load_rom(gb, rom, sizeof(rom)));
+    /* The infrared vectors start at the beginning of a display interval. */
+    gb->display_cycles_since_frame = 0;
+    gb->display_clock.frame_age_dots = 0;
+    gb->lcd_repeat_countdown = 0;
     cupid_gb_write_u8(gb, 0xff40, 0);
     cupid_gb_write_u8(gb, 0xff04, 0);
     assert(!gb->elapsed_cycles && !gb->display_cycles_since_frame);
