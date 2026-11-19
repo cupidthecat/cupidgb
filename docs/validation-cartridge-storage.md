@@ -58,3 +58,11 @@ The paired bank probe checks every one of the 65,536 ROM-latch values at two byt
 The probe, libraries, headers, compiler and all 264 build inputs retain their recorded hashes. An offline companion receipt corrects the original report parser's rejection of eight ordinary cartridge-load messages; it retains all comparison rows and leaves the original logs and receipt unchanged. The companion has SHA-256 `fcc61a21524410218d18b0412231a7b115a26bd8fcdb9654b5883415570841f2`.
 
 The configured ceiling does not establish tested gameplay at every capacity. This checkpoint limited cartridge RAM to 128 KiB, including TPP1. The later [storage, wave and camera checkpoint](validation-storage-wave.md) extends declared TPP1 SRAM through 2 MiB and records its separate validation. Physical peripherals and every-game compatibility remain open in the [parity checklist](parity.md).
+
+## HuC3, MBC7 and Camera comparisons
+
+At `92cd698`, all 131,072 HuC3 cases matched. The test exercised every command byte and register index from a fixed initial clock state on DMG and CGB. Each case compared eight state fields and both command-port readbacks.
+
+Four Linux headless runs matched every pixel after 1,800 frame-equivalents. They reached the file menu with a modified MBC7 image on CGB-E, the new-game and date menu with HuC3 on CGB-E, and the camera capture and contrast controls on DMG and CGB-E. Both builds used the same per-model firmware and ten-event input trace. CupidGB used startup seed 0, and the comparison used seed 1. The camera cases used the same grayscale input and immediate capture completion.
+
+The local library scan found no commercial HuC1, MMM01, MBC6, TAMA5 or TPP1 inputs. Physical camera capture, motion and infrared still need separate tests.
