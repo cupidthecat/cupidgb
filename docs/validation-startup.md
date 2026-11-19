@@ -415,3 +415,8 @@ After warmup, Qt measured guest clock progress at 100.008% of target on Windows
 and 100.020% on WSLg. The WSLg monotonic clock advanced at 96.68% of its raw clock
 over the full run. The 95th-percentile widget paint intervals were 18.29 ms and
 18.12 ms respectively. Both audio sinks reported zero idle or error events.
+
+The 60-second CGB-C run repeated after the I/O latch changes at `7f8d442`.
+Both hosts again applied all 88 inputs, reached the first stage and wrote
+the same 8 KiB save. The final images also matched the earlier run byte for
+byte. Both audio sinks reported zero idle or error events.

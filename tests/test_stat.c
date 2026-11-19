@@ -236,14 +236,19 @@ static void test_stat_during_delayed_speed_switch(void) {
 
 static void test_invalid_comparison_latches(void) {
     const uint8_t program[] = {0};
-    const CupidGbModel models[] = {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_MGB, CUPID_GB_MODEL_SGB,
-                                   CUPID_GB_MODEL_SGB2, CUPID_GB_MODEL_CGB};
+    const CupidGbModel models[] = {
+        CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_MGB,   CUPID_GB_MODEL_SGB,   CUPID_GB_MODEL_SGB2,
+        CUPID_GB_MODEL_CGB_0,   CUPID_GB_MODEL_CGB_A, CUPID_GB_MODEL_CGB_B, CUPID_GB_MODEL_CGB_C,
+        CUPID_GB_MODEL_CGB_D,   CUPID_GB_MODEL_CGB_E};
     for (unsigned m = 0; m < sizeof(models) / sizeof(models[0]); ++m) {
-        for (unsigned speed = 0; speed <= (models[m] == CUPID_GB_MODEL_CGB); ++speed) {
+        for (unsigned speed = 0; speed <= cupid_gb_model_is_cgb(models[m]); ++speed) {
             CupidGb *gb = prepare(models[m], speed != 0, program, sizeof(program), 0x40, 0, 1, 0);
             assert(gb->pixels.line == 1 && gb->pixels.dot == 0);
             assert(cupid_gb_read_u8(gb, 0xff44) == 1);
-            const uint8_t boundary_stat = models[m] == CUPID_GB_MODEL_CGB ? 4 : 0;
+            const bool retained_bit =
+                cupid_gb_model_is_cgb(models[m]) &&
+                (speed || models[m] == CUPID_GB_MODEL_CGB_D || models[m] == CUPID_GB_MODEL_CGB_E);
+            const uint8_t boundary_stat = retained_bit ? 4 : 0;
             assert((cupid_gb_read_u8(gb, 0xff41) & 7) == boundary_stat);
             assert(gb->pixels.lyc_irq);
             gb->interrupt_flags = 0;
@@ -531,7 +536,35 @@ static void test_early_color_lyc_then_stat(void) {
     }
 }
 
+static void test_color_vblank_comparison_latches(void) {
+    const uint8_t program[] = {0};
+    for (unsigned model = 0; model < sizeof(color_revisions) / sizeof(color_revisions[0]);
+         ++model) {
+        for (unsigned speed = 0; speed < 2; ++speed) {
+            for (unsigned line = 144; line <= 152; ++line) {
+                CupidGb *gb = prepare(color_revisions[model], speed != 0, program, sizeof(program),
+                                      0x40, (uint8_t)(line - 1u), 1, 0);
+                for (unsigned row = 1; row < line; ++row)
+                    cupid_gb_tick_ppu_dots(gb, 456);
+                assert(gb->pixels.line == line && gb->pixels.dot == 0);
+                const bool retained = speed || model >= 4;
+                const unsigned mode = line == 144 ? 0 : 1;
+                assert((cupid_gb_read_u8(gb, 0xff41) & 7u) == (mode | (retained ? 4u : 0u)));
+                assert(gb->pixels.lyc_irq);
+                gb->interrupt_flags = 0;
+                check_snapshot_continuation(gb);
+                cupid_gb_tick_ppu_dots(gb, 1);
+                assert(!gb->pixels.lyc_irq);
+                assert(!(cupid_gb_read_u8(gb, 0xff41) & 4u));
+                assert(!(gb->interrupt_flags & 2u));
+                destroy(gb);
+            }
+        }
+    }
+}
+
 int main(void) {
+    test_color_vblank_comparison_latches();
     test_early_color_lyc_then_stat();
     test_color_last_line_stat_writes();
     test_color_last_line_lyc_writes();

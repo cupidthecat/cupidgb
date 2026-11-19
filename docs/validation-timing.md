@@ -135,3 +135,18 @@ failures with the supplied firmware.
 A separate probe executed scroll, window-position and window-enable writes
 at 13 CPU alignments. All 156 cases matched PC, LY, STAT and terminal cycles.
 The completed framebuffers also matched across all 3,594,240 pixels.
+
+## CGB STAT coincidence across scanlines
+
+Readable LY advances before the comparator samples the next line. During the
+gap, early CGB revisions at normal speed clear the readable STAT coincidence
+bit and hold the previous LYC interrupt input. Later revisions and double
+speed hold both latches. The comparison across VBlank rows 144 through 152
+also holds the interrupt input until the next row settles.
+
+Guest `LDH` probes reproduced three incorrect STAT reads immediately after
+firmware handoff. All 52 guest alignments agreed after the fix. The timing
+probes also agreed on 288 visible-row observations, 720 VBlank observations,
+3,600 observations around STAT and LYC writes, and 43,200 observations across
+1,728 line-153 cases. The regression checks native snapshot continuation at
+108 VBlank boundaries across six revisions and both speeds.

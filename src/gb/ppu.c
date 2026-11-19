@@ -182,15 +182,19 @@ static void update_stat_irq(CupidGb *gb, StatUpdate update, bool half_dot, int f
     const bool fast_monochrome = gb->double_speed && !color;
     bool compare_valid = !p->initialized || gb->ppu_lcd_startup || p->dot != 0 || p->line == 0 ||
                          (stat & 3u) == CUPID_GB_PPU_MODE_OAM;
-    /* The final VBlank row exposes the next LY before its comparison settles.
+    /* Color scanlines expose the next LY before its comparison settles.
      * Fast monochrome playback must retain line 152 across that readable edge. */
-    if (p->initialized && (p->line < 143 || (fast_monochrome && p->line == 152)) &&
+    if (p->initialized &&
+        (p->line < 143 || (color && p->line < 152) || (fast_monochrome && p->line == 152)) &&
         gb->io_registers[CUPID_GB_IO_LY] == p->line + 1u)
         compare_valid = false;
     unsigned compare_line = gb->io_registers[CUPID_GB_IO_LY];
     if (p->initialized && p->line == 143 && p->dot >= 455)
         compare_valid = false;
-    bool clear_visible_match = false;
+    /* Early normal-speed color hardware clears the readable coincidence bit
+     * while a line comparison is invalid. Its IRQ input remains held. */
+    bool clear_visible_match = early_color_lcd(gb) && !gb->double_speed && p->initialized &&
+                               p->line < 153u && !compare_valid;
     const bool color_line_tail = color && p->line == 152 && p->dot == 455;
     if (p->initialized && color && (color_line_tail || p->line == 153)) {
         /* Phase zero is the first readable LY=153, one dot before the line counter advances.
