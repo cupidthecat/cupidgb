@@ -688,10 +688,10 @@ void MainWindow::configure() {
             settings_.setValue(QString("video/customPalette/%1").arg(i), colorNames[i]);
         settings_.setValue("video/customPalette/off", offColorValue.name());
         if (!cameraSourceOverride_) {
-            settings_.setValue("camera/source", cameraSource->currentData());
             const auto selected =
                 cameraSource->currentIndex() == 1 ? CameraSource::Generated : CameraSource::System;
             if (selected != cameraSource_) {
+                settings_.setValue("camera/source", cameraSource->currentData());
                 cancelCameraCapture();
                 cameraError_.clear();
                 cameraSource_ = selected;

@@ -2,8 +2,9 @@
 
 In Qt, open **Settings** and choose **Camera input**. **System Camera** uses
 the operating system's default camera. **Generated Pattern** uses the core's
-deterministic sensor and guest-clock exposure timing. The setting is saved
-when you apply the dialog. Changing input cancels a capture in progress.
+deterministic sensor and guest-clock exposure timing. Choosing a source
+applies it to the current window and sets the default for new windows.
+Changing input cancels a capture in progress.
 
 Use `--camera-source generated` or `--camera-source system` to select input
 for one launch, including any new windows opened from that session.

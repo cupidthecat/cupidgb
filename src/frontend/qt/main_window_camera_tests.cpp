@@ -373,6 +373,37 @@ bool MainWindow::cameraSourceSmokeTest(const QString &directory) {
         watchdog.stop();
         return checked && !timedOut;
     };
+    // An older window retains its active input, but accepting unrelated settings
+    // must not replace the preference saved through another existing window.
+    {
+        MainWindow newer(true, true);
+        newer.timer_.stop();
+        HostCamera *const retainedSource = session.hostCamera_.get();
+        bool audioChanged = false;
+        if (!configureSource(
+                newer, 0, 1, true, true,
+                [&] {
+                    auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+                    auto *interference =
+                        dialog ? dialog->findChild<QSlider *>("audioInterferenceVolume") : nullptr;
+                    if (interference) {
+                        interference->setValue(35);
+                        audioChanged = true;
+                    }
+                }) ||
+            !audioChanged || newer.cameraSource_ != CameraSource::Generated ||
+            !configureSource(session, 0, 0, true) ||
+            settings_.value("camera/source").toString() != "generated" ||
+            settings_.value("audio/interferenceVolume").toInt() != 35 ||
+            session.cameraSource_ != CameraSource::System ||
+            session.hostCamera_.get() != retainedSource)
+            return smokeFailure(__FILE__, __LINE__);
+        MainWindow future(true, true);
+        future.timer_.stop();
+        if (future.cameraSource_ != CameraSource::Generated || future.hostCamera_)
+            return smokeFailure(__FILE__, __LINE__);
+    }
+    settings_.remove("camera/source");
     const auto shutter = [&] {
         auto &gb = session.emulator_->gb;
         cupid_gb_write_u8(&gb, 0x4000, 0x10);
