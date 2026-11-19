@@ -22,8 +22,9 @@ must pass native validation.
 
 Portable states support completed cartridge boot on DMG, Pocket, CGB,
 SGB NTSC, SGB PAL, and SGB2 with ROM-only or ROM+RAM, MBC1, MBC2, standard
-MBC3 with optional RTC, MBC5, MBC7, and HuC3. The importer checks the model
-family and, when present, the saved cartridge title and global checksum.
+MBC3 with optional RTC, MBC5, MBC7, HuC3, and TPP1. The importer checks
+the model family and, when present, the saved cartridge title and global
+checksum.
 It validates every referenced memory range before replacing the running
 state.
 
@@ -47,6 +48,13 @@ of counters start at zero. Host-synchronized loads clamp future
 timestamps to the receiving clock without clearing the stored counters.
 Accurate mode starts its next guest interval at the receiving clock.
 Portable loads start a fresh nibble command and infrared history.
+
+TPP1 checkpoints carry banking, up to 2 MiB of SRAM, both clock copies,
+the stored MR4 value, and motor strength. The initial bank-one view is
+preserved until the first mapper write. TPP1 follows the same timestamp
+rules as HuC3. Without the clock block its clock bytes and MR4 start
+clear. A file can restore motor strength independently through mapper
+writes.
 
 Portable loads restart missing LCD, audio oscillator, and peripheral
 timing from a deterministic phase. The SGB introduction is complete on
@@ -74,6 +82,11 @@ HuC3 validation covered 19 independent files in both clock modes. It
 checked the initial bank mapping, SRAM, clock and alarm digits, future
 timestamps, and missing clock data. Fifteen exported files resumed
 with the expected cart state in both clock modes.
+
+TPP1 validation matched 38 imports and 17 exports against independent
+checkpoints. The cases cover both clock modes, all four mapper modes,
+full-width ROM and SRAM latches, clock rollover, motor commands, and
+omitted mapper controls or clock data.
 
 Host camera images and pending device requests stay with the receiving session. Saving a pending host capture writes an idle camera to the file while the live request continues. After full validation, a load into host-camera mode cancels obsolete requests and clears imported busy state while retaining the current image. This also applies to a saved generated countdown. Without a provider, generated captures retain their countdown, while a host-origin snapshot starts idle. The existing 64-byte camera section and strict busy/countdown validator are unchanged. See [Camera cartridges](host-camera.md) for reset, rewind and embedding rules.
 

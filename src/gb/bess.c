@@ -41,6 +41,7 @@ enum {
     BESS_INFO_SIZE = 18,
     BESS_RTC_SIZE = 48,
     BESS_HUC3_SIZE = 17,
+    BESS_TPP1_SIZE = 17,
     BESS_MBC7_SIZE = 10,
     BESS_XOAM_SIZE = 96,
     BESS_SGB_SIZE = 0x39,
@@ -56,7 +57,7 @@ typedef struct BessBlock {
 } BessBlock;
 
 typedef struct BessState {
-    BessBlock info, core, mapper, clock, huc3, mbc7, extra_oam, sgb;
+    BessBlock info, core, mapper, clock, huc3, tpp1, mbc7, extra_oam, sgb;
     BessBlock regions[BESS_REGION_COUNT];
     BessBlock sgb_regions[BESS_REGION_COUNT];
     size_t block_begin, block_end;
@@ -85,6 +86,8 @@ static BessBlock *known_block(BessState *state, const uint8_t *name) {
         return &state->clock;
     if (!memcmp(name, "HUC3", 4))
         return &state->huc3;
+    if (!memcmp(name, "TPP1", 4))
+        return &state->tpp1;
     if (!memcmp(name, "MBC7", 4))
         return &state->mbc7;
     if (!memcmp(name, "XOAM", 4))
@@ -172,6 +175,8 @@ static CupidGbStateResult validate(const CupidGb *gb, const BessState *state) {
     if (core[20] > 1 || core[22] > 2 || core[23] || core[BESS_PORTS + 0x50] > 1 ||
         state->mapper.size % 3 || (state->clock.bytes && state->clock.size != BESS_RTC_SIZE) ||
         (state->huc3.bytes && (state->huc3.size != BESS_HUC3_SIZE || state->huc3.bytes[16] > 1)) ||
+        (state->tpp1.bytes &&
+         (state->tpp1.size != BESS_TPP1_SIZE || (state->tpp1.bytes[16] & 0xf0u))) ||
         (state->mbc7.bytes && state->mbc7.size != BESS_MBC7_SIZE) ||
         (state->extra_oam.bytes && state->extra_oam.size != BESS_XOAM_SIZE) ||
         (state->sgb.bytes && !cupid_gb_model_is_sgb(gb->model)) ||
@@ -357,23 +362,34 @@ static bool restore_mbc7(CupidGb *gb, const uint8_t *memory) {
     return cupid_gb_mbc7_serial_valid(&gb->mbc7);
 }
 
-static void restore_huc3(CupidGb *gb, const uint8_t *clock) {
-    if (gb->header.mbc_type != CUPID_GB_HUC3)
-        return;
+static int64_t controller_timestamp(const CupidGb *gb, const uint8_t *clock) {
     /* Sample the receiving clock once, after all structural validation.
      * Accurate mode starts a guest interval at this new baseline. */
     const int64_t now = cupid_gb_rtc_now(gb);
-    gb->huc3.rtc_base_time = now;
+    if (!clock || gb->rtc_policy.mode != CUPID_GB_RTC_SYNC_TO_HOST)
+        return now;
+    const uint64_t saved = bess_long(clock) | (uint64_t)bess_long(clock + 4) << 32;
+    return saved <= (uint64_t)now ? (int64_t)saved : now;
+}
+
+static void restore_huc3(CupidGb *gb, const uint8_t *clock) {
+    gb->huc3.rtc_base_time = controller_timestamp(gb, clock);
     if (!clock)
         return;
-    const uint64_t saved = bess_long(clock) | (uint64_t)bess_long(clock + 4) << 32;
-    if (gb->rtc_policy.mode == CUPID_GB_RTC_SYNC_TO_HOST && saved <= (uint64_t)now)
-        gb->huc3.rtc_base_time = (int64_t)saved;
     gb->huc3.minutes = bess_word(clock + 8);
     gb->huc3.days = bess_word(clock + 10);
     gb->huc3.alarm_minutes = bess_word(clock + 12);
     gb->huc3.alarm_days = bess_word(clock + 14);
     gb->huc3.alarm_enabled = clock[16] != 0;
+}
+
+static void restore_tpp1(CupidGb *gb, const uint8_t *clock) {
+    gb->tpp1.rtc_base_time = controller_timestamp(gb, clock);
+    if (!clock)
+        return;
+    memcpy(gb->tpp1.live, clock + 8, sizeof(gb->tpp1.live));
+    memcpy(gb->tpp1.latched, clock + 12, sizeof(gb->tpp1.latched));
+    gb->tpp1.status = clock[16];
 }
 
 static bool supported_mapper(const CupidGb *gb) {
@@ -384,6 +400,7 @@ static bool supported_mapper(const CupidGb *gb) {
         case CUPID_GB_MBC5:
         case CUPID_GB_MBC7:
         case CUPID_GB_HUC3:
+        case CUPID_GB_TPP1:
             return true;
         case CUPID_GB_MBC3:
             return !cupid_gb_has_extended_mbc3(gb);
@@ -440,7 +457,7 @@ CupidGbStateResult cupid_gb_bess_load(CupidGb *gb, const uint8_t *data, size_t l
     next->power_on = gb->power_on;
     /* An omitted RTC block has no portable timestamp. Keep the receiver's
      * clock rather than treating its counters as having run since the epoch. */
-    if (next->header.has_timer)
+    if (next->header.mbc_type == CUPID_GB_MBC3 && next->header.has_timer)
         next->rtc = gb->rtc;
 
     copy_region(next->work_ram, sizeof(next->work_ram), state.regions[0]);
@@ -483,7 +500,10 @@ CupidGbStateResult cupid_gb_bess_load(CupidGb *gb, const uint8_t *data, size_t l
     }
     cupid_gb_reset_restore_host(next, gb);
     cupid_gb_input_import_legacy(next);
-    restore_huc3(next, state.huc3.bytes);
+    if (next->header.mbc_type == CUPID_GB_HUC3)
+        restore_huc3(next, state.huc3.bytes);
+    else if (next->header.mbc_type == CUPID_GB_TPP1)
+        restore_tpp1(next, state.tpp1.bytes);
     if (next->header.has_battery)
         ++next->battery_write_generation;
     cupid_gb_reset_commit(gb, next);
