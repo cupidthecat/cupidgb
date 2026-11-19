@@ -182,17 +182,20 @@ static void update_stat_irq(CupidGb *gb, StatUpdate update, bool half_dot, int f
     const bool fast_monochrome = gb->double_speed && !color;
     bool compare_valid = !p->initialized || gb->ppu_lcd_startup || p->dot != 0 || p->line == 0 ||
                          (stat & 3u) == CUPID_GB_PPU_MODE_OAM;
-    /* Color scanlines expose the next LY before its comparison settles.
-     * Fast monochrome playback must retain line 152 across that readable edge. */
-    if (p->initialized &&
-        (p->line < 143 || (color && p->line < 152) || (fast_monochrome && p->line == 152)) &&
-        gb->io_registers[CUPID_GB_IO_LY] == p->line + 1u)
-        compare_valid = false;
     unsigned compare_line = gb->io_registers[CUPID_GB_IO_LY];
-    if (p->initialized && p->dot >= 453) {
-        /* The comparison stops two dots before LY changes at a CGB VBlank boundary. */
-        if ((color && p->line >= 143 && p->line < 153) || (p->line == 143 && p->dot >= 455))
+    if (p->initialized) {
+        const unsigned line = p->line;
+        if (line < 143u) {
+            /* The visible-row handoff exposes the next LY before comparison. */
+            compare_valid = compare_valid && compare_line != line + 1u;
+        } else if (color && line < 153u) {
+            /* The VBlank comparison stops two dots before readable LY changes. */
+            if (p->dot >= 453u || (line < 152u && compare_line == line + 1u))
+                compare_valid = false;
+        } else if ((line == 143u && p->dot >= 455u) ||
+                   (fast_monochrome && line == 152u && compare_line == 153u)) {
             compare_valid = false;
+        }
     }
     /* Early normal-speed color hardware clears the readable coincidence bit
      * while a line comparison is invalid. Its IRQ input remains held. */
