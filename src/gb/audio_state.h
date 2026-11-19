@@ -36,6 +36,7 @@ enum {
 
 bool cupid_gb_audio_state_valid(const CupidGb *gb);
 bool cupid_gb_audio_state_encode(const CupidGb *gb, uint8_t *data, size_t length);
-bool cupid_gb_audio_state_decode(CupidGb *gb, const uint8_t *data, size_t length);
+bool cupid_gb_audio_state_decode(CupidGb *gb, const uint8_t *data, size_t length,
+                                 bool startup_filter_flag);
 
 #endif

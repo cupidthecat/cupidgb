@@ -24,6 +24,14 @@
 
 #include "cupid/gb/gb.h"
 
+enum { CUPID_GB_POST_BOOT_NR50 = 0x77, CUPID_GB_POST_BOOT_NR51 = 0xf3 };
+
+/* Only built-in CGB A–E cartridge entry supplies settled filter history. */
+static inline bool cupid_gb_audio_startup_filter_supported(const CupidGb *gb) {
+    return cupid_gb_model_is_cgb(gb->model) && gb->model != CUPID_GB_MODEL_CGB_0 &&
+           gb->program_kind == CUPID_GB_PROGRAM_CARTRIDGE && !gb->boot_rom_enabled;
+}
+
 void cupid_gb_audio_configure(CupidGb *gb);
 uint8_t cupid_gb_audio_dac_mask(const CupidGb *gb);
 void cupid_gb_audio_credit(CupidGb *gb, unsigned base_cycles);

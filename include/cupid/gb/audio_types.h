@@ -68,6 +68,7 @@ typedef struct CupidGbAudioFilterState {
     double capacitor[2];
     double interference;
     double retention;
+    bool startup_pending;
 } CupidGbAudioFilterState;
 
 /* Inputs to optional hardware-interference synthesis at an output boundary. */

@@ -498,6 +498,7 @@ static void legacy_projection(void) {
                 memset(source->sgb.received_header, 0x69, RECEIVED_BYTES);
                 source->sgb.commands_disabled = !disabled;
             }
+            source->apu.output.filter.startup_pending = false; /* Fixtures predate V30. */
             Blob current = capture(source);
             assert(
                 current.size ==

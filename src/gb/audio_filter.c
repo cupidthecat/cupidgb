@@ -50,6 +50,18 @@ static void dc_targets(uint8_t enabled_dacs, uint8_t nr50, uint8_t nr51, double 
     target[1] = (double)(high * (((nr50 >> 4) & 7u) + 1u) * 510u);
 }
 
+void cupid_gb_audio_filter_settle(CupidGbAudioFilterState *state, const CupidGbAudioPolicy *policy,
+                                  CupidGbAudioFrame mixed, uint8_t enabled_dacs, uint8_t nr50,
+                                  uint8_t nr51) {
+    if (policy->preserve_waveform) {
+        dc_targets(enabled_dacs, nr50, nr51, state->capacitor);
+    } else {
+        state->capacitor[0] = policy->filter_disabled ? 0 : mixed.left;
+        state->capacitor[1] = policy->filter_disabled ? 0 : mixed.right;
+    }
+    state->startup_pending = false;
+}
+
 static int32_t hardware_bias(const CupidGbAudioConditions *conditions, uint32_t random_value) {
     static const int32_t display_bias[4] = {582, 0, 582, 873};
     int32_t bias = conditions->lcd_enabled ? display_bias[conditions->lcd_mode] : 0;

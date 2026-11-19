@@ -116,6 +116,7 @@ void cupid_gb_apu_apply_cgb_boot_pulse(CupidGb *gb, unsigned native_divider,
     gb->io_registers[0x14] = (uint8_t)(0x80u | (BOOT_FREQUENCY >> 8u));
     /* Seed the existing output path from the cartridge-entry DAC level. */
     cupid_gb_audio_import_legacy(gb);
+    gb->apu.output.filter.startup_pending = true;
 }
 
 static bool pulse_gate_off(CupidGbApu *apu, unsigned channel) {

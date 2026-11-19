@@ -23,6 +23,7 @@
 #include "audio_state.h"
 
 #include "audio_filter.h"
+#include "audio_output.h"
 #include "cupid/gb/apu.h"
 #include "state_io.h"
 
@@ -68,7 +69,7 @@ static void channel_fields(StateIo *io, CupidGbAudioChannel *channel) {
     byte(io, &channel->cursor);
 }
 
-static void audio_fields(StateIo *io, CupidGb *gb) {
+static void audio_fields(StateIo *io, CupidGb *gb, bool startup_filter_flag) {
     CupidGbAudioOutput *output = &gb->apu.output;
     for (unsigned channel = 0; channel < CUPID_GB_AUDIO_CHANNELS; ++channel)
         channel_fields(io, &output->channels[channel]);
@@ -78,7 +79,16 @@ static void audio_fields(StateIo *io, CupidGb *gb) {
     real(io, &output->filter.retention);
     real(io, &output->policy.interference_volume);
     byte(io, &output->policy.muted_channels);
-    boolean(io, &output->policy.preserve_waveform);
+    /* V30 uses a spare bit in the old Preserve Waveform byte. */
+    uint8_t flags =
+        (uint8_t)(output->policy.preserve_waveform | (output->filter.startup_pending << 1));
+    byte(io, &flags);
+    if (io->input) {
+        if (flags > (startup_filter_flag ? 3u : 1u))
+            io->invalid = true;
+        output->policy.preserve_waveform = (flags & 1u) != 0;
+        output->filter.startup_pending = (flags & 2u) != 0;
+    }
     for (unsigned channel = 0; channel < CUPID_GB_AUDIO_CHANNELS; ++channel)
         real(io, &output->dac_charge[channel]);
     for (unsigned frame = 0; frame < CUPID_GB_AUDIO_DAC_DELAY; ++frame)
@@ -118,6 +128,7 @@ bool cupid_gb_audio_state_valid(const CupidGb *gb) {
         output->dac_delay_cursor >= CUPID_GB_AUDIO_DAC_DELAY ||
         output->policy.muted_channels > 15 ||
         (output->policy.filter_disabled && output->policy.preserve_waveform) ||
+        (output->filter.startup_pending && !cupid_gb_audio_startup_filter_supported(gb)) ||
         !unit_value(output->policy.interference_volume) || !unit_value(output->filter.retention) ||
         !filter_history(output->filter.capacitor[0]) ||
         !filter_history(output->filter.capacitor[1]) ||
@@ -179,15 +190,16 @@ bool cupid_gb_audio_state_encode(const CupidGb *gb, uint8_t *data, size_t length
     if (!data || length != CUPID_GB_AUDIO_STATE_SIZE || !cupid_gb_audio_state_valid(gb))
         return false;
     StateIo io = {NULL, data, 0, length, false};
-    audio_fields(&io, (CupidGb *)gb);
+    audio_fields(&io, (CupidGb *)gb, true);
     return !io.invalid && io.offset == length;
 }
 
-bool cupid_gb_audio_state_decode(CupidGb *gb, const uint8_t *data, size_t length) {
+bool cupid_gb_audio_state_decode(CupidGb *gb, const uint8_t *data, size_t length,
+                                 bool startup_filter_flag) {
     if (!gb || !data || length != CUPID_GB_AUDIO_STATE_SIZE)
         return false;
     StateIo io = {data, NULL, 0, length, false};
-    audio_fields(&io, gb);
+    audio_fields(&io, gb, startup_filter_flag);
     if (io.invalid || io.offset != length)
         return false;
     CupidGbAudioOutput *output = &gb->apu.output;

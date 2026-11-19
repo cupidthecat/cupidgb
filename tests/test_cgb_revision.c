@@ -432,6 +432,7 @@ static void test_legacy_noise_envelope(CupidGbModel model) {
     arm_envelopes(source, false);
     source->apu.noise_timing.envelope = (CupidGbEnvelopeGate){0};
     source->apu.ch4_env_timer = 1;
+    source->apu.output.filter.startup_pending = false; /* Absent from V28. */
     size_t length;
     uint8_t *state = snapshot(source, &length);
     state[8] = 28;

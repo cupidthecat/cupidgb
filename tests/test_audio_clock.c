@@ -136,7 +136,7 @@ static void test_legacy_increment(void) {
          * native structure padding and host integer byte order. */
         put_word(legacy + STEP_OFFSET, old_step, 4);
         *restored = *gb;
-        assert(cupid_gb_audio_state_decode(restored, legacy, sizeof(legacy)));
+        assert(cupid_gb_audio_state_decode(restored, legacy, sizeof(legacy), false));
         assert(restored->apu.output.fraction_step == floor_step);
         assert(cupid_gb_audio_state_encode(restored, recaptured, sizeof(recaptured)));
         assert(memcmp(canonical, recaptured, sizeof(canonical)) == 0);
@@ -144,17 +144,17 @@ static void test_legacy_increment(void) {
         assert(cupid_gb_audio_state_valid(restored));
 
         *restored = *gb;
-        assert(cupid_gb_audio_state_decode(restored, canonical, sizeof(canonical)));
+        assert(cupid_gb_audio_state_decode(restored, canonical, sizeof(canonical), true));
         assert(cupid_gb_audio_state_encode(restored, recaptured, sizeof(recaptured)));
         assert(memcmp(canonical, recaptured, sizeof(canonical)) == 0);
 
         put_word(legacy + STEP_OFFSET, old_step + 1, 4);
         *restored = *gb;
-        assert(!cupid_gb_audio_state_decode(restored, legacy, sizeof(legacy)));
+        assert(!cupid_gb_audio_state_decode(restored, legacy, sizeof(legacy), false));
         put_word(legacy + STEP_OFFSET, old_step, 4);
         put_word(legacy + SPAN_OFFSET, (uint32_t)gb->apu.output.max_span + 2, 2);
         *restored = *gb;
-        assert(!cupid_gb_audio_state_decode(restored, legacy, sizeof(legacy)));
+        assert(!cupid_gb_audio_state_decode(restored, legacy, sizeof(legacy), false));
         free(restored);
         free(gb);
     }

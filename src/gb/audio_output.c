@@ -191,6 +191,12 @@ static uint8_t dac_gain(CupidGbAudioOutput *output, unsigned channel, bool enabl
 
 void cupid_gb_audio_render(CupidGb *gb) {
     CupidGbAudioOutput *output = &gb->apu.output;
+    if (output->filter.startup_pending) {
+        /* Pulse 1 was the only connected DAC at cartridge entry. Its synthesis
+         * anchor still holds that mix, even if the guest has queued new writes. */
+        cupid_gb_audio_filter_settle(&output->filter, &output->policy, output->channels[0].anchor,
+                                     1u, CUPID_GB_POST_BOOT_NR50, CUPID_GB_POST_BOOT_NR51);
+    }
     const uint32_t rate = cupid_gb_apu_get_sample_rate(gb);
     const bool color = cupid_gb_model_is_cgb(gb->model);
     const bool delay = !color && output->max_span != 2;

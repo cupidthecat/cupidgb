@@ -179,6 +179,7 @@ static void install_descriptor(CupidGb *next, const uint8_t *header, size_t payl
 static void initialize_track(CupidGb *next, const CupidGb *previous, uint8_t track) {
     cupid_gb_startup_hardware(next);
     next->apu.output = previous->apu.output;
+    next->apu.output.filter.startup_pending = false;
     if (!previous->loaded) {
         /* An unloaded instance has only the approximate post-boot waveform.
          * Music executes no firmware, so begin with uncharged reconstruction.

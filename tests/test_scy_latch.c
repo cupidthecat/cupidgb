@@ -149,6 +149,7 @@ static void test_snapshot(bool compatibility, bool fast, bool changed) {
     prepare_fetch(source, false, true);
     if (changed)
         source->gb->io_registers[CUPID_GB_IO_SCY] = 8;
+    source->gb->apu.output.filter.startup_pending = false; /* Absent from V16. */
 
     const size_t size = cupid_gb_state_size(source->gb);
     assert(size > 128);

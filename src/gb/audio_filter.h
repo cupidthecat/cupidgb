@@ -36,6 +36,10 @@ enum { CUPID_GB_AUDIO_FILTER_HISTORY_LIMIT = 65536 };
 void cupid_gb_audio_filter_set_rate(CupidGbAudioFilterState *state, uint32_t clock_hz,
                                     uint32_t sample_rate);
 
+void cupid_gb_audio_filter_settle(CupidGbAudioFilterState *state, const CupidGbAudioPolicy *policy,
+                                  CupidGbAudioFrame mixed, uint8_t enabled_dacs, uint8_t nr50,
+                                  uint8_t nr51);
+
 /* Histories must be finite and within HISTORY_LIMIT; retention and interference
  * volume must be finite in [0, 1]. The two filter flags are mutually exclusive.
  * enabled_dacs is the effective four-bit mask after any monochrome DAC delay.

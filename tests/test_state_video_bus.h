@@ -125,6 +125,7 @@ static void test_video_bus_history(void) {
         a->cgb_mode = a->model == CUPID_GB_MODEL_CGB;
         /* This synthetic model change needs a canonical display-clock origin. */
         a->lcd_repeat_countdown = 0;
+        a->apu.output.filter.startup_pending = false;
         cupid_gb_pixels_import_legacy(a);
         cupid_gb_display_clock_import_legacy(a);
         cupid_gb_vram_bus_import_legacy(a);

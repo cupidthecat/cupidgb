@@ -295,7 +295,10 @@ static void check_boundary(const CupidGb *gb, const CupidGb *before, CupidGbRese
     CHECK(!gb->huc1_ir_mode && !gb->huc3_mode && !gb->huc3_value);
     CHECK(!gb->mmm01_locked && gb->mmm01_ram_mask == 3 && !gb->mmm01_rom_select);
     CHECK(gb->sgb.player_count == 1 && !gb->sgb.current_player && !gb->sgb.mask_mode);
-    CHECK(!memcmp(&gb->apu.output, &before->apu.output, sizeof(gb->apu.output)));
+    CupidGbAudioOutput retained_output = before->apu.output;
+    if (firmware)
+        retained_output.filter.startup_pending = false;
+    CHECK(!memcmp(&gb->apu.output, &retained_output, sizeof(retained_output)));
     CHECK(cupid_gb_audio_state_valid(gb));
     CHECK(cupid_gb_display_clock_state_valid(gb) && cupid_gb_pixels_timing_valid(gb) &&
           cupid_gb_vram_bus_state_valid(gb));

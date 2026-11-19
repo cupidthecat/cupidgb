@@ -22,6 +22,7 @@
 
 #include "cupid/gb/state.h"
 
+#include "audio_output.h"
 #include "audio_state.h"
 #include "cartridge_internal.h"
 #include "cupid/common/sha256.h"
@@ -52,7 +53,8 @@
 
 enum {
     STATE_HEADER_SIZE = 128,
-    STATE_VERSION_V29 = CUPID_GB_STATE_VERSION,
+    STATE_VERSION_V30 = CUPID_GB_STATE_VERSION,
+    STATE_VERSION_V29 = 29,
     STATE_VERSION_V28 = 28,
     STATE_VERSION_V27 = 27,
     STATE_VERSION_V26 = 26,
@@ -1110,7 +1112,7 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
     }
     memset(data, 0, STATE_HEADER_SIZE);
     memcpy(data, state_magic, sizeof(state_magic));
-    put_u32(data + 8, STATE_VERSION_V29);
+    put_u32(data + 8, STATE_VERSION_V30);
     put_u32(data + 12, (uint32_t)size);
     put_u32(data + 16, (uint32_t)gb->model);
     put_u32(data + 20, (uint32_t)gb->rom_size);
@@ -1126,7 +1128,7 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
         cupid_sha256(gb->boot_rom, gb->boot_rom_size, data + 64);
     }
     StateIo io = {NULL, data, STATE_HEADER_SIZE, hardware_size, false};
-    state_fields(&io, (CupidGb *)gb, STATE_VERSION_V29);
+    state_fields(&io, (CupidGb *)gb, STATE_VERSION_V30);
     state_extension_v3(&io, (CupidGb *)gb);
     state_extension_v4(&io, (CupidGb *)gb);
     state_extension_v5(&io, (CupidGb *)gb, sections, &camera);
@@ -1256,7 +1258,7 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
         return CUPID_GB_STATE_INVALID;
     }
     const uint32_t version = get_u32(data + 8);
-    if (version < STATE_VERSION_V2 || version > STATE_VERSION_V29 ||
+    if (version < STATE_VERSION_V2 || version > STATE_VERSION_V30 ||
         (gb->header.mbc_type == CUPID_GB_TAMA5 && version < STATE_VERSION_V26) ||
         (version < STATE_VERSION_V19 && gb->cartridge_ram_size > CUPID_GB_INLINE_RAM_SIZE)) {
         return CUPID_GB_STATE_UNSUPPORTED_VERSION;
@@ -1559,7 +1561,8 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
     }
     if (audio_size) {
         if (!reserve(&io, audio_size) ||
-            !cupid_gb_audio_state_decode(candidate, data + io.offset, audio_size))
+            !cupid_gb_audio_state_decode(candidate, data + io.offset, audio_size,
+                                         version >= STATE_VERSION_V30))
             io.invalid = true;
         io.offset += audio_size;
     }
@@ -1750,6 +1753,8 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
         /* Live listening retains its stream, DAC and filter history. Rebase only
          * the reconstruction fraction at the newly selected guest timeline. */
         candidate->apu.output = gb->apu.output;
+        if (!cupid_gb_audio_startup_filter_supported(candidate))
+            candidate->apu.output.filter.startup_pending = false;
         candidate->sgb_startup.output = gb->sgb_startup.output;
         candidate->apu.output.sample_fraction = 0;
         candidate->apu.output.fraction_half = false;

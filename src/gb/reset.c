@@ -21,6 +21,7 @@
  */
 
 #include "cupid/gb/reset.h"
+#include "audio_output.h"
 
 #include "cartridge_internal.h"
 #include "cupid/gb/camera.h"
@@ -155,6 +156,8 @@ bool cupid_gb_reset_with_allocator(CupidGb *gb, CupidGbResetKind kind, void *(*a
     }
 
     next->apu.output = gb->apu.output;
+    if (!cupid_gb_audio_startup_filter_supported(next))
+        next->apu.output.filter.startup_pending = false;
     cupid_gb_reset_restore_host(next, gb);
     if (gb->header.mbc_type == CUPID_GB_HUC3 &&
         (gb->huc3.minutes || gb->huc3.days || gb->huc3.alarm_minutes || gb->huc3.alarm_days ||

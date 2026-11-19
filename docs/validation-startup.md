@@ -515,7 +515,37 @@ The 55 supplied-firmware runs retained their snapshots and frame traces.
 All 177 acceptance and mapper cases passed on both hosts. Only the
 audio CRC changed in the 28 built-in CGB mapper cases. Windows passed
 105 tests, Linux passed 103 and the Linux sanitizer build passed 76.
-Analog filter history and revision 0 remain open.
+Revision 0 pulse handoff remains open.
+
+### CGB startup audio filter
+
+The first built-in audio frame on CGB A through E starts with settled
+capacitor history for the selected filter mode. Accurate uses the
+cartridge-entry mix from pulse 1. Preserve Waveform uses the DC estimate
+from the entry routing and volume registers. A guest write before the
+first sample is still delivered through the normal reconstruction path.
+
+In 300 comparisons with supplied firmware, the maximum first-sample
+difference was 1 PCM unit with Accurate and 3 with Preserve Waveform.
+The earlier implementation differed by up to 4,080 and 4,082 units,
+respectively. With the filter off, the maximum difference stayed at 3.
+The matrix covers five revisions, four cartridge cases and five rates
+from 8 to 192 kHz. Another 90 comparisons in a separate runtime
+confirmed the same first-sample bounds.
+
+Version 30 records the pending initialization for exact snapshot
+restoration. The regression covers all three filter modes, a routing
+write before the first sample, version 29 import, reset and live restore
+into firmware. In 55 supplied-firmware runs, snapshot payloads and
+frame callbacks reproduced the previous results after accounting for
+the version header. Sample-clock phase and reconstruction remainders
+still differ from executed firmware.
+
+Windows passed 105 tests, Linux passed 103 and the Linux sanitizer build
+passed 76. All 177 acceptance and mapper cases passed per host with
+matching guest results across hosts. Only the audio CRC changed in the
+28 built-in CGB mapper runs. The 121 paired firmware terminal clocks
+still matched.
 
 ### Monochrome cartridge in Qt
 

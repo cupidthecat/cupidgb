@@ -26,6 +26,7 @@
 
 #include "cupid/gb/gb.h"
 #include "../gbc/cgb_internal.h"
+#include "audio_output.h"
 #include "cupid/gb/battery.h"
 #include "cupid/gb/infrared.h"
 #include "display_clock.h"
@@ -112,6 +113,8 @@ void cupid_gb_set_model(CupidGb *gb, CupidGbModel model) {
     }
 
     gb->model = model;
+    if (!cupid_gb_audio_startup_filter_supported(gb))
+        gb->apu.output.filter.startup_pending = false;
 }
 
 bool cupid_gb_model_is_sgb(CupidGbModel model) {
@@ -391,8 +394,8 @@ void cupid_gb_init(CupidGb *gb) {
     gb->io_registers[0x21u] = 0x00u;                                            /* NR42 */
     gb->io_registers[0x22u] = 0x00u;                                            /* NR43 */
     gb->io_registers[0x23u] = 0xbfu;                                            /* NR44 */
-    gb->io_registers[0x24u] = 0x77u;                                            /* NR50 */
-    gb->io_registers[0x25u] = 0xf3u;                                            /* NR51 */
+    gb->io_registers[0x24u] = CUPID_GB_POST_BOOT_NR50;                          /* NR50 */
+    gb->io_registers[0x25u] = CUPID_GB_POST_BOOT_NR51;                          /* NR51 */
     gb->io_registers[0x26u] = cupid_gb_model_is_sgb(gb->model) ? 0xf0u : 0xf1u; /* NR52 */
     /* Sync APU struct with boot-ROM state */
     gb->apu.apu_on = true;

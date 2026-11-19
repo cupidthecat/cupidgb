@@ -427,6 +427,7 @@ static void test_legacy_state(CupidGbModel model) {
     cupid_gb_write_u8(gb, 0x0800, 7);
     cupid_gb_write_u8(gb, 0xa012, 0x13);
     cupid_gb_write_u8(gb, 0xb012, 0xd7);
+    gb->apu.output.filter.startup_pending = false; /* Absent from V24. */
     size_t size;
     uint8_t *legacy = snapshot(gb, &size);
     size -= FLASH_PAYLOAD;

@@ -27,6 +27,7 @@
 #include "cupid/gb/apu.h"
 #include "cupid/gb/input.h"
 #include "cupid/gb/ppu.h"
+#include "cupid/gb/reset.h"
 #include "cupid/gb/state.h"
 #include "cupid/gb/timer.h"
 #include "test_state_layout.h"
@@ -89,7 +90,7 @@ static void resign(Blob *blob) {
     cupid_sha256_final(&hash, blob->bytes + 96);
 }
 
-static CupidGb *create_machine(CupidGbModel model, uint32_t rate, unsigned seed) {
+static CupidGb *load_machine(CupidGbModel model, uint32_t rate, unsigned seed) {
     CupidGb *gb = calloc(1, sizeof(*gb));
     assert(gb);
     uint8_t rom[32768] = {0};
@@ -104,6 +105,11 @@ static CupidGb *create_machine(CupidGbModel model, uint32_t rate, unsigned seed)
     cupid_gb_set_power_on_seed(gb, seed);
     assert(cupid_gb_load_rom(gb, rom, sizeof(rom)));
     assert(cupid_gb_apu_set_sample_rate(gb, rate));
+    return gb;
+}
+
+static CupidGb *create_machine(CupidGbModel model, uint32_t rate, unsigned seed) {
+    CupidGb *gb = load_machine(model, rate, seed);
     cupid_gb_write_u8(gb, 0xff26, 0x80);
     cupid_gb_write_u8(gb, 0xff24, 0x77);
     cupid_gb_write_u8(gb, 0xff25, 0xff);
@@ -458,6 +464,116 @@ static void test_live_combination(void) {
     destroy_machine(target);
 }
 
+static void read_first_frame(CupidGb *gb, int16_t sample[2]) {
+    for (unsigned chunk = 0; chunk < 64; ++chunk) {
+        cupid_gb_tick(gb, 4);
+        cupid_gb_apu_run(gb, true);
+        if (cupid_gb_apu_drain(gb, sample, 1) == 1)
+            return;
+    }
+    assert(!"No audio frame delivered");
+}
+
+static void test_startup_filter_history(void) {
+    const uint32_t rates[] = {8000, 48000, 192000};
+    const CupidGbAudioFrame expected[] = {{4080, 4080}, {0, 0}, {4080, 0}};
+    for (unsigned rate = 0; rate < sizeof(rates) / sizeof(rates[0]); ++rate) {
+        for (unsigned mode = 0; mode < sizeof(expected) / sizeof(expected[0]); ++mode) {
+            CupidGb *source = load_machine(CUPID_GB_MODEL_CGB_E, rates[rate], 1);
+            CupidGb *target = load_machine(CUPID_GB_MODEL_CGB_E, rates[rate], 2);
+            assert(source->apu.output.filter.startup_pending);
+            assert(cupid_gb_reset(source, CUPID_GB_RESET_QUICK));
+            assert(source->apu.output.filter.startup_pending);
+            assert(cupid_gb_apu_set_filter_mode(source, (CupidGbAudioFilter)mode));
+            Blob blob = encode(source);
+            assert(load(target, &blob, 0) == CUPID_GB_STATE_OK);
+            assert(target->apu.output.filter.startup_pending);
+            int16_t original[2], restored[2];
+            read_first_frame(source, original);
+            read_first_frame(target, restored);
+            assert(original[0] == expected[mode].left && original[1] == expected[mode].right);
+            assert(!memcmp(original, restored, sizeof(original)));
+            assert(!source->apu.output.filter.startup_pending);
+            assert_same(source, target);
+
+            assert(cupid_gb_reset(source, CUPID_GB_RESET_QUICK));
+            assert(!source->apu.output.filter.startup_pending);
+            const double before = source->apu.output.filter.capacitor[1];
+            assert(cupid_gb_apu_set_filter_mode(source, CUPID_GB_AUDIO_FILTER_ACCURATE));
+            assert(source->apu.output.filter.capacitor[1] == before);
+            const double listening_history = source->apu.output.filter.capacitor[1];
+            assert(load(source, &blob, 2) == CUPID_GB_STATE_OK);
+            assert(!source->apu.output.filter.startup_pending);
+            assert(source->apu.output.filter.capacitor[1] == listening_history);
+            free(blob.bytes);
+            destroy_machine(source);
+            destroy_machine(target);
+        }
+    }
+}
+
+static void test_startup_filter_after_guest_write(void) {
+    CupidGb *source = load_machine(CUPID_GB_MODEL_CGB_E, 44100, 1);
+    CupidGb *seeded = load_machine(CUPID_GB_MODEL_CGB_E, 44100, 1);
+    assert(cupid_gb_apu_set_filter_mode(source, CUPID_GB_AUDIO_FILTER_PRESERVE_WAVEFORM));
+    assert(cupid_gb_apu_set_filter_mode(seeded, CUPID_GB_AUDIO_FILTER_PRESERVE_WAVEFORM));
+    seeded->apu.output.filter.capacitor[1] = 4080;
+    seeded->apu.output.filter.startup_pending = false;
+    /* The cartridge disconnects both sides before the first output frame. */
+    cupid_gb_write_u8(source, 0xff25, 0);
+    cupid_gb_write_u8(seeded, 0xff25, 0);
+    int16_t original[2], expected[2];
+    read_first_frame(source, original);
+    read_first_frame(seeded, expected);
+    assert(!memcmp(original, expected, sizeof(original)));
+    assert_same(source, seeded);
+    destroy_machine(source);
+    destroy_machine(seeded);
+}
+
+/* These DMG and CGB-E fixtures have no extra OAM or PCM latch tail. */
+static size_t fixture_audio_offset(Blob blob) {
+    return blob.length - TEST_STATE_SGB_PROTOCOL_BYTES - SRAM_LENGTH_BYTES - IO_HISTORY_BYTES -
+           ACCESSORY_BYTES - CUPID_GB_DISPLAY_CLOCK_STATE_SIZE - CUPID_GB_PIXEL_TIMING_STATE_SIZE -
+           CUPID_GB_VRAM_BUS_STATE_SIZE - CUPID_GB_AUDIO_STATE_SIZE;
+}
+
+static void test_v29_filter_history(void) {
+    CupidGb *source = load_machine(CUPID_GB_MODEL_CGB_E, 44100, 1);
+    CupidGb *target = load_machine(CUPID_GB_MODEL_CGB_E, 44100, 2);
+    Blob blob = encode(source);
+    const size_t flags = fixture_audio_offset(blob) + POLICY_OFFSET + 9;
+    assert(blob.bytes[flags] == 2);
+    blob.bytes[8] = 29;
+    resign(&blob);
+    assert(load(target, &blob, 0) == CUPID_GB_STATE_INVALID);
+    blob.bytes[flags] = 0;
+    resign(&blob);
+    assert(load(target, &blob, 0) == CUPID_GB_STATE_OK);
+    assert(!target->apu.output.filter.startup_pending);
+    int16_t sample[2];
+    read_first_frame(target, sample);
+    assert(sample[0] == 4080 && sample[1] == 4080);
+    free(blob.bytes);
+    destroy_machine(source);
+    destroy_machine(target);
+}
+
+static void test_firmware_restore_cancels_pending_filter(void) {
+    CupidGb *source = load_machine(CUPID_GB_MODEL_CGB_E, 44100, 1);
+    CupidGb *target = load_machine(CUPID_GB_MODEL_CGB_E, 44100, 2);
+    source->boot_rom_size = target->boot_rom_size = 0x900;
+    cupid_gb_start_boot_rom(source);
+    assert(source->boot_rom_enabled && !source->apu.output.filter.startup_pending);
+    assert(!target->boot_rom_enabled && target->apu.output.filter.startup_pending);
+    Blob blob = encode(source);
+    assert(load(target, &blob, 2) == CUPID_GB_STATE_OK);
+    assert(target->boot_rom_enabled && !target->apu.output.filter.startup_pending);
+    free(blob.bytes);
+    destroy_machine(source);
+    destroy_machine(target);
+}
+
 static void test_malformed_history(void) {
     CupidGb *source = create_machine(CUPID_GB_MODEL_DMG_ABC, 44100, 17);
     CupidGb *target = create_machine(CUPID_GB_MODEL_DMG_ABC, 48000, 99);
@@ -466,10 +582,7 @@ static void test_malformed_history(void) {
     cupid_gb_tick(target, 133);
     Blob valid = encode(source), bad = {malloc(valid.length), valid.length};
     assert(bad.bytes);
-    const size_t audio = valid.length - TEST_STATE_SGB_PROTOCOL_BYTES - SRAM_LENGTH_BYTES -
-                         IO_HISTORY_BYTES - ACCESSORY_BYTES - CUPID_GB_DISPLAY_CLOCK_STATE_SIZE -
-                         CUPID_GB_PIXEL_TIMING_STATE_SIZE - CUPID_GB_VRAM_BUS_STATE_SIZE -
-                         CUPID_GB_AUDIO_STATE_SIZE;
+    const size_t audio = fixture_audio_offset(valid);
 
     const struct Mutation {
         size_t offset;
@@ -486,6 +599,7 @@ static void test_malformed_history(void) {
                      {POLICY_OFFSET, 8, UINT64_C(0xbfb999999999999a)},
                      {POLICY_OFFSET + 8, 1, 16},
                      {POLICY_OFFSET + 9, 1, 2},
+                     {POLICY_OFFSET + 9, 1, 4},
                      {CHARGE_OFFSET, 8, UINT64_C(0x7ff8000000000000)},
                      {CHARGE_OFFSET + 8, 8, UINT64_C(0xbfb999999999999a)},
                      {CHARGE_OFFSET + 16, 8, UINT64_C(0x3ff199999999999a)},
@@ -575,6 +689,10 @@ int main(void) {
     test_live_rate_changes();
     test_v13_import();
     test_live_combination();
+    test_startup_filter_history();
+    test_startup_filter_after_guest_write();
+    test_v29_filter_history();
+    test_firmware_restore_cancels_pending_filter();
     test_malformed_history();
     printf("Audio state checks: %u exact replays, %u rate changes, %u live restores, "
            "%u mixed-rate live restores, %u legacy imports, "

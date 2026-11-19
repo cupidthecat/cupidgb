@@ -494,6 +494,7 @@ static void attach_printer(CupidGb *gb, uint8_t marker) {
 static void draft_roundtrip(CupidGbModel model, unsigned code, unsigned attachments) {
     CupidGb *source = create(model, code);
     CupidGb *target = create(model, code);
+    source->apu.output.filter.startup_pending = false; /* Fixtures include V19–V21. */
     fill_storage(source, 17);
     source->apu.ch3_sample = 9;
     source->apu.ch3_sample_byte = 0x69;
@@ -574,6 +575,7 @@ static void draft_roundtrip(CupidGbModel model, unsigned code, unsigned attachme
 static void draft_rejections(unsigned code) {
     CupidGb *source = create(CUPID_GB_MODEL_CGB, code);
     CupidGb *target = create(CUPID_GB_MODEL_CGB, code);
+    source->apu.output.filter.startup_pending = false; /* Fixtures include V19–V21. */
     fill_storage(source, 11);
     fill_storage(target, 97);
     source->apu.ch3_sample = 9;
