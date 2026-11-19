@@ -563,6 +563,9 @@ void cupid_gb_startup_hardware(CupidGb *gb) {
     /* Color boot firmware selects cartridge compatibility later through KEY0.
      * The cartridge header governs the post-boot profile only when no firmware runs. */
     gb->cgb_mode = cupid_gb_model_is_cgb(gb->model);
+    gb->cgb_vram_bank = 0;
+    gb->cgb_wram_bank = 1;
+    gb->cgb_object_priority_x = false;
     gb->hdma_pending = false;
     gb->hdma_active = false;
     gb->hdma_hblank_delay = 0;

@@ -75,6 +75,33 @@ void cupid_cgb_init_state(CupidGb *gb) {
     gb->io_registers[0x70u] = 0xf9u;
 }
 
+void cupid_cgb_apply_cartridge_io(CupidGb *gb) {
+    const bool color = gb->cgb_mode;
+
+    /* Firmware leaves the DMA page and DMG object palettes at their cold values. */
+    gb->io_registers[CUPID_GB_IO_DMA] = 0;
+    gb->io_registers[CUPID_GB_IO_OBP0] = 0;
+    gb->io_registers[CUPID_GB_IO_OBP1] = 0;
+    memset(gb->io_registers + 0x72, 0, 4);
+
+    /* The readable selector is zero, which still maps physical bank 1. */
+    gb->cgb_wram_bank = 1;
+    gb->io_registers[0x70] = 0xf8;
+
+    if (color) {
+        gb->io_registers[0x68] = 0x80;
+        /* The shared firmware for revisions A through E selects OBJ byte 1. */
+        if (gb->model != CUPID_GB_MODEL_CGB_0)
+            gb->io_registers[0x6a] = 0x81;
+    } else {
+        gb->io_registers[0x00] = 0xff; /* Both joypad row selectors inactive. */
+        gb->io_registers[0x68] = 0x88;
+        gb->io_registers[0x6a] = 0x90;
+        gb->io_registers[0x6c] = 0xff;
+        gb->cgb_object_priority_x = true;
+    }
+}
+
 /**
  * @brief Computes the linear VRAM array offset for a given VRAM address.
  *

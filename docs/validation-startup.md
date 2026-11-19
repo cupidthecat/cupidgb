@@ -383,6 +383,25 @@ image. The earlier built-in profile differed in all 24 monochrome cases.
 Divider and LCD phase at handoff still depend on the firmware and cartridge
 header. Firmware-specific bank 2 work data remains open.
 
+### I/O ports at cartridge entry
+
+Built-in startup now sets the CGB DMA source page and DMG sprite palette
+registers to zero. It restores the palette index and auto-increment latches,
+the monochrome sprite priority and joypad row selection, and the CGB scratch
+registers. The color-mode WRAM selector reads `F8` and still maps bank 1.
+
+The shared firmware for revisions A through E agreed with all 12 selected
+ports in each of 30 cases. The generated revision 0 firmware agreed on 68
+selected readbacks across six more cases. Authentic revision 0 color JOYP
+and OBJ index values remain open. The startup regression also captures the
+ports through cartridge `LDH` instructions after loading and both reset kinds.
+
+Firmware re-entry resets the VRAM and WRAM selectors and sprite priority
+before executing the first instruction. The test changes those selectors
+first, enters the overlay, and verifies the initial mappings with the same
+backing memory. A quick reset carries forward the live DMA page and the two
+DMG sprite palette bytes.
+
 ### Monochrome cartridge in Qt
 
 Windows and WSLg each ran Donkey Kong for 60 seconds at `0d898fa` on CGB-C

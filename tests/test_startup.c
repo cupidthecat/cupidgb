@@ -298,16 +298,40 @@ static void load_generated_rom(CupidGb *gb, CupidGbModel model, uint64_t seed) {
     load_generated_profile(gb, model, seed, model == CUPID_GB_MODEL_CGB);
 }
 
+static const uint8_t cgb_entry_ports[] = {0x00, 0x46, 0x48, 0x49, 0x68, 0x6a,
+                                          0x6c, 0x70, 0x72, 0x73, 0x74, 0x75};
+
 static void check_cgb_cartridge_entry(CupidGb *gb, bool color, uint8_t checksum) {
     const uint8_t expected[] = {0x11, checksum,           0, color ? 0xff : 0, color ? 0x56 : 8,
                                 0,    color ? 0x0d : 0x7c};
     assert(gb->cpu.pc == 0x0100 && gb->cpu.sp == 0xfffe && gb->cpu.f == 0x80);
     assert(gb->cgb_mode == color);
-    /* Jump to the entry routine and save A, then read and save each remaining register. */
-    for (unsigned i = 0; i < 2 + 2 * (sizeof(expected) - 1); ++i)
+    const uint8_t color_obj_index = gb->model == CUPID_GB_MODEL_CGB_0 ? 0x40 : 0xc1;
+    const uint8_t ports[] = {color ? 0xcf : 0xff,
+                             0,
+                             0,
+                             0,
+                             color ? 0xc0 : 0xc8,
+                             color ? color_obj_index : 0xd0,
+                             color ? 0xfe : 0xff,
+                             color ? 0xf8 : 0xff,
+                             0,
+                             0,
+                             color ? 0 : 0xff,
+                             0x8f};
+    assert(sizeof(ports) == sizeof(cgb_entry_ports));
+    assert(!gb->dma_active && !gb->hdma_active && !gb->hdma_pending);
+    assert(gb->cgb_object_priority_x == !color);
+    gb->work_ram[0x1000] = 0x5a;
+    gb->work_ram[0x2000] = 0xa5;
+    assert(cupid_gb_read_u8(gb, 0xd000) == 0x5a);
+    /* Save A, the other six CPU registers, then the first I/O reads. */
+    for (unsigned i = 0; i < 2 * (sizeof(expected) + sizeof(ports)); ++i)
         assert(cupid_gb_step(gb));
     for (unsigned i = 0; i < sizeof(expected); ++i)
         assert(cupid_gb_read_u8(gb, (uint16_t)(0xff80 + i)) == expected[i]);
+    for (unsigned i = 0; i < sizeof(ports); ++i)
+        assert(cupid_gb_read_u8(gb, (uint16_t)(0xff87 + i)) == ports[i]);
 }
 
 static void test_cgb_cartridge_entry_registers(void) {
@@ -342,6 +366,13 @@ static void test_cgb_cartridge_entry_registers(void) {
     rom[0x102] = 0x01;
     memcpy(rom + 0x134, "CUPIDGB HANDOFF", 15);
     memcpy(rom + 0x150, entry, sizeof(entry));
+    size_t next = 0x150 + sizeof(entry);
+    for (unsigned i = 0; i < sizeof(cgb_entry_ports); ++i) {
+        rom[next++] = 0xf0; /* LDH A, [$00 + port] */
+        rom[next++] = cgb_entry_ports[i];
+        rom[next++] = 0xe0; /* LDH [$87 + index], A */
+        rom[next++] = (uint8_t)(0x87 + i);
+    }
     rom[0x144] = '0';
     cupid_gb_set_power_on_seed(gb, 0);
     for (unsigned model = 0; model < sizeof(models) / sizeof(models[0]); ++model) {
@@ -781,6 +812,11 @@ static void test_boot_entry_preserves_memory(void) {
             memset(a->object_attribute_memory, 0xa6, sizeof(a->object_attribute_memory));
             memset(a->cartridge_ram, 0x37, sizeof(a->cartridge_ram));
             a->rtc.base_time = 123456;
+            if (model == CUPID_GB_MODEL_CGB) {
+                cupid_gb_write_u8(a, 0xff4f, 1);
+                cupid_gb_write_u8(a, 0xff70, 7);
+                a->cgb_object_priority_x = true;
+            }
             cupid_gb_set_power_on_seed(a, ~seed_at(seed));
             *before = *a;
             cupid_gb_enter_boot_rom(a);
@@ -797,6 +833,10 @@ static void test_boot_entry_preserves_memory(void) {
             assert(memcmp(a->io_registers + 0x30, b->io_registers + 0x30, 16) == 0);
             assert(a->io_registers[0x3f] == 0);
             if (model == CUPID_GB_MODEL_CGB) {
+                assert(!a->cgb_object_priority_x);
+                assert(cupid_gb_read_u8(a, 0xff70) == 0 && cupid_gb_read_u8(a, 0xff4f) == 0xfe);
+                assert(cupid_gb_read_u8(a, 0xd000) == a->work_ram[0x1000]);
+                assert(cupid_gb_read_u8(a, 0x8000) == a->video_ram[0]);
                 for (unsigned i = 0; i < 16; ++i)
                     assert(a->io_registers[0x30 + i] == 0);
                 assert(memcmp(a->cgb_bg_palette_ram, b->cgb_bg_palette_ram, 64) == 0);

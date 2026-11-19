@@ -852,7 +852,10 @@ void cupid_gb_cartridge_post_boot(CupidGb *gb) {
     gb->speed_phase = false;
     gb->io_registers[0x4d] = 0;
     gb->io_registers[0x4f] = (uint8_t)(0xfeu | (gb->cgb_vram_bank & 1u));
-    gb->io_registers[0x70] = (uint8_t)(0xf8u | gb->cgb_wram_bank);
+    if (cupid_gb_model_is_cgb(gb->model))
+        cupid_cgb_apply_cartridge_io(gb);
+    else
+        gb->io_registers[0x70] = (uint8_t)(0xf8u | gb->cgb_wram_bank);
     if (cupid_gb_model_is_sgb(gb->model)) {
         /* Approximate the elapsed header-transfer time when firmware is absent.
          * Executable firmware replaces this phase when its overlay is entered. */
