@@ -1,6 +1,6 @@
 /**
  * @file    main_window_sgb_tests.cpp
- * @brief   Adapter startup pacing, ordered audio, recording, redraw, and debugger workflows.
+ * @brief   Adapter startup, ordered audio, state files, redraw, and debugger workflows.
  * @author  cupidthecat
  * @date    2026-11-17
  *
@@ -454,6 +454,33 @@ bool MainWindow::sgbSmokeTest(const QString &directory) {
                     "Breakpoint condition evaluation failed."))
                 return smokeFailure(__FILE__, __LINE__);
         }
+    }
+
+    {
+        MainWindow portable(true, true, false, QStringLiteral(""), CUPID_GB_MODEL_SGB2,
+                            uint64_t(0));
+        portable.timer_.stop();
+        if (!portable.openRom(cartridges[1]))
+            return smokeFailure(__FILE__, __LINE__);
+        portable.setPaused(true);
+        auto &gb = portable.emulator_->gb;
+        gb.sgb.transfer.tiles[32] = 0x80;
+        gb.sgb.transfer.map[0] = 1;
+        gb.sgb.transfer.palettes[1] = 0x001f;
+        gb.sgb.player_count = 4;
+        gb.sgb.current_player = 2;
+        const QString path = fixtures.filePath("adapter.bess");
+        if (!portable.savePortableStateFile(path))
+            return smokeFailure(__FILE__, __LINE__);
+        gb.sgb.transfer.map[0] = 0;
+        gb.sgb.player_count = 1;
+        gb.sgb.current_player = 0;
+        const QRgb red = (*portable.sgbColorTable_)[0x001f];
+        if (!portable.loadStateFile(path) || !portable.paused_ ||
+            portable.image_.size() != QSize(CUPID_SGB_SCREEN_WIDTH, CUPID_SGB_SCREEN_HEIGHT) ||
+            portable.image_.pixel(0, 0) != red || gb.sgb.player_count != 4 ||
+            gb.sgb.current_player != 2 || cupid_gb_sgb_startup_active(&gb))
+            return smokeFailure(__FILE__, __LINE__);
     }
 
     // Compare the high-rate Qt interval against independent small drains after

@@ -40,8 +40,11 @@ enum {
     BESS_INFO_SIZE = 18,
     BESS_RTC_SIZE = 48,
     BESS_XOAM_SIZE = 96,
+    BESS_SGB_SIZE = 0x39,
     BESS_PORTS = 0x18,
-    BESS_MEMORY = 0x98
+    BESS_MEMORY = 0x98,
+    BESS_REGION_COUNT = 7,
+    BESS_DESCRIPTOR_SIZE = 8
 };
 
 typedef struct BessBlock {
@@ -50,8 +53,9 @@ typedef struct BessBlock {
 } BessBlock;
 
 typedef struct BessState {
-    BessBlock info, core, mapper, clock, extra_oam;
-    BessBlock regions[7];
+    BessBlock info, core, mapper, clock, extra_oam, sgb;
+    BessBlock regions[BESS_REGION_COUNT];
+    BessBlock sgb_regions[BESS_REGION_COUNT];
     size_t block_begin, block_end;
 } BessState;
 
@@ -78,6 +82,8 @@ static BessBlock *known_block(BessState *state, const uint8_t *name) {
         return &state->clock;
     if (!memcmp(name, "XOAM", 4))
         return &state->extra_oam;
+    if (!memcmp(name, "SGB ", 4))
+        return &state->sgb;
     return NULL;
 }
 
@@ -105,9 +111,10 @@ static bool read_blocks(BessState *state, const uint8_t *data, size_t limit) {
     return false;
 }
 
-static bool read_regions(BessState *state, const uint8_t *data, size_t limit) {
-    for (unsigned index = 0; index < sizeof(state->regions) / sizeof(state->regions[0]); ++index) {
-        const uint8_t *desc = state->core.bytes + BESS_MEMORY + index * 8u;
+static bool read_regions(const BessState *state, const uint8_t *data, size_t limit,
+                         const uint8_t *descriptors, BessBlock *regions) {
+    for (unsigned index = 0; index < BESS_REGION_COUNT; ++index) {
+        const uint8_t *desc = descriptors + index * BESS_DESCRIPTOR_SIZE;
         const size_t size = bess_long(desc);
         const size_t offset = bess_long(desc + 4);
         if (!size)
@@ -115,7 +122,7 @@ static bool read_regions(BessState *state, const uint8_t *data, size_t limit) {
         if (offset > limit || size > limit - offset ||
             (offset < state->block_end && offset + size > state->block_begin))
             return false;
-        state->regions[index] = (BessBlock){data + offset, size};
+        regions[index] = (BessBlock){data + offset, size};
     }
     return true;
 }
@@ -126,6 +133,9 @@ static bool matches_model(CupidGbModel model, const uint8_t *id) {
     if (cupid_gb_model_is_cgb(model))
         return id[0] == 'C' && (id[1] == 'C' || id[1] == ' ') &&
                (id[2] == ' ' || id[2] == '0' || (id[2] >= 'A' && id[2] <= 'E'));
+    if (cupid_gb_model_is_sgb(model))
+        return id[0] == 'S' && id[2] == ' ' &&
+               (id[1] == ' ' || id[1] == 'N' || id[1] == 'P' || id[1] == '2');
     if (id[0] != 'G')
         return false;
     switch (id[1]) {
@@ -155,6 +165,7 @@ static CupidGbStateResult validate(const CupidGb *gb, const BessState *state) {
     if (core[20] > 1 || core[22] > 2 || core[23] || core[BESS_PORTS + 0x50] > 1 ||
         state->mapper.size % 3 || (state->clock.bytes && state->clock.size != BESS_RTC_SIZE) ||
         (state->extra_oam.bytes && state->extra_oam.size != BESS_XOAM_SIZE) ||
+        (state->sgb.bytes && !cupid_gb_model_is_sgb(gb->model)) ||
         (!cupid_gb_model_is_cgb(gb->model) && (state->regions[5].size || state->regions[6].size)))
         return CUPID_GB_STATE_INVALID;
     if (!core[BESS_PORTS + 0x50])
@@ -174,6 +185,54 @@ static void copy_region(uint8_t *dest, size_t capacity, BessBlock region) {
     if (count)
         memcpy(dest, region.bytes, count);
     memset(dest + count, 0, capacity - count);
+}
+
+static void copy_words(uint16_t *dest, size_t capacity, BessBlock region) {
+    const size_t count = region.size < capacity ? region.size : capacity;
+    const size_t words = count / 2u;
+    memset(dest, 0, capacity);
+    for (size_t index = 0; index < words; ++index)
+        dest[index] = bess_word(region.bytes + index * 2u);
+    if (count % 2u)
+        dest[words] = region.bytes[words * 2u];
+}
+
+static void restore_sgb(CupidGb *gb, const BessState *state) {
+    if (!cupid_gb_model_is_sgb(gb->model))
+        return;
+    CupidGbSgb *sgb = &gb->sgb;
+    sgb->enabled = gb->header.sgb_flag == 3;
+    sgb->commands_disabled = !state->sgb.bytes;
+    if (sgb->commands_disabled)
+        return;
+
+    const BessBlock *region = state->sgb_regions;
+    /* BESS has one border and no transfer or fade phase. Present it now and
+     * use it as the starting point for later partial border transfers. */
+    copy_region(sgb->border_tiles, sizeof(sgb->border_tiles), region[0]);
+    copy_words(sgb->border_map, sizeof(sgb->border_map), region[1]);
+    copy_words(sgb->transfer.palettes, sizeof(sgb->transfer.palettes), region[2]);
+    memcpy(sgb->transfer.tiles, sgb->border_tiles, sizeof(sgb->transfer.tiles));
+    memcpy(sgb->transfer.map, sgb->border_map, sizeof(sgb->transfer.map));
+    memcpy(sgb->border_palettes, sgb->transfer.palettes, sizeof(sgb->transfer.palettes));
+    if (region[3].size)
+        copy_words(sgb->screen_palettes, sizeof(sgb->screen_palettes), region[3]);
+    for (unsigned index = 4; index < 16; index += 4)
+        sgb->screen_palettes[index] = sgb->screen_palettes[0];
+    copy_words(sgb->ram_palettes, sizeof(sgb->ram_palettes), region[4]);
+    copy_region(sgb->attribute_map, sizeof(sgb->attribute_map), region[5]);
+    for (size_t index = 0; index < sizeof(sgb->attribute_map); ++index)
+        sgb->attribute_map[index] &= 3u;
+    copy_region(sgb->attribute_files, sizeof(sgb->attribute_files), region[6]);
+
+    const uint8_t multiplayer = state->sgb.bytes[BESS_SGB_SIZE - 1];
+    const uint8_t players = multiplayer >> 4;
+    const uint8_t selected = multiplayer & 15u;
+    /* MLT_REQ can leave the adapter in an irregular three-pad mode. */
+    if (players <= 4 && selected < players && (players != 3 || !(selected & 1u))) {
+        sgb->player_count = players;
+        sgb->current_player = selected;
+    }
 }
 
 static void restore_registers(CupidGb *gb, const uint8_t *core) {
@@ -286,8 +345,8 @@ static bool supported_mapper(const CupidGb *gb) {
 CupidGbStateResult cupid_gb_bess_load(CupidGb *gb, const uint8_t *data, size_t length) {
     if (!gb || !gb->loaded || !gb->rom)
         return CUPID_GB_STATE_NO_ROM;
-    if (!cupid_gb_model_is_valid(gb->model) || cupid_gb_model_is_sgb(gb->model) ||
-        gb->program_kind != CUPID_GB_PROGRAM_CARTRIDGE || !supported_mapper(gb))
+    if (!cupid_gb_model_is_valid(gb->model) || gb->program_kind != CUPID_GB_PROGRAM_CARTRIDGE ||
+        !supported_mapper(gb))
         return CUPID_GB_STATE_UNSUPPORTED_FEATURE;
     if (gb->rom_size < 0x150u || gb->rom_size > gb->rom_capacity ||
         !cupid_gb_cartridge_storage_valid(gb) ||
@@ -296,7 +355,11 @@ CupidGbStateResult cupid_gb_bess_load(CupidGb *gb, const uint8_t *data, size_t l
         return CUPID_GB_STATE_INVALID;
     BessState state = {0};
     const size_t limit = length - BESS_FOOTER_SIZE;
-    if (!read_blocks(&state, data, limit) || !read_regions(&state, data, limit))
+    if (!read_blocks(&state, data, limit) ||
+        !read_regions(&state, data, limit, state.core.bytes + BESS_MEMORY, state.regions))
+        return CUPID_GB_STATE_INVALID;
+    if (state.sgb.bytes && (state.sgb.size < BESS_SGB_SIZE || state.sgb.bytes < state.core.bytes ||
+                            !read_regions(&state, data, limit, state.sgb.bytes, state.sgb_regions)))
         return CUPID_GB_STATE_INVALID;
     const CupidGbStateResult status = validate(gb, &state);
     if (status != CUPID_GB_STATE_OK)
@@ -356,6 +419,7 @@ CupidGbStateResult cupid_gb_bess_load(CupidGb *gb, const uint8_t *data, size_t l
     }
     restore_clock(next, state.clock.bytes);
     restore_registers(next, state.core.bytes);
+    restore_sgb(next, &state);
 
     next->rtc_policy = gb->rtc_policy;
     next->apu.output = gb->apu.output;

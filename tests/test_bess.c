@@ -25,6 +25,7 @@
 #include "../src/gb/oam_bus.h"
 #include "cupid/gb/apu.h"
 #include "cupid/gb/cartridge.h"
+#include "cupid/gb/sgb_startup.h"
 #include "cupid/gb/timer.h"
 
 #include <assert.h>
@@ -40,6 +41,10 @@ static CupidGb *machine(CupidGbModel model, uint8_t type, bool compatibility) {
     memcpy(rom + 0x100, guest, sizeof(guest));
     memcpy(rom + 0x134, "PORTABLE STATE", 14);
     rom[0x143] = cupid_gb_model_is_cgb(model) && !compatibility ? 0x80 : 0;
+    if (cupid_gb_model_is_sgb(model) && !compatibility) {
+        rom[0x146] = 3;
+        rom[0x14b] = 0x33;
+    }
     rom[0x147] = type;
     rom[0x148] = type ? 1 : 0;
     rom[0x149] = type == 6 || !type ? 0 : 3;
@@ -70,7 +75,7 @@ static unsigned read_long(const uint8_t *data) {
            (unsigned)data[3] << 24;
 }
 
-static uint8_t *find_block(uint8_t *data, size_t length, const char name[4]) {
+static uint8_t *lookup_block(uint8_t *data, size_t length, const char name[4]) {
     size_t cursor = read_long(data + length - 8);
     while (cursor + 8 <= length - 8) {
         const unsigned count = read_long(data + cursor + 4);
@@ -78,8 +83,13 @@ static uint8_t *find_block(uint8_t *data, size_t length, const char name[4]) {
             return data + cursor + 8;
         cursor += 8 + count;
     }
-    assert(!"Missing fixture block");
     return NULL;
+}
+
+static uint8_t *find_block(uint8_t *data, size_t length, const char name[4]) {
+    uint8_t *block = lookup_block(data, length, name);
+    assert(block);
+    return block;
 }
 
 static uint8_t *capture(CupidGb *gb, size_t *length) {
@@ -271,11 +281,118 @@ static void check_invalid(void) {
     destroy(source);
 }
 
+static void check_sgb(CupidGbModel model, const char tag[4], bool declares_enhancements) {
+    CupidGb *source = machine(model, 0, !declares_enhancements);
+    CupidGb *target = machine(model, 0, !declares_enhancements);
+    CupidGbSgb *sgb = &source->sgb;
+    sgb->commands_disabled = false;
+    sgb->player_count = 4;
+    sgb->current_player = 2;
+    sgb->mask_mode = CUPID_SGB_MASK_FREEZE;
+    sgb->transfer.tiles[32] = 0x80;
+    sgb->transfer.map[0] = 0x0801;
+    sgb->transfer.palettes[33] = 0x001f;
+    sgb->transfer.border_transition = 35;
+    sgb->screen_palettes[0] = 0x0410;
+    sgb->screen_palettes[12] = 0xabcd;
+    sgb->ram_palettes[2047] = 0x3911;
+    sgb->attribute_map[359] = 3;
+    sgb->attribute_files[4049] = 0x39;
+    source->io_registers[0] = 0xfd;
+
+    target->sgb.mask_mode = CUPID_SGB_MASK_BLACK;
+    target->sgb.command_write_index = 17;
+    target->sgb.received_header[0] = 0xc1;
+    target->sgb.transfer.frames_remaining = 2;
+    size_t size;
+    uint8_t *data = capture(source, &size);
+    assert(!memcmp(find_block(data, size, "CORE") + 4, tag, 4));
+    uint8_t *block = find_block(data, size, "SGB ");
+    assert(read_long(block - 4) == 0x39u && block[0x38] == 0x42);
+    assert(read_long(block + 8) == 0x800u && read_long(block + 16) == 0x80u);
+    assert(cupid_gb_bess_load(target, data, size) == CUPID_GB_STATE_OK);
+    const CupidGbSgb *loaded = &target->sgb;
+    assert(loaded->enabled == declares_enhancements && cupid_gb_sgb_commands_enabled(target));
+    assert(loaded->player_count == 4 && loaded->current_player == 2);
+    assert(cupid_gb_read_u8(target, 0xff00) == 0xfd);
+    assert(!loaded->mask_mode && !loaded->command_write_index && !loaded->received_header[0]);
+    assert(!loaded->transfer.frames_remaining && !loaded->transfer.border_transition);
+    assert(!cupid_gb_sgb_startup_active(target));
+    assert(!memcmp(loaded->border_tiles, sgb->transfer.tiles, sizeof(loaded->border_tiles)));
+    assert(!memcmp(loaded->border_map, loaded->transfer.map, sizeof(loaded->border_map)));
+    assert(loaded->border_map[0] == 0x0801 && loaded->border_palettes[33] == 0x001f);
+    assert(loaded->screen_palettes[4] == 0x0410 && loaded->screen_palettes[8] == 0x0410 &&
+           loaded->screen_palettes[12] == 0x0410 && loaded->ram_palettes[2047] == 0x3911);
+    assert(loaded->attribute_map[359] == 3 && loaded->attribute_files[4049] == 0x39);
+    uint32_t *pixels = malloc(CUPID_SGB_SCREEN_WIDTH * CUPID_SGB_SCREEN_HEIGHT * sizeof(*pixels));
+    assert(pixels);
+    cupid_gb_sgb_render_argb(target, pixels, CUPID_SGB_SCREEN_WIDTH * CUPID_SGB_SCREEN_HEIGHT);
+    assert(pixels[0] == 0xffff0000u);
+    free(pixels);
+    check_native_snapshot(target);
+
+    /* Bad offsets must be rejected before changing controller or border state. */
+    const unsigned tiles_offset = read_long(block + 4);
+    put_long(block + 4, read_long(data + size - 8));
+    assert(cupid_gb_bess_load(target, data, size) == CUPID_GB_STATE_INVALID);
+    assert(loaded->border_map[0] == 0x0801 && loaded->current_player == 2);
+    put_long(block + 4, tiles_offset);
+    if (!declares_enhancements) {
+        CupidGb *monochrome = machine(CUPID_GB_MODEL_DMG_ABC, 0, false);
+        uint8_t *model_tag = find_block(data, size, "CORE") + 4;
+        memcpy(model_tag, "GD  ", 4);
+        assert(cupid_gb_bess_load(monochrome, data, size) == CUPID_GB_STATE_INVALID);
+        memcpy(model_tag, tag, 4);
+        destroy(monochrome);
+    }
+
+    /* An extension appended to the SGB block stays opaque to this reader. */
+    uint8_t *extended = malloc(size + 1u);
+    assert(extended);
+    const size_t payload = (size_t)(block - data);
+    const size_t block_end = payload + 0x39u;
+    memcpy(extended, data, block_end);
+    extended[block_end] = 0xff;
+    memcpy(extended + block_end + 1u, data + block_end, size - block_end);
+    put_long(extended + payload - 4u, 0x3a);
+    assert(cupid_gb_bess_load(target, extended, size + 1u) == CUPID_GB_STATE_OK);
+    assert(loaded->border_map[0] == 0x0801 && loaded->current_player == 2);
+    free(extended);
+
+    block[0x38] = 0x32;
+    put_long(block + 24, 0); /* No active palettes. */
+    put_long(block + 8, 1);  /* One low tilemap byte. */
+    const unsigned attribute_offset = read_long(block + 44);
+    data[attribute_offset + 359] = 0xff;
+    assert(cupid_gb_bess_load(target, data, size) == CUPID_GB_STATE_OK);
+    assert(loaded->player_count == 3 && loaded->current_player == 2);
+    assert(loaded->border_map[0] == 1 && loaded->border_map[1] == 0);
+    assert(loaded->screen_palettes[0] == 0x7fff && loaded->screen_palettes[3] == 0);
+    assert(loaded->attribute_map[359] == 3);
+    check_native_snapshot(target);
+    block[0x38] = 0x4f;
+    assert(cupid_gb_bess_load(target, data, size) == CUPID_GB_STATE_OK);
+    assert(loaded->player_count == 1 && !loaded->current_player);
+    free(data);
+
+    sgb->commands_disabled = true;
+    data = capture(source, &size);
+    assert(!lookup_block(data, size, "SGB "));
+    assert(cupid_gb_bess_load(target, data, size) == CUPID_GB_STATE_OK);
+    assert(loaded->enabled == declares_enhancements && !cupid_gb_sgb_commands_enabled(target));
+    assert(loaded->player_count == 1 && !loaded->current_player && !loaded->border_map[0]);
+    assert(cupid_gb_step(target) && !cupid_gb_sgb_startup_active(target));
+    check_native_snapshot(target);
+    free(data);
+    destroy(target);
+    destroy(source);
+}
+
 int main(void) {
     const CupidGbModel models[] = {
-        CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_DMG0,  CUPID_GB_MODEL_MGB,
-        CUPID_GB_MODEL_CGB_0,   CUPID_GB_MODEL_CGB_A, CUPID_GB_MODEL_CGB_B,
-        CUPID_GB_MODEL_CGB_C,   CUPID_GB_MODEL_CGB_D, CUPID_GB_MODEL_CGB_E};
+        CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_DMG0,  CUPID_GB_MODEL_MGB,   CUPID_GB_MODEL_CGB_0,
+        CUPID_GB_MODEL_CGB_A,   CUPID_GB_MODEL_CGB_B, CUPID_GB_MODEL_CGB_C, CUPID_GB_MODEL_CGB_D,
+        CUPID_GB_MODEL_CGB_E,   CUPID_GB_MODEL_SGB,   CUPID_GB_MODEL_SGB2,  CUPID_GB_MODEL_SGB_PAL};
     const uint8_t mappers[] = {0, 3, 6, 0x10, 0x1b};
     for (unsigned i = 0; i < sizeof(models) / sizeof(models[0]); ++i)
         for (unsigned j = 0; j < sizeof(mappers); ++j) {
@@ -284,5 +401,8 @@ int main(void) {
                 exercise(models[i], mappers[j], true);
         }
     check_invalid();
+    check_sgb(CUPID_GB_MODEL_SGB, "SN  ", true);
+    check_sgb(CUPID_GB_MODEL_SGB_PAL, "SP  ", false);
+    check_sgb(CUPID_GB_MODEL_SGB2, "S2  ", true);
     puts("Portable states preserve mapped cartridge and memory state.");
 }

@@ -20,19 +20,26 @@ or by dropping the file on the window. The loader also reads BESS data
 embedded in a foreign state container. A file with a CupidGB native header
 must pass native validation.
 
-Portable states support completed cartridge boot on DMG, Pocket, and
-CGB with ROM-only or ROM+RAM, MBC1, MBC2, standard MBC3 with optional
-RTC, and MBC5. The importer checks the model family and, when present,
+Portable states support completed cartridge boot on DMG, Pocket, CGB,
+SGB NTSC, SGB PAL, and SGB2 with ROM-only or ROM+RAM, MBC1, MBC2, standard
+MBC3 with optional RTC, and MBC5. The importer checks the model family and, when present,
 the saved cartridge title and global checksum. It validates every
 referenced memory range before replacing the running state.
 
 BESS restores CPU registers, memory, mapped banks, and register values.
-Portable loads restart missing LCD, audio oscillator, and peripheral
-timing from a deterministic phase. Active firmware, SGB, GBS and other
-mapper extensions remain outside this portable workflow. Native slots
-continue to preserve exact timing, including pending transfers.
+On SGB, it also carries command permission, palettes, attributes, visible
+border data, and the selected controller. The latest captured border
+appears immediately after import. The four tilemap rows outside the
+display are written as zeros. Files without an SGB block restore a
+single controller with commands disabled.
 
-The portable regression covers 75 model, cartridge and mode combinations,
+Portable loads restart missing LCD, audio oscillator, and peripheral
+timing from a deterministic phase. The SGB introduction is complete on
+load, with packet, mask, and transfer history cleared. Active firmware,
+GBS, and other mapper extensions remain outside this portable workflow.
+Native slots preserve exact timing, including pending transfers.
+
+The portable regression covers 90 model, cartridge and mode combinations,
 normal and double speed, malformed files, and native saves of imported
 checkpoints. Twelve fixture pairs exchanged registers, physical RAM and
 bank selection with an independent runtime. Three additional exchanges

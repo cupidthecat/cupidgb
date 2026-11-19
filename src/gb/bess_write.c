@@ -25,12 +25,20 @@
 #include "cartridge_internal.h"
 #include "cupid/gb/cartridge.h"
 #include "cupid/gb/mbc6.h"
+#include "cupid/gb/sgb.h"
 #include "oam_bus.h"
 #include "printer_internal.h"
 
 #include <string.h>
 
-enum { BESS_CORE_BYTES = 0xd0, BESS_RTC_BYTES = 0x30, BESS_XOAM_BYTES = 0x60 };
+enum {
+    BESS_CORE_BYTES = 0xd0,
+    BESS_RTC_BYTES = 0x30,
+    BESS_XOAM_BYTES = 0x60,
+    BESS_SGB_BYTES = 0x39,
+    BESS_SGB_MAP_BYTES = 0x800,
+    BESS_SGB_MEMORY_BYTES = 0x2000 + BESS_SGB_MAP_BYTES + 0x80 + 0x20 + 0x1000 + 0x168 + 0xfd2
+};
 
 static const char writer_name[] = "CupidGB";
 
@@ -73,8 +81,7 @@ static CupidGbStateResult supported(const CupidGb *gb) {
     if (gb->rom_size < 0x150u || gb->rom_size > gb->rom_capacity ||
         !cupid_gb_model_is_valid(gb->model) || !cupid_gb_cartridge_storage_valid(gb))
         return CUPID_GB_STATE_INVALID;
-    if (gb->program_kind != CUPID_GB_PROGRAM_CARTRIDGE || gb->boot_rom_enabled ||
-        cupid_gb_model_is_sgb(gb->model))
+    if (gb->program_kind != CUPID_GB_PROGRAM_CARTRIDGE || gb->boot_rom_enabled)
         return CUPID_GB_STATE_UNSUPPORTED_FEATURE;
     switch (gb->header.mbc_type) {
         case CUPID_GB_MBC_NONE:
@@ -97,6 +104,11 @@ static CupidGbStateResult supported(const CupidGb *gb) {
           (gb->rtc_register && (gb->rtc_register < 8u || gb->rtc_register > 15u)))) ||
         gb->cgb_vram_bank > 1u || gb->cgb_wram_bank > 7u ||
         (!cupid_gb_model_is_cgb(gb->model) && gb->double_speed))
+        return CUPID_GB_STATE_INVALID;
+    if (cupid_gb_sgb_commands_enabled(gb) &&
+        (!gb->sgb.player_count || gb->sgb.player_count > 4 ||
+         (gb->sgb.player_count == 3 && (gb->sgb.current_player & 1u)) ||
+         gb->sgb.current_player >= gb->sgb.player_count))
         return CUPID_GB_STATE_INVALID;
     return CUPID_GB_STATE_OK;
 }
@@ -125,7 +137,9 @@ size_t cupid_gb_bess_size(const CupidGb *gb) {
            (mbc ? 8u + mbc : 0) +
            (gb->header.mbc_type == CUPID_GB_MBC3 && gb->header.has_timer ? 8u + BESS_RTC_BYTES
                                                                          : 0) +
-           (cupid_gb_extra_oam_size(gb->model) ? 8u + BESS_XOAM_BYTES : 0) + 8u + 8u;
+           (cupid_gb_extra_oam_size(gb->model) ? 8u + BESS_XOAM_BYTES : 0) +
+           (cupid_gb_sgb_commands_enabled(gb) ? BESS_SGB_MEMORY_BYTES + 8u + BESS_SGB_BYTES : 0) +
+           8u + 8u;
 }
 
 static void write_block(uint8_t *data, size_t *cursor, const char name[4], const uint8_t *payload,
@@ -147,8 +161,44 @@ static void write_region(uint8_t *data, size_t *cursor, uint8_t *descriptor, con
     *cursor += size;
 }
 
+static void write_word_region(uint8_t *data, size_t *cursor, uint8_t *descriptor,
+                              const uint16_t *source, size_t words, size_t wire_size) {
+    put_dword(descriptor, (uint32_t)wire_size);
+    put_dword(descriptor + 4, (uint32_t)*cursor);
+    for (size_t word = 0; word < words; ++word)
+        put_word(data + *cursor + word * 2, source[word]);
+    memset(data + *cursor + words * 2, 0, wire_size - words * 2);
+    *cursor += wire_size;
+}
+
+static void write_sgb_memory(uint8_t *data, size_t *cursor, uint8_t payload[BESS_SGB_BYTES],
+                             const CupidGbSgb *sgb) {
+    /* BESS has no border transition history. Preserve the latest captured
+     * transfer as one border, including tile uploads awaiting PCT_TRN. */
+    write_region(data, cursor, payload, sgb->transfer.tiles, sizeof(sgb->transfer.tiles));
+    /* Only the displayed 28 rows are retained by this core. The four
+     * undisplayed rows of the portable 32-row tilemap have no source history. */
+    write_word_region(data, cursor, payload + 8, sgb->transfer.map,
+                      sizeof(sgb->transfer.map) / sizeof(sgb->transfer.map[0]), BESS_SGB_MAP_BYTES);
+    write_word_region(data, cursor, payload + 16, sgb->transfer.palettes,
+                      CUPID_SGB_BORDER_PALETTE_COLORS, 0x80);
+    write_word_region(data, cursor, payload + 24, sgb->screen_palettes,
+                      sizeof(sgb->screen_palettes) / sizeof(sgb->screen_palettes[0]), 0x20);
+    write_word_region(data, cursor, payload + 32, sgb->ram_palettes,
+                      sizeof(sgb->ram_palettes) / sizeof(sgb->ram_palettes[0]), 0x1000);
+    write_region(data, cursor, payload + 40, sgb->attribute_map, sizeof(sgb->attribute_map));
+    write_region(data, cursor, payload + 48, sgb->attribute_files, sizeof(sgb->attribute_files));
+    payload[56] = (uint8_t)((sgb->player_count << 4) | sgb->current_player);
+}
+
 static void model_name(CupidGbModel model, uint8_t name[4]) {
-    if (cupid_gb_model_is_cgb(model)) {
+    if (cupid_gb_model_is_sgb(model)) {
+        memcpy(name,
+               model == CUPID_GB_MODEL_SGB_PAL ? "SP  "
+               : model == CUPID_GB_MODEL_SGB2  ? "S2  "
+                                               : "SN  ",
+               4);
+    } else if (cupid_gb_model_is_cgb(model)) {
         memcpy(name, "CC  ", 4);
         name[2] = model == CUPID_GB_MODEL_CGB_E   ? 'E'
                   : model == CUPID_GB_MODEL_CGB_0 ? '0'
@@ -258,6 +308,10 @@ CupidGbStateResult cupid_gb_bess_save(const CupidGb *gb, uint8_t *data, size_t c
     write_region(data, &cursor, core + 0xb8, gb->high_ram, 0x7f);
     write_region(data, &cursor, core + 0xc0, gb->cgb_bg_palette_ram, color ? 0x40 : 0);
     write_region(data, &cursor, core + 0xc8, gb->cgb_obj_palette_ram, color ? 0x40 : 0);
+    uint8_t sgb_payload[BESS_SGB_BYTES] = {0};
+    const bool save_sgb = cupid_gb_sgb_commands_enabled(gb);
+    if (save_sgb)
+        write_sgb_memory(data, &cursor, sgb_payload, &gb->sgb);
     const size_t blocks_start = cursor;
     write_block(data, &cursor, "NAME", (const uint8_t *)writer_name, sizeof(writer_name) - 1);
     uint8_t info[0x12];
@@ -281,6 +335,8 @@ CupidGbStateResult cupid_gb_bess_save(const CupidGb *gb, uint8_t *data, size_t c
             extra[cell] = cupid_gb_extra_oam_read(gb, (uint8_t)(0xa0u + cell));
         write_block(data, &cursor, "XOAM", extra, sizeof(extra));
     }
+    if (save_sgb)
+        write_block(data, &cursor, "SGB ", sgb_payload, sizeof(sgb_payload));
     write_block(data, &cursor, "END ", NULL, 0);
     put_dword(data + cursor, (uint32_t)blocks_start);
     memcpy(data + cursor + 4, "BESS", 4);
