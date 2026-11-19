@@ -24,6 +24,7 @@
 
 #include "cupid/gbc/cgb.h"
 
+#include "../gb/audio_output.h"
 #include "cgb_internal.h"
 #include "cupid/gb/gb.h"
 #include "cupid/gb/ppu.h"
@@ -727,6 +728,7 @@ unsigned cupid_cgb_apply_cartridge_handoff(CupidGb *gb) {
      * also wait for the firmware's legacy tilemap transfer. */
     const unsigned extra_cycles =
         gb->cgb_mode ? 0u : 1116u + 32u * palette->boot_compatibility_slot + tilemap_cycles;
+    cupid_gb_apu_apply_cgb_boot_pulse(gb, phase, extra_cycles);
     phase += extra_cycles;
     /* Install the complete phase before the first cartridge clock. */
     gb->io_registers[0x04] = (uint8_t)(phase >> 8u);

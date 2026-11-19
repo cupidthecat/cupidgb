@@ -495,6 +495,28 @@ mapper runs, terminal time increased by 2,340 or 2,392 guest cycles.
 Instruction counts, audio frame counts and audio CRCs changed in those
 runs. Framebuffer CRCs and test verdicts stayed the same.
 
+### CGB pulse 1 at cartridge entry
+
+Built-in startup on CGB A through E restores pulse 1's oscillator phase,
+length, sweep, envelope lock and register latches at cartridge entry.
+Monochrome startup gives the oscillator more time to run after the last
+trigger. On A and B, the length depends on the sequencer phase at both
+trigger writes. The first PCM12 read now returns `00`, with pulse 1
+still active in NR52.
+
+The compiled state matched 300 supplied-firmware handoffs across both
+cartridge modes, all 26 measured monochrome setup durations and the
+license branches. In 95 guest runs, the PCM reads and pulse state matched
+before and after writes to envelope, frequency and trigger registers.
+The startup regression covers the first guest PCM read and
+oscillator and length state after load, quick reset and hard reset.
+
+The 55 supplied-firmware runs retained their snapshots and frame traces.
+All 177 acceptance and mapper cases passed on both hosts. Only the
+audio CRC changed in the 28 built-in CGB mapper cases. Windows passed
+105 tests, Linux passed 103 and the Linux sanitizer build passed 76.
+Analog filter history and revision 0 remain open.
+
 ### Monochrome cartridge in Qt
 
 Windows and WSLg each ran Donkey Kong for 60 seconds at `0d898fa` on CGB-C

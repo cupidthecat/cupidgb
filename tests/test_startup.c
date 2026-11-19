@@ -1276,26 +1276,29 @@ static void test_cgb_startup_clock(void) {
         uint16_t divider;
         uint8_t apu_step;
         uint16_t compatibility_cycles;
+        uint8_t pulse_position, pulse_length_ab;
+        uint16_t pulse_timer;
     } cases[] = {
-        {0x80, 0, 0, 0x01, {'0', '1'}, 8440, 1, 0},
-        {0xc0, 0, 0, 0x33, {'0', '1'}, 8472, 1, 0},
-        {0x80, 0xb3, 'B', 0x01, {'0', '1'}, 13432, 1, 0},
-        {0xc0, 0xb3, 'U', 0x01, {'0', '1'}, 11724, 1, 0},
-        {0x80, 0xb3, '?', 0x33, {'0', '1'}, 11900, 1, 0},
-        {0xc0, 0x46, '?', 0x01, {'0', '1'}, 11824, 1, 0},
-        {0x80, 0x5a, 'A', 0x01, {'0', '1'}, 12200, 1, 0},
-        {0xc0, 0, 0, 0x33, {'0', '2'}, 7872, 0, 0},
-        {0xc0, 0, 0, 0x33, {'Z', '1'}, 7836, 0, 0},
-        {0x80, 0, 0, 0x00, {'0', '1'}, 7840, 0, 0},
-        {0x00, 0, 'A', 0x00, {'0', '1'}, 9852, 1, 2012},
-        {0x00, 0, 'A', 0x01, {'0', '1'}, 10452, 1, 2012},
-        {0x00, 0x43, 'A', 0x01, {'0', '1'}, 13492, 1, 3036},
-        {0x00, 0x58, 'A', 0x01, {'0', '1'}, 13676, 1, 3220},
-        {0x00, 0x70, 'A', 0x01, {'0', '1'}, 12620, 1, 1660},
+        {0x80, 0, 0, 0x01, {'0', '1'}, 8440, 1, 0, 6, 62, 148},
+        {0xc0, 0, 0, 0x33, {'0', '1'}, 8472, 1, 0, 6, 62, 148},
+        {0x80, 0xb3, 'B', 0x01, {'0', '1'}, 13432, 1, 0, 6, 64, 148},
+        {0xc0, 0xb3, 'U', 0x01, {'0', '1'}, 11724, 1, 0, 6, 63, 148},
+        {0x80, 0xb3, '?', 0x33, {'0', '1'}, 11900, 1, 0, 6, 63, 148},
+        {0xc0, 0x46, '?', 0x01, {'0', '1'}, 11824, 1, 0, 6, 63, 148},
+        {0x80, 0x5a, 'A', 0x01, {'0', '1'}, 12200, 1, 0, 6, 64, 148},
+        {0xc0, 0, 0, 0x33, {'0', '2'}, 7872, 0, 0, 6, 62, 148},
+        {0xc0, 0, 0, 0x33, {'Z', '1'}, 7836, 0, 0, 6, 62, 148},
+        {0x80, 0, 0, 0x00, {'0', '1'}, 7840, 0, 0, 6, 62, 148},
+        {0x00, 0, 'A', 0x00, {'0', '1'}, 9852, 1, 2012, 6, 62, 160},
+        {0x00, 0, 'A', 0x01, {'0', '1'}, 10452, 1, 2012, 6, 62, 160},
+        {0x00, 0x43, 'A', 0x01, {'0', '1'}, 13492, 1, 3036, 2, 63, 144},
+        {0x00, 0x58, 'A', 0x01, {'0', '1'}, 13676, 1, 3220, 3, 63, 212},
+        {0x00, 0x70, 'A', 0x01, {'0', '1'}, 12620, 1, 1660, 4, 63, 8},
     };
 
     uint8_t rom[32768] = {0};
-    const uint8_t entry[] = {0xf0, 0x04, 0xe0, 0x80, 0x18, 0xfe}; /* DIV to HRAM. */
+    const uint8_t entry[] = {0xf0, 0x04, 0xe0, 0x80, 0xf0,
+                             0x76, 0xe0, 0x81, 0x18, 0xfe}; /* DIV and PCM12 to HRAM. */
     memcpy(rom + 0x100, entry, sizeof(entry));
     CupidGb *gb = calloc(1, sizeof(*gb));
     assert(gb);
@@ -1317,6 +1320,12 @@ static void test_cgb_startup_clock(void) {
                                          gb->div_counter * 4u + gb->divider_subcycle;
                 assert(divider == cases[i].divider);
                 assert(gb->apu.fs_step == cases[i].apu_step && !gb->apu.fs_skip_div_event);
+                const bool early_length =
+                    gb->model == CUPID_GB_MODEL_CGB_A || gb->model == CUPID_GB_MODEL_CGB_B;
+                assert(gb->apu.ch1_len == (early_length ? cases[i].pulse_length_ab : 64u));
+                assert(gb->apu.ch1_duty_pos == cases[i].pulse_position);
+                assert(gb->apu.ch1_freq == 1985u && gb->apu.ch1_timer == cases[i].pulse_timer);
+                assert(gb->apu.ch1_vol == 0 && gb->apu.pulse_timing[0].envelope.locked);
                 const unsigned position = 168u + cases[i].compatibility_cycles;
                 const unsigned line = 144u + position / 456u;
                 const unsigned dot = position % 456u;
@@ -1343,6 +1352,8 @@ static void test_cgb_startup_clock(void) {
                 assert(cupid_gb_step(gb) && cupid_gb_step(gb));
                 /* LDH samples the register after the opcode and immediate byte. */
                 assert(cupid_gb_read_u8(gb, 0xff80) == (divider + 8u) / 256u);
+                assert(cupid_gb_step(gb) && cupid_gb_step(gb));
+                assert(cupid_gb_read_u8(gb, 0xff81) == 0 && cupid_gb_read_u8(gb, 0xff77) == 0);
 
                 const unsigned timer_phase = divider + (unsigned)gb->elapsed_cycles;
                 cupid_gb_write_u8(gb, 0xff05, 0x47);

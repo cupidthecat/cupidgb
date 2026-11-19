@@ -85,6 +85,39 @@ static void pulse_latch_wave(CupidGbApu *apu, unsigned channel) {
     apu->pulse_timing[channel].output_high = ((cupid_gb_duty_mask[duty] >> index) & 1u) != 0;
 }
 
+void cupid_gb_apu_apply_cgb_boot_pulse(CupidGb *gb, unsigned native_divider,
+                                       unsigned compatibility_cycles) {
+    enum { BOOT_FREQUENCY = 1985, PERIOD = (2048 - BOOT_FREQUENCY) * 4 };
+
+    /* The last trigger runs eight clocks later on the compatibility path. */
+    const unsigned extra = compatibility_cycles ? compatibility_cycles - 8u : 0u;
+    const unsigned duty_phase = PERIOD - 148u + extra;
+    CupidGbApu *apu = &gb->apu;
+    apu->ch1_duty_pos = (uint8_t)((6u + duty_phase / PERIOD) & 7u);
+    apu->ch1_freq = BOOT_FREQUENCY;
+    apu->ch1_timer = (uint16_t)(PERIOD - duty_phase % PERIOD);
+    apu->ch1_len = 64u;
+    if (gb->model == CUPID_GB_MODEL_CGB_A || gb->model == CUPID_GB_MODEL_CGB_B) {
+        /* Both trigger writes can clock length on A/B. During this interval
+         * the parity of the sequencer step follows divider bit 13. */
+        const unsigned first = native_divider - 0xaf08u + (compatibility_cycles ? 16u : 0u);
+        const unsigned second = native_divider - 0x65b8u + (compatibility_cycles ? 8u : 0u);
+        apu->ch1_len -= (uint8_t)(((first >> 13u) & 1u) + ((second >> 13u) & 1u));
+    }
+
+    apu->ch1_vol = 0;
+    apu->ch1_env_timer = 2u;
+    apu->ch1_sweep_timer = 8u;
+    apu->pulse_timing[0].envelope = (CupidGbEnvelopeGate){.locked = true, .lock_pending = true};
+    pulse_latch_wave(apu, 0);
+    gb->io_registers[0x10] = 0x00u;
+    gb->io_registers[0x11] = 0x80u;
+    gb->io_registers[0x13] = (uint8_t)BOOT_FREQUENCY;
+    gb->io_registers[0x14] = (uint8_t)(0x80u | (BOOT_FREQUENCY >> 8u));
+    /* Seed the existing output path from the cartridge-entry DAC level. */
+    cupid_gb_audio_import_legacy(gb);
+}
+
 static bool pulse_gate_off(CupidGbApu *apu, unsigned channel) {
     bool dac = channel ? apu->ch2_dac : apu->ch1_dac;
     bool *active = channel ? &apu->ch2_on : &apu->ch1_on;

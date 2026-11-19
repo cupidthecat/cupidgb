@@ -34,5 +34,7 @@ void cupid_gb_audio_update(CupidGb *gb, unsigned channel, uint8_t value, unsigne
 void cupid_gb_audio_update_channels(CupidGb *gb, uint8_t channels, unsigned base_offset,
                                     bool force);
 void cupid_gb_apu_channel_samples(const CupidGb *gb, uint8_t samples[4]);
+void cupid_gb_apu_apply_cgb_boot_pulse(CupidGb *gb, unsigned native_divider,
+                                       unsigned compatibility_cycles);
 
 #endif
