@@ -541,13 +541,26 @@ static void test_color_vblank_comparison_latches(void) {
     for (unsigned model = 0; model < sizeof(color_revisions) / sizeof(color_revisions[0]);
          ++model) {
         for (unsigned speed = 0; speed < 2; ++speed) {
-            for (unsigned line = 144; line <= 152; ++line) {
+            for (unsigned line = 144; line <= 153; ++line) {
                 CupidGb *gb = prepare(color_revisions[model], speed != 0, program, sizeof(program),
                                       0x40, (uint8_t)(line - 1u), 1, 0);
-                for (unsigned row = 1; row < line; ++row)
+                for (unsigned row = 1; row < line - 1u; ++row)
                     cupid_gb_tick_ppu_dots(gb, 456);
-                assert(gb->pixels.line == line && gb->pixels.dot == 0);
                 const bool retained = speed || model >= 4;
+                cupid_gb_tick_ppu_dots(gb, 452);
+                assert(cupid_gb_read_u8(gb, 0xff44) == line - 1u);
+                assert(cupid_gb_read_u8(gb, 0xff41) & 4u);
+                assert(gb->pixels.lyc_irq);
+                cupid_gb_tick_ppu_dots(gb, 1);
+                assert(cupid_gb_read_u8(gb, 0xff44) == line - 1u);
+                assert(((cupid_gb_read_u8(gb, 0xff41) & 4u) != 0u) == retained);
+                assert(gb->pixels.lyc_irq);
+                cupid_gb_tick_ppu_dots(gb, 3);
+                assert(gb->pixels.line == line && gb->pixels.dot == 0);
+                if (line == 153) {
+                    destroy(gb);
+                    continue;
+                }
                 const unsigned mode = line == 144 ? 0 : 1;
                 assert((cupid_gb_read_u8(gb, 0xff41) & 7u) == (mode | (retained ? 4u : 0u)));
                 assert(gb->pixels.lyc_irq);

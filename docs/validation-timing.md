@@ -150,3 +150,19 @@ probes also agreed on 288 visible-row observations, 720 VBlank observations,
 3,600 observations around STAT and LYC writes, and 43,200 observations across
 1,728 line-153 cases. The regression checks native snapshot continuation at
 108 VBlank boundaries across six revisions and both speeds.
+
+At entry to VBlank and through line 152, the comparator now stops two dots
+before readable LY changes. The early normal-speed revisions clear STAT
+bit 2 at that first edge. The previous LYC interrupt input stays latched
+until the next comparison.
+
+The component comparison covered 66 LY, STAT and IF schedules at normal
+speed and another 66 with double-speed display timing. It also checked
+90 STAT and LYC write alignments at VBlank entry and 90 at an interior
+VBlank boundary. All sampled schedules and writes matched. The regression
+checks the early edge at all ten boundaries on six revisions and both
+speeds.
+
+Both builds passed all 177 acceptance and mapper cases with identical
+guest results to the previous build. The 121 paired firmware cases kept
+their matching terminal clocks.

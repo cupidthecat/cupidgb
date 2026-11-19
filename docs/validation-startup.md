@@ -434,8 +434,8 @@ cycle with identical framebuffer captures and matching 8 KiB saves.
 Both audio sinks reported zero idle or error events.
 
 CGB revision 0, monochrome-compatibility handoff phases and firmware-dependent
-divider values remain open. Early color revisions still clear the readable
-coincidence bit later than the measured edge at a VBlank row boundary.
+divider values remain open. See [VBlank comparison timing](validation-timing.md#cgb-stat-coincidence-across-scanlines)
+for the early color coincidence bit transition.
 
 ### Monochrome cartridge in Qt
 
