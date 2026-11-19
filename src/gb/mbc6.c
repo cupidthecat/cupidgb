@@ -33,7 +33,25 @@ enum {
     STATUS_PROTECTED = 0x02
 };
 
-enum { READ_ARRAY, READ_ID, READ_HIDDEN, COLLECT_PAGE, COLLECT_HIDDEN_PAGE, READ_STATUS };
+enum {
+    READ_ARRAY,
+    READ_ID,
+    READ_HIDDEN,
+    COLLECT_PAGE,
+    COLLECT_HIDDEN_PAGE,
+    READ_STATUS,
+    COLLECT_BUFFER,
+    COLLECT_HIDDEN_BUFFER
+};
+
+static bool collecting(uint8_t mode) {
+    return mode == COLLECT_PAGE || mode == COLLECT_HIDDEN_PAGE || mode == COLLECT_BUFFER ||
+           mode == COLLECT_HIDDEN_BUFFER;
+}
+
+static uint8_t ready_status(const CupidGbMbc6 *mbc) {
+    return STATUS_READY | (mbc->sector_protected ? STATUS_PROTECTED : 0u);
+}
 
 enum { UNLOCK_IDLE, UNLOCK_SECOND, UNLOCK_COMMAND };
 
@@ -80,10 +98,10 @@ bool cupid_gb_mbc6_read_program(const CupidGb *gb, uint16_t address, uint8_t *va
             break;
         case COLLECT_PAGE:
         case COLLECT_HIDDEN_PAGE:
-            *value = 0;
-            break;
+        case COLLECT_BUFFER:
+        case COLLECT_HIDDEN_BUFFER:
         case READ_STATUS:
-            *value = mbc->status;
+            *value = ready_status(mbc);
             break;
         default:
             *value = gb->mbc6_flash[offset];
@@ -102,6 +120,14 @@ static void clear_page(CupidGbMbc6 *mbc) {
     memset(mbc->page, 0, sizeof(mbc->page));
 }
 
+static void begin_buffer(CupidGbMbc6 *mbc, bool hidden) {
+    mbc->flash_mode = hidden ? COLLECT_HIDDEN_BUFFER : COLLECT_BUFFER;
+    mbc->status = 0;
+    mbc->page_count = 0;
+    mbc->page_base = 0;
+    memset(mbc->page, 0xff, sizeof(mbc->page));
+}
+
 static void reset_command(CupidGbMbc6 *mbc) {
     mbc->flash_mode = READ_ARRAY;
     mbc->sequence = UNLOCK_IDLE;
@@ -110,13 +136,13 @@ static void reset_command(CupidGbMbc6 *mbc) {
     clear_page(mbc);
 }
 
-static void complete(CupidGbMbc6 *mbc, bool success) {
+static void complete(CupidGbMbc6 *mbc) {
     clear_page(mbc);
     mbc->flash_mode = READ_STATUS;
     /* Status reports completion immediately. Chip operation latency and
      * intermediate polling behavior require hardware measurements. */
-    mbc->status =
-        (success ? STATUS_READY : STATUS_TIMEOUT) | (mbc->sector_protected ? STATUS_PROTECTED : 0u);
+    /* Failure also finishes the operation; bit 1 reports sector protection. */
+    mbc->status = ready_status(mbc);
 }
 
 static void erase(CupidGb *gb, size_t start, size_t length) {
@@ -132,44 +158,43 @@ static void erase(CupidGb *gb, size_t start, size_t length) {
 
 static void page_write(CupidGb *gb, size_t offset, uint8_t value) {
     CupidGbMbc6 *mbc = &gb->mbc6;
-    const bool hidden = mbc->flash_mode == COLLECT_HIDDEN_PAGE;
-    if (hidden)
-        offset &= CUPID_GB_MBC6_HIDDEN_SIZE - 1u;
-    if (mbc->page_count == CUPID_GB_MBC6_PAGE_SIZE) {
-        if (value == 0xf0u) {
-            reset_command(mbc);
-            return;
-        }
-        const bool writable = hidden ? mbc->write_enabled
-                                     : mbc->page_base >= SECTOR_SIZE || sector_zero_writable(mbc);
-        const bool confirmed = writable && offset == mbc->page_base + CUPID_GB_MBC6_PAGE_SIZE - 1u;
-        if (confirmed) {
-            const size_t base = mbc->page_base + (hidden ? CUPID_GB_MBC6_FLASH_SIZE : 0);
-            uint8_t *destination = gb->mbc6_flash + base;
-            bool changed = false;
-            for (size_t i = 0; i < CUPID_GB_MBC6_PAGE_SIZE; ++i) {
-                const uint8_t programmed = destination[i] & mbc->page[i];
-                changed |= programmed != destination[i];
-                destination[i] = programmed;
-            }
-            if (changed)
-                ++gb->battery_write_generation;
-        }
-        complete(mbc, confirmed);
+    if (mbc->flash_mode == COLLECT_PAGE || mbc->flash_mode == COLLECT_HIDDEN_PAGE) {
+        /* Older states contain a sequential prefix and a zero-filled tail.
+         * Retain that representation until the next write so loading and saving
+         * an untouched pending state preserves its bytes. */
+        memset(mbc->page + mbc->page_count, 0xff, sizeof(mbc->page) - mbc->page_count);
+        mbc->page_base = 0;
+        mbc->flash_mode = mbc->flash_mode == COLLECT_PAGE ? COLLECT_BUFFER : COLLECT_HIDDEN_BUFFER;
+    }
+    const unsigned index = (unsigned)offset & (CUPID_GB_MBC6_PAGE_SIZE - 1u);
+    const bool hidden = mbc->flash_mode == COLLECT_HIDDEN_BUFFER;
+    /* page_count stores the previous buffer index plus one, with zero meaning
+     * that no data has arrived. Repeating that index triggers programming. */
+    if (mbc->page_count != index + 1u) {
+        mbc->page[index] = value;
+        mbc->page_count = (uint8_t)(index + 1u);
         return;
     }
-    if (!mbc->page_count)
-        mbc->page_base = (uint32_t)offset & ~(CUPID_GB_MBC6_PAGE_SIZE - 1u);
-    if (offset != mbc->page_base + mbc->page_count) {
-        if (value == 0xf0u)
-            reset_command(mbc);
-        else
-            complete(mbc, false);
+    if (value == 0xf0u) {
+        reset_command(mbc);
         return;
     }
-    /* A literal F0 is valid page data. Only the confirmation write or a
-     * write outside the expected data sequence can terminate the operation. */
-    mbc->page[mbc->page_count++] = value;
+    const size_t base = offset & ~(size_t)(CUPID_GB_MBC6_PAGE_SIZE - 1u);
+    const size_t target = hidden ? base & (CUPID_GB_MBC6_HIDDEN_SIZE - 1u) : base;
+    const bool writable =
+        hidden ? mbc->write_enabled : target >= SECTOR_SIZE || sector_zero_writable(mbc);
+    if (writable) {
+        uint8_t *destination = gb->mbc6_flash + target + (hidden ? CUPID_GB_MBC6_FLASH_SIZE : 0);
+        bool changed = false;
+        for (size_t i = 0; i < CUPID_GB_MBC6_PAGE_SIZE; ++i) {
+            const uint8_t programmed = destination[i] & mbc->page[i];
+            changed |= programmed != destination[i];
+            destination[i] = programmed;
+        }
+        if (changed)
+            ++gb->battery_write_generation;
+    }
+    complete(mbc);
 }
 
 static void execute_command(CupidGb *gb, size_t offset, uint8_t value) {
@@ -181,7 +206,17 @@ static void execute_command(CupidGb *gb, size_t offset, uint8_t value) {
         const bool writable = start || sector_zero_writable(mbc);
         if (writable)
             erase(gb, start, SECTOR_SIZE);
-        complete(mbc, writable);
+        complete(mbc);
+        return;
+    }
+    if (setup == 0x60u && (value == 0x20u || value == 0x40u)) {
+        if (offset >= SECTOR_SIZE || !mbc->write_enabled)
+            return;
+        if (mbc->sector_protected != (value == 0x20u)) {
+            mbc->sector_protected = value == 0x20u;
+            ++gb->battery_write_generation;
+        }
+        complete(mbc);
         return;
     }
     if ((offset & 0x7fffu) != UNLOCK_ADDRESS_A)
@@ -189,25 +224,18 @@ static void execute_command(CupidGb *gb, size_t offset, uint8_t value) {
     if (setup == 0x80u && value == 0x10u) {
         const size_t start = sector_zero_writable(mbc) ? 0 : SECTOR_SIZE;
         erase(gb, start, CUPID_GB_MBC6_FLASH_SIZE - start);
-        complete(mbc, true);
+        complete(mbc);
     } else if (setup == 0x77u && value == 0x77u) {
         mbc->flash_mode = READ_HIDDEN;
         mbc->status = 0;
-    } else if (setup == 0x60u &&
-               (value == 0x04u || value == 0xe0u || value == 0x20u || value == 0x40u)) {
+    } else if (setup == 0x60u && (value == 0x04u || value == 0xe0u)) {
         if (!mbc->write_enabled) {
-            complete(mbc, false);
+            return;
         } else if (value == 0xe0u) {
-            mbc->flash_mode = COLLECT_HIDDEN_PAGE;
-            mbc->status = 0;
+            begin_buffer(mbc, true);
         } else {
-            if (value == 0x04u) {
-                erase(gb, CUPID_GB_MBC6_FLASH_SIZE, CUPID_GB_MBC6_HIDDEN_SIZE);
-            } else if (mbc->sector_protected != (value == 0x20u)) {
-                mbc->sector_protected = value == 0x20u;
-                ++gb->battery_write_generation;
-            }
-            complete(mbc, true);
+            erase(gb, CUPID_GB_MBC6_FLASH_SIZE, CUPID_GB_MBC6_HIDDEN_SIZE);
+            complete(mbc);
         }
     } else if (!setup) {
         switch (value) {
@@ -221,8 +249,7 @@ static void execute_command(CupidGb *gb, size_t offset, uint8_t value) {
                 mbc->status = 0;
                 break;
             case 0xa0:
-                mbc->flash_mode = COLLECT_PAGE;
-                mbc->status = 0;
+                begin_buffer(mbc, false);
                 break;
         }
     }
@@ -231,7 +258,7 @@ static void execute_command(CupidGb *gb, size_t offset, uint8_t value) {
 static void write_flash(CupidGb *gb, uint16_t address, uint8_t value) {
     CupidGbMbc6 *mbc = &gb->mbc6;
     const size_t offset = flash_address(mbc, address);
-    if (mbc->flash_mode == COLLECT_PAGE || mbc->flash_mode == COLLECT_HIDDEN_PAGE) {
+    if (collecting(mbc->flash_mode)) {
         page_write(gb, offset, value);
         return;
     }
@@ -285,8 +312,8 @@ void cupid_gb_mbc6_write(CupidGb *gb, uint16_t address, uint8_t value) {
 
 bool cupid_gb_mbc6_state_valid(const CupidGb *gb) {
     const CupidGbMbc6 *mbc = &gb->mbc6;
-    if (mbc->flash_mode > READ_STATUS || mbc->sequence > UNLOCK_COMMAND || mbc->ram_bank[0] > 7 ||
-        mbc->ram_bank[1] > 7 ||
+    if (mbc->flash_mode > COLLECT_HIDDEN_BUFFER || mbc->sequence > UNLOCK_COMMAND ||
+        mbc->ram_bank[0] > 7 || mbc->ram_bank[1] > 7 ||
         (mbc->setup && mbc->setup != 0x60 && mbc->setup != 0x77 && mbc->setup != 0x80) ||
         mbc->page_count > CUPID_GB_MBC6_PAGE_SIZE || (mbc->page_base & 0x7fu) ||
         (!mbc->page_count && mbc->page_base))
@@ -296,19 +323,31 @@ bool cupid_gb_mbc6_state_valid(const CupidGb *gb) {
             mbc->flash_mode == COLLECT_PAGE ? CUPID_GB_MBC6_FLASH_SIZE : CUPID_GB_MBC6_HIDDEN_SIZE;
         if (mbc->page_base >= limit || mbc->sequence || mbc->setup)
             return false;
+    } else if (mbc->flash_mode == COLLECT_BUFFER || mbc->flash_mode == COLLECT_HIDDEN_BUFFER) {
+        if (mbc->page_base || mbc->sequence || mbc->setup)
+            return false;
+        if (!mbc->page_count) {
+            for (unsigned i = 0; i < CUPID_GB_MBC6_PAGE_SIZE; ++i) {
+                if (mbc->page[i] != 0xffu)
+                    return false;
+            }
+        }
     } else if (mbc->page_count) {
         return false;
     }
     if (mbc->flash_mode == READ_STATUS) {
         const uint8_t result = mbc->status & (uint8_t)~STATUS_PROTECTED;
+        /* Keep completed failure states written by the older implementation readable. */
         if (result != STATUS_READY && result != STATUS_TIMEOUT)
             return false;
     } else if (mbc->status) {
         return false;
     }
-    for (unsigned i = mbc->page_count; i < CUPID_GB_MBC6_PAGE_SIZE; ++i) {
-        if (mbc->page[i])
-            return false;
+    if (mbc->flash_mode != COLLECT_BUFFER && mbc->flash_mode != COLLECT_HIDDEN_BUFFER) {
+        for (unsigned i = mbc->page_count; i < CUPID_GB_MBC6_PAGE_SIZE; ++i) {
+            if (mbc->page[i])
+                return false;
+        }
     }
     return true;
 }

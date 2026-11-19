@@ -347,6 +347,11 @@ Version 24 keeps the version 23 layout. The existing two-byte cartridge-bus reco
 
 Version 25 places an MBC6-only record after the SGB receiver record and before the serial accessory descriptor. The record contains the split ROM and SRAM selectors, flash chip and write-enable gates, sector protection, current flash mode, command phase, status and buffered page. The flash array and hidden bytes follow. The payload is fixed at 1,048,978 bytes. Other controllers keep their version 24 payload.
 
+The same record now retains arbitrary-order program buffers. Current builds
+can resume earlier states with a sequential buffer. Reopening a state saved
+during an arbitrary-order program operation requires a build that supports
+the new buffer modes.
+
 An older MBC6 state that contains the board's 32 KiB SRAM maps its historical 16 KiB ROM selection and 8 KiB SRAM selection into adjacent halves. Flash starts erased with its command latches clear because those states do not contain flash data.
 
 ### TAMA5 in version 26
