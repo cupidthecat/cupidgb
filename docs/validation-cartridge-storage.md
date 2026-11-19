@@ -67,6 +67,25 @@ Four Linux headless runs matched every pixel after 1,800 frame-equivalents. They
 
 The local library scan found no commercial HuC1, MMM01, MBC6, TAMA5 or TPP1 inputs. Physical camera capture, motion and infrared still need separate tests.
 
+## Commercial battery saves and cold Continue
+
+Windows and Linux headless builds at `bf6ef13` used each game's Save command
+and restored the game-written battery in a new process. The runs used ordinary
+guest inputs and opened no native snapshots.
+
+Final Fantasy Adventure on DMG saved the opening arena into slot 1 on MBC2.
+The 512-byte battery matched on both platforms. A fresh Continue displayed
+the saved character, while the same inputs with erased storage entered the
+New Game introduction. After loading the slot, Right moved the character 56
+pixels on both platforms. The test covers the initial arena and save slot.
+
+Robopon Sun Version on CGB-E confirmed its own Save command after the player
+reached the kitchen. Both builds wrote the same 32,785-byte HuC3 battery with
+a fixed clock. Cold Continue restored the named player, one Robopon, and
+1,000 gold. Left movement changed 13,179 pixels compared with an idle run at
+the same frame. Separate loads using the system clock also restored progress
+and advanced the HuC3 minute counter.
+
 ## TPP1 mapper write range
 
 Addresses `0000–3FFF` select the mapper registers using the low two address

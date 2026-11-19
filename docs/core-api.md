@@ -99,7 +99,7 @@ Initialization creates model-specific WRAM, HRAM, OAM, and wave-memory contents.
 
 Both setters affect the next cold initialization; they leave current memory and the last realized seed intact. `cupid_gb_get_power_on_seed` returns that realized seed, including an automatic choice. Policy survives initialization and native-state loading, while cleanup clears it. A loaded state restores its own memory without replacing the receiving instance's seed metadata. The getter therefore describes the host's last cold generation, not the provenance of restored RAM. Native states exclude this metadata; the realized guest memory is already serialized.
 
-Ordinary initialization clears physical CGB WRAM bank 2 and supplies the modeled post-boot wave pattern. Cartridge loading on Color revisions A–E also writes the boot title checksum and final background fade buffer. Initial firmware execution needs the original cold memory. [Color WRAM at cartridge entry](validation-startup.md#color-wram-at-cartridge-entry)
+Ordinary initialization clears physical CGB WRAM bank 2 and supplies the modeled post-boot wave pattern. Cartridge loading on Color hardware writes the boot title checksum, palette selection, and final background fade buffer. Initial firmware execution needs the original cold memory. [Color WRAM at cartridge entry](validation-startup.md#color-wram-at-cartridge-entry)
 
 ```c
 cupid_gb_set_model(gb, CUPID_GB_MODEL_CGB);

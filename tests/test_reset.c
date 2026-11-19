@@ -346,9 +346,8 @@ static void check_boundary(const CupidGb *gb, const CupidGb *before, CupidGbRese
         CHECK(filled(cupid_gb_cartridge_ram_const(gb), gb->cartridge_ram_size, 0xff));
     if (quick) {
         if (!firmware && cupid_gb_model_is_cgb(gb->model)) {
-            const size_t retained_end = gb->model == CUPID_GB_MODEL_CGB_0 ? 0x7eu : 0x72u;
             CHECK(!memcmp(gb->high_ram, gb->rom + 0x104, 0x30));
-            CHECK(!memcmp(gb->high_ram + 0x30, before->high_ram + 0x30, retained_end - 0x30));
+            CHECK(!memcmp(gb->high_ram + 0x30, before->high_ram + 0x30, 0x42));
             CHECK(gb->high_ram[0x7e] == before->high_ram[0x7e]);
         } else {
             CHECK(!memcmp(gb->high_ram, before->high_ram, sizeof(gb->high_ram)));
@@ -360,12 +359,14 @@ static void check_boundary(const CupidGb *gb, const CupidGb *before, CupidGbRese
         CHECK(gb->io_registers[0x46] == 0x12 && gb->io_registers[0x48] == 0x34 &&
               gb->io_registers[0x49] == 0x56);
         if (!firmware && gb->model == CUPID_GB_MODEL_CGB) {
+            uint8_t bank2[0x1000] = {[8] = 28, [11] = 3};
+            for (size_t offset = 0x840; offset < 0x880; offset += 2) {
+                bank2[offset] = 0xff;
+                bank2[offset + 1] = 0x7f;
+            }
             CHECK(!memcmp(gb->work_ram, before->work_ram, 0x2000) &&
-                  filled(gb->work_ram + 0x2000, 0x840, 0) &&
-                  filled(gb->work_ram + 0x2880, 0x780, 0) &&
+                  !memcmp(gb->work_ram + 0x2000, bank2, sizeof(bank2)) &&
                   !memcmp(gb->work_ram + 0x3000, before->work_ram + 0x3000, 0x5000));
-            for (size_t offset = 0x2840; offset < 0x2880; offset += 2)
-                CHECK(gb->work_ram[offset] == 0xff && gb->work_ram[offset + 1] == 0x7f);
             CHECK(filled(gb->object_attribute_memory, sizeof(gb->object_attribute_memory), 0));
         } else {
             CHECK(!memcmp(gb->work_ram, before->work_ram, sizeof(gb->work_ram)));

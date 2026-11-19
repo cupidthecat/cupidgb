@@ -744,7 +744,6 @@ static void test_color_cartridge_entry_work_ram(void) {
     uint8_t rom[0x8000] = {[0x134] = 0xf8, [0x137] = 0xf7, [0x144] = '0'};
 
     for (size_t model = 0; model < sizeof(models) / sizeof(models[0]); ++model) {
-        const bool later_color = models[model] != CUPID_GB_MODEL_CGB_0;
         cupid_gb_set_model(gb, models[model]);
         for (size_t cart = 0; cart < sizeof(cartridges) / sizeof(cartridges[0]); ++cart) {
             rom[0x143] = cartridges[cart].color_flag;
@@ -760,10 +759,10 @@ static void test_color_cartridge_entry_work_ram(void) {
                     assert(cupid_gb_reset(gb, startup == 1 ? CUPID_GB_RESET_QUICK
                                                            : CUPID_GB_RESET_HARD));
                 }
-                assert(gb->work_ram[0x2000] == (later_color ? cartridges[cart].checksum : 0));
+                assert(gb->work_ram[0x2000] == cartridges[cart].checksum);
                 for (size_t offset = 0x2840; offset < 0x2880; offset += 2) {
-                    assert(gb->work_ram[offset] == (later_color ? 0xff : 0));
-                    assert(gb->work_ram[offset + 1] == (later_color ? 0x7f : 0));
+                    assert(gb->work_ram[offset] == 0xff);
+                    assert(gb->work_ram[offset + 1] == 0x7f);
                 }
                 assert(gb->work_ram[0x283f] == 0 && gb->work_ram[0x2880] == 0);
             }
@@ -1053,7 +1052,6 @@ static void test_cartridge_entry_logo(void) {
     for (size_t model = 0; model < sizeof(models) / sizeof(models[0]); ++model) {
         const bool color = cupid_gb_model_is_cgb(models[model]);
         const bool mark = models[model] != CUPID_GB_MODEL_DMG0;
-        const bool has_boot_stack = color && models[model] != CUPID_GB_MODEL_CGB_0;
         cupid_gb_set_model(gb, models[model]);
         cupid_gb_init(gb);
         uint8_t power_on_hram[sizeof(gb->high_ram)], expected_hram[sizeof(gb->high_ram)];
@@ -1089,7 +1087,7 @@ static void test_cartridge_entry_logo(void) {
             uint8_t quick_hram[sizeof(gb->high_ram)];
             memset(quick_hram, 0x5a, sizeof(quick_hram));
             memcpy(quick_hram, expected_hram, logo_bytes);
-            if (has_boot_stack) {
+            if (color) {
                 static const uint8_t stack[2][12] = {
                     {0x71, 0x02, 0x4d, 0x01, 0x00, 0xff, 0x0d, 0x00, 0x03, 0x06, 0xf9, 0x00},
                     {0x71, 0x02, 0x4d, 0x01, 0xc1, 0xff, 0x0d, 0x00, 0xd3, 0x05, 0xf9, 0x00},
@@ -1666,20 +1664,22 @@ static void test_native_color_startup_phase(void) {
            cases);
 }
 
-static void test_cgb0_rejected_license_divider(void) {
+static void test_cgb0_cartridge_entry_divider(void) {
     static const struct {
         uint8_t color, license, first, second;
-        bool rejected_first;
+        uint16_t phase;
     } headers[] = {
-        {0x00, 0x33, 'Z', 'Z', true}, {0x00, 0x33, 'Y', '1', true},  {0x00, 0x33, '0', 'Z', false},
-        {0x00, 0x01, 0, 0, false},    {0x80, 0x33, 'Z', 'Z', false}, {0xc0, 0x33, 'Z', 'Z', false},
+        {0x00, 0x33, 'Z', 'Z', 0x2884}, {0x00, 0x33, 'Y', '1', 0x2884},
+        {0x00, 0x33, '0', 'Z', 0x28a8}, {0x00, 0x01, 0, 0, 0x2ae0},
+        {0x80, 0x33, 'Z', 'Z', 0x20a8}, {0xc0, 0x33, 'Z', 'Z', 0x20a8},
+        {0x00, 0x00, 0, 0, 0x2888},     {0x80, 0x01, 0, 0, 0x31b4},
+        {0xc0, 0x33, '0', '1', 0x31d4},
     };
 
-    static const uint8_t expected[] = {0x29, 0x2a, 0x2a, 0x2b, 0x2c, 0x2e};
-    static const uint8_t approximate[] = {0x1f, 0x20, 0x21, 0x22, 0x23, 0x24};
     /* The first LDH samples 124 T-cycles after entry. Subsequent samples occur
      * 256, 252, 256, 256 and 260 T-cycles later, straddling divider increments. */
     static const unsigned padding[] = {25, 58, 57, 58, 58, 59};
+    static const unsigned read_cycles[] = {124, 380, 632, 888, 1144, 1404};
     for (unsigned header = 0; header < sizeof(headers) / sizeof(headers[0]); ++header) {
         uint8_t rom[32768] = {0};
         rom[0x100] = 0xc3;
@@ -1709,14 +1709,17 @@ static void test_cgb0_rejected_license_divider(void) {
                 assert(cupid_gb_reset(gb, reset == 1 ? CUPID_GB_RESET_QUICK : CUPID_GB_RESET_HARD));
             const unsigned phase = (unsigned)gb->io_registers[4] * 256u +
                                    (gb->div_counter & 63u) * 4u + gb->divider_subcycle;
-            assert(phase == (headers[header].rejected_first ? 0x2884u : 0x1ed0u));
+            assert(phase == headers[header].phase);
             unsigned steps = 0;
             while (gb->cpu.pc != end && steps++ < 1000)
                 assert(cupid_gb_step(gb));
             assert(gb->cpu.pc == end && steps < 1000);
-            const uint8_t *bytes = headers[header].rejected_first ? expected : approximate;
-            for (unsigned sample = 0; sample < sizeof(expected); ++sample)
-                assert(cupid_gb_read_u8(gb, (uint16_t)(0xff80u + sample)) == bytes[sample]);
+            for (unsigned sample = 0; sample < sizeof(read_cycles) / sizeof(read_cycles[0]);
+                 ++sample) {
+                const uint8_t expected =
+                    (uint8_t)((headers[header].phase + read_cycles[sample]) >> 8);
+                assert(cupid_gb_read_u8(gb, (uint16_t)(0xff80u + sample)) == expected);
+            }
         }
         cupid_gb_cleanup(gb);
         free(gb);
@@ -1741,7 +1744,7 @@ static void test_color_target_initialization(void) {
 int main(void) {
     test_cartridge_entry_logo();
     test_color_cartridge_entry_work_ram();
-    test_cgb0_rejected_license_divider();
+    test_cgb0_cartridge_entry_divider();
     test_seeded_generations();
     test_model_distributions();
     test_color_work_ram_revisions();

@@ -76,8 +76,7 @@ static void restore_retained_memory(CupidGb *next, const CupidGb *previous) {
                previous->work_ram + CUPID_GB_CGB_BOOT_WRAM_END,
                sizeof(next->work_ram) - CUPID_GB_CGB_BOOT_WRAM_END);
         const size_t start = CUPID_GB_STARTUP_LOGO_BYTES;
-        const size_t end = next->model == CUPID_GB_MODEL_CGB_0 ? CUPID_GB_CGB_BOOT_STACK_END
-                                                               : CUPID_GB_CGB_BOOT_STACK_START;
+        const size_t end = CUPID_GB_CGB_BOOT_STACK_START;
         memcpy(next->high_ram + start, previous->high_ram + start, end - start);
         next->high_ram[CUPID_GB_CGB_BOOT_STACK_END] =
             previous->high_ram[CUPID_GB_CGB_BOOT_STACK_END];

@@ -482,9 +482,9 @@ before execution. Memory-preserving firmware re-entry retains live VRAM.
 Windows and Linux each matched 96 full VRAM images. The comparison used the
 installed DMG and Color firmware, plus replacement firmware for Pocket and
 adapter profiles. Two DMG0 expectations follow the original disassembly.
-The CGB0 comparison ran the installed Color firmware on the CGB0 model, and
-its legacy map rules also match the revision-specific disassembly. Original
-DMG0 and CGB0 binary verification remains open.
+The first CGB0 comparison ran later Color firmware on the CGB0 model. A
+follow-up with original CGB0 firmware matched the modeled logo and legacy
+maps. Original DMG0 binary verification remains open.
 
 ### Color HRAM at cartridge entry
 
@@ -492,7 +492,7 @@ The Color startup firmware copies the 48 logo bytes from the cartridge
 header into `FF80–FFAF` before expanding the tiles. Built-in startup writes
 that buffer on all six Color profiles. [Original firmware disassembly](https://codeberg.org/ISSOtm/gb-bootroms/src/commit/443d7f057ae06e8d1d76fa8083650cf0be2cd0ae/src/cgb.asm#L222-L234)
 
-On revisions A–E, the default handoff also leaves 12 stack bytes at
+On all six revisions, the default handoff also leaves 12 stack bytes at
 `FFF2–FFFD`. The bytes follow the native-color, monochrome compatibility, or
 legacy tilemap path. Quick Reset without installed firmware reproduces those
 writes and retains the other HRAM bytes. At the immediate reset boundary,
@@ -507,9 +507,10 @@ the CGB0 model. The cases use two power-on seeds, both color flags, and
 ordinary and legacy monochrome compatibility. Eighteen guest runs on
 each host also read the modeled bytes at cartridge entry.
 
-These stack checks use the installed Color firmware with no held buttons.
-The original CGB0 stack still needs verification. Manual boot-time palette
-choices use installed firmware.
+The original CGB0 and CGB-E firmware produced the same 12 stack bytes in
+normal startup. In monochrome compatibility with Up held, both firmware
+images wrote six additional stack bytes at `FFEC–FFF1`. Manual boot-time
+palette choices use installed firmware.
 
 ### CGB monochrome compatibility handoff
 
@@ -545,17 +546,15 @@ mapper runs, terminal time increased by 2,340 or 2,392 guest cycles.
 Instruction counts, audio frame counts and audio CRCs changed in those
 runs. Framebuffer CRCs and test verdicts stayed the same.
 
-### CGB-0 monochrome divider at cartridge entry
+### CGB-0 divider at cartridge entry
 
-On CGB-0, built-in monochrome startup sets the divider phase to `2884`
-when the extended license check rejects its first byte. The hardware
-test reads `29 2A 2A 2B 2C 2E` at six points after cartridge entry. The
-regression checks the same reads after load, quick reset and hard reset,
-with controls for other license headers and native color mode.
-
-The test distinguishes four-clock-aligned starting phases. The low two
-oscillator bits, authentic CGB-0 firmware execution, other license
-branches, and the display and audio handoff still need qualification.
+Original CGB0 firmware leaves DIV 524 T-cycles ahead of later firmware
+executed on the same model. The built-in divider uses that offset with
+the existing title lookup and compatibility timing. Rejecting the first
+extended-license byte still gives `2884` in monochrome mode. The regression
+uses nine headers and six timed guest reads after cartridge load, Quick
+Reset, and Hard Reset. The CGB0 display and audio handoff need separate
+qualification.
 
 ### CGB-0 wave RAM at cartridge entry
 
@@ -644,8 +643,8 @@ byte. Both audio sinks reported zero idle or error events.
 
 ## Color WRAM at cartridge entry
 
-Built-in startup for Color revisions A–E clears physical WRAM bank 2, then
-restores the title checksum and the background fade buffer. `D000` holds the
+Built-in Color startup clears physical WRAM bank 2, then restores the title
+checksum, palette selection, and background fade buffer. `D000` holds the
 title checksum for old licensee byte `01` and for old byte `33` with extended
 code `01`. The checksum adds all 16 bytes at `0134–0143`, including the color
 flag, modulo 256.
@@ -653,18 +652,30 @@ flag, modulo 256.
 [Title checksum routine](https://codeberg.org/ISSOtm/gb-bootroms/src/commit/443d7f057ae06e8d1d76fa8083650cf0be2cd0ae/src/cgb.asm#L845-L879)
 [Background palette fade](https://codeberg.org/ISSOtm/gb-bootroms/src/commit/443d7f057ae06e8d1d76fa8083650cf0be2cd0ae/src/cgb.asm#L588-L638)
 
+`D008` and `D00B` store the selected palette slot and object shuffle flags.
+CGB0 also stores copies at `D006` and `D009`. Monochrome titles outside the
+licensed lookup use the firmware's default colors. For licensed checksum
+`9C`, object palette 0 follows the background and object palette 1 keeps its
+separate colors. [Palette selection and stores](https://codeberg.org/ISSOtm/gb-bootroms/src/commit/443d7f057ae06e8d1d76fa8083650cf0be2cd0ae/src/cgb.asm#L925-L980)
+
+The next comparison used original CGB0, CGB-C, and CGB-E firmware. Windows
+and Linux each matched 600 built-in and executed-firmware handoff pairs
+across 94 lookup entries and six license and title controls, each in native
+color and monochrome compatibility mode. All 127 HRAM bytes, the first 12
+WRAM bank 2 bytes, the 64-byte fade buffer, and the DIV phase matched. All
+300 monochrome cases on each host also matched the three active palettes.
+
 Windows and Linux each matched all 65 modeled bytes in 126 built-in and
-supplied-firmware handoff pairs. Twenty native-color guest readbacks on each
-host selected WRAM bank 2 and read those bytes through the CPU bus. Sixteen
-archived controls with an alternate firmware image left the bank clear.
+supplied-firmware handoff pairs in the earlier WRAM checkpoint. Twenty
+native-color guest readbacks on each host selected WRAM bank 2 and read those
+bytes through the CPU bus. Sixteen archived controls with an alternate
+firmware image left the bank clear.
 
 The regression covers cartridge load, Quick Reset, and Hard Reset for all six
 Color revisions across native and compatibility headers. Quick Reset keeps the
 other WRAM banks. Cold firmware startup restores the raw generation, and Quick
-Reset with installed firmware retains live WRAM until firmware writes. The
-original revision 0 handoff still needs qualification. The supplied firmware
-also left 632–649 different bytes per case in the remaining bank 2 palette
-metadata and buffers.
+Reset with installed firmware retains live WRAM until firmware writes.
+Palette scratch buffers at `D900–D959` and `DA00–DCFF` still need modeling.
 
 An unpaced Robopon Sun Version replay on CGB-E applied the 317-input cold route
 on Windows and Linux. Both matched the earlier build's final 160 × 144 image,

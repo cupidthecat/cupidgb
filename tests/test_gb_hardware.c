@@ -540,7 +540,47 @@ static void test_cgb_dmg_compatibility_palette_requires_nintendo_licensee(void) 
     assert(!gb.cgb_mode);
     assert(cupid_cgb_compat_active(&gb));
     assert(cupid_cgb_compat_bg_color(&gb, 0u) == 0x7fffu);
-    assert(cupid_cgb_compat_bg_color(&gb, 1u) == 0x56b5u);
+    assert(cupid_cgb_compat_bg_color(&gb, 1u) == 0x1befu);
+    assert(cupid_cgb_compat_bg_color(&gb, 2u) == 0x6180u);
+    assert(cupid_cgb_compat_obj_color(&gb, 0u, 1u) == 0x421fu);
+    assert(cupid_cgb_compat_obj_color(&gb, 1u, 1u) == 0x421fu);
+    cupid_gb_cleanup(&gb);
+}
+
+static void test_cgb_cartridge_palette_metadata(void) {
+    static const struct {
+        uint8_t checksum, slot, flags;
+    } cases[] = {{0x88, 8, 0},  {0x8c, 0, 1}, {0x9c, 12, 2},
+                 {0x00, 28, 3}, {0xf2, 7, 4}, {0x36, 3, 5}};
+
+    CupidGb gb = {0};
+    uint8_t rom[32u * 1024u];
+    build_test_rom(rom, sizeof(rom));
+    memset(rom + 0x134, 0, 16);
+    rom[0x14b] = 1;
+
+    for (unsigned model = 0; model < 2; ++model) {
+        const bool revision_zero = model == 0;
+        cupid_gb_set_model(&gb, revision_zero ? CUPID_GB_MODEL_CGB_0 : CUPID_GB_MODEL_CGB_E);
+        for (size_t index = 0; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+            rom[0x134] = cases[index].checksum;
+            rom[0x14d] = compute_header_checksum(rom);
+            assert(cupid_gb_load_rom(&gb, rom, sizeof(rom)));
+            uint16_t bg[4], obj0[4], obj1[4];
+            assert(cupid_cgb_get_compatibility_palette(&gb, bg, obj0, obj1));
+            assert(gb.work_ram[0x2008] == cases[index].slot);
+            assert(gb.work_ram[0x200b] == cases[index].flags);
+            assert(gb.work_ram[0x2006] == (revision_zero ? cases[index].slot : 0));
+            assert(gb.work_ram[0x2009] == (revision_zero ? cases[index].flags : 0));
+            if (cases[index].checksum == 0x9c) {
+                const uint16_t expected_bg[] = {0x7fff, 0x6e31, 0x454a, 0};
+                const uint16_t expected_obj1[] = {0x231f, 0x035f, 0x00f2, 0x0009};
+                assert(!memcmp(bg, expected_bg, sizeof(bg)) && !memcmp(bg, obj0, sizeof(bg)));
+                assert(!memcmp(obj1, expected_obj1, sizeof(obj1)));
+                assert(!memcmp(gb.cgb_bg_palette_ram, gb.cgb_obj_palette_ram, sizeof(bg)));
+            }
+        }
+    }
     cupid_gb_cleanup(&gb);
 }
 
@@ -1702,6 +1742,7 @@ void test_gb_hardware(void) {
     test_color_boot_preserves_selected_memory_banks();
     test_cgb_dmg_compatibility_palette_for_pokemon_red();
     test_cgb_dmg_compatibility_palette_requires_nintendo_licensee();
+    test_cgb_cartridge_palette_metadata();
     test_sgb_uses_adapter_colors_for_unlisted_title();
     test_cgb_double_speed_slows_timer_domain();
     test_ei_sequence_enables_interrupts_after_next_instruction();

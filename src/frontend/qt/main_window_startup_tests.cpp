@@ -170,6 +170,8 @@ bool MainWindow::startupSmokeTest(const QString &directory) {
     MainWindow handoff(true, false, false, noBoot, CUPID_GB_MODEL_CGB, uint64_t(0));
     handoff.timer_.stop();
     uint8_t handoffBank[0x1000] = {};
+    handoffBank[8] = 28;
+    handoffBank[11] = 3;
     for (size_t offset = 0x840; offset < 0x880; offset += 2) {
         handoffBank[offset] = 0xff;
         handoffBank[offset + 1] = 0x7f;

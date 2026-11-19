@@ -178,12 +178,15 @@ def startup_checks(runner, root):
         assert automatic == replay
         assert stable_result(automatic_record) == stable_result(replay_record)
 
-    # HLE clears CGB WRAM bank 2. Fresh firmware must see this generation's
-    # original cold bytes instead of inheriting that post-boot memory edit.
+    # Built-in startup clears bank 2 and records the default palette selection.
+    # Fresh firmware must see the original cold generation.
     program = memory_serial_program(0xD000, bank=2)
     rom.write_bytes(make_rom(program, color=True))
     hle, _ = memory_serial_sample(runner, rom, "--power-on-seed", "0")
-    assert hle == bytes(16), hle
+    expected = bytearray(16)
+    expected[8] = 28
+    expected[11] = 3
+    assert hle == expected, hle
     boot = root / "startup-boot.bin"
     firmware = bytearray(0x900)
     firmware[:len(program)] = program
