@@ -59,6 +59,8 @@ void cupid_gb_reset_restore_cartridge(CupidGb *next, const CupidGb *previous) {
     memcpy(next->gbs_header, previous->gbs_header, sizeof(next->gbs_header));
     next->gbs_payload_size = previous->gbs_payload_size;
     next->mbc3_extended_history = previous->mbc3_extended_history;
+    next->hot_swap_mbc1_multicart = previous->hot_swap_mbc1_multicart;
+    next->hot_swap_mbc3_extended = previous->hot_swap_mbc3_extended;
     memcpy(next->save_path, previous->save_path, sizeof(next->save_path));
     memcpy(next->boot_rom, previous->boot_rom, sizeof(next->boot_rom));
     next->boot_rom_size = previous->boot_rom_size;

@@ -676,6 +676,8 @@ void cupid_gb_cleanup(CupidGb *gb) {
     memset(gb->gbs_header, 0, sizeof(gb->gbs_header));
     gb->gbs_payload_size = 0;
     gb->mbc3_extended_history = false;
+    gb->hot_swap_mbc1_multicart = false;
+    gb->hot_swap_mbc3_extended = false;
     free(gb->cartridge_ram_heap);
     gb->cartridge_ram_heap = NULL;
     gb->cartridge_ram_capacity = 0;

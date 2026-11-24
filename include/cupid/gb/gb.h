@@ -459,6 +459,10 @@ typedef struct CupidGb {
     /* Cartridge configuration can leave wide MBC3 wiring attached to a later
      * music program. This host latch survives resets and loads, but not cleanup. */
     bool mbc3_extended_history;
+    /* Host wiring retained by live cartridge replacement and console reset.
+     * Cold loads clear these latches. Native states retain the receiving history. */
+    bool hot_swap_mbc1_multicart;
+    bool hot_swap_mbc3_extended;
     uint8_t video_ram[0x4000];
     uint8_t cartridge_ram[CUPID_GB_INLINE_RAM_SIZE];
     size_t cartridge_ram_size;
@@ -711,6 +715,20 @@ bool cupid_gb_parse_header(const uint8_t *rom_data, size_t rom_size,
                            CupidGbCartridgeHeader *header);
 bool cupid_gb_load_rom_file(CupidGb *gb, const char *path);
 bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size);
+/* Prepare an incoming cartridge in a zeroed, separate destination. Success owns
+ * independent ROM/storage and copies the live console without executing it or
+ * changing its attachments. Incoming SRAM starts erased. The caller can import
+ * its battery and replace borrowed cheat configuration before commit. Failure
+ * leaves the live console unchanged and the destination safe for cleanup.
+ * Do not execute a staged console or change the live cartridge before commit.
+ * The incoming cartridge does not inherit the previous save path. */
+bool cupid_gb_prepare_cartridge_swap(CupidGb *candidate, const CupidGb *current,
+                                     const uint8_t *rom_data, size_t rom_size);
+/* Commit a successfully prepared destination at the existing console address.
+ * Transfers owned storage, frees the previous storage, retains attached device
+ * identity, and invalidates a pending host camera request. No allocation, guest
+ * execution or observer callback occurs. The destination is zeroed afterward. */
+void cupid_gb_commit_cartridge_swap(CupidGb *current, CupidGb *candidate);
 /* True means the hardware step completed, including an illegal opcode's fetch
  * and halt. It does not imply instruction progress or successful gameplay.
  * False reports an invalid instance, absent cartridge, or decoder failure.

@@ -184,7 +184,7 @@ class MainWindow final : public QMainWindow {
     void registerShortcut(QAction *action, const QString &id);
     bool flushBattery(bool forceWrite = false);
     bool closeRom();
-    enum class ResetWorkflow { Open, Normal, Quick, Reload };
+    enum class ResetWorkflow { Open, Normal, Quick, Reload, HotSwap };
     void queueCameraCapture(CupidGb *gb, uint64_t request);
     void cancelCameraCapture();
     void applyCameraSource(CupidGb *gb);
@@ -196,15 +196,17 @@ class MainWindow final : public QMainWindow {
     bool resetCartridge(ResetWorkflow workflow);
     bool resetConsole(CupidGbResetKind kind);
     bool prepareResetCandidate(CupidEmulator *candidate, ResetWorkflow workflow, bool sameStorage);
-    bool prepareResetSymbols(std::unique_ptr<CupidGbDebugger> &symbols);
+    bool prepareCompanionSymbols(const QString &romPath, std::unique_ptr<CupidGbDebugger> &symbols);
     bool resetSmokeTest(const QString &directory);
     bool largeCartridgeRamSmokeTest(const QString &directory);
     bool resetInputSmokeTest(const QString &directory);
     bool resetMenuInputSmokeTest(const QString &directory);
     bool resetAudioSmokeTest(const QString &directory);
     bool reloadRom();
+    void chooseCartridgeSwap();
     bool openRom(const QString &path, bool reload, ResetWorkflow workflow = ResetWorkflow::Open);
     bool reloadSmokeTest(const QString &directory);
+    bool hotSwapSmokeTest(const QString &directory);
     void resetPacing();
     void refreshTimerInterval();
     void setTurboCap(unsigned quarters);
@@ -409,6 +411,7 @@ class MainWindow final : public QMainWindow {
     QAction *resetAction_ = nullptr;
     QAction *quickResetAction_ = nullptr;
     QAction *reloadAction_ = nullptr;
+    QAction *hotSwapAction_ = nullptr;
     QAction *frameAction_ = nullptr;
     QAction *screenshotAction_ = nullptr;
     QAction *screenshotAsAction_ = nullptr;

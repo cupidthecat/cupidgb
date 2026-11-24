@@ -22,6 +22,7 @@
 
 #include "main_window_internal.h"
 
+#include <QLineEdit>
 #include <QScopeGuard>
 
 extern "C" {
@@ -402,6 +403,214 @@ bool MainWindow::resetSmokeTest(const QString &directory) {
         session.failed_ = false;
         session.bootDirectoryOverride_ = QStringLiteral("");
     }
+    return true;
+}
+
+bool MainWindow::hotSwapSmokeTest(const QString &directory) {
+    const QDir fixtures(QDir(directory).filePath("hot-swap"));
+    if (!QDir().mkpath(fixtures.path()))
+        return smokeFailure(__FILE__, __LINE__);
+    QByteArray mono(32768, char(0));
+    mono[0x100] = char(0x18);
+    mono[0x101] = char(0xfe);
+    mono[0x147] = 0x03;
+    mono[0x149] = 0x02;
+    QByteArray color = mono;
+    color[0x143] = char(0x80);
+    color[0x147] = 0x1b;
+    color[0x150] = 0x3e;
+    color[0x151] = 0x64;
+    for (auto *rom : {&mono, &color}) {
+        uint8_t checksum = 0;
+        for (int address = 0x134; address <= 0x14c; ++address)
+            checksum = uint8_t(checksum - uint8_t((*rom)[address]) - 1);
+        (*rom)[0x14d] = char(checksum);
+    }
+    const QString outgoing = fixtures.filePath("outgoing.gb");
+    const QString incoming = fixtures.filePath("incoming.gbc");
+    const QString batteryPath = fixtures.filePath("incoming.sav");
+    const QByteArray incomingBattery(8192, char(0x55));
+    if (!writeResetFixture(outgoing, mono) || !writeResetFixture(incoming, color) ||
+        !writeResetFixture(fixtures.filePath("outgoing.sym"), "00:0150 Outgoing\n") ||
+        !writeResetFixture(fixtures.filePath("incoming.sym"), "00:0150 Incoming\n") ||
+        !writeResetFixture(batteryPath, incomingBattery))
+        return smokeFailure(__FILE__, __LINE__);
+
+    // Drive both buttons in the real modal picker with no native OS dialog.
+    const auto nativeDialogs = Qt::AA_DontUseNativeDialogs;
+    const bool previousDialogs = QApplication::testAttribute(nativeDialogs);
+    QApplication::setAttribute(nativeDialogs);
+    const auto restoreDialogs =
+        qScopeGuard([=] { QApplication::setAttribute(nativeDialogs, previousDialogs); });
+    const auto choose = [](MainWindow &window, const QString &path) {
+        QTimer picker;
+        QTimer timeout;
+        bool handled = false;
+        QObject::connect(&picker, &QTimer::timeout, [&] {
+            auto *dialog = qobject_cast<QFileDialog *>(QApplication::activeModalWidget());
+            if (!dialog)
+                return;
+            if (!path.isEmpty()) {
+                // Enter the path as the user would, even when the field has focus.
+                auto *filename = dialog->findChild<QLineEdit *>(QStringLiteral("fileNameEdit"));
+                if (!filename)
+                    return;
+                filename->setText(path);
+            }
+            picker.stop();
+            handled = true;
+            if (path.isEmpty())
+                dialog->reject();
+            else
+                QMetaObject::invokeMethod(dialog, "accept", Qt::DirectConnection);
+        });
+        QObject::connect(&timeout, &QTimer::timeout, [] {
+            if (auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget()))
+                dialog->reject();
+        });
+        picker.start(5);
+        timeout.setSingleShot(true);
+        timeout.start(2000);
+        window.hotSwapAction_->trigger();
+        return handled;
+    };
+
+    {
+        MainWindow session(true, true, false, QStringLiteral(""), CUPID_GB_MODEL_CGB, 0);
+        session.timer_.stop();
+        if (session.hotSwapAction_->isEnabled() || !session.openRom(outgoing) ||
+            !session.hotSwapAction_->isEnabled())
+            return smokeFailure(__FILE__, __LINE__);
+        session.setPaused(true);
+        session.ensureDebugger();
+        session.debuggerWindow_->submitCommand("break $0155");
+        if (session.debugger_->bp_count != 1 ||
+            !session.startRecording(fixtures.filePath("running.wav")) || !session.runFrame())
+            return smokeFailure(__FILE__, __LINE__);
+        const uint64_t initialSession = session.sessionId_;
+        if (!choose(session, {}) || session.sessionId_ != initialSession ||
+            session.romPath_ != outgoing || !session.paused_)
+            return smokeFailure(__FILE__, __LINE__);
+
+        session.setPrinterConnected(true);
+        if (!session.printer_)
+            return smokeFailure(__FILE__, __LINE__);
+        auto &gb = session.emulator_->gb;
+        cupid_gb_write_u8(&gb, 0, 0x0a);
+        cupid_gb_write_u8(&gb, 0xa012, 0x31);
+        cupid_gb_write_u8(&gb, 0xff01, 0x88);
+        cupid_gb_write_u8(&gb, 0xff02, 0x81);
+        cupid_gb_tick(&gb, 384);
+        if (!session.printer_->state.incoming_bits || session.printer_->state.incoming_bits >= 8)
+            return smokeFailure(__FILE__, __LINE__);
+        cupid_gb_set_buttons(&gb, 0xfe);
+        gb.cpu.pc = 0x150;
+        gb.work_ram[8] = 0x47;
+        session.rememberFrame();
+        if (!session.rememberDebuggerStep())
+            return smokeFailure(__FILE__, __LINE__);
+        const auto oldState = session.captureState();
+        const auto oldRam = session.savePath_;
+        const auto owner = session.emulator_.get();
+        const auto audio = session.audioBuffer_;
+        const auto printer = session.printer_;
+        const auto printerHistory = std::make_unique<CupidGbPrinterState>(printer->state);
+        const auto output = std::make_unique<CupidGbAudioOutput>(gb.apu.output);
+        const uint64_t cycles = gb.elapsed_cycles;
+        const uint64_t recorded = session.recorder_->framesWritten();
+        const auto unchanged = [&] {
+            return session.emulator_.get() == owner && session.sessionId_ == initialSession &&
+                   session.captureState() == oldState && session.audioBuffer_ == audio &&
+                   session.printer_ == printer && session.recorder_->framesWritten() == recorded &&
+                   session.debugger_->bp_count == 1 && !session.debuggerHistory_.empty() &&
+                   session.romPath_ == outgoing && session.paused_;
+        };
+        const auto swap = [&] { return session.openRom(incoming, false, ResetWorkflow::HotSwap); };
+        if (oldState.isEmpty() || !writeResetFixture(batteryPath, "short battery") || swap() ||
+            !unchanged() || !writeResetFixture(batteryPath, incomingBattery))
+            return smokeFailure(__FILE__, __LINE__);
+        session.failed_ = false;
+        const QString symbols = fixtures.filePath("incoming.sym");
+        if (!writeResetFixture(symbols, "invalid symbols\n") || swap() || !unchanged() ||
+            !writeResetFixture(symbols, "00:0150 Incoming\n"))
+            return smokeFailure(__FILE__, __LINE__);
+        session.failed_ = false;
+        session.savePath_ = fixtures.path();
+        if (swap() || !unchanged())
+            return smokeFailure(__FILE__, __LINE__);
+        session.failed_ = false;
+        session.savePath_ = oldRam;
+        session.bootDirectoryOverride_ = fixtures.filePath("missing-firmware");
+        if (!swap() || session.emulator_.get() != owner ||
+            session.sessionId_ != initialSession + 1 || !session.paused_ ||
+            session.romPath_ != incoming || session.savePath_ != batteryPath ||
+            session.slotPath(1) != fixtures.filePath("incoming.s1") || gb.cgb_mode ||
+            gb.cpu.pc != 0x150 || gb.elapsed_cycles != cycles || gb.work_ram[8] != 0x47 ||
+            gb.joypad != 0xfe || session.audioBuffer_ != audio ||
+            std::memcmp(output.get(), &gb.apu.output, sizeof(*output)) ||
+            session.printer_ != printer ||
+            std::memcmp(printerHistory.get(), &printer->state, sizeof(*printerHistory)) ||
+            gb.serial_link.user_data != printer || !session.recorder_->active() ||
+            session.recorder_->framesWritten() != recorded || session.debugger_->bp_count != 1 ||
+            !session.debuggerHistory_.empty() || session.rewindStates_.size() != 1 ||
+            session.restoreState(oldState, false))
+            return smokeFailure(__FILE__, __LINE__);
+        const char *symbol =
+            cupid_gb_debugger_symbol_for_address(session.debugger_.get(), 0, 0x150, true);
+        if (!symbol || std::strcmp(symbol, "Incoming"))
+            return smokeFailure(__FILE__, __LINE__);
+        QFile saved(oldRam);
+        if (!saved.open(QIODevice::ReadOnly))
+            return smokeFailure(__FILE__, __LINE__);
+        const QByteArray savedBytes = saved.readAll();
+        if (savedBytes.size() != incomingBattery.size() || savedBytes.at(0x12) != char(0x31))
+            return smokeFailure(__FILE__, __LINE__);
+        cupid_gb_write_u8(&gb, 0, 0x0a);
+        if (cupid_gb_read_u8(&gb, 0xa012) != 0x55 || !cupid_gb_step(&gb) || gb.cpu.a != 0x64 ||
+            gb.cpu.pc != 0x152)
+            return smokeFailure(__FILE__, __LINE__);
+        gb.cpu.pc = 0x100;
+        if (!session.runFrame() || session.recorder_->framesWritten() <= recorded ||
+            !session.closeRom() || session.hotSwapAction_->isEnabled())
+            return smokeFailure(__FILE__, __LINE__);
+    }
+
+    MainWindow automatic(true, true, false, QStringLiteral(""), -1, 0);
+    automatic.timer_.stop();
+    if (!automatic.openRom(outgoing) || automatic.emulator_->gb.model != CUPID_GB_MODEL_DMG_ABC ||
+        !automatic.runFrame())
+        return smokeFailure(__FILE__, __LINE__);
+    if (!choose(automatic, incoming) || automatic.romPath_ != incoming)
+        return smokeFailure(__FILE__, __LINE__);
+    if (automatic.paused_ || automatic.emulator_->gb.model != CUPID_GB_MODEL_CGB ||
+        !automatic.emulator_->gb.cgb_mode || automatic.emulator_->gb.cpu.pc != 0x100 ||
+        automatic.emulator_->gb.elapsed_cycles || !automatic.closeRom())
+        return smokeFailure(__FILE__, __LINE__);
+
+    const QString partnerPath = fixtures.filePath("partner.gb");
+    if (!writeResetFixture(partnerPath, mono))
+        return smokeFailure(__FILE__, __LINE__);
+    MainWindow linked(true, true, false, QStringLiteral(""), CUPID_GB_MODEL_CGB, 0);
+    MainWindow partner(true, true, false, QStringLiteral(""), CUPID_GB_MODEL_CGB, 0);
+    linked.timer_.stop();
+    partner.timer_.stop();
+    if (!linked.openRom(outgoing) || !partner.openRom(partnerPath) || !linked.connectLink(&partner))
+        return smokeFailure(__FILE__, __LINE__);
+    auto *endpoint = &linked.emulator_->gb;
+    auto &peer = partner.emulator_->gb;
+    cupid_gb_write_u8(&peer, 0xff01, 0xbd);
+    cupid_gb_write_u8(&peer, 0xff02, 0x80);
+    cupid_gb_write_u8(endpoint, 0xff01, 0xa7);
+    cupid_gb_write_u8(endpoint, 0xff02, 0x81);
+    cupid_gb_tick(endpoint, 384);
+    const auto remaining = endpoint->serial_bits_remaining;
+    if (!remaining || remaining >= 8 || !linked.openRom(incoming, false, ResetWorkflow::HotSwap) ||
+        !linked.linkSession_ || linked.linkSession_ != partner.linkSession_ ||
+        &linked.emulator_->gb != endpoint || endpoint->serial_bits_remaining != remaining)
+        return smokeFailure(__FILE__, __LINE__);
+    cupid_gb_tick(endpoint, 2048);
+    if (cupid_gb_read_u8(endpoint, 0xff01) != 0xbd || cupid_gb_read_u8(&peer, 0xff01) != 0xa7)
+        return smokeFailure(__FILE__, __LINE__);
     return true;
 }
 

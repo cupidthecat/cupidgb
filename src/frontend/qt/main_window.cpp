@@ -226,6 +226,9 @@ void MainWindow::buildMenus() {
     reloadAction_ = file->addAction("&Reload Cartridge");
     registerShortcut(reloadAction_, "reload");
     connect(reloadAction_, &QAction::triggered, this, [this] { reloadRom(); });
+    hotSwapAction_ = file->addAction("&Hot Swap Cartridge…");
+    registerShortcut(hotSwapAction_, "hotSwap");
+    connect(hotSwapAction_, &QAction::triggered, this, [this] { chooseCartridgeSwap(); });
     loadStateFileAction_ = file->addAction("Load State File…");
     connect(loadStateFileAction_, &QAction::triggered, this, [this] {
         const QPointer<MainWindow> self(this);
@@ -618,6 +621,9 @@ bool MainWindow::openRom(const QString &path) {
 }
 
 bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflow) {
+    const bool hotSwap = workflow == ResetWorkflow::HotSwap;
+    if (hotSwap && (!emulator_ || musicInfo_))
+        return false;
     const QPointer<MainWindow> self(this);
     const bool previousOperation = stateOperation_;
     stateOperation_ = true;
@@ -647,6 +653,10 @@ bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflo
         reportError(error);
         return false;
     }
+    if (hotSwap && music) {
+        reportError("Hot Swap Cartridge requires a Game Boy cartridge.");
+        return false;
+    }
     auto candidate = music ? std::unique_ptr<CupidEmulator>() : std::make_unique<CupidEmulator>();
     int model = reload && emulator_
                     ? int(emulator_->gb.model)
@@ -657,7 +667,8 @@ bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflo
         reportError("The configured hardware model is invalid.");
         return false;
     }
-    if (!music && (uint8_t(data[0x143]) & 0xc0) == 0xc0 &&
+    const bool preserveConsole = hotSwap && model == int(emulator_->gb.model);
+    if (!preserveConsole && !music && (uint8_t(data[0x143]) & 0xc0) == 0xc0 &&
         !cupid_gb_model_is_cgb(CupidGbModel(model))) {
         reportError("This cartridge requires Game Boy Color. Select Automatic or Game Boy Color.");
         return false;
@@ -668,6 +679,24 @@ bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflo
         if (!prepareMusicCandidate(candidate, data, model, metadata))
             return false;
         candidateMusic = metadata;
+    } else if (hotSwap) {
+        if (!cupid_gb_prepare_cartridge_swap(&candidate->gb, &emulator_->gb,
+                                             reinterpret_cast<const uint8_t *>(data.constData()),
+                                             size_t(data.size()))) {
+            cupid_gb_cleanup(&candidate->gb);
+            reportError("The cartridge could not be loaded.");
+            return false;
+        }
+        candidate->target_system =
+            cupid_gb_model_is_cgb(CupidGbModel(model)) ? CUPID_SYSTEM_GBC : CUPID_SYSTEM_GB;
+        candidate->initialized = true;
+        if (!preserveConsole) {
+            cupid_gb_set_model(&candidate->gb, CupidGbModel(model));
+            candidate->gb.boot_rom_size = 0;
+            std::memset(candidate->gb.boot_rom, 0, sizeof(candidate->gb.boot_rom));
+            // A reset of the staged machine must never clear the live printer.
+            candidate->gb.serial_link = {};
+        }
     } else {
         if (powerOnSeedOverride_)
             cupid_gb_set_power_on_seed(&candidate->gb, *powerOnSeedOverride_);
@@ -708,8 +737,17 @@ bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflo
         cupid_emulator_shutdown(candidate.get());
         return false;
     }
+    std::unique_ptr<CupidGbDebugger> swapSymbols;
+    const auto cleanupSymbols = qScopeGuard([&swapSymbols] {
+        if (swapSymbols)
+            cupid_gb_debugger_cleanup(swapSymbols.get());
+    });
+    if (hotSwap && !prepareCompanionSymbols(absolute, swapSymbols)) {
+        cupid_emulator_shutdown(candidate.get());
+        return false;
+    }
     // Reject unavailable firmware before exporting the current cartridge's clock.
-    const QString bootFolder = music ? QString() : bootDirectory();
+    const QString bootFolder = music || preserveConsole ? QString() : bootDirectory();
     if (!bootFolder.isEmpty()) {
         QString name = "dmg_boot.bin";
         if (model == CUPID_GB_MODEL_CGB_0)
@@ -742,6 +780,10 @@ bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflo
         }
         std::memcpy(candidate->gb.boot_rom, bytes.constData(), size_t(bytes.size()));
         candidate->gb.boot_rom_size = size_t(bytes.size());
+    }
+    if (hotSwap && !preserveConsole && !prepareResetCandidate(candidate.get(), workflow, false)) {
+        cupid_emulator_shutdown(candidate.get());
+        return false;
     }
     const auto batteryIdentity = [](const QString &path) {
         const QFileInfo file(path);
@@ -827,17 +869,19 @@ bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflo
     }
     // Initial firmware entry restores the same generation's cold memory after
     // cartridge loading and battery import have prepared persistent clock history.
-    if (workflow != ResetWorkflow::Open) {
+    if (workflow != ResetWorkflow::Open && !hotSwap) {
         if (!prepareResetCandidate(candidate.get(), workflow, liveBattery)) {
             cupid_emulator_shutdown(candidate.get());
             return false;
         }
-    } else if (!bootFolder.isEmpty())
+    } else if (workflow == ResetWorkflow::Open && !bootFolder.isEmpty())
         cupid_gb_start_boot_rom(&candidate->gb);
     // Startup may rebuild the APU. Install host choices after its final reset,
     // before the candidate can execute or produce its first audio sample.
-    applyAudioPolicy(&candidate->gb);
-    applyDisplayLayers(&candidate->gb);
+    if (!preserveConsole) {
+        applyAudioPolicy(&candidate->gb);
+        applyDisplayLayers(&candidate->gb);
+    }
     const bool sameCartridge = emulator_ && romData_ == data &&
                                romPath_.compare(absolute, pathCase) == 0 &&
                                emulator_->gb.model == candidate->gb.model;
@@ -850,7 +894,7 @@ bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflo
     const uint64_t previousPresentationCycles =
         emulator_ ? cupid_gb_presentation_cycles(&emulator_->gb) : 0;
     const bool resetChangedBattery =
-        workflow != ResetWorkflow::Open && sameBattery && emulator_ &&
+        workflow != ResetWorkflow::Open && !hotSwap && sameBattery && emulator_ &&
         candidate->gb.battery_write_generation != emulator_->gb.battery_write_generation;
     if (!sameCartridge && workflow == ResetWorkflow::Open) {
         disconnectLink();
@@ -860,14 +904,23 @@ bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflo
         }
         setPrinterConnected(false);
     }
-    if (!replaceLinkEndpoint(&candidate->gb)) {
+    if (preserveConsole) {
+        // Keep the address that owns the live cable and printer. Link scheduling
+        // still needs the new cartridge generation before it can execute.
+        cupid_gb_commit_cartridge_swap(&emulator_->gb, &candidate->gb);
         cupid_emulator_shutdown(candidate.get());
-        return false;
+        commitCameraSession(&emulator_->gb, workflow);
+        rebaseLink();
+    } else {
+        if (!replaceLinkEndpoint(&candidate->gb)) {
+            cupid_emulator_shutdown(candidate.get());
+            return false;
+        }
+        commitCameraSession(&candidate->gb, workflow);
+        if (emulator_)
+            cupid_emulator_shutdown(emulator_.get());
+        emulator_ = std::move(candidate);
     }
-    commitCameraSession(&candidate->gb, workflow);
-    if (emulator_)
-        cupid_emulator_shutdown(emulator_.get());
-    emulator_ = std::move(candidate);
     setMusicSession(candidateMusic, candidateMusic ? candidateMusic->first_track : 0);
     // Device reclassification can emit output immediately. The outer operation
     // still gates callbacks; resetting a session does not release its controls.
@@ -880,7 +933,8 @@ bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflo
         cheatSaveWarning_.clear();
     cupid_gb_set_cheats(&emulator_->gb, cheats_.get());
     refreshCheats(true);
-    resetPrinter();
+    if (!preserveConsole)
+        resetPrinter();
     const auto &gb = emulator_->gb;
     const bool motorCapable =
         gb.header.has_rumble &&
@@ -928,12 +982,16 @@ bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflo
         resetRewind();
     ++sessionId_;
     const uint64_t committedSession = sessionId_;
-    resetDebuggerTimeline(!sameCartridge && !reload);
+    resetDebuggerTimeline(!sameCartridge && !reload && !hotSwap);
+    if (swapSymbols) {
+        std::swap(debugger_->symbols, swapSymbols->symbols);
+        std::swap(debugger_->symbol_count, swapSymbols->symbol_count);
+    }
     if (inspectorsWindow_)
         inspectorsWindow_->sessionChanged();
     romData_ = data;
     romPath_ = absolute;
-    if (debugger_ && !sameCartridge && !reload) {
+    if (debugger_ && !sameCartridge && !reload && !hotSwap) {
         const QString symbols = info.dir().filePath(info.completeBaseName() + ".sym");
         if (QFileInfo::exists(symbols))
             loadDebuggerSymbols(symbols);
@@ -965,24 +1023,34 @@ bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflo
     updateRecentMenu();
     // Reload keeps its existing pause choice without a transient resume. The
     // reset transaction retains controls until an actual input event changes them.
-    setPaused(workflow == ResetWorkflow::Reload && paused_, workflow != ResetWorkflow::Open);
+    if (hotSwap) {
+        resetPacing();
+        if (debugger_ && !paused_)
+            cupid_gb_debugger_begin(debugger_.get(), &emulator_->gb, CUPID_GB_DEBUG_RUN);
+    } else {
+        setPaused(workflow == ResetWorkflow::Reload && paused_, workflow != ResetWorkflow::Open);
+    }
     if (!self || sessionId_ != committedSession)
         return true;
     setWindowTitle(info.fileName() + " — CupidGB");
-    statusBar()->showMessage(music                  ? "Music playback"
+    statusBar()->showMessage(preserveConsole        ? "Cartridge swapped"
+                             : hotSwap              ? "Cartridge swapped and hardware reset"
+                             : music                ? "Music playback"
                              : bootFolder.isEmpty() ? "Post-boot startup; no boot ROM selected"
                                                     : "Boot ROM loaded");
     if (!cheatWarning.isEmpty()) {
         qWarning("%s", qPrintable(cheatWarning));
         statusBar()->showMessage(cheatWarning);
     }
-    setupAudio();
+    if (!preserveConsole)
+        setupAudio();
     if (!self || sessionId_ != committedSession)
         return true;
-    display_->messages.clear();
+    if (!preserveConsole)
+        display_->messages.clear();
     if (!music)
         display_->messages.showCartridge(QCoreApplication::applicationVersion(), romData_);
-    present(Presentation::Reset);
+    present(preserveConsole ? Presentation::Redraw : Presentation::Reset);
     // A new cartridge reclassifies held controller axes while callbacks are gated.
     // Commit those controls before its first snapshot; resets retain their native contacts.
     if (workflow == ResetWorkflow::Open)
@@ -1103,6 +1171,7 @@ void MainWindow::refreshActions() {
                          copyScreenshotAction_, loadStateFileAction_, recordingAction_})
         action->setEnabled(bool(emulator_));
     reloadAction_->setEnabled(bool(emulator_) && !musicInfo_);
+    hotSwapAction_->setEnabled(bool(emulator_) && !musicInfo_);
     savePortableStateAction_->setEnabled(bool(emulator_) && !musicInfo_);
     for (auto *action : {screenshotAction_, screenshotAsAction_, copyScreenshotAction_})
         action->setEnabled(bool(emulator_) && !musicInfo_);

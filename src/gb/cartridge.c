@@ -35,6 +35,7 @@
 
 #include "cupid/common/log.h"
 #include "cupid/gb/battery.h"
+#include "cupid/gb/camera.h"
 #include "cupid/gb/gb.h"
 #include "cupid/gb/huc3.h"
 #include "cupid/gb/mbc7.h"
@@ -428,7 +429,8 @@ bool cupid_gb_has_extended_mbc3(const CupidGb *gb) {
     return gb->header.mbc_type == CUPID_GB_MBC3 &&
            (gb->program_kind == CUPID_GB_PROGRAM_GBS
                 ? gb->mbc3_extended_history
-                : gb->rom_size > 0x200000u || gb->cartridge_ram_size > 0x8000u);
+                : gb->hot_swap_mbc3_extended || gb->rom_size > 0x200000u ||
+                      gb->cartridge_ram_size > 0x8000u);
 }
 
 void cupid_gb_huc1_write(CupidGb *gb, uint16_t address, uint8_t value) {
@@ -483,7 +485,7 @@ size_t cupid_gb_selected_rom_bank(const CupidGb *gb, bool lower_region) {
             size_t high = (size_t)(gb->mbc1_bank_high2 & 0x03u);
             size_t low = (size_t)(gb->mbc1_bank_low5 & 0x1fu);
 
-            if (gb->mbc1_multicart) {
+            if (gb->mbc1_multicart || gb->hot_swap_mbc1_multicart) {
                 if (lower_region) {
                     bank = gb->mbc1_ram_banking_mode ? (high << 4u) : 0u;
                 } else {
@@ -590,7 +592,7 @@ size_t cupid_gb_selected_ram_bank(const CupidGb *gb) {
         return gb->tpp1.ram_bank;
 
     if (gb->header.mbc_type == CUPID_GB_MBC1) {
-        if (gb->mbc1_ram_banking_mode && !gb->mbc1_multicart) {
+        if (gb->mbc1_ram_banking_mode && !gb->mbc1_multicart && !gb->hot_swap_mbc1_multicart) {
             return gb->mbc1_bank_high2 & 0x03u;
         }
 
@@ -996,8 +998,8 @@ bool cupid_gb_cartridge_source_fits(const CupidGb *gb, const void *source, size_
  * @note An invalid header checksum is non-fatal; a warning is logged and
  *       loading continues.
  */
-bool cupid_gb_load_rom_with_allocator(CupidGb *gb, const uint8_t *rom_data, size_t rom_size,
-                                      void *(*allocate)(size_t)) {
+static bool load_cartridge(CupidGb *gb, const uint8_t *rom_data, size_t rom_size,
+                           void *(*allocate)(size_t), const CupidGb *console) {
     CupidGbCartridgeHeader header;
     if (gb == 0 || rom_data == 0 || allocate == 0) {
         return false;
@@ -1128,17 +1130,37 @@ bool cupid_gb_load_rom_with_allocator(CupidGb *gb, const uint8_t *rom_data, size
     /* Storage is ready. Finish an aliased source copy before init can
      * clear either the inline SRAM or a reused heap, then transfer ownership. */
     memmove(candidate_rom, rom_data, rom_size);
+    if (console) {
+        /* Allocation and aliased input copying finish before borrowing any live
+         * console fields. This copy never owns the previous cartridge buffers. */
+        *gb = *console;
+        memset(gb->cartridge_ram, 0, sizeof(gb->cartridge_ram));
+        memset(&gb->mbc6, 0, sizeof(gb->mbc6));
+        memset(&gb->mbc7, 0, sizeof(gb->mbc7));
+        gb->mbc7.motion_x = console->mbc7.motion_x;
+        gb->mbc7.motion_y = console->mbc7.motion_y;
+        memset(&gb->tama5, 0, sizeof(gb->tama5));
+        gb->program_kind = CUPID_GB_PROGRAM_CARTRIDGE;
+        memset(gb->gbs_header, 0, sizeof(gb->gbs_header));
+        gb->gbs_payload_size = 0;
+        memset(gb->save_path, 0, sizeof(gb->save_path));
+        gb->hot_swap_mbc1_multicart = console->hot_swap_mbc1_multicart || console->mbc1_multicart;
+        gb->hot_swap_mbc3_extended =
+            console->hot_swap_mbc3_extended || cupid_gb_has_extended_mbc3(console);
+    }
     gb->rom = candidate_rom;
     gb->rom_capacity = required_capacity;
     gb->cartridge_ram_heap = candidate_ram;
     gb->cartridge_ram_capacity = ram_capacity;
     gb->mbc6_flash = candidate_flash;
 
-    cupid_gb_init(gb);
+    if (!console)
+        cupid_gb_init(gb);
     gb->rom_size = rom_size;
 
     gb->header = header;
-    cupid_gb_cartridge_post_boot(gb);
+    if (!console)
+        cupid_gb_cartridge_post_boot(gb);
 
     if (gb->header.mbc_type == CUPID_GB_MBC_UNKNOWN) {
         cupid_log_errorf("Unrecognised cartridge type 0x%02X; attempting ROM-only mode.",
@@ -1167,6 +1189,41 @@ bool cupid_gb_load_rom_with_allocator(CupidGb *gb, const uint8_t *rom_data, size
      * profile remains distinct from the zeroed control latches of console reset. */
     if (gb->header.mbc_type == CUPID_GB_TPP1)
         gb->tpp1.rom_bank = 1;
+    if (console) {
+        /* The shared RTC storage survives replacement. TPP1 exposes the first
+         * four raw clock bytes in reverse order; HuC3's digits belong to its
+         * cleared mapper while its time baseline belongs to the shared clock. */
+        gb->rtc = console->rtc;
+        int64_t baseline = console->rtc.base_time;
+        if (console->header.mbc_type == CUPID_GB_TPP1) {
+            gb->rtc.s = console->tpp1.live[3];
+            gb->rtc.m = console->tpp1.live[2];
+            gb->rtc.h = console->tpp1.live[1];
+            gb->rtc.dl = console->tpp1.live[0];
+            gb->rtc.ls = console->tpp1.latched[3];
+            gb->rtc.lm = console->tpp1.latched[2];
+            gb->rtc.lh = console->tpp1.latched[1];
+            gb->rtc.ldl = console->tpp1.latched[0];
+            baseline = console->tpp1.rtc_base_time;
+        } else if (console->header.mbc_type == CUPID_GB_HUC3) {
+            baseline = console->huc3.rtc_base_time;
+        } else if (console->header.mbc_type == CUPID_GB_TAMA5) {
+            baseline = console->tama5.clock.base_time;
+        }
+        gb->rtc.base_time = baseline;
+        gb->tpp1.live[0] = gb->rtc.dl;
+        gb->tpp1.live[1] = gb->rtc.h;
+        gb->tpp1.live[2] = gb->rtc.m;
+        gb->tpp1.live[3] = gb->rtc.s;
+        gb->tpp1.latched[0] = gb->rtc.ldl;
+        gb->tpp1.latched[1] = gb->rtc.lh;
+        gb->tpp1.latched[2] = gb->rtc.lm;
+        gb->tpp1.latched[3] = gb->rtc.ls;
+        gb->tpp1.rtc_base_time = baseline;
+        gb->huc3.rtc_base_time = baseline;
+        if (gb->header.mbc_type == CUPID_GB_TAMA5)
+            gb->tama5.clock.base_time = baseline;
+    }
     /* A fresh cartridge exposes erased storage until the host restores its
      * battery image. Resolve built-in RAM sizes before filling the array. */
     memset(cupid_gb_cartridge_ram(gb), 0xff, gb->cartridge_ram_size);
@@ -1175,7 +1232,8 @@ bool cupid_gb_load_rom_with_allocator(CupidGb *gb, const uint8_t *rom_data, size
 
     gb->loaded = true;
     ++gb->rom_generation;
-    cupid_gb_rtc_bind_cartridge(gb);
+    if (!console)
+        cupid_gb_rtc_bind_cartridge(gb);
     if (candidate_rom != previous_rom)
         free(previous_rom);
     if (candidate_ram != previous_ram)
@@ -1195,8 +1253,45 @@ bool cupid_gb_load_rom_with_allocator(CupidGb *gb, const uint8_t *rom_data, size
     return true;
 }
 
+bool cupid_gb_load_rom_with_allocator(CupidGb *gb, const uint8_t *rom_data, size_t rom_size,
+                                      void *(*allocate)(size_t)) {
+    return load_cartridge(gb, rom_data, rom_size, allocate, NULL);
+}
+
 bool cupid_gb_load_rom(CupidGb *gb, const uint8_t *rom_data, size_t rom_size) {
     return cupid_gb_load_rom_with_allocator(gb, rom_data, rom_size, malloc);
+}
+
+bool cupid_gb_prepare_cartridge_swap_with_allocator(CupidGb *candidate, const CupidGb *current,
+                                                    const uint8_t *rom_data, size_t rom_size,
+                                                    void *(*allocate)(size_t)) {
+    if (!candidate || !current || candidate == current || !current->loaded || !current->rom ||
+        current->rom_generation == UINT64_MAX || !cupid_gb_model_is_valid(current->model) ||
+        !cupid_gb_cartridge_storage_valid(current) ||
+        !cupid_gb_cartridge_source_fits(current, rom_data, rom_size))
+        return false;
+    return load_cartridge(candidate, rom_data, rom_size, allocate, current);
+}
+
+bool cupid_gb_prepare_cartridge_swap(CupidGb *candidate, const CupidGb *current,
+                                     const uint8_t *rom_data, size_t rom_size) {
+    return cupid_gb_prepare_cartridge_swap_with_allocator(candidate, current, rom_data, rom_size,
+                                                          malloc);
+}
+
+void cupid_gb_commit_cartridge_swap(CupidGb *current, CupidGb *candidate) {
+    if (!current || !candidate || current == candidate || !candidate->loaded)
+        return;
+    uint8_t *const previous_rom = current->rom;
+    uint8_t *const previous_ram = current->cartridge_ram_heap;
+    uint8_t *const previous_flash = current->mbc6_flash;
+    candidate->camera_host = current->camera_host;
+    cupid_gb_camera_cancel_request(candidate);
+    *current = *candidate;
+    memset(candidate, 0, sizeof(*candidate));
+    free(previous_rom);
+    free(previous_ram);
+    free(previous_flash);
 }
 
 // Name helpers

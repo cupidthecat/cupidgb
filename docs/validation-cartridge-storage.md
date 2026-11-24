@@ -121,3 +121,26 @@ control logged an unknown type and invalid checksum and stayed at the
 Nintendo logo. The MBC7, Camera, and multicart captures showed their
 opening screens or menus. This run measures startup and bounded execution.
 The generated mapper tests cover banking and state continuation separately.
+
+## Live cartridge replacement
+
+A pinned comparison exercised both native-color and monochrome-compatible
+cartridges on all six Color revisions. Same-model replacement retained CPU
+registers, physical RAM, I/O, both palette banks, the attached printer,
+and the MBC3 clock. Incoming SRAM was erased. Separate probes verified
+retained MBC1 multicart and extended MBC3 bank wiring.
+
+The core regression exercises 180 model and mapper combinations. It also
+checks allocation failures, flash and SRAM ownership, invalidated trusted
+state contexts, native and portable state imports, and the first
+instruction fetched from the new cartridge. The Qt workflow drives the
+file picker, checks automatic model changes, and verifies outgoing and
+incoming battery files, failed writes, recording continuation, and an
+in-flight cable transfer.
+
+A Tetris replay replaced the active ROM with a byte-identical copy while
+the game was running. Over 1,800 intervals, a separate uninterrupted
+instance matched the swapped instance's guest clocks, pixels, and all
+1,329,036 stereo PCM frames. The captured states matched before and
+immediately after replacement and at the final frame. Windows and Linux
+produced the same final image, which shows an active game.

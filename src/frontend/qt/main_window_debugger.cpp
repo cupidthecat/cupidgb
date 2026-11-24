@@ -220,14 +220,15 @@ bool MainWindow::loadDebuggerSymbols(const QString &path) {
     return true;
 }
 
-bool MainWindow::prepareResetSymbols(std::unique_ptr<CupidGbDebugger> &symbols) {
+bool MainWindow::prepareCompanionSymbols(const QString &romPath,
+                                         std::unique_ptr<CupidGbDebugger> &symbols) {
     if (debugger_) {
         symbols = std::make_unique<CupidGbDebugger>();
         cupid_gb_debugger_init(symbols.get());
-        const QFileInfo rom(romPath_);
+        const QFileInfo rom(romPath);
         const QString path = rom.dir().filePath(rom.completeBaseName() + ".sym");
         QString error;
-        // Validate replacement symbols before committing a cartridge reset.
+        // Validate replacement symbols before committing a cartridge transition.
         // An absent companion file deliberately removes the previous symbols.
         if (QFileInfo::exists(path) && !readDebuggerSymbols(symbols.get(), path, error)) {
             reportError(error);

@@ -21,11 +21,17 @@
  */
 
 #include "cupid/gb/battery.h"
+#include "cupid/gb/bess.h"
+#include "cupid/gb/camera.h"
 #include "cupid/gb/cartridge.h"
+#include "cupid/gb/link.h"
+#include "cupid/gb/printer.h"
 #include "cupid/gb/reset.h"
 #include "cupid/gb/state.h"
+#include "cupid/gb/timer.h"
 
 #include "../src/gb/cartridge_internal.h"
+#include "../src/gb/printer_internal.h"
 #include <assert.h>
 #include <errno.h>
 #include <stdio.h>
@@ -1332,7 +1338,416 @@ static void test_mbc3_snapshot_writes(void) {
     free(gb);
 }
 
+static unsigned swap_observations;
+
+static int64_t swap_clock(void *user) {
+    (void)user;
+    ++swap_observations;
+    return INT64_C(1800000000);
+}
+
+static void swap_camera(CupidGb *gb, uint64_t request, void *user) {
+    (void)gb;
+    (void)request;
+    (void)user;
+    ++swap_observations;
+}
+
+static bool all_bytes(const uint8_t *bytes, size_t size, uint8_t expected) {
+    for (size_t byte = 0; byte < size; ++byte)
+        if (bytes[byte] != expected)
+            return false;
+    return true;
+}
+
+static void check_swap_console(const CupidGb *after, const CupidGb *before) {
+    assert(!memcmp(&after->cpu, &before->cpu, sizeof(after->cpu)));
+    assert(!memcmp(after->video_ram, before->video_ram, sizeof(after->video_ram)));
+    assert(!memcmp(after->work_ram, before->work_ram, sizeof(after->work_ram)));
+    assert(!memcmp(after->high_ram, before->high_ram, sizeof(after->high_ram)));
+    assert(!memcmp(after->io_registers, before->io_registers, sizeof(after->io_registers)));
+    assert(!memcmp(after->object_attribute_memory, before->object_attribute_memory,
+                   sizeof(after->object_attribute_memory)));
+    assert(!memcmp(after->extra_oam, before->extra_oam, sizeof(after->extra_oam)));
+    assert(!memcmp(after->frame_buffer, before->frame_buffer, sizeof(after->frame_buffer)));
+    assert(!memcmp(after->frame_buffer_color, before->frame_buffer_color,
+                   sizeof(after->frame_buffer_color)));
+    assert(!memcmp(after->cgb_bg_palette_ram, before->cgb_bg_palette_ram, 64));
+    assert(!memcmp(after->cgb_obj_palette_ram, before->cgb_obj_palette_ram, 64));
+    assert(!memcmp(&after->apu, &before->apu, sizeof(after->apu)));
+    assert(!memcmp(&after->pixels, &before->pixels, sizeof(after->pixels)));
+    assert(!memcmp(&after->display_clock, &before->display_clock, sizeof(after->display_clock)));
+    assert(!memcmp(&after->pixel_timing, &before->pixel_timing, sizeof(after->pixel_timing)));
+    assert(!memcmp(&after->vram_bus, &before->vram_bus, sizeof(after->vram_bus)));
+    assert(!memcmp(&after->sgb, &before->sgb, sizeof(after->sgb)));
+    assert(!memcmp(&after->sgb_startup, &before->sgb_startup, sizeof(after->sgb_startup)));
+    assert(after->model == before->model && after->cgb_mode == before->cgb_mode &&
+           after->double_speed == before->double_speed &&
+           after->cgb_vram_bank == before->cgb_vram_bank &&
+           after->cgb_wram_bank == before->cgb_wram_bank &&
+           after->cgb_object_priority_x == before->cgb_object_priority_x);
+    assert(after->interrupt_flags == before->interrupt_flags &&
+           after->interrupt_enable == before->interrupt_enable &&
+           after->elapsed_cycles == before->elapsed_cycles &&
+           after->div_counter == before->div_counter &&
+           after->divider_subcycle == before->divider_subcycle &&
+           after->tima_overflow_delay == before->tima_overflow_delay &&
+           after->tima_reload_just_happened == before->tima_reload_just_happened);
+    assert(after->dma_active == before->dma_active && after->dma_index == before->dma_index &&
+           after->dma_source_base == before->dma_source_base &&
+           after->dma_restart_pending == before->dma_restart_pending &&
+           after->hdma_active == before->hdma_active &&
+           after->hdma_pending == before->hdma_pending &&
+           after->hdma_source == before->hdma_source &&
+           after->hdma_destination == before->hdma_destination);
+    assert(after->serial_bits_remaining == before->serial_bits_remaining &&
+           after->serial_tx_latch == before->serial_tx_latch &&
+           after->serial_fast_clock == before->serial_fast_clock &&
+           after->serial_master_clock == before->serial_master_clock &&
+           after->joypad == before->joypad &&
+           after->joyp_sample_pending == before->joyp_sample_pending &&
+           after->joyp_select_delay == before->joyp_select_delay);
+    assert(after->cartridge_bus_data == before->cartridge_bus_data &&
+           after->cartridge_bus_expiry == before->cartridge_bus_expiry &&
+           after->vblank_events == before->vblank_events &&
+           after->battery_write_generation == before->battery_write_generation);
+    assert(after->boot_rom_size == before->boot_rom_size &&
+           after->boot_rom_enabled == before->boot_rom_enabled &&
+           !memcmp(after->boot_rom, before->boot_rom, sizeof(after->boot_rom)));
+    assert(!memcmp(&after->power_on, &before->power_on, sizeof(after->power_on)) &&
+           !memcmp(&after->rtc_policy, &before->rtc_policy, sizeof(after->rtc_policy)));
+}
+
+static void test_swap_console_matrix(void) {
+    const uint8_t types[] = {0,    8,    9,    3,    6,    0x10, 0x1e, 0x22,
+                             0xfc, 0xfe, 0xff, 0x0b, 0xbc, 0x20, 0xfd};
+    CupidGb *gb = calloc(1, sizeof(*gb)), *candidate = calloc(1, sizeof(*candidate));
+    assert(gb && candidate);
+    uint8_t *old = make_rom(0x8000, 0x10, 0, 3);
+    for (unsigned model = 0; model <= CUPID_GB_MODEL_CGB_D; ++model) {
+        for (unsigned type = 0; type < sizeof(types); ++type) {
+            cupid_gb_set_model(gb, (CupidGbModel)model);
+            cupid_gb_set_power_on_seed(gb, 0);
+            assert(cupid_gb_load_rom(gb, old, 0x8000));
+            cupid_gb_tick(gb, 2345);
+            gb->cpu.pc = 0x2345;
+            gb->cpu.sp = 0xc123;
+            gb->cpu.ime_delay = 1;
+            gb->cpu.halted = gb->cpu.stopped = true;
+            gb->cgb_mode = false;
+            gb->double_speed = cupid_gb_model_is_cgb(gb->model);
+            gb->cgb_vram_bank = 1;
+            gb->cgb_wram_bank = 6;
+            gb->tima_overflow_delay = 1;
+            gb->dma_active = gb->dma_restart_pending = true;
+            gb->dma_index = 17;
+            gb->dma_source_base = 0xc000;
+            gb->hdma_active = gb->hdma_pending = true;
+            gb->hdma_source = 0x2340;
+            gb->hdma_destination = 0x8120;
+            gb->serial_bits_remaining = 5;
+            gb->serial_tx_latch = 0xa5;
+            gb->joypad = 0xed;
+            gb->joyp_sample_pending = true;
+            gb->joyp_select_delay = 11;
+            gb->rtc.s = 47;
+            gb->rtc.ls = 31;
+            gb->rtc.base_time = 12345;
+            gb->rtc_cycles = 31337;
+            gb->tpp1.status = 12;
+            gb->camera_host.pending_request = 17;
+            gb->camera_host.request_sequence = 19;
+            gb->camera_host.request_callback = swap_camera;
+            strcpy(gb->save_path, "outgoing-private.sav");
+            memset(gb->cartridge_ram, 0x5a, sizeof(gb->cartridge_ram));
+            cupid_gb_set_rtc_time_source(gb, swap_clock, NULL);
+            StorageSnapshot *before = storage_snapshot(gb);
+            uint8_t *rom = types[type] == 0xbc
+                               ? make_tpp1_storage_rom((CupidGbModel)model, 0x8000, 9)
+                               : make_rom(0x8000, types[type], 0, 3);
+            rom[0x143] = 0xc0;
+            update_header_checksum(rom);
+            swap_observations = 0;
+            assert(cupid_gb_prepare_cartridge_swap(candidate, gb, rom, 0x8000));
+            assert(!swap_observations);
+            assert_storage_unchanged(before, gb);
+            check_swap_console(candidate, &before->machine);
+            assert(candidate->rom != gb->rom && !memcmp(candidate->rom, rom, 0x8000));
+            assert(candidate->rom_generation == gb->rom_generation + 1);
+            assert(candidate->program_kind == CUPID_GB_PROGRAM_CARTRIDGE &&
+                   !candidate->gbs_payload_size && !candidate->save_path[0]);
+            assert(all_bytes(cupid_gb_cartridge_ram_const(candidate), candidate->cartridge_ram_size,
+                             0xff));
+            assert(candidate->rtc.s == 47 && candidate->rtc.ls == 31 &&
+                   candidate->rtc.base_time == 12345 && candidate->rtc_cycles == 31337 &&
+                   candidate->tpp1.status == 12 && !candidate->tpp1.motor_strength &&
+                   !candidate->mbc5_rumble_on);
+            assert(!candidate->huc3.minutes && !candidate->huc3.alarm_enabled &&
+                   candidate->huc3.rtc_base_time == 12345 && !candidate->camera.busy_tcycles);
+            assert(candidate->camera_host.pending_request == 17);
+            if (candidate->mbc6_flash)
+                assert(candidate->mbc6_flash != gb->mbc6_flash &&
+                       all_bytes(candidate->mbc6_flash, CUPID_GB_MBC6_STORAGE_SIZE, 0xff));
+            /* A pending request remains live until a real commit. Newest host
+             * image and sequence information wins over the detached snapshot. */
+            gb->camera_host.request_sequence = 23;
+            gb->camera_host.pending_request = 22;
+            gb->camera_host.image[0] = 91;
+            uint8_t *incoming_rom = candidate->rom;
+            cupid_gb_commit_cartridge_swap(gb, candidate);
+            assert(!swap_observations && gb->rom == incoming_rom && !candidate->rom &&
+                   !candidate->cartridge_ram_heap && !candidate->mbc6_flash && !candidate->loaded);
+            check_swap_console(gb, &before->machine);
+            assert(!gb->camera_host.pending_request && gb->camera_host.request_sequence == 23 &&
+                   gb->camera_host.image[0] == 91);
+            assert(!cupid_gb_camera_complete(gb, 22, NULL, 0));
+            cupid_gb_cleanup(candidate);
+            destroy_storage_snapshot(before);
+            free(rom);
+        }
+    }
+    cupid_gb_cleanup(gb);
+    free(old);
+    free(candidate);
+    free(gb);
+}
+
+static void test_swap_failure_and_battery(void) {
+    CupidGb *gb = calloc(1, sizeof(*gb)), *candidate = calloc(1, sizeof(*candidate));
+    assert(gb && candidate);
+    uint8_t *large = make_tpp1_storage_rom(CUPID_GB_MODEL_CGB, 0x8000, 9);
+    uint8_t *flash = make_rom(0x8000, 0x20, 0, 3);
+    cupid_gb_set_power_on_seed(gb, 0);
+    assert(cupid_gb_load_rom(gb, large, 0x8000));
+    memset(gb->cartridge_ram_heap, 0x37, gb->cartridge_ram_capacity);
+    StorageSnapshot *before = storage_snapshot(gb);
+    for (unsigned input = 0; input < 2; ++input)
+        for (unsigned failure = 1; failure <= 2; ++failure) {
+            storage_allocation_calls = 0;
+            storage_fail_at = failure;
+            assert(!cupid_gb_prepare_cartridge_swap_with_allocator(
+                candidate, gb, input ? flash : large, 0x8000, storage_allocator));
+            assert(storage_allocation_calls == failure && !candidate->rom &&
+                   !candidate->cartridge_ram_heap && !candidate->mbc6_flash);
+            assert_storage_unchanged(before, gb);
+            cupid_gb_cleanup(candidate);
+        }
+    assert(!cupid_gb_prepare_cartridge_swap(candidate, gb, NULL, 0));
+    assert(!cupid_gb_prepare_cartridge_swap(candidate, gb, large, 0x14f));
+    assert(
+        !cupid_gb_prepare_cartridge_swap(candidate, gb, gb->rom + gb->rom_capacity - 0x100, 0x150));
+    assert(!cupid_gb_prepare_cartridge_swap(gb, gb, large, 0x8000));
+    assert_storage_unchanged(before, gb);
+    destroy_storage_snapshot(before);
+    gb->rom_generation = UINT64_MAX;
+    assert(!cupid_gb_prepare_cartridge_swap(candidate, gb, large, 0x8000));
+    gb->rom_generation = UINT64_MAX - 1;
+    assert(cupid_gb_prepare_cartridge_swap(candidate, gb, gb->rom, gb->rom_size));
+    assert(candidate->rom_generation == UINT64_MAX && candidate->rom != gb->rom);
+    cupid_gb_commit_cartridge_swap(gb, candidate);
+    assert(gb->rom_generation == UINT64_MAX);
+    gb->rom_generation = 7;
+    uint8_t *ordinary = make_rom(0x8000, 3, 0, 2);
+    memcpy(gb->cartridge_ram_heap, ordinary, 0x8000);
+    assert(cupid_gb_prepare_cartridge_swap(candidate, gb, gb->cartridge_ram_heap, 0x8000));
+    assert(!candidate->cartridge_ram_heap && candidate->cartridge_ram_size == 0x2000);
+    uint8_t battery[0x2000];
+    memset(battery, 0x96, sizeof(battery));
+    assert(cupid_gb_load_battery_at(candidate, battery, sizeof(battery), 0) == CUPID_GB_BATTERY_OK);
+    assert(!memcmp(gb->cartridge_ram_heap, ordinary, 0x8000));
+    cupid_gb_commit_cartridge_swap(gb, candidate);
+    assert(all_bytes(gb->cartridge_ram, sizeof(battery), 0x96));
+    /* A second replacement releases independently owned flash as well as ROM. */
+    assert(cupid_gb_prepare_cartridge_swap(candidate, gb, flash, 0x8000));
+    cupid_gb_commit_cartridge_swap(gb, candidate);
+    assert(gb->mbc6_flash);
+    assert(cupid_gb_prepare_cartridge_swap(candidate, gb, large, 0x8000));
+    cupid_gb_commit_cartridge_swap(gb, candidate);
+    assert(!gb->mbc6_flash && gb->cartridge_ram_heap);
+    cupid_gb_cleanup(candidate);
+    cupid_gb_cleanup(gb);
+    free(ordinary);
+    free(large);
+    free(flash);
+    free(candidate);
+    free(gb);
+}
+
+static void test_swap_wiring_and_state(void) {
+    CupidGb *gb = calloc(1, sizeof(*gb)), *candidate = calloc(1, sizeof(*candidate));
+    CupidGb *fresh = calloc(1, sizeof(*fresh));
+    assert(gb && candidate && fresh);
+    for (unsigned mapper = 0; mapper < 2; ++mapper) {
+        uint8_t *old = make_rom(mapper ? 0x400000 : 0x100000, mapper ? 0x13 : 3, 5, 3);
+        uint8_t *plain = make_rom(0x200000, mapper ? 0x13 : 3, 6, 3);
+        uint8_t *middle = make_rom(0x8000, 0x1b, 0, 0);
+        if (!mapper)
+            memcpy(old + 0x40104, old + 0x104, 48);
+        assert(cupid_gb_load_rom(fresh, plain, 0x200000));
+        const size_t size = cupid_gb_state_size(fresh);
+        uint8_t *state = malloc(size);
+        assert(state && cupid_gb_save_state(fresh, state, size, NULL) == CUPID_GB_STATE_OK);
+        for (unsigned intervening = 0; intervening < 2; ++intervening) {
+            assert(cupid_gb_load_rom(gb, old, mapper ? 0x400000 : 0x100000));
+            if (intervening) {
+                assert(cupid_gb_prepare_cartridge_swap(candidate, gb, middle, 0x8000));
+                cupid_gb_commit_cartridge_swap(gb, candidate);
+            }
+            assert(cupid_gb_prepare_cartridge_swap(candidate, gb, plain, 0x200000));
+            cupid_gb_commit_cartridge_swap(gb, candidate);
+            CupidGbStateContext stale;
+            assert(cupid_gb_state_context_init(&stale, gb) == CUPID_GB_STATE_OK);
+            assert(cupid_gb_prepare_cartridge_swap(candidate, gb, gb->rom, gb->rom_size));
+            cupid_gb_commit_cartridge_swap(gb, candidate);
+            assert(cupid_gb_save_state_with_context(gb, state, size, NULL, &stale) ==
+                   CUPID_GB_STATE_WRONG_ROM);
+            for (unsigned restore = 0; restore < 3; ++restore) {
+                if (restore == 1)
+                    assert(cupid_gb_reset(gb, CUPID_GB_RESET_HARD));
+                if (restore == 2)
+                    assert(cupid_gb_load_state(gb, state, size) == CUPID_GB_STATE_OK);
+                cupid_gb_write_u8(gb, 0x2000, mapper ? 0x80 : 1);
+                if (!mapper)
+                    cupid_gb_write_u8(gb, 0x4000, 2);
+                assert(cupid_gb_read_u8(gb, 0x4000) == (mapper ? 0 : 33));
+            }
+            const size_t portable_size = cupid_gb_bess_size(gb);
+            uint8_t *portable = malloc(portable_size);
+            assert(portable_size && portable);
+            assert(cupid_gb_bess_save(gb, portable, portable_size, NULL) == CUPID_GB_STATE_OK);
+            assert(cupid_gb_bess_load(gb, portable, portable_size) == CUPID_GB_STATE_OK);
+            assert(cupid_gb_read_u8(gb, 0x4000) == (mapper ? 0 : 33));
+            /* Portable mapper writes use the receiving console's retained
+             * wiring. The same file on a cold receiver uses ordinary wiring. */
+            assert(cupid_gb_load_rom(fresh, plain, 0x200000));
+            assert(cupid_gb_bess_load(fresh, portable, portable_size) == CUPID_GB_STATE_OK);
+            assert(!fresh->hot_swap_mbc1_multicart && !fresh->hot_swap_mbc3_extended &&
+                   cupid_gb_read_u8(fresh, 0x4000) == (mapper ? 1 : 65));
+            free(portable);
+            assert(cupid_gb_load_rom(gb, plain, 0x200000));
+            assert(!gb->hot_swap_mbc1_multicart && !gb->hot_swap_mbc3_extended);
+            cupid_gb_write_u8(gb, 0x2000, mapper ? 0x80 : 1);
+            if (!mapper)
+                cupid_gb_write_u8(gb, 0x4000, 2);
+            assert(cupid_gb_read_u8(gb, 0x4000) == (mapper ? 1 : 65));
+        }
+        free(state);
+        free(middle);
+        free(plain);
+        free(old);
+    }
+    cupid_gb_cleanup(fresh);
+    cupid_gb_cleanup(gb);
+    free(fresh);
+    free(candidate);
+    free(gb);
+}
+
+static void test_swap_clocks_and_instruction(void) {
+    CupidGb *gb = calloc(1, sizeof(*gb)), *candidate = calloc(1, sizeof(*candidate));
+    assert(gb && candidate);
+    uint8_t *mbc3 = make_rom(0x8000, 0x10, 0, 3);
+    uint8_t *tpp1 = make_tpp1_storage_rom(CUPID_GB_MODEL_DMG_ABC, 0x8000, 0);
+    uint8_t *huc3 = make_rom(0x8000, 0xfe, 0, 3);
+    assert(cupid_gb_load_rom(gb, mbc3, 0x8000));
+    gb->rtc = (CupidGbRtc){.s = 47,
+                           .m = 38,
+                           .h = 17,
+                           .dl = 9,
+                           .dh = 0x41,
+                           .ls = 31,
+                           .lm = 22,
+                           .lh = 13,
+                           .ldl = 4,
+                           .ldh = 0x81,
+                           .latch_prev = 1,
+                           .base_time = 12345};
+    gb->tpp1.status = 0x0d;
+    gb->rtc_cycles = 112233;
+    assert(cupid_gb_prepare_cartridge_swap(candidate, gb, tpp1, 0x8000));
+    const uint8_t live[] = {9, 17, 38, 47}, latched[] = {4, 13, 22, 31};
+    assert(!memcmp(candidate->tpp1.live, live, 4) && !memcmp(candidate->tpp1.latched, latched, 4) &&
+           candidate->tpp1.status == 0x0d && candidate->tpp1.rtc_base_time == 12345 &&
+           candidate->rtc_cycles == 112233);
+    cupid_gb_commit_cartridge_swap(gb, candidate);
+    gb->tpp1.live[0] = 42;
+    gb->tpp1.live[1] = 0x83;
+    gb->tpp1.live[2] = 52;
+    gb->tpp1.live[3] = 59;
+    gb->tpp1.rtc_base_time = 67890;
+    assert(cupid_gb_prepare_cartridge_swap(candidate, gb, huc3, 0x8000));
+    assert(candidate->rtc.s == 59 && candidate->rtc.m == 52 && candidate->rtc.h == 0x83 &&
+           candidate->rtc.dl == 42 && candidate->rtc.dh == 0x41 &&
+           candidate->rtc.base_time == 67890 && candidate->huc3.rtc_base_time == 67890 &&
+           !candidate->huc3.minutes && !candidate->huc3.days);
+    cupid_gb_commit_cartridge_swap(gb, candidate);
+    gb->huc3.rtc_base_time = 78901;
+    assert(cupid_gb_prepare_cartridge_swap(candidate, gb, mbc3, 0x8000));
+    assert(candidate->rtc.base_time == 78901 && candidate->rtc.s == 59 &&
+           candidate->rtc_cycles == 112233);
+    cupid_gb_commit_cartridge_swap(gb, candidate);
+    /* The very next ROM fetch uses incoming bytes at the retained PC. */
+    gb->cpu.pc = 0x0200;
+    gb->cpu.a = 0x37;
+    mbc3[0x200] = 0x3c; /* INC A */
+    assert(cupid_gb_prepare_cartridge_swap(candidate, gb, mbc3, 0x8000));
+    cupid_gb_commit_cartridge_swap(gb, candidate);
+    assert(cupid_gb_step(gb) && gb->cpu.a == 0x38 && gb->cpu.pc == 0x0201);
+    cupid_gb_cleanup(gb);
+    free(huc3);
+    free(tpp1);
+    free(mbc3);
+    free(candidate);
+    free(gb);
+}
+
+static void test_swap_attachments(void) {
+    CupidGb *gb = calloc(1, sizeof(*gb)), *peer = calloc(1, sizeof(*peer));
+    CupidGb *candidate = calloc(1, sizeof(*candidate));
+    uint8_t *rom = make_rom(0x8000, 3, 0, 2);
+    assert(gb && peer && candidate && cupid_gb_load_rom(gb, rom, 0x8000) &&
+           cupid_gb_load_rom(peer, rom, 0x8000));
+    CupidGbPrinter *printer = cupid_gb_printer_create(NULL, NULL, NULL);
+    assert(printer);
+    cupid_gb_set_serial_link(gb, cupid_gb_printer_link(printer));
+    printer->state.phase = PRINTER_HEADER;
+    printer->state.index = 2;
+    printer->state.incoming = 3;
+    printer->state.incoming_bits = 2;
+    const CupidGbPrinter saved_printer = *printer;
+    assert(cupid_gb_prepare_cartridge_swap(candidate, gb, rom, 0x8000));
+    assert(!memcmp(printer, &saved_printer, sizeof(*printer)));
+    cupid_gb_commit_cartridge_swap(gb, candidate);
+    assert(cupid_gb_printer_attached(gb) == printer &&
+           !memcmp(printer, &saved_printer, sizeof(*printer)));
+    cupid_gb_set_serial_link(gb, (CupidGbSerialLink){0});
+    cupid_gb_printer_destroy(printer);
+    CupidGbLinkPair pair = {0};
+    assert(cupid_gb_link_attach(&pair, gb, peer));
+    pair.outgoing[0] = true;
+    const CupidGbLinkPair saved_pair = pair;
+    assert(cupid_gb_prepare_cartridge_swap(candidate, gb, rom, 0x8000));
+    cupid_gb_commit_cartridge_swap(gb, candidate);
+    assert(pair.endpoints[0] == gb && !memcmp(&pair, &saved_pair, sizeof(pair)) &&
+           gb->serial_link.user_data == &pair);
+    cupid_gb_link_rebase(&pair);
+    assert(pair.endpoints[0] == gb && pair.rom_generation[0] == gb->rom_generation &&
+           pair.outgoing[0]);
+    cupid_gb_link_detach(&pair);
+    cupid_gb_cleanup(gb);
+    cupid_gb_cleanup(peer);
+    free(rom);
+    free(candidate);
+    free(peer);
+    free(gb);
+}
+
 int main(void) {
+    test_swap_console_matrix();
+    test_swap_failure_and_battery();
+    test_swap_wiring_and_state();
+    test_swap_clocks_and_instruction();
+    test_swap_attachments();
     test_header_storage_capabilities();
     test_mmm01_header_storage();
     test_mbc3_snapshot_writes();

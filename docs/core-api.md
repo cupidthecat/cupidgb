@@ -64,6 +64,10 @@ Loading a cartridge resets hardware on success. The loader validates size, heade
 
 A complete frontend replacement also validates battery and boot inputs. Build a separate candidate and swap it in only after all those inputs succeed. The Qt frontend uses that pattern. Native resets and state imports retain the receiving ROM pointer, capacity and load generation. They can replace the SRAM allocation; neither allocation's pointer or capacity is serialized.
 
+For live cartridge replacement, call `cupid_gb_prepare_cartridge_swap` with a separate, zeroed destination. It allocates the incoming storage, starts the incoming SRAM erased, and copies the live console state. Import the incoming battery into the prepared instance and save the outgoing cartridge before calling `cupid_gb_commit_cartridge_swap`. Keep the live console stopped during the transaction and clean up the destination if preparation is abandoned. The staged copy must not execute while it borrows observer and accessory registrations.
+
+Commit keeps the live console address, transfers ownership, and clears the destination. It advances the cartridge generation, so callers must discard trusted snapshot contexts and rebase an attached link pair. Live replacement and console reset retain observed MBC1 multicart and extended MBC3 wiring history. The receiving session supplies that history when loading an existing state.
+
 `CUPID_GB_INLINE_RAM_SIZE` describes the fixed 128 KiB array and historical state prefix. `CUPID_GB_MAX_RAM_SIZE` is the 2 MiB active-storage ceiling. Loaded TPP1 cartridges above 128 KiB use `cartridge_ram_heap` with an exact `cartridge_ram_capacity`; smaller populations use the inline array with zero heap capacity. Other controllers retain their existing physical limits. Use the inline constant when working with the fixed array, and `cartridge_ram_size` for the active span.
 
 The accessors in `cupid/gb/cartridge.h` select contiguous active storage:

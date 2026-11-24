@@ -28,6 +28,10 @@ Emulation > Quick Reset, or Ctrl+Alt+R, keeps the active hardware model and phys
 
 File > Reload Cartridge refreshes the cartridge, firmware and companion symbols while keeping the active hardware model, breakpoints and running or paused choice. It performs a hard reset and retains compatible rewind history. A missing companion file clears the old symbols; malformed symbols or unreadable assets leave the session intact. Reload has no default shortcut; assign one in Settings if needed.
 
+File > Hot Swap Cartridge replaces a cartridge while the console is running or paused. When the hardware model stays the same, the CPU continues at its current address and keeps console RAM, display and audio state, controller input, and any attached link cable or printer. A Color console also keeps its current color or monochrome mode. If the selected hardware model changes, the replacement starts with a console reset.
+
+CupidGB writes the outgoing battery save, then uses the incoming cartridge's own save and companion files. Breakpoints stay in place. Rewind and instruction history start over, and save slots follow the incoming filename. An unreadable cartridge or a failed battery load or write leaves the current cartridge in place. Hot Swap Cartridge is available with a cartridge loaded. It has no default shortcut and can be assigned in Settings.
+
 All reset workflows keep an active audio recording and held input. Menus suspend guest execution while preserving existing holds and accepting releases. Closing a menu reconciles current controller state before play resumes. Battery storage survives both reset kinds; volatile cartridge storage survives Quick Reset and is erased by a hard reset. MBC3 and TPP1 clock values survive. HuC3 clock and alarm digits reset with their controller and are saved through the normal autosave path.
 
 ## Controls

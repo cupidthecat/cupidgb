@@ -58,6 +58,12 @@ bool cupid_gb_mbc7_serial_valid(const CupidGbMbc7 *device);
 bool cupid_gb_load_rom_with_allocator(CupidGb *gb, const uint8_t *rom_data, size_t rom_size,
                                       void *(*allocate)(size_t));
 
+/* The same allocator contract applies to independent hot-swap ROM, SRAM and
+ * flash preparation. The destination must be zeroed and separate from current. */
+bool cupid_gb_prepare_cartridge_swap_with_allocator(CupidGb *candidate, const CupidGb *current,
+                                                    const uint8_t *rom_data, size_t rom_size,
+                                                    void *(*allocate)(size_t));
+
 /* Reset candidates own their writable SRAM and borrow only immutable ROM.
  * The allocator contract above also applies to the candidate structure. */
 bool cupid_gb_reset_with_allocator(CupidGb *gb, CupidGbResetKind kind, void *(*allocate)(size_t));

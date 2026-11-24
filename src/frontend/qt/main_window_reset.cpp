@@ -37,6 +37,10 @@ bool MainWindow::prepareResetCandidate(CupidEmulator *candidate, ResetWorkflow w
     next.apu.output = previous.apu.output;
     next.vblank_events = previous.vblank_events;
     next.battery_write_generation = previous.battery_write_generation;
+    if (workflow != ResetWorkflow::HotSwap) {
+        next.hot_swap_mbc1_multicart = previous.hot_swap_mbc1_multicart;
+        next.hot_swap_mbc3_extended = previous.hot_swap_mbc3_extended;
+    }
     // These are current host controls, separate from the reset JOYP and sensor
     // latches. Supply them before native reset retains its host registrations.
     next.joypad = previous.joypad;
@@ -132,7 +136,7 @@ bool MainWindow::resetCartridge(ResetWorkflow workflow) {
         if (symbols)
             cupid_gb_debugger_cleanup(symbols.get());
     });
-    if (!prepareResetSymbols(symbols) ||
+    if (!prepareCompanionSymbols(romPath_, symbols) ||
         !openRom(romPath_, workflow != ResetWorkflow::Normal, workflow))
         return false;
     if (!self || sessionId_ != resetSession)
@@ -157,6 +161,26 @@ bool MainWindow::restart() {
 
 bool MainWindow::quickReset() {
     return resetCartridge(ResetWorkflow::Quick);
+}
+
+void MainWindow::chooseCartridgeSwap() {
+    const QPointer<MainWindow> self(this);
+    const auto session = sessionId_;
+    const bool previousOperation = stateOperation_;
+    stateOperation_ = true;
+    const auto operation = qScopeGuard([self, previousOperation] {
+        if (self)
+            self->stateOperation_ = previousOperation;
+    });
+    const QString path = QFileDialog::getOpenFileName(
+        this, "Hot Swap Cartridge", settings_.value("files/lastDirectory").toString(),
+        "Game Boy cartridges (*.gb *.gbc *.sgb *.zip *.7z *.rar);;All files (*)");
+    if (!self || sessionId_ != session)
+        return;
+    if (path.isEmpty() || !openRom(path, false, ResetWorkflow::HotSwap)) {
+        if (self && sessionId_ == session)
+            resetPacing();
+    }
 }
 
 bool MainWindow::resetConsole(CupidGbResetKind kind) {
