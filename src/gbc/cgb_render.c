@@ -158,6 +158,10 @@ void cupid_cgb_render_scanline(CupidGb *gb, uint8_t lcdc, uint8_t ly, size_t bas
         color_index = (uint8_t)(((((unsigned)high >> bit_index) & 0x01u) << 1u) |
                                 (((unsigned)low >> bit_index) & 0x01u));
         palette_number = (uint8_t)(attributes & 0x07u);
+        if (gb->hide_background_layer) {
+            color_index = 0;
+            palette_number = 0;
+        }
 
         gb->frame_buffer[base_index + x] = color_index;
         gb->frame_buffer_color[base_index + x] =
@@ -170,7 +174,7 @@ void cupid_cgb_render_scanline(CupidGb *gb, uint8_t lcdc, uint8_t ly, size_t bas
         gb->window_line_counter = (uint8_t)(gb->window_line_counter + 1u);
     }
 
-    if ((lcdc & 0x02u) != 0u) {
+    if ((lcdc & 0x02u) != 0u && !gb->hide_object_layer) {
         int obj_height = ((lcdc & 0x04u) != 0u) ? 16 : 8;
         unsigned int sprite_count = 0u;
         unsigned int i;

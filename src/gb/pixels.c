@@ -364,24 +364,36 @@ static void shift_sprite_priorities(uint16_t values[8]) {
 }
 #endif
 
+void cupid_gb_set_layer_visibility(CupidGb *gb, bool background, bool objects) {
+    if (!gb)
+        return;
+    gb->hide_background_layer = !background;
+    gb->hide_object_layer = !objects;
+}
+
 static void emit_pixel(CupidGb *gb, bool inserted) {
     CupidGbPixels *p = &gb->pixels;
     uint8_t lcdc = gb->io_registers[CUPID_GB_IO_LCDC];
-    uint8_t raw = inserted ? 0 : p->colors[p->read];
-    bool background_priority = !inserted && p->priorities[p->read] != 0;
+    /* Hiding the background also removes its priority. The window and object
+     * fetchers still advance, including when their pixels are hidden. */
+    const bool blank_background = inserted || gb->hide_background_layer;
+    uint8_t raw = blank_background ? 0 : p->colors[p->read];
+    bool background_priority = !blank_background && p->priorities[p->read] != 0;
     if (!(lcdc & 1)) {
         background_priority = false;
         if (!gb->cgb_mode)
             raw = 0;
     }
-    bool object = p->sprite_colors[0] && (lcdc & 2);
+    bool object = p->sprite_colors[0] && (lcdc & 2) && !gb->hide_object_layer;
     if (raw && (lcdc & 1) && (background_priority || p->sprite_flags[0]))
         object = false;
     uint8_t color = object ? p->sprite_colors[0] : raw;
     size_t index = (size_t)p->line * CUPID_GB_SCREEN_WIDTH + p->x;
     if (gb->cgb_mode) {
         const uint8_t *palette = object ? gb->cgb_obj_palette_ram : gb->cgb_bg_palette_ram;
-        unsigned number = object ? p->sprite_palettes[0] : inserted ? 0 : p->palettes[p->read];
+        unsigned number = object             ? p->sprite_palettes[0]
+                          : blank_background ? 0
+                                             : p->palettes[p->read];
         gb->frame_buffer_color[index] = gb->cpu.stopped && gb->stop_ppu_palette_blocked
                                             ? 0
                                             : palette_color(palette, number * 4 + color);

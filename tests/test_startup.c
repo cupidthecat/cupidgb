@@ -401,6 +401,77 @@ static void test_cgb_cartridge_entry_registers(void) {
     free(gb);
 }
 
+static void test_cgb_quick_reset_palettes(void) {
+    const CupidGbModel models[] = {CUPID_GB_MODEL_CGB_0, CUPID_GB_MODEL_CGB_A,
+                                   CUPID_GB_MODEL_CGB_B, CUPID_GB_MODEL_CGB_C,
+                                   CUPID_GB_MODEL_CGB_D, CUPID_GB_MODEL_CGB_E};
+    const uint8_t default_bg[] = {0xff, 0x7f, 0xef, 0x1b, 0x80, 0x61, 0, 0};
+    const uint8_t default_obj[] = {0xff, 0x7f, 0x1f, 0x42, 0xf2, 0x1c, 0, 0};
+    const uint8_t licensed_palette[] = {0xff, 0x7f, 0xff, 0x03, 0x1f, 0, 0, 0};
+    CupidGb *gb = calloc(1, sizeof(*gb));
+    assert(gb);
+    for (unsigned model = 0; model < sizeof(models) / sizeof(models[0]); ++model) {
+        for (unsigned color = 0; color < 2; ++color) {
+            for (unsigned licensed = 0; licensed < 2; ++licensed) {
+                uint8_t rom[0x8000] = {0};
+                rom[0x100] = 0x18;
+                rom[0x101] = 0xfe;
+                rom[0x143] = color ? 0x80 : 0;
+                rom[0x134] = (uint8_t)(0xdbu - rom[0x143]);
+                rom[0x14b] = (uint8_t)licensed;
+                for (unsigned byte = 0x134; byte <= 0x14c; ++byte)
+                    rom[0x14d] = (uint8_t)(rom[0x14d] - rom[byte] - 1);
+                cupid_gb_set_model(gb, models[model]);
+                cupid_gb_set_power_on_seed(gb, 0);
+                assert(cupid_gb_load_rom(gb, rom, sizeof(rom)));
+                for (unsigned firmware = 0; firmware < 2; ++firmware) {
+                    gb->boot_rom_size = firmware ? 0x900 : 0;
+                    for (unsigned reset = 0; reset < 2; ++reset) {
+                        uint8_t background[64], object[64];
+                        for (unsigned byte = 0; byte < 64; ++byte) {
+                            background[byte] = (uint8_t)(byte * 37u + 0x5au + reset);
+                            object[byte] = (uint8_t)(byte * 19u + 0xa6u + reset);
+                        }
+                        memcpy(gb->cgb_bg_palette_ram, background, sizeof(background));
+                        memcpy(gb->cgb_obj_palette_ram, object, sizeof(object));
+                        if (!firmware) {
+                            for (unsigned byte = 0; byte < 64; byte += 2) {
+                                background[byte] = 0xff;
+                                background[byte + 1] = 0x7f;
+                            }
+                            if (color) {
+                                object[0] = 0;
+                            } else {
+                                const uint8_t *bg = licensed ? licensed_palette : default_bg;
+                                const uint8_t *obj = licensed ? licensed_palette : default_obj;
+                                memcpy(background, bg, 8);
+                                memcpy(object, obj, 8);
+                                memcpy(object + 8, obj, 8);
+                            }
+                        }
+                        assert(cupid_gb_reset(gb, CUPID_GB_RESET_QUICK));
+                        assert(memcmp(gb->cgb_bg_palette_ram, background, sizeof(background)) == 0);
+                        assert(memcmp(gb->cgb_obj_palette_ram, object, sizeof(object)) == 0);
+                        assert(gb->boot_rom_enabled == (firmware != 0));
+                        if (!firmware && color) {
+                            /* Confirm the restored bytes through ordinary guest palette ports. */
+                            cupid_gb_write_u8(gb, 0xff40, 0);
+                            for (unsigned byte = 0; byte < 64; ++byte) {
+                                cupid_gb_write_u8(gb, 0xff68, (uint8_t)byte);
+                                cupid_gb_write_u8(gb, 0xff6a, (uint8_t)byte);
+                                assert(cupid_gb_read_u8(gb, 0xff69) == background[byte]);
+                                assert(cupid_gb_read_u8(gb, 0xff6b) == object[byte]);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    cupid_gb_cleanup(gb);
+    free(gb);
+}
+
 static void observe_serial(const CupidGb *gb, uint8_t transmitted, void *data) {
     (void)gb;
     (void)transmitted;
@@ -1768,6 +1839,7 @@ int main(void) {
     test_native_color_startup_phase();
     test_color_target_initialization();
     test_cgb_cartridge_entry_registers();
+    test_cgb_quick_reset_palettes();
     puts("Startup memory and lifecycle checks passed.");
     return 0;
 }

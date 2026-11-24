@@ -87,6 +87,9 @@ bool cupid_gb_oam_dma_blocks_bus(const CupidGb *gb);
 void cupid_gb_tick_ppu(CupidGb *gb, uint16_t cycles);
 /* Advances LCD dots without advancing the CPU, timer, DMA, or audio clocks. */
 void cupid_gb_tick_ppu_dots(CupidGb *gb, uint16_t dots);
+/* Changes subsequently emitted pixels while leaving LCD fetches and timing active.
+ * Both layers start visible. The host choice survives resets and state loads. */
+void cupid_gb_set_layer_visibility(CupidGb *gb, bool background, bool objects);
 void cupid_gb_pixels_begin_line(CupidGb *gb);
 void cupid_gb_pixels_scan_object(CupidGb *gb, unsigned index);
 void cupid_gb_pixels_begin_transfer(CupidGb *gb);

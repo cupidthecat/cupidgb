@@ -137,8 +137,12 @@ OAM lists all 40 entries, including entries outside visible lines. The table sho
 
 Inspector raw grayscale mode bypasses color correction. Palette-selected color previews and swatches use the active CGB correction and ambient temperature. Numeric entries retain their RGB555 values. Object previews retain a visible distinction for otherwise uniform monochrome object palettes.
 
+## Graphics layers
+
+Use Tools > Show Background and Window or Tools > Show Objects to isolate the game layers. Hiding the background and window shows their base color and lets objects appear through areas that normally cover them. LCD timing and memory access continue as usual. Step or resume if the game is paused. The switches are per window, and loading a state or resetting the console keeps the current selection.
+
 ## Remaining debugger scope
 
 Use Audio > Audio Channels or Alt+1 through Alt+4 to listen to individual channel combinations. Muting changes output mixing while the emulated channel continues running. These choices persist through state loading, rewind and Backstep for the current session.
 
-A full expression language, saved debugger sessions, continuous-playback instruction replay, ROM patching, interactive palette editing, and graphics layer toggles remain pending. Inspector rendering and the bounded instruction history are useful diagnostic tools, not complete debugger or hardware parity.
+A full expression language, saved debugger sessions, continuous-playback instruction replay, ROM patching, and interactive palette editing remain pending. Inspector rendering and the bounded instruction history are useful diagnostic tools, not complete debugger or hardware parity.

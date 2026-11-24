@@ -837,6 +837,59 @@ static void test_palette_output_ignores_unused_bit(void) {
     }
 }
 
+static void test_layer_visibility(CupidGbModel model, bool color_mode) {
+    CupidGb gb;
+    CupidGbPixels visible_pixels;
+    CupidGbDisplayClock visible_clock;
+    uint16_t visible_end_dot = 0;
+    uint8_t visible_interrupts = 0;
+    for (unsigned hidden = 0; hidden < 4; ++hidden) {
+        prepare(&gb, cupid_gb_model_is_cgb(model), 1);
+        gb.model = model;
+        gb.cgb_mode = color_mode;
+        gb.io_registers[CUPID_GB_IO_LCDC] = 0xf3;
+        gb.io_registers[CUPID_GB_IO_WY] = 0;
+        gb.io_registers[CUPID_GB_IO_WX] = 87;
+        memset(gb.video_ram + 0x1c00, 2, 32);
+        memset(gb.video_ram + 0x3800, 2, 32);
+        memset(gb.video_ram + 0x3c00, 3, 32);
+        gb.cgb_bg_palette_ram[0] = 0x10;  /* Palette 0, color 0. */
+        gb.cgb_bg_palette_ram[4] = 0x29;  /* Compatibility window. */
+        gb.cgb_bg_palette_ram[18] = 0x34; /* Native background. */
+        gb.cgb_bg_palette_ram[28] = 0x72; /* Native window. */
+        object(&gb, 0, 24, 2, 0x80);      /* Behind the background. */
+        object(&gb, 1, 40, 2, 0);
+        const bool background = !(hidden & 1);
+        const bool objects = !(hidden & 2);
+        cupid_gb_set_layer_visibility(&gb, background, objects);
+        render(&gb);
+        assert(gb.frame_buffer[0] == (background ? 1 : 0));
+        assert(gb.frame_buffer[16] == (background ? 1 : objects ? 2 : 0));
+        assert(gb.frame_buffer[32] == (objects ? 2 : background ? 1 : 0));
+        assert(gb.frame_buffer[100] == (background ? 2 : 0));
+        if (cupid_gb_model_is_cgb(model)) {
+            const uint16_t bg_color = background ? (color_mode ? 0x34 : 0x1f) : 0x10;
+            const uint16_t window_color = background ? (color_mode ? 0x72 : 0x29) : 0x10;
+            assert(gb.frame_buffer_color[0] == bg_color);
+            assert(gb.frame_buffer_color[16] == (!background && objects ? 0x7c00 : bg_color));
+            assert(gb.frame_buffer_color[32] == (objects ? 0x7c00 : bg_color));
+            assert(gb.frame_buffer_color[100] == window_color);
+        }
+        assert(gb.window_line_counter == 1);
+        if (!hidden) {
+            memcpy(&visible_pixels, &gb.pixels, sizeof(visible_pixels));
+            memcpy(&visible_clock, &gb.display_clock, sizeof(visible_clock));
+            visible_end_dot = gb.ppu_transfer_end_dot;
+            visible_interrupts = gb.interrupt_flags;
+        } else {
+            assert(memcmp(&visible_pixels, &gb.pixels, sizeof(visible_pixels)) == 0);
+            assert(memcmp(&visible_clock, &gb.display_clock, sizeof(visible_clock)) == 0);
+            assert(visible_end_dot == gb.ppu_transfer_end_dot);
+            assert(visible_interrupts == gb.interrupt_flags);
+        }
+    }
+}
+
 static void test_pixel_output_preserves_object_queue_lanes(void) {
     CupidGb gb;
     for (unsigned color_mode = 0; color_mode < 2; ++color_mode) {
@@ -906,6 +959,10 @@ int main(void) {
     test_physical_color_attributes_in_compatibility_mode();
     test_stopped_compatibility_background_priority();
     test_palette_output_ignores_unused_bit();
+    test_layer_visibility(CUPID_GB_MODEL_DMG_ABC, false);
+    test_layer_visibility(CUPID_GB_MODEL_CGB, false);
+    test_layer_visibility(CUPID_GB_MODEL_CGB, true);
+    test_layer_visibility(CUPID_GB_MODEL_SGB, false);
     test_pixel_output_preserves_object_queue_lanes();
     puts("PPU priority checks passed.");
     return 0;

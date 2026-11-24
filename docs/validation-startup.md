@@ -744,3 +744,20 @@ serial control register in 60 cases across all 12 profiles. An independent
 352-observation comparison covered cold, hard-reset, quick-reset, and
 overlay-entry paths. A new serial transfer after re-entry completed with
 the expected data and interrupt.
+
+## Color palette RAM after Quick Reset
+
+Quick Reset with installed firmware preserves both palette banks at firmware
+entry. Built-in startup applies the firmware's writes before cartridge entry.
+Native Color starts with a white background bank and clears the first byte
+of the object bank. Monochrome compatibility replaces background palette 0
+and object palettes 0 and 1. The rest of the background bank is white, and
+untouched object bytes keep their values from before the reset.
+
+The Windows and Linux comparisons used the same cartridge and patterned
+palette history as the pinned firmware runs. Each platform matched all 128
+palette bytes on each of the six Color revisions in native and compatibility
+mode. The startup regression covers
+96 combinations of revision, cartridge header, firmware selection, and
+previous palette contents. Native-color cases also read the bytes through
+the guest palette ports.

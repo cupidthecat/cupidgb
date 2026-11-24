@@ -135,10 +135,22 @@ bool MainWindow::resetSmokeTest(const QString &directory) {
         MainWindow session(true, true, false, QStringLiteral(""), CUPID_GB_MODEL_DMG_ABC, 0);
         session.timer_.stop();
         if (!session.quickResetAction_ || session.quickResetAction_->isEnabled() ||
+            session.showBackgroundAction_->isEnabled() || session.showObjectsAction_->isEnabled() ||
             session.quickResetAction_->shortcut() != QKeySequence("Ctrl+Alt+R") ||
             !session.openRom(volatilePath) || !session.quickResetAction_->isEnabled())
             return smokeFailure(__FILE__, __LINE__);
         session.setPaused(true);
+        const auto visibleState = session.captureState();
+        for (auto *layer : {session.showBackgroundAction_, session.showObjectsAction_}) {
+            if (!layer->isEnabled() || !layer->isChecked())
+                return smokeFailure(__FILE__, __LINE__);
+            layer->trigger();
+        }
+        if (visibleState.isEmpty() || session.captureState() != visibleState ||
+            !session.restoreState(visibleState, false) ||
+            !session.emulator_->gb.hide_background_layer ||
+            !session.emulator_->gb.hide_object_layer)
+            return smokeFailure(__FILE__, __LINE__);
         const QByteArray coldMemory = resetPhysicalMemory(session.emulator_->gb);
         if (!cupid_gb_apu_set_sample_rate(&session.emulator_->gb, 48000))
             return smokeFailure(__FILE__, __LINE__);
@@ -186,6 +198,7 @@ bool MainWindow::resetSmokeTest(const QString &directory) {
             session.paused_ != (workflow >= 2) ||
             (session.emulator_.get() == owner) != (workflow >= 3) ||
             resetPhysicalMemory(reset) != (quick ? physical : coldMemory) ||
+            !reset.hide_background_layer || !reset.hide_object_layer ||
             reset.cartridge_ram[0] != (quick ? 0x6b : 0xff) ||
             std::memcmp(&reset.apu.output, output.get(), sizeof(*output)) ||
             !cupid_gb_audio_state_valid(&reset) || !session.recorder_->active() ||
@@ -211,7 +224,8 @@ bool MainWindow::resetSmokeTest(const QString &directory) {
         if (!session.runFrame() || session.recorder_->framesWritten() <= recorded ||
             !session.stopRecording() ||
             QFileInfo(recording).size() != qint64(44 + session.recorder_->framesWritten() * 4) ||
-            !session.closeRom() || session.quickResetAction_->isEnabled())
+            !session.closeRom() || session.quickResetAction_->isEnabled() ||
+            session.showBackgroundAction_->isEnabled() || session.showObjectsAction_->isEnabled())
             return smokeFailure(__FILE__, __LINE__);
     }
 

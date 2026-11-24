@@ -352,10 +352,18 @@ static void check_boundary(const CupidGb *gb, const CupidGb *before, CupidGbRese
         } else {
             CHECK(!memcmp(gb->high_ram, before->high_ram, sizeof(gb->high_ram)));
         }
-        CHECK(!memcmp(gb->cgb_bg_palette_ram, before->cgb_bg_palette_ram,
-                      sizeof(gb->cgb_bg_palette_ram)) &&
-              !memcmp(gb->cgb_obj_palette_ram, before->cgb_obj_palette_ram,
-                      sizeof(gb->cgb_obj_palette_ram)));
+        if (!firmware && cupid_gb_model_is_cgb(gb->model)) {
+            for (size_t byte = 0; byte < sizeof(gb->cgb_bg_palette_ram); ++byte)
+                CHECK(gb->cgb_bg_palette_ram[byte] == (byte & 1u ? 0x7f : 0xff));
+            CHECK(!gb->cgb_obj_palette_ram[0] &&
+                  !memcmp(gb->cgb_obj_palette_ram + 1, before->cgb_obj_palette_ram + 1,
+                          sizeof(gb->cgb_obj_palette_ram) - 1));
+        } else {
+            CHECK(!memcmp(gb->cgb_bg_palette_ram, before->cgb_bg_palette_ram,
+                          sizeof(gb->cgb_bg_palette_ram)) &&
+                  !memcmp(gb->cgb_obj_palette_ram, before->cgb_obj_palette_ram,
+                          sizeof(gb->cgb_obj_palette_ram)));
+        }
         CHECK(gb->io_registers[0x46] == 0x12 && gb->io_registers[0x48] == 0x34 &&
               gb->io_registers[0x49] == 0x56);
         if (!firmware && gb->model == CUPID_GB_MODEL_CGB) {

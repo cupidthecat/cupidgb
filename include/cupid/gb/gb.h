@@ -578,6 +578,8 @@ typedef struct CupidGb {
     uint32_t lcd_repeat_countdown;       /* Remaining CGB first-frame repeat delay. */
     uint8_t display_frame_type;          /* Presentation event, separate from VBlank IRQs. */
     bool loaded;
+    bool hide_background_layer; /* Host display controls, excluded from states. */
+    bool hide_object_layer;
     uint64_t vblank_events;            /* Host observation count; excluded from guest snapshots. */
     uint64_t battery_write_generation; /* Host dirty tracking; excluded from guest snapshots. */
     char save_path[260];

@@ -84,10 +84,20 @@ static void restore_retained_memory(CupidGb *next, const CupidGb *previous) {
     memcpy(next->object_attribute_memory, previous->object_attribute_memory,
            sizeof(next->object_attribute_memory));
     memcpy(next->extra_oam, previous->extra_oam, sizeof(next->extra_oam));
-    memcpy(next->cgb_bg_palette_ram, previous->cgb_bg_palette_ram,
-           sizeof(next->cgb_bg_palette_ram));
-    memcpy(next->cgb_obj_palette_ram, previous->cgb_obj_palette_ram,
-           sizeof(next->cgb_obj_palette_ram));
+    if (next->boot_rom_size || !cupid_gb_model_is_cgb(next->model)) {
+        memcpy(next->cgb_bg_palette_ram, previous->cgb_bg_palette_ram,
+               sizeof(next->cgb_bg_palette_ram));
+        memcpy(next->cgb_obj_palette_ram, previous->cgb_obj_palette_ram,
+               sizeof(next->cgb_obj_palette_ram));
+    } else {
+        /* Firmware rewrites every BG color while fading the logo. Native Color
+         * also clears OBJ byte zero; compatibility setup replaces OBJ palettes
+         * zero and one. Retain only the object bytes outside those writes. */
+        const size_t object_start = next->cgb_mode ? 1u : 16u;
+        memcpy(next->cgb_obj_palette_ram + object_start,
+               previous->cgb_obj_palette_ram + object_start,
+               sizeof(next->cgb_obj_palette_ram) - object_start);
+    }
     next->io_registers[0x46] = previous->io_registers[0x46];
     next->io_registers[0x48] = previous->io_registers[0x48];
     next->io_registers[0x49] = previous->io_registers[0x49];
@@ -190,6 +200,8 @@ bool cupid_gb_reset_with_allocator(CupidGb *gb, CupidGbResetKind kind, void *(*a
 
 void cupid_gb_reset_restore_host(CupidGb *next, const CupidGb *gb) {
     next->cheats = gb->cheats;
+    next->hide_background_layer = gb->hide_background_layer;
+    next->hide_object_layer = gb->hide_object_layer;
     next->serial_output_callback = gb->serial_output_callback;
     next->serial_output_user_data = gb->serial_output_user_data;
     next->serial_link = gb->serial_link;

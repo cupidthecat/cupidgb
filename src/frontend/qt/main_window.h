@@ -145,6 +145,7 @@ class MainWindow final : public QMainWindow {
     void openPaletteEditor();
     void applyPaletteLibrary(const PaletteLibrary &library);
     void applyDisplaySettings();
+    void applyDisplayLayers(CupidGb *gb) const;
     void setFrameBlending(FrameBlending mode);
     QSize logicalWindowSize(const QSize &nativeSize, int scale) const;
     void resizeWindowCentered(const QSize &windowSize, const QRect &previousGeometry);
@@ -414,6 +415,8 @@ class MainWindow final : public QMainWindow {
     QAction *copyScreenshotAction_ = nullptr;
     QAction *loadStateFileAction_ = nullptr;
     QAction *savePortableStateAction_ = nullptr;
+    QAction *showBackgroundAction_ = nullptr;
+    QAction *showObjectsAction_ = nullptr;
     std::array<QAction *, 3> scalingActions_{};
     std::array<QAction *, 3> scalingFilterActions_{};
     std::array<QAction *, 12> turboCapActions_{};

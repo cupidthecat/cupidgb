@@ -105,3 +105,19 @@ The DMG and CGB regression executes a guest store at every address from
 banks, SRAM, the RTC, motor state and battery generation after each store.
 The previous build changed the low ROM bank on the first store at `4000`.
 Physical flash behavior and commercial TPP1 carts remain unverified.
+
+## Local cartridge startup sample
+
+The 2026-11-21 inventory found 880 ROM images or ZIP members. They covered
+eight families with valid headers, including an MBC1 multicart and 13
+MBC5 rumble images. The library had no recognized MMM01, TPP1, HuC1, MBC6,
+TAMA5, ROM+RAM, or extended MBC3 image.
+
+The Release runner completed 600 guest intervals on each platform for
+one representative of each available family, plus the multicart, one
+rumble image, and a bad-dump control. Windows and Linux produced the same
+guest reports and full final images for all 11 inputs. The bad-dump
+control logged an unknown type and invalid checksum and stayed at the
+Nintendo logo. The MBC7, Camera, and multicart captures showed their
+opening screens or menus. This run measures startup and bounded execution.
+The generated mapper tests cover banking and state continuation separately.

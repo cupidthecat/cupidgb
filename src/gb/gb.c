@@ -308,6 +308,8 @@ void cupid_gb_init(CupidGb *gb) {
     const CupidGbPowerOn power_on = gb->power_on;
     const CupidGbRtcPolicy rtc_policy = gb->rtc_policy;
     const CupidGbCameraHost camera_host = gb->camera_host;
+    const bool hide_background_layer = gb->hide_background_layer;
+    const bool hide_object_layer = gb->hide_object_layer;
     memset(gb, 0, sizeof(*gb));
     /* Approximate boot starts after firmware has already driven the bus. */
     gb->cartridge_bus_data = 0xffu;
@@ -346,6 +348,8 @@ void cupid_gb_init(CupidGb *gb) {
     gb->power_on = power_on;
     gb->rtc_policy = rtc_policy;
     gb->camera_host = camera_host;
+    gb->hide_background_layer = hide_background_layer;
+    gb->hide_object_layer = hide_object_layer;
     cupid_gb_camera_cancel_request(gb);
 
     if (gb->rom == 0) {

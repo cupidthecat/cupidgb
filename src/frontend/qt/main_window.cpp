@@ -27,6 +27,10 @@
 
 #include <QScopeGuard>
 
+extern "C" {
+#include "cupid/gb/ppu.h"
+}
+
 MainWindow::MainWindow(bool isolated, bool automated, bool audioCheck,
                        const QString &bootDirectoryOverride, std::optional<int> modelOverride,
                        std::optional<uint64_t> powerOnSeedOverride,
@@ -525,6 +529,16 @@ void MainWindow::buildMenus() {
     connect(debuggerAction_, &QAction::triggered, this, [this] { openDebugger(); });
     inspectorsAction_ = tools->addAction("&Memory and Graphics");
     connect(inspectorsAction_, &QAction::triggered, this, [this] { openInspectors(); });
+    showBackgroundAction_ = tools->addAction("Show &Background and Window");
+    showObjectsAction_ = tools->addAction("Show &Objects");
+    for (auto *action : {showBackgroundAction_, showObjectsAction_}) {
+        action->setCheckable(true);
+        action->setChecked(true);
+        connect(action, &QAction::toggled, this, [this] {
+            if (emulator_)
+                applyDisplayLayers(&emulator_->gb);
+        });
+    }
     cheatsAction_ = tools->addAction("&Cheats…");
     cheatSearchAction_ = tools->addAction("Cheat &Search…");
     enableCheatsAction_ = tools->addAction("&Enable Cheats");
@@ -823,6 +837,7 @@ bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflo
     // Startup may rebuild the APU. Install host choices after its final reset,
     // before the candidate can execute or produce its first audio sample.
     applyAudioPolicy(&candidate->gb);
+    applyDisplayLayers(&candidate->gb);
     const bool sameCartridge = emulator_ && romData_ == data &&
                                romPath_.compare(absolute, pathCase) == 0 &&
                                emulator_->gb.model == candidate->gb.model;
@@ -1077,6 +1092,11 @@ bool MainWindow::closeRom() {
     return true;
 }
 
+void MainWindow::applyDisplayLayers(CupidGb *gb) const {
+    cupid_gb_set_layer_visibility(gb, showBackgroundAction_->isChecked(),
+                                  showObjectsAction_->isChecked());
+}
+
 void MainWindow::refreshActions() {
     for (auto *action : {closeAction_, resetAction_, quickResetAction_, reloadAction_, pauseAction_,
                          frameAction_, screenshotAction_, screenshotAsAction_,
@@ -1098,6 +1118,8 @@ void MainWindow::refreshActions() {
         action->setEnabled(bool(emulator_));
     debuggerAction_->setEnabled(bool(emulator_));
     inspectorsAction_->setEnabled(bool(emulator_));
+    showBackgroundAction_->setEnabled(bool(emulator_) && !musicInfo_);
+    showObjectsAction_->setEnabled(bool(emulator_) && !musicInfo_);
     connectionsMenu_->setEnabled(bool(emulator_));
     refreshCheats();
     refreshDebugger();
