@@ -46,6 +46,12 @@ intermittent PulseAudio shutdown abort, including in a clean preceding build.
 The same checks pass with the 6.8.3 SDK. Keep the toolkit version in runtime
 receipts; passing core checks does not qualify a particular audio backend.
 
+Linux Release builds pass `-fPIC` at the Qt link step when interprocedural
+optimization is enabled. With GCC 15 and Qt 6.8.3, the link otherwise
+introduced copies of Qt meta-objects and caused crashes at startup and in
+the graphics inspector. The flag preserves the shared Qt object addresses
+and keeps interprocedural optimization enabled.
+
 The desktop application needs a working graphical session and a usable audio output backend. An offscreen workflow check can run without a visible desktop:
 
 ```sh

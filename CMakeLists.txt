@@ -112,6 +112,11 @@ target_link_libraries(cupidgb_rom_runner PRIVATE cupidgb_core)
 if(CUPIDGB_BUILD_QT)
     find_package(Qt6 6.4 REQUIRED COMPONENTS Widgets Multimedia PrintSupport)
     message(STATUS "CupidGB Qt ${Qt6_VERSION} from ${Qt6_DIR}")
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND cupidgb_ipo_supported)
+        # The desktop link mixes core and Qt objects. Keep Qt data references
+        # position independent through LTO so meta-objects have one address.
+        add_link_options("$<$<AND:$<CONFIG:Release>,$<LINK_LANG_AND_ID:CXX,GNU,Clang>>:-fPIC>")
+    endif()
     find_package(SDL2 2.24 REQUIRED CONFIG)
     if(MSVC)
         get_target_property(cupidgb_sdl_target SDL2::SDL2 ALIASED_TARGET)
