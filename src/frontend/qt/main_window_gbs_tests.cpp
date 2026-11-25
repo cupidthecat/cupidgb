@@ -162,8 +162,12 @@ bool MainWindow::gbsSmokeTest(const QString &directory) {
         session.centralWidget() != session.musicPlayer_ || !session.display_->isHidden() ||
         session.minimumSize() != session.maximumSize() || session.size() == gameSize ||
         session.reloadAction_->isEnabled() || session.hotSwapAction_->isEnabled() ||
-        session.screenshotAction_->isEnabled() || session.copyScreenshotAction_->isEnabled() ||
+        session.workBoyAction_->isEnabled() || session.screenshotAction_->isEnabled() ||
+        session.copyScreenshotAction_->isEnabled() ||
         session.findChild<QAction *>("fullscreen")->isEnabled())
+        return smokeFailure(__FILE__, __LINE__);
+    session.setWorkBoyConnected(true);
+    if (session.workBoy_)
         return smokeFailure(__FILE__, __LINE__);
     session.timer_.stop();
     for (auto *action : session.audioChannelActions_)
@@ -502,7 +506,7 @@ bool MainWindow::gbsSmokeTest(const QString &directory) {
         session.musicInfo_ || session.centralWidget() != session.display_ ||
         session.size() != gameSize || session.maximumSize() != gameMaximum ||
         !session.reloadAction_->isEnabled() || !session.hotSwapAction_->isEnabled() ||
-        !session.screenshotAction_->isEnabled() ||
+        !session.workBoyAction_->isEnabled() || !session.screenshotAction_->isEnabled() ||
         !session.findChild<QAction *>("fullscreen")->isEnabled() || !playFrames(1) ||
         session.image_.isNull() || !session.openRom(path) || !session.closeRom() ||
         session.musicInfo_ || session.size() != gameSize || session.maximumSize() != gameMaximum ||

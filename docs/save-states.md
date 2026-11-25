@@ -509,6 +509,23 @@ Live loads keep the receiving stream's filter history. Loading into an
 active firmware overlay cancels a pending built-in initialization.
 Older files restore their recorded filter history with the pending flag clear.
 
+### WorkBoy keyboard in version 30
+
+Version 30 can record a connected WorkBoy keyboard in the existing serial
+device descriptor. Its device kind is 2, its codec is 1, and its payload is
+30 bytes. States with a printer or without a built-in serial device keep
+their existing encoding.
+
+The payload stores the outgoing byte and its latched pin, the partial
+incoming byte and bit count, command mode, pending key, both Shift states,
+and the 21 clock packet bytes and cursor. A matching attachment resumes a
+partial key or clock transfer. The loader validates the record before
+committing either object, even if the receiving machine has a different
+device connected. The load keeps the receiving connection and clock
+callbacks. An older state, a state for another device, or a portable state
+starts fresh keyboard protocol history. The desktop clock offset is a
+preference and follows the receiving session.
+
 ## Validation scope
 
 The established regression and fixture results below retain their earlier checkpoint scope. Version 21 state, startup and audio checks passed in the complete Windows, Linux and sanitizer gates. Native exchange, frontend restoration and runtime results have their own scope in the [startup checkpoint](validation-sgb-startup.md); passing a codec regression alone does not qualify those workflows or the underlying hardware behavior.

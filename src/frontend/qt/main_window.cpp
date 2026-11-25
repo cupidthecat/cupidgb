@@ -193,6 +193,7 @@ MainWindow::~MainWindow() {
     if (recorder_ && !recorder_->finish())
         qCritical("Cannot finalize audio recording: %s", qPrintable(recorder_->errorString()));
     setPrinterConnected(false);
+    setWorkBoyConnected(false);
     if (emulator_) {
         flushBattery(true);
         cupid_emulator_shutdown(emulator_.get());
@@ -513,7 +514,8 @@ void MainWindow::buildMenus() {
     auto *accessories = new QActionGroup(connectionsMenu_);
     disconnectAction_ = connectionsMenu_->addAction("&None");
     printerAction_ = connectionsMenu_->addAction("Game Boy &Printer");
-    for (auto *action : {disconnectAction_, printerAction_}) {
+    workBoyAction_ = connectionsMenu_->addAction("&WorkBoy Keyboard");
+    for (auto *action : {disconnectAction_, printerAction_, workBoyAction_}) {
         action->setCheckable(true);
         accessories->addAction(action);
     }
@@ -521,8 +523,10 @@ void MainWindow::buildMenus() {
     connect(disconnectAction_, &QAction::triggered, this, [this] {
         disconnectLink();
         setPrinterConnected(false);
+        setWorkBoyConnected(false);
     });
     connect(printerAction_, &QAction::triggered, this, [this] { setPrinterConnected(true); });
+    connect(workBoyAction_, &QAction::triggered, this, [this] { setWorkBoyConnected(true); });
     linkMenu_ = connectionsMenu_->addMenu("Link &Cable");
     linkMenu_->setObjectName("linkCable");
     connect(linkMenu_, &QMenu::aboutToShow, this, [this] { refreshLinkMenu(); });
@@ -903,6 +907,7 @@ bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflo
             return false;
         }
         setPrinterConnected(false);
+        setWorkBoyConnected(false);
     }
     if (preserveConsole) {
         // Keep the address that owns the live cable and printer. Link scheduling
@@ -933,8 +938,10 @@ bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflo
         cheatSaveWarning_.clear();
     cupid_gb_set_cheats(&emulator_->gb, cheats_.get());
     refreshCheats(true);
-    if (!preserveConsole)
+    if (!preserveConsole) {
         resetPrinter();
+        resetWorkBoy();
+    }
     const auto &gb = emulator_->gb;
     const bool motorCapable =
         gb.header.has_rumble &&
@@ -1119,6 +1126,7 @@ bool MainWindow::closeRom() {
     cameraError_.clear();
     resetMotionInput();
     setPrinterConnected(false);
+    setWorkBoyConnected(false);
     ++sessionId_;
     const uint64_t closingSession = sessionId_;
     resetControllerRumble();
@@ -1190,6 +1198,7 @@ void MainWindow::refreshActions() {
     showBackgroundAction_->setEnabled(bool(emulator_) && !musicInfo_);
     showObjectsAction_->setEnabled(bool(emulator_) && !musicInfo_);
     connectionsMenu_->setEnabled(bool(emulator_));
+    workBoyAction_->setEnabled(bool(emulator_) && !musicInfo_);
     refreshCheats();
     refreshDebugger();
     refreshMusicControls();

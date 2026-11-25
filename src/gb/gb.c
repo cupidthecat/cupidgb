@@ -435,9 +435,7 @@ void cupid_gb_init(CupidGb *gb) {
     cupid_gb_display_clock_import_legacy(gb);
     cupid_gb_pixels_import_legacy(gb);
     gb->vram_bus = (CupidGbVramBus){0};
-    CupidGbPrinter *printer = cupid_gb_printer_attached(gb);
-    if (printer)
-        cupid_gb_printer_state_clear(&printer->state, gb->elapsed_cycles);
+    cupid_gb_reset_serial_device(gb);
 }
 
 // Boot ROM support
@@ -649,9 +647,7 @@ void cupid_gb_startup_hardware(CupidGb *gb) {
     cupid_gb_display_clock_reset(gb);
     cupid_gb_sgb_begin_boot(gb);
     cupid_gb_sgb_startup_reset(gb, true);
-    CupidGbPrinter *printer = cupid_gb_printer_attached(gb);
-    if (printer)
-        cupid_gb_printer_state_clear(&printer->state, gb->elapsed_cycles);
+    cupid_gb_reset_serial_device(gb);
 }
 
 /**

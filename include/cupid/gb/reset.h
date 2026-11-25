@@ -48,10 +48,10 @@ typedef enum CupidGbResetKind {
  * Installed firmware starts at PC 0. Without firmware, the explicit approximate
  * post-boot profile starts at PC 0x0100. Its color handoff clears WRAM bank 2 and OAM.
  * No guest execution or output callback occurs inside this operation. A built-in
- * printer's protocol resets only after the new machine has been committed.
+ * printer or WorkBoy protocol resets after the new machine has been committed.
  *
  * Invalid arguments, an invalid firmware size, or allocation failure return false
- * without changing the machine, attached printer, or calling its host clock source.
+ * without changing the machine or serial device or calling a host clock source.
  * Call only between guest execution steps; the core is not reentrant. */
 bool cupid_gb_reset(struct CupidGb *gb, CupidGbResetKind kind);
 

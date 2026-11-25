@@ -33,6 +33,7 @@
 #include "rtc_internal.h"
 #include "startup_internal.h"
 #include "tama5_internal.h"
+#include "workboy_internal.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -147,7 +148,7 @@ bool cupid_gb_reset_with_allocator(CupidGb *gb, CupidGbResetKind kind, void *(*a
         next->power_on.seed = gb->power_on.generation_seed;
     }
     /* The candidate has no attached accessory or observers. Initialization cannot
-     * mutate the live printer or publish an intermediate machine through callbacks. */
+     * mutate a live device or publish an intermediate machine through callbacks. */
     cupid_gb_init(next);
     cupid_gb_reset_restore_cartridge(next, gb);
     /* Reset clears command latches, while nonvolatile flash retains its bytes
@@ -238,9 +239,15 @@ void cupid_gb_reset_commit(CupidGb *gb, CupidGb *next) {
     if (previous_flash != gb->mbc6_flash)
         free(previous_flash);
     free(next);
+    cupid_gb_reset_serial_device(gb);
+}
+
+void cupid_gb_reset_serial_device(CupidGb *gb) {
     CupidGbPrinter *printer = cupid_gb_printer_attached(gb);
     if (printer)
         cupid_gb_printer_state_clear(&printer->state, gb->elapsed_cycles);
+    else
+        cupid_gb_workboy_reset(cupid_gb_workboy_attached(gb));
 }
 
 bool cupid_gb_reset(CupidGb *gb, CupidGbResetKind kind) {

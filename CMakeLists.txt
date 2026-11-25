@@ -67,7 +67,7 @@ add_library(cupidgb_core STATIC
     src/gb/sgb_startup.c src/gb/sgb_startup_audio.c src/gb/sgb_startup_render.c src/gb/state_startup.c
     src/gb/state_sgb_protocol.c
     src/gbc/cgb.c src/gbc/cgb_palette.c src/gbc/cgb_dma.c src/gbc/cgb_render.c
-    src/gb/printer.c src/gb/printer_state.c src/gb/link.c
+    src/gb/printer.c src/gb/printer_state.c src/gb/workboy.c src/gb/link.c
     src/gb/cheats.c
     src/gb/tpp1.c
     src/gb/huc3.c
@@ -194,6 +194,8 @@ if(CUPIDGB_BUILD_QT)
         src/frontend/qt/main_window_telemetry.cpp
         src/frontend/qt/main_window_printer.cpp
         src/frontend/qt/main_window_printer_tests.cpp
+        src/frontend/qt/main_window_workboy.cpp
+        src/frontend/qt/main_window_workboy_tests.cpp
         src/frontend/qt/main_window_link.cpp
         src/frontend/qt/main_window_link_tests.cpp
         src/frontend/qt/printer_window.cpp
@@ -247,7 +249,7 @@ if(CUPIDGB_ENABLE_TESTS)
     enable_testing()
     foreach(test_name IN ITEMS
         smoke gb gbs startup reset rtc rtc_timing rtc_dma rtc_state divider_phase
-        serial serial_selection serial_state link printer printer_state ppu pixel_timing
+        serial serial_selection serial_state link printer printer_state workboy workboy_state ppu pixel_timing
         pixel_timing_state scy_latch stat apu wave_retrigger wave_history wave_history_state
         audio_synthesis audio_filter audio_state audio_publication audio_clock cpu_timing cpu_lockup
         dma oam_bus video_bus vram_bus vram_quiet bus state state_ram bess bess_bank_defaults bess_mmm01 battery

@@ -318,6 +318,15 @@ bool MainWindow::finishPlayback(PlaybackWork &work, PlaybackResult *result, bool
 }
 
 bool MainWindow::runFrame(Playback playback, PlaybackResult *result) {
+    // Rewind replays an earlier interval for presentation. Its guest commands
+    // must not publish the same persistent accessory clock write again.
+    const QPointer<MainWindow> self(this);
+    const bool previousClockGate = suppressWorkBoyClockWrites_;
+    suppressWorkBoyClockWrites_ |= playback != Playback::Forward;
+    const auto clockWrites = qScopeGuard([self, previousClockGate] {
+        if (self)
+            self->suppressWorkBoyClockWrites_ = previousClockGate;
+    });
     if (linkSession_)
         return playback == Playback::Forward && runLinkedFrame(result);
     PlaybackWork work;

@@ -46,6 +46,7 @@
 #include "state_startup.h"
 #include "tama5_internal.h"
 #include "vram_bus.h"
+#include "workboy_internal.h"
 
 #include <limits.h>
 #include <stdlib.h>
@@ -994,13 +995,19 @@ static size_t current_hardware_size(const CupidGb *gb, size_t *startup_length) {
            (cupid_gb_model_is_early_cgb(gb->model) ? STATE_PCM_READ_SIZE : 0u);
 }
 
+static size_t current_accessory_size(const CupidGb *gb) {
+    if (cupid_gb_printer_attached(gb))
+        return STATE_ACCESSORY_DESCRIPTOR_SIZE + PRINTER_STATE_WIRE_SIZE;
+    if (cupid_gb_workboy_attached(gb))
+        return STATE_ACCESSORY_DESCRIPTOR_SIZE + WORKBOY_STATE_WIRE_SIZE;
+    return STATE_ACCESSORY_DESCRIPTOR_SIZE;
+}
+
 size_t cupid_gb_state_size(const CupidGb *gb) {
     if (!ready(gb))
         return 0;
     const size_t hardware = current_hardware_size(gb, NULL);
-    return hardware ? hardware + STATE_ACCESSORY_DESCRIPTOR_SIZE +
-                          (cupid_gb_printer_attached(gb) ? PRINTER_STATE_WIRE_SIZE : 0)
-                    : 0;
+    return hardware ? hardware + current_accessory_size(gb) : 0;
 }
 
 static void put_u32(uint8_t *data, uint32_t value) {
@@ -1017,7 +1024,7 @@ static uint32_t get_u32(const uint8_t *data) {
 /* The caller supplies a geometry-derived offset. A descriptor cannot move itself
  * by declaring another payload length or leave unparsed bytes after the device. */
 static size_t accessory_wire_size(const uint8_t *data, size_t length, size_t offset,
-                                  const uint8_t **printer_payload) {
+                                  uint32_t version) {
     if (offset > length || length - offset < STATE_ACCESSORY_DESCRIPTOR_SIZE)
         return 0;
     const uint8_t *accessory = data + offset;
@@ -1030,14 +1037,16 @@ static size_t accessory_wire_size(const uint8_t *data, size_t length, size_t off
     } else if (accessory[0] == CUPID_GB_SERIAL_DEVICE_PRINTER) {
         if (accessory[1] != PRINTER_STATE_CODEC_VERSION || payload_size != PRINTER_STATE_WIRE_SIZE)
             return 0;
+    } else if (accessory[0] == CUPID_GB_SERIAL_DEVICE_WORKBOY) {
+        if (version < STATE_VERSION_V30 || accessory[1] != WORKBOY_STATE_CODEC_VERSION ||
+            payload_size != WORKBOY_STATE_WIRE_SIZE)
+            return 0;
     } else {
         return 0;
     }
     const size_t size = STATE_ACCESSORY_DESCRIPTOR_SIZE + (size_t)payload_size;
     if (length - offset != size)
         return 0;
-    if (printer_payload)
-        *printer_payload = payload_size ? accessory + STATE_ACCESSORY_DESCRIPTOR_SIZE : NULL;
     return size;
 }
 
@@ -1056,12 +1065,14 @@ static bool overlaps_live_storage(const CupidGb *gb, const void *data, size_t si
     if (!gb || !data)
         return false;
     const CupidGbPrinter *printer = cupid_gb_printer_attached(gb);
+    const CupidGbWorkBoy *workboy = cupid_gb_workboy_attached(gb);
     return overlaps(data, size, gb, sizeof(*gb)) ||
            (gb->rom && overlaps(data, size, gb->rom, gb->rom_capacity)) ||
            (gb->cartridge_ram_heap &&
             overlaps(data, size, gb->cartridge_ram_heap, gb->cartridge_ram_capacity)) ||
            (gb->mbc6_flash && overlaps(data, size, gb->mbc6_flash, CUPID_GB_MBC6_STORAGE_SIZE)) ||
-           (printer && overlaps(data, size, printer, sizeof(*printer)));
+           (printer && overlaps(data, size, printer, sizeof(*printer))) ||
+           (workboy && overlaps(data, size, workboy, sizeof(*workboy)));
 }
 
 static bool valid_written_pointer(const CupidGb *gb, const uint8_t *data, size_t capacity,
@@ -1088,8 +1099,8 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
     if (!hardware_size)
         return CUPID_GB_STATE_INVALID;
     const CupidGbPrinter *printer = cupid_gb_printer_attached(gb);
-    const size_t size =
-        hardware_size + STATE_ACCESSORY_DESCRIPTOR_SIZE + (printer ? PRINTER_STATE_WIRE_SIZE : 0);
+    const CupidGbWorkBoy *workboy = cupid_gb_workboy_attached(gb);
+    const size_t size = hardware_size + current_accessory_size(gb);
     if (!data || capacity < size) {
         return CUPID_GB_STATE_BUFFER_TOO_SMALL;
     }
@@ -1099,7 +1110,8 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
         !valid_hardware(gb, sections, &camera) ||
         (gb->mbc6_flash && !cupid_gb_mbc6_state_valid(gb)) ||
         (gb->header.mbc_type == CUPID_GB_TAMA5 && !cupid_gb_tama5_state_valid(gb)) ||
-        (printer && !cupid_gb_printer_state_valid(&printer->state, gb))) {
+        (printer && !cupid_gb_printer_state_valid(&printer->state, gb)) ||
+        (workboy && !cupid_gb_workboy_state_valid(&workboy->state))) {
         return CUPID_GB_STATE_INVALID;
     }
     memset(data, 0, STATE_HEADER_SIZE);
@@ -1188,6 +1200,14 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
                                            accessory + STATE_ACCESSORY_DESCRIPTOR_SIZE,
                                            PRINTER_STATE_WIRE_SIZE))
             return CUPID_GB_STATE_INVALID;
+    } else if (workboy) {
+        accessory[0] = CUPID_GB_SERIAL_DEVICE_WORKBOY;
+        accessory[1] = WORKBOY_STATE_CODEC_VERSION;
+        put_u32(accessory + 4, WORKBOY_STATE_WIRE_SIZE);
+        if (!cupid_gb_workboy_state_encode(&workboy->state,
+                                           accessory + STATE_ACCESSORY_DESCRIPTOR_SIZE,
+                                           WORKBOY_STATE_WIRE_SIZE))
+            return CUPID_GB_STATE_INVALID;
     }
     integrity(data, size, data + 96);
     if (written) {
@@ -1244,8 +1264,10 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
     if (live_audio && (!cupid_gb_audio_state_valid(gb) || !cupid_gb_sgb_startup_output_valid(gb)))
         return CUPID_GB_STATE_INVALID;
     CupidGbPrinter *printer = cupid_gb_printer_attached(gb);
+    CupidGbWorkBoy *workboy = cupid_gb_workboy_attached(gb);
     if (!data || !cupid_gb_cartridge_source_fits(gb, data, length) ||
         (printer && overlaps(data, length, printer, sizeof(*printer))) ||
+        (workboy && overlaps(data, length, workboy, sizeof(*workboy))) ||
         length < STATE_HEADER_SIZE || !cupid_gb_state_has_magic(data, length)) {
         return CUPID_GB_STATE_INVALID;
     }
@@ -1357,6 +1379,8 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
     unsigned sections = version >= STATE_VERSION_V5 ? state_sections(gb) : 0;
     size_t accessory_size = 0;
     const uint8_t *printer_payload = NULL;
+    CupidGbWorkBoyState workboy_candidate = {0};
+    bool has_workboy_state = false;
     if (version >= STATE_VERSION_V12) {
         device_size = extended_wire_size(sections);
         const size_t history_offset = device_size + tail_size + infrared_size + clock_size +
@@ -1365,9 +1389,10 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
         if (version == STATE_VERSION_V19) {
             const bool wave_layout =
                 gb->cartridge_ram_size <= CUPID_GB_INLINE_RAM_SIZE &&
-                accessory_wire_size(data, length, history_offset + STATE_WAVE_HISTORY_SIZE, NULL);
+                accessory_wire_size(data, length, history_offset + STATE_WAVE_HISTORY_SIZE,
+                                    version);
             const bool ram_layout =
-                accessory_wire_size(data, length, history_offset + ram_capacity, NULL) &&
+                accessory_wire_size(data, length, history_offset + ram_capacity, version) &&
                 get_u32(data + history_offset) == gb->cartridge_ram_size;
             /* The earlier wave writer could not load larger cartridges.
              * Never infer a missing SRAM tail from the receiving timeline. */
@@ -1389,9 +1414,18 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
             return CUPID_GB_STATE_INVALID;
         const size_t accessory_offset = protocol_offset + protocol_size + mbc6_size + tama5_size +
                                         extra_oam_size + pcm_read_size;
-        accessory_size = accessory_wire_size(data, length, accessory_offset, &printer_payload);
+        accessory_size = accessory_wire_size(data, length, accessory_offset, version);
         if (!accessory_size)
             return CUPID_GB_STATE_INVALID;
+        if (data[accessory_offset] == CUPID_GB_SERIAL_DEVICE_PRINTER)
+            printer_payload = data + accessory_offset + STATE_ACCESSORY_DESCRIPTOR_SIZE;
+        if (data[accessory_offset] == CUPID_GB_SERIAL_DEVICE_WORKBOY) {
+            const uint8_t *payload = data + accessory_offset + STATE_ACCESSORY_DESCRIPTOR_SIZE;
+            if (!cupid_gb_workboy_state_decode(&workboy_candidate, payload,
+                                               WORKBOY_STATE_WIRE_SIZE))
+                return CUPID_GB_STATE_INVALID;
+            has_workboy_state = true;
+        }
         /* Geometry comes from the receiving cartridge. Check it before any
          * allocation or decode; a forged count cannot move the accessory. */
         if (ram_size &&
@@ -1788,6 +1822,12 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
     *gb = *candidate;
     if (printer)
         printer->state = *printer_candidate;
+    if (workboy) {
+        if (has_workboy_state)
+            workboy->state = workboy_candidate;
+        else
+            cupid_gb_workboy_reset(workboy);
+    }
     free(printer_candidate);
     candidate->cartridge_ram_heap = NULL;
     candidate->mbc6_flash = NULL;

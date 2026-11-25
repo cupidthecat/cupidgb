@@ -75,5 +75,6 @@ bool cupid_gb_reset_with_allocator(CupidGb *gb, CupidGbResetKind kind, void *(*a
 void cupid_gb_reset_restore_cartridge(CupidGb *next, const CupidGb *previous);
 void cupid_gb_reset_restore_host(CupidGb *next, const CupidGb *previous);
 void cupid_gb_reset_commit(CupidGb *gb, CupidGb *next);
+void cupid_gb_reset_serial_device(CupidGb *gb);
 
 #endif

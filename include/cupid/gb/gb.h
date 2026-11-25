@@ -354,6 +354,7 @@ typedef bool (*CupidGbSerialSampleCallback)(const struct CupidGb *gb, void *user
 typedef enum CupidGbSerialDevice {
     CUPID_GB_SERIAL_DEVICE_NONE = 0,
     CUPID_GB_SERIAL_DEVICE_PRINTER = 1,
+    CUPID_GB_SERIAL_DEVICE_WORKBOY = 2,
 } CupidGbSerialDevice;
 
 typedef struct CupidGbSerialLink {

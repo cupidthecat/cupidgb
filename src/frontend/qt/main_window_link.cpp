@@ -248,6 +248,8 @@ bool MainWindow::connectLink(MainWindow *partner) {
         return false;
     setPrinterConnected(false);
     partner->setPrinterConnected(false);
+    setWorkBoyConnected(false);
+    partner->setWorkBoyConnected(false);
     auto session = std::make_shared<LinkSession>();
     session->windows = {this, partner};
     // A launched bit belongs to its window's cable endpoint. Resets, state loads
@@ -266,6 +268,7 @@ bool MainWindow::connectLink(MainWindow *partner) {
         window->resetDebuggerTimeline();
         window->disconnectAction_->setChecked(false);
         window->printerAction_->setChecked(false);
+        window->workBoyAction_->setChecked(false);
         window->statusBar()->showMessage(
             "Link cable connected. Pause and playback speed apply to both games.", 5000);
     }

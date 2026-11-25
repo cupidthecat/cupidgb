@@ -15,6 +15,25 @@ The behavior reference remains revision
 private, independently built tools. Reference code, game images, firmware, saves and
 captured commercial content are excluded from the product and public commits.
 
+## WorkBoy serial keyboard
+
+Generated ROMs on DMG and Color hardware match the pinned keyboard poll and
+clock traces. The Color checks cover normal and fast serial. Tests check
+Shift injection, replacement of a pending key, the clock read and write
+packets, and 641 bit positions where a device snapshot can resume a transfer.
+
+Native snapshot checks resume a key halfway through a serial byte and
+continue a clock response already sampled from the outgoing session. They
+reject malformed device records while preserving the receiving console and
+its printer, keyboard or cable. Portable loading clears the keyboard
+protocol while keeping its connection. Same-model cartridge replacement
+keeps the pending key. Console reset starts a fresh protocol.
+
+Qt workflow tests exercise the menu, keyboard events, clock offset
+persistence, rewind preview, and changes between the cable, printer and
+keyboard. They use a generated cartridge and drive the serial registers.
+Physical keyboard behavior and original accessory software remain unverified.
+
 ## Complete local gate
 
 | Configuration | Result |

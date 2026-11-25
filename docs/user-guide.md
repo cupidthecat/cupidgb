@@ -137,7 +137,7 @@ Settings > Highpass Filter offers None (Keep DC Offset), Accurate and Preserve W
 
 Audio > Audio Channels enables or mutes Square Channel 1, Square Channel 2, Wave Channel and Noise Channel. Alt+1 through Alt+4 are the default shortcuts; Settings can reassign them. Channel choices last for the current application session and also affect recordings. They do not change the game's sound registers. Global listening mute and volume remain separate.
 
-Audio > Start Audio Recording writes stereo 16-bit PCM into a WAVE file. Choose the action again to stop. Recording captures forward handheld output before host volume, mute, and resampling. Pause and rewind add no samples. The adapter introduction and its silent lead-in play through the selected audio device but add no samples to the recording. Reset, Quick Reset, Reload and native console resets keep the recording and its sample rate. Cartridge replacement, closing, or an explicit core sample-rate change ends the file. Loading a state continues the recording with the restored forward timeline.
+Audio > Start Audio Recording writes stereo 16-bit PCM into a WAVE file. Choose the action again to stop. Recording captures forward handheld output before host volume, mute, and resampling. Pause and rewind add no samples. The adapter introduction and its silent lead-in play through the selected audio device but add no samples to the recording. Reset, Quick Reset, Reload, Hot Swap Cartridge and native console resets keep the recording and its sample rate. Opening another cartridge, closing, or an explicit core sample-rate change ends the file. Loading a state continues the recording with the restored forward timeline.
 
 ## Link play
 
@@ -154,6 +154,12 @@ Current states retain pending printer packets and jobs when a printer is attache
 Reset clears pending printer work while retaining the attachment and existing paper, including when it refreshes cartridge assets. Opening a separate cartridge or closing the session disconnects the printer. Paper remains host output, and PNG export and system printing use their explicit controls.
 
 The interface reports unavailable audio devices. A successful file recording proves sample capture, not audible host playback quality. Backend idle events and hardware sound differences remain under investigation.
+
+## WorkBoy keyboard
+
+Open a cartridge and choose Emulation > Connect > WorkBoy Keyboard. When the software starts the keyboard protocol, the cartridge window sends letters, numbers, punctuation, navigation keys and Shift to the accessory. F1 through F9 select the WorkBoy functions. Choose Connect > None to return to the ordinary game controls. Connecting a printer or another cartridge window also disconnects the keyboard.
+
+The WorkBoy clock follows local time until guest software sets it. CupidGB saves the offset as a preference. Native states and rewind resume a pending key or clock transfer when the keyboard is connected. A reset or portable state load clears the pending transfer. A same-model hot swap keeps it.
 
 ## Screenshots
 

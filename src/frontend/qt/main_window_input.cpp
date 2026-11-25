@@ -95,6 +95,7 @@ void MainWindow::setPausedLocal(bool value, bool retainInput) {
 }
 
 void MainWindow::releaseKeys(bool resetAudio) {
+    releaseWorkBoyKeys();
     if (!motionFocusActive_ && motionSource_ == MotionSource::Controller && motionInputAllowed())
         releaseMouseInput();
     else
@@ -487,6 +488,15 @@ bool MainWindow::eventFilter(QObject *object, QEvent *event) {
         resetControllerRumble();
     }
     const bool menuRelease = menuInputSuspended_ && widget && objectBelongsTo(widget, this);
+    if (!stateOperation_ && (!paused_ || event->type() == QEvent::KeyRelease) &&
+        ((!menuInputSuspended_ && (object == display_ || object == this)) ||
+         (menuRelease && event->type() == QEvent::KeyRelease)) &&
+        (event->type() == QEvent::ShortcutOverride || event->type() == QEvent::KeyPress ||
+         event->type() == QEvent::KeyRelease) &&
+        handleWorkBoyKey(static_cast<QKeyEvent *>(event), event->type() != QEvent::KeyRelease,
+                         event->type() == QEvent::ShortcutOverride) &&
+        event->type() != QEvent::KeyRelease)
+        return true;
     if (menuRelease && event->type() == QEvent::MouseButtonRelease && mouseButtonA_) {
         mouseButtonA_ = false;
         if (!stateOperation_ && !(paused_ && debuggerInputPaused_))

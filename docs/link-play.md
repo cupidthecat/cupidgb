@@ -13,7 +13,7 @@ For two copies of the same game, put each cartridge copy in a separate writable 
 
 Choose **Emulation > Connect > None** to disconnect. Closing either cartridge also disconnects the pair. The remaining window continues as an independent session. A failed save that prevents closing keeps the cartridge and connection available for retry.
 
-A console has one serial accessory connection. Connecting a Game Boy Printer replaces that window's cable connection. Connecting another cartridge replaces the printer or previous cable connection.
+A console has one serial connection. Connecting a Game Boy Printer or WorkBoy keyboard replaces that window's cable connection. Connecting another cartridge replaces the accessory or previous cable connection.
 
 ## Controls for both players
 
@@ -43,6 +43,6 @@ Each window retains its own audio device, volume, mute, channel controls and WAV
 
 ## Scope
 
-The current connection supports two local windows. Network transport, additional cable participants, keyboard accessories and physical infrared devices remain pending. A working connection does not establish compatibility with every multiplayer game or hardware revision. See the [parity checklist](parity.md) and [link validation record](validation-link.md) for measured coverage and remaining gaps.
+The current connection supports two local windows. Network transport, additional cable participants and physical infrared devices remain pending. See the [parity checklist](parity.md) and [link validation record](validation-link.md) for measured coverage and remaining gaps.
 
 The [core API](core-api.md#paired-console-execution) describes instruction scheduling, callback ownership and endpoint replacement for other frontends.

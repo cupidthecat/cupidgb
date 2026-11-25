@@ -45,7 +45,8 @@ bool MainWindow::smokeTest(SmokeWorkflow workflow) {
     if (!playbackSmokeTest(directory.path()) || !startupSmokeTest(directory.path()) ||
         !rtcSmokeTest(directory.path()) || !audioPolicySmokeTest(directory.path()) ||
         !resetSmokeTest(directory.path()) || !hotSwapSmokeTest(directory.path()) ||
-        !cameraSmokeTest(directory.path()) || !cameraSourceSmokeTest(directory.path()) ||
+        !workBoySmokeTest(directory.path()) || !cameraSmokeTest(directory.path()) ||
+        !cameraSourceSmokeTest(directory.path()) ||
         (workflow == SmokeWorkflow::All &&
          (!largeCartridgeRamSmokeTest(directory.path()) || !sgbSmokeTest(directory.path()))))
         return smokeFailure(__FILE__, __LINE__);
