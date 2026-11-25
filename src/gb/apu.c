@@ -433,19 +433,21 @@ static void pulse_frequency_reload(CupidGbApu *apu, unsigned channel) {
     }
 }
 
-static void color_pulse_high_write(CupidGbApu *apu, unsigned channel, uint16_t old_frequency,
-                                   bool trigger) {
+static void pulse_high_write(CupidGb *gb, unsigned channel, uint16_t old_frequency, bool trigger) {
+    CupidGbApu *apu = &gb->apu;
     CupidGbPulseTiming *timing = &apu->pulse_timing[channel];
     uint16_t frequency = channel ? apu->ch2_freq : apu->ch1_freq;
     uint8_t *index = channel ? &apu->ch2_duty_pos : &apu->ch1_duty_pos;
     bool active = channel ? apu->ch2_on : apu->ch1_on;
-    if (timing->edge_age > 2) {
+    const unsigned last_cancel_dot = cupid_gb_model_is_cgb(gb->model) ? 2u : 1u;
+    if (timing->edge_age > last_cancel_dot) {
         return;
     }
     /* The high frequency bits also gate the duty clock. Removing the high-bank
      * input during its reload window cancels that phase advance, while the
-     * already latched digital sample survives until the next frequency edge. A fresh
-     * trigger clears eligibility for that cancellation while its delay remains. */
+     * latched digital sample survives until the next frequency edge. Monochrome
+     * accepts the change only on the first audio tick. A trigger's start delay
+     * also prevents cancellation. */
     if (active && !timing->start_delay && !trigger && old_frequency >= 0x700 && frequency < 0x700) {
         *index = (uint8_t)((*index + 7u) & 7u);
         timing->output_blocked = false;
@@ -1214,9 +1216,7 @@ void cupid_gb_apu_on_write(CupidGb *gb, uint8_t off, uint8_t val) {
             old_len_en = apu->ch1_len_en;
             apu->ch1_len_en = (val & 0x40u) != 0u;
             trigger = (val & 0x80u) != 0u;
-            if (cupid_gb_model_is_cgb(gb->model)) {
-                color_pulse_high_write(apu, 0, old_frequency, trigger);
-            }
+            pulse_high_write(gb, 0, old_frequency, trigger);
             pulse_frequency_reload(apu, 0);
 
             if (pulse_or_wave_length_write_clocks(gb, old_len_en, apu->ch1_len_en)) {
@@ -1269,9 +1269,7 @@ void cupid_gb_apu_on_write(CupidGb *gb, uint8_t off, uint8_t val) {
             old_len_en = apu->ch2_len_en;
             apu->ch2_len_en = (val & 0x40u) != 0u;
             trigger = (val & 0x80u) != 0u;
-            if (cupid_gb_model_is_cgb(gb->model)) {
-                color_pulse_high_write(apu, 1, old_frequency, trigger);
-            }
+            pulse_high_write(gb, 1, old_frequency, trigger);
             pulse_frequency_reload(apu, 1);
 
             if (pulse_or_wave_length_write_clocks(gb, old_len_en, apu->ch2_len_en)) {

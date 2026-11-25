@@ -554,6 +554,40 @@ static void test_monochrome_pulse_duty_hold(void) {
     }
 }
 
+static void test_monochrome_pulse_high_bank_edge(void) {
+    const CupidGbModel models[] = {CUPID_GB_MODEL_DMG0, CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_MGB,
+                                   CUPID_GB_MODEL_SGB, CUPID_GB_MODEL_SGB2};
+    for (unsigned model = 0; model < sizeof(models) / sizeof(models[0]); ++model)
+        for (unsigned channel = 0; channel < 2; ++channel)
+            for (unsigned age = 0; age <= 2; ++age) {
+                CupidGb gb = {0};
+                gb.model = models[model];
+                cupid_gb_sgb_startup_reset(&gb, false);
+                const uint16_t base = channel ? 0xff16 : 0xff11;
+                const uint8_t *position = channel ? &gb.apu.ch2_duty_pos : &gb.apu.ch1_duty_pos;
+                const uint16_t *timer = channel ? &gb.apu.ch2_timer : &gb.apu.ch1_timer;
+                const CupidGbPulseTiming *timing = &gb.apu.pulse_timing[channel];
+                cupid_gb_write_u8(&gb, 0xff26, 0x80);
+                cupid_gb_write_u8(&gb, base, 0xc0);
+                cupid_gb_write_u8(&gb, base + 1, 0xf0);
+                cupid_gb_write_u8(&gb, base + 2, 0xf3);
+                cupid_gb_write_u8(&gb, base + 3, 0x87);
+                tick_audio(&gb, *timer + age);
+                assert(*position == 1 && timing->edge_age == age && timing->output_high);
+                assert(gb.apu.dac_sample[channel] == 15);
+
+                cupid_gb_write_u8(&gb, base + 3, 0x06);
+                const unsigned retained_position = age < 2 ? 0 : 1;
+                const unsigned next_edge = (age < 2 ? 1076u : 52u) - age;
+                assert(*position == retained_position && *timer == next_edge);
+                assert(timing->output_high && gb.apu.dac_sample[channel] == 15);
+                tick_audio(&gb, next_edge - 1);
+                assert(*position == retained_position && timing->output_high);
+                tick_audio(&gb, 1);
+                assert(*position == retained_position + 1);
+            }
+}
+
 static void test_pulse_dac_hold(void) {
     for (unsigned color = 0; color < 2; ++color) {
         for (unsigned channel = 0; channel < 2; ++channel) {
@@ -1752,6 +1786,7 @@ int main(void) {
     test_pulse_dac_hold();
     test_monochrome_pulse_clock_lifetime();
     test_monochrome_pulse_duty_hold();
+    test_monochrome_pulse_high_bank_edge();
     test_monochrome_envelope_retrigger_between_divider_edges();
     test_color_pulse_phantom_trigger();
     test_color_pulse_clock_and_held_duty();

@@ -162,9 +162,15 @@ the extra poll. The replay now matches every instruction interval across
 22,294,718 instructions. The Mortal Kombat II replay still matches across
 21,219,482 instructions. Both routes end with matching clocks, CPU
 registers, and native pixels. Six sampled images in Mortal Kombat I and
-151 in Mortal Kombat II differ along the way, and the paired PCM still
-differs later in both games. The envelope checkpoint records those audio
-differences. [Monochrome envelope validation](validation-audio.md#monochrome-envelope-edges)
+151 in Mortal Kombat II differ along the way when the probe samples the
+live framebuffer at fixed guest clocks. The first three differences
+occur partway through scanline 31. A separate comparison of published
+frames matches all 3,301 Mortal Kombat I images and 3,001 of 3,004 Mortal
+Kombat II images. The three remaining presentation differences affect
+four, ten, and five pixels on the top row.
+
+The paired PCM still differs later in both games. The audio validation
+records the envelope and pulse timing changes. [Monochrome pulse validation](validation-audio.md#monochrome-pulse-frequency-writes)
 
 All 8,680 generated timing cases match the pinned comparison. The cases
 cover DMG ABC, Pocket, CGB 0/C/E, SGB, and SGB2. They vary the placement

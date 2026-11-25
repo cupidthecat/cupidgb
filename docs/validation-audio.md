@@ -228,3 +228,35 @@ records the matching cross-platform replays and remaining timing gaps.
 Release passed 111 tests on Windows and 109 on Linux. The Qt desktop
 workflow also passed at 125% device scale on both. The APU, audio publication,
 audio state, and native-state tests passed ASan and UBSan on Linux.
+
+## Monochrome pulse frequency writes
+
+In the Mortal Kombat I replay, a write to NR24 changed pulse 2 from
+frequency `0x7f3` to `0x6f3` on the reload tick. CupidGB loaded the new
+1,076-clock period and retained a duty step that should have been
+canceled. The oscillator then changed the output one step early. The
+fix cancels the step at that edge while keeping the digital sample
+already held by the channel.
+
+A generated cartridge reproduces the edge without commercial inputs.
+The two neighboring write placements, a write that stays in the high
+frequency range, and a trigger write keep their previous behavior.
+Across 361 write placements on DMG ABC, two of the three mismatches are
+fixed. The remaining case is well past the reload tick, when the pinned
+comparison backs up duty after the countdown happens to equal the newly
+written low-byte period.
+The core regression checks both pulse channels on DMG 0, DMG ABC, Pocket,
+SGB, and SGB2. It verifies the new countdown, the held sample and the
+next duty step on either side of the reload boundary.
+
+The active Mortal Kombat I route matches its first 2,414,746 stereo
+frames, about 54.76 seconds at 44.1 kHz. Differing 16-bit channel samples
+fell from 133,292 to 21,707 out of 4,873,132. The peak difference fell
+from 9,248 to 5,894. The active Mortal Kombat II PCM comparison retains
+its 3,229,216 differing channel samples. Both replays still match the
+pinned guest execution, final clocks, registers and terminal images.
+
+The Windows and Linux builds produced identical PCM and exact state
+continuations for both active routes. The DMG and CGB-E sound ROMs each
+reported twelve passing cases on both hosts, with matching PCM and image
+checksums across hosts.
