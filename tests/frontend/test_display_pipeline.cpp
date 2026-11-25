@@ -25,10 +25,12 @@
 #include <QColor>
 #include <QColorSpace>
 #include <QCryptographicHash>
+#include <QSemaphore>
 #include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstdio>
+#include <future>
 
 namespace {
 QByteArray canonicalRgbaHash(const QImage &image) {
@@ -69,6 +71,193 @@ std::array<QImage, 2> generatedFilterFrames() {
     assert(canonicalRgbaHash(frames[1]) ==
            "391bdf890051695612fb5acc2aa882cf2f427f3f2227d4da222820b0758d4f1c");
     return frames;
+}
+
+std::array<QImage, 2> generatedParallelEdgeFrames() {
+    const std::array<QRgb, 8> colors = {
+        qRgb(21, 38, 59),   qRgb(227, 192, 114), qRgb(231, 69, 82), qRgb(47, 154, 116),
+        qRgb(69, 101, 165), qRgb(226, 230, 238), qRgb(1, 2, 3),     qRgb(253, 254, 255)};
+    const std::array<unsigned, 35> cells = {0, 0, 2, 1, 1, 3, 3, 0, 2, 2, 1, 4, 3, 5, 2, 2, 1, 1,
+                                            4, 4, 5, 3, 3, 0, 5, 5, 4, 2, 3, 0, 0, 5, 0, 2, 2};
+    std::array<QImage, 2> frames = {QImage(160, 144, QImage::Format_RGB32),
+                                    QImage(160, 144, QImage::Format_RGB32)};
+    for (size_t phase = 0; phase < frames.size(); ++phase) {
+        for (int y = 0; y < frames[phase].height(); ++y) {
+            for (int x = 0; x < frames[phase].width(); ++x) {
+                const size_t cell = size_t(((y + int(phase)) % 5) * 7 + (x + int(phase)) % 7);
+                const size_t region = size_t(x / 21 + 3 * (y / 15));
+                frames[phase].setPixel(x, y,
+                                       colors[(cells[cell] + region + phase) % colors.size()]);
+            }
+        }
+    }
+    assert(canonicalRgbaHash(frames[0]) ==
+           "07e3abb85011ee34f40ab522e67f1e66ba68a8dc5c279261cdbf7d9354a96b6d");
+    assert(canonicalRgbaHash(frames[1]) ==
+           "c872edab629b5d1b8a658b72fc70c45f98732003b4389f0c8426deaca6eb7c72");
+    return frames;
+}
+
+void testParallelEdgeCaptures() {
+    const std::array filters = {ScalingFilter::Scale2x, ScalingFilter::Scale4x,
+                                ScalingFilter::AntialiasedScale2x,
+                                ScalingFilter::AntialiasedScale4x};
+    const std::array names = {"Scale2x", "Scale4x", "AntialiasedScale2x", "AntialiasedScale4x"};
+    // The first two sizes straddle the 160,000-pixel parallel threshold.
+    // Integer and uneven fractional scaling also cross repeated-row boundaries.
+    const std::array sizes = {QSize(401, 399), QSize(400, 400), QSize(480, 432), QSize(523, 417)};
+    // Captured from the serial a37a680 pipeline, using only the generated frames
+    // above. Hashes encode top-down RGBA; phases are Disabled, Simple, Accurate
+    // even, Accurate odd. Every pixel, including the outer rows, is opaque.
+    const char *hashes[4][4][4] = {
+        {
+            // Scale2x
+            {"e72ab047bab24f4120b28f020166d9f5c258b6676de33beeb26193f9cbf747cb",
+             "c92df34581d1d2965e5b9f26de49ee85ef0003c7ff12cd5837fbff8eee86bee2",
+             "cb044edf0deb70bc64f550f05c95afaab0fa2b2ae23926d087d7e2b1f16ec9af",
+             "f29db6560a30262e4f278318b88a6d2725ac17e1434dd9d2d63355867670f2a4"},
+            {"ccdc728a0d2f3fecd441fa50257541f67634e6fe126f5de053184943fa4ee1d4",
+             "a6003a946c30416a6948e9f4c2f134cb5dae2c6b5e0e54b31a0dba37c51904dd",
+             "ac58b21ea3894b79e792b9c77177d01c63cc70772038109da36b1cfd2063ff7f",
+             "ecec6552bf78f6d176646413bdc986ad276429fa5dc353793b6a506bf73c0959"},
+            {"4745da2e55bf06e632425dedcc16d25fa1c3e67975569af0bff5b258ec9cd024",
+             "4acbfdf8427280b1d9d45633070f44e2df9006f3eba22fc740e09b94086550ee",
+             "2df6668410e1e5e207334b1682c5c9644bf1418ec0f5d406010cfda9025d644f",
+             "02e821f005f40b1896a39ed8674d4c151a18e3b028668134ec911e6824b8edf6"},
+            {"d7a383a2ac07c9858e77fb95564cad32abb8fc40b0d74d862c684dad63e44e7d",
+             "e1c4c3b6a843674f17eae212ab2bdd6d85bedce847a3275164a4f1ace9d91536",
+             "f0ecb08de344c1421ffdebe24208b07eb2d8da15650aec7a3cca3972c15b1d16",
+             "1231dc6f199b2079b68bdf50d8566710655598286b47a872a90ed1a65be32db7"},
+        },
+        {
+            // Scale4x
+            {"0f7562c4b441964db969e85e49d979330873f3489c189207186d2902183e361b",
+             "461dc82d1b8d0843e5bb083a9f8cf9ba21270694f7eb0f3b34d5efa8c4916188",
+             "f547c9c42330650592d92b5e13d219e1f5e17044e0773336d47dfe22cf189a6e",
+             "cbce6df2acda087e616a1418e0680b1b23420fb9e943a7ef95abca1ef5a4bc69"},
+            {"79b1fa50dcb1c7223b34d6bd32f03fbff4c1697e56f43e5a01bb5d1272c2bd4b",
+             "9973ed22ebc8311cabb3222cc7c662cd3cef2924d7727188f82d5449d9e02841",
+             "80814b362cf37922c8533f77813b6c9640d0eeb8fcbaf9eaf580d4f8b6f7a089",
+             "964762539102630a6561deb8d2734f7ab0b75203755e3d7a985a21015ad4072d"},
+            {"cbd5fb32dd603cf6cf77b4b427ca5378782ce4f944916dfa8c009bd054412a17",
+             "b809cd97d22ba40e9f295cfc636c29eaba3109718c63e67f92b35e8a642befd8",
+             "294992be7ef80321307b813c165f3a3a3d446f3308ef178b08641b8062c89c4c",
+             "406606d7e8f30378c3bd1fe31a1735fa861552f1950289290e303aafb5101139"},
+            {"fa3dbbd7c53f9cdef071c287780fc0cbabd2803339548100f73fea483b81de5a",
+             "c30ca29af0f9810fccab70a5a97eca799c778008b784b26cfedfe113175c1fba",
+             "19d10b7be9d4303e6afc58b1840c40b7244d60ba259cfa35e3de6d5b3bcbe059",
+             "ce779e625603de1bc8e1374422f45075ada81225d9ac78e7e5f759d0d4e6ca7f"},
+        },
+        {
+            // AntialiasedScale2x
+            {"36bb7af7d29b957124c27ea69709805d1bae035049b5575d30b8a87ceb65660f",
+             "443f878f4ad620295b27c2a213468d4c229c591a860cab6a7b2e1bf5ed7872e9",
+             "d33e9fce61bd02081916008fa89d79816dda0e76fb88bbc5aa44895e337c068a",
+             "36288ce920c463e5234a0907d97d0662d50752b761b087da620714f8f11ede4b"},
+            {"a94b99eea6674bead1ea9b43d3a7453a3ba64637e4099efd79ec26101eed03d2",
+             "a7c1f9ec072c7a89f553e62141d9e953f5e751626371a2ea1a6112d850e0d13f",
+             "b3f6df66700fc8477302210943287dfee8db9b80b83094933b46d4986d836be0",
+             "613d0466a7b1ad2e779cd87e5a2d74ab10b59e1883acab72fb0aa7d5538c7c18"},
+            {"c93ea952a41515168b56e48d48ae3f61df9c5562a90aec3854cad6ca08de433e",
+             "326f16966cc7a2e70f27c5d10b6f61602dd9d7c5a41e1cf28dd9004994521773",
+             "b6804f58c9070d0ba7b263bb05f83c5d837dc8a0807058e2a356ac3ac3db88a8",
+             "67d073bc76ac16a76043d9b705d99a9224a90ec1368144f7b6490a1e2a1bf98f"},
+            {"db732fcd0ac07f5aa608ef37a016690f27b667630341b7d0518ac73e75aa4028",
+             "abf9fa7cf3592b1d76505f142fc4b7d8a44710f9d54f38d74e7a8f68964f7bf5",
+             "844549768394128a0771432503210410eca4f38385a7a6cf84a59f702cef5d26",
+             "8e928c55bb66619b55efdbbde259f397d6d23433f246f9b586f624a686668e55"},
+        },
+        {
+            // AntialiasedScale4x
+            {"9dd1b9387d6fdf6d3e871b6e7a05d6e9b817202ed2f0e266cc20cf6e69ec3c0f",
+             "cc576759396fc68cb31cc5ef89fed5412462df58fec35624b8eae388ec3772c2",
+             "23fa3fb9449072e0e503455390a2c6b66a2391e9c958a2a7b2c45744b042a070",
+             "7f325a9fda8e07cc97d5e558b137581955a89112b8668adbdff43298dd84bfdc"},
+            {"3c660b9d96713d9f587fdfe7937f42965ae6bb451a905d03fa46cde9c5178558",
+             "82b4f6edad44fbfb9969255a983ce18cd264f4713008cd20a7e3fb660767df7e",
+             "25bccd2a94e33fb733ce66aced327b5a2ed24e55146c58e37c1ef03089408950",
+             "d641569266b4b5d4234956aec1e62ff62b0f9fd15432811dd24f004f3d8dde25"},
+            {"013564daaad1bf1191ccf183781ef8d3538bef862ab948aac74221781aa2c764",
+             "6adb47eb1eb01cf40597cadfcfdc19b56a33b4c2d32da09235c2a982286c2b75",
+             "a40a58f01559028ff5e4262f4af8dcba901bdf814f0ded98595a04dcd783fb86",
+             "abc032963ae278209c1cc57fc3c2df2e49ebac7dfd0a2e72d9d8faa72e125bb7"},
+            {"242cd764229494e017001ae75b32b6f4466609f81d9eb9a6c3a72df04c6cdc9f",
+             "402139ea1ec7205e7a99567e5284e156b9c22bd55b25046249161a2dc6e3f1c2",
+             "0a28e0fd800b200f978aecc19da09ada25cab8c9d901e3a074f1b73af7519207",
+             "8ad11e4f2e980c05ab2102d02c1fad4823528254ba6daa4214950efe8006085d"},
+        },
+    };
+    const auto frames = generatedParallelEdgeFrames();
+    const auto renderHash = [&](size_t filter, size_t size, unsigned phase) {
+        const auto mode = phase == 0   ? FrameBlending::Disabled
+                          : phase == 1 ? FrameBlending::Simple
+                                       : FrameBlending::Accurate;
+        const auto output = renderDisplayFrames(frames[0], frames[1], sizes[size], filters[filter],
+                                                mode, phase == 3);
+        assert(output.size() == sizes[size]);
+        return canonicalRgbaHash(output);
+    };
+    const auto check = [&](const QByteArray &observed, size_t filter, size_t size, unsigned phase) {
+        if (observed != hashes[filter][size][phase]) {
+            std::fprintf(stderr, "large %s %dx%d blend %u: %s, expected %s\n", names[filter],
+                         sizes[size].width(), sizes[size].height(), phase, observed.constData(),
+                         hashes[filter][size][phase]);
+        }
+        assert(observed == hashes[filter][size][phase]);
+    };
+
+    // Start more simultaneous callers than the dedicated worker capacity.
+    // Hash each result as soon as its synchronous call returns. Run this before
+    // the serial cases so shared tables and the worker pool also initialize
+    // under contention; exhausted worker slots must permit inline progress.
+    QSemaphore ready;
+    QSemaphore start;
+    std::array<std::future<QByteArray>, 8> pending;
+    for (size_t job = 0; job < pending.size(); ++job) {
+        pending[job] = std::async(std::launch::async, [&, job] {
+            ready.release();
+            start.acquire();
+            return renderHash(job / 2, 2 + job % 2, unsigned(2 + job % 2));
+        });
+    }
+    ready.acquire(int(pending.size()));
+    start.release(int(pending.size()));
+    for (size_t job = 0; job < pending.size(); ++job)
+        check(pending[job].get(), job / 2, 2 + job % 2, unsigned(2 + job % 2));
+
+    for (size_t filter = 0; filter < filters.size(); ++filter)
+        for (size_t size = 0; size < sizes.size(); ++size)
+            for (unsigned phase = 0; phase < 4; ++phase)
+                check(renderHash(filter, size, phase), filter, size, phase);
+
+    // Above 4x height, even Scale4x can copy repeated half-cell rows. With two
+    // workers, the final band starts at row 480, in the same half-cell as row
+    // 479. It must render its first row without reading another band's output.
+    const char *repeatedRowHashes[2][2] = {
+        {"99e1604aa346016ac803ed6beafe598d796506fa3ee260e32f7fd38af112af12",
+         "1000c15e673c17a08311e235e5aeee71ee525eb1bf4359cf76371fff6ce040b7"},
+        {"252c4c8df0d2cfa153581cd8a655140bc82086235da48a88b1fef4bd76a816ff",
+         "bcd4a3e3c9ded8d19668f526ceac66c65e6c758884d17792c6e253b7354c2db3"},
+    };
+    for (size_t filter = 0; filter < 2; ++filter) {
+        for (unsigned odd = 0; odd < 2; ++odd) {
+            const auto output =
+                renderDisplayFrames(frames[0], frames[1], {801, 721}, filters[1 + 2 * filter],
+                                    FrameBlending::Accurate, odd != 0);
+            assert(output.size() == QSize(801, 721));
+            const auto observed = canonicalRgbaHash(output);
+            if (observed != repeatedRowHashes[filter][odd]) {
+                std::fprintf(stderr, "repeated-row %s 801x721 odd %u: %s, expected %s\n",
+                             names[1 + 2 * filter], odd, observed.constData(),
+                             repeatedRowHashes[filter][odd]);
+            }
+            assert(observed == repeatedRowHashes[filter][odd]);
+        }
+    }
+    assert(canonicalRgbaHash(frames[0]) ==
+           "07e3abb85011ee34f40ab522e67f1e66ba68a8dc5c279261cdbf7d9354a96b6d");
+    assert(canonicalRgbaHash(frames[1]) ==
+           "c872edab629b5d1b8a658b72fc70c45f98732003b4389f0c8426deaca6eb7c72");
 }
 
 void testExpandedFilterCaptures() {
@@ -403,6 +592,7 @@ void testFilteredFrameBlending() {
 } // namespace
 
 int main() {
+    testParallelEdgeCaptures();
     testExpandedFilterCaptures();
     testExpandedFilterOrientation();
     testPreciseNearestSampling();

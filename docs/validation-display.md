@@ -130,3 +130,36 @@ A Linux rendering benchmark used two generated 256 × 224 frames with Accurate
 blending at 1919 × 1079. Reusing sampled rows and looking up blends for flat
 pixels lowered the median render time from 24.8 to 7.8 ms and p95 from 36.7 to
 12.5 ms across alternating runs. These figures time the filter itself.
+
+### Parallel Scale rendering
+
+The four Scale filters can split an output of at least 160,000 pixels into
+independent row bands. The caller renders part of the image and waits for every
+band. The shared pool provides at most two workers. When both are busy, the
+caller renders the remaining bands itself.
+
+The regression test checks complete RGBA output against the serial renderer on
+both sides of the threshold and at integer and fractional sizes. Eight callers
+start together to exercise a busy pool. The test also checks both input images
+for mutation after rendering. All 68 generated captures matched on Windows and
+Linux, including repeated rows across band boundaries. A separate Linux run
+matched all 60 retained Mario output frames byte for byte. The display tests
+passed ASan and UBSan on Linux. Full Release passed 111 tests on Windows and
+109 on Linux.
+
+The native replay used Super Mario Bros. Deluxe on CGB-0 with antialiased
+Scale4x, Accurate blending, a 733 × 601 window, audio and rewind. Each host
+ran the same 30-second input trace twice per build in serial, parallel,
+parallel, serial order. The table shows medians after the five-second warmup.
+
+| Host | Serial guest speed | Parallel guest speed | Serial widget paints/s | Parallel widget paints/s |
+| --- | ---: | ---: | ---: | ---: |
+| Windows | 93.48% | 99.99% | 28.07 | 50.35 |
+| Linux/Xcb | 99.99% | 99.99% | 59.89 | 59.88 |
+
+The median Windows p95 paint interval fell from 46.9 to 36.2 ms. Median peak
+working set was 77.8 MiB serial and 79.7 MiB parallel on Windows, and 97.5 MiB
+serial and 97.0 MiB parallel on Linux. Every run had zero audio idle events
+and errors after warmup. The isolated Linux PulseAudio sink captured nonzero
+game samples in every run. Guest speed and widget paints measure different
+parts of playback.

@@ -24,11 +24,16 @@
 
 #include <QColor>
 #include <QColorSpace>
+#include <QFutureSynchronizer>
+#include <QPromise>
+#include <QThread>
+#include <QThreadPool>
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <vector>
 
 namespace {
@@ -201,45 +206,88 @@ QImage renderEdgeFrames(const QImage &source, const QImage &previous, QSize outp
     const auto &temporal = blendTable(blending);
     const auto &midpoint = blendTable(FrameBlending::Simple);
     const double oldHalfWeight = blending == FrameBlending::Accurate ? 1.0 / 6.0 : 0.25;
-    EdgePosition last{-1, false};
-    for (int y = 0; y < output.height(); ++y) {
-        const float position = 1.0f - (float(output.height() - y) - 0.5f) / float(output.height());
-        const auto vertical = edgePosition(position, frame.height());
-        auto *outputRow = reinterpret_cast<QRgb *>(result.scanLine(y));
-        if (vertical.cell == last.cell && vertical.secondHalf == last.secondHalf) {
-            std::memcpy(outputRow, result.constScanLine(y - 1),
-                        size_t(output.width()) * sizeof(QRgb));
-            continue;
-        }
-        last = vertical;
-        const auto currentLines = edgeRows(frame, vertical.cell);
-        const auto previousLines = blend ? edgeRows(history, vertical.cell) : currentLines;
-        const int lcdRow = vertical.cell / (expand ? 2 : 1);
-        const bool reverse = blending == FrameBlending::Accurate && (lcdRow & 1) != int(oddFrame);
-        auto *out = outputRow;
-        for (const auto &span : spans) {
-            const auto current = currentLines.at(span.position.cell);
-            auto color = current.corner(span.position.secondHalf, vertical.secondHalf);
-            if (blend) {
-                const auto previousCells = previousLines.at(span.position.cell);
-                auto old = previousCells.corner(span.position.secondHalf, vertical.secondHalf);
-                auto center = current.center;
-                auto oldCenter = previousCells.center;
-                if (reverse) {
-                    std::swap(color, old);
-                    std::swap(center, oldCenter);
-                }
-                color = antialias
-                            ? mixAntialiased(color, center, old, oldCenter, temporal, oldHalfWeight)
-                            : mixPixel(color, old, temporal);
-            } else if (antialias) {
-                color = mixPixel(color, current.center, midpoint);
+    auto *pixels = result.bits();
+    const qsizetype stride = result.bytesPerLine();
+    const auto renderRows = [&](int first, int end) {
+        EdgePosition last{-1, false};
+        for (int y = first; y < end; ++y) {
+            const float position =
+                1.0f - (float(output.height() - y) - 0.5f) / float(output.height());
+            const auto vertical = edgePosition(position, frame.height());
+            auto *outputRow = reinterpret_cast<QRgb *>(pixels + y * stride);
+            if (vertical.cell == last.cell && vertical.secondHalf == last.secondHalf) {
+                std::memcpy(outputRow, pixels + (y - 1) * stride,
+                            size_t(output.width()) * sizeof(QRgb));
+                continue;
             }
-            auto *end = outputRow + span.end;
-            std::fill(out, end, color);
-            out = end;
+            last = vertical;
+            const auto currentLines = edgeRows(frame, vertical.cell);
+            const auto previousLines = blend ? edgeRows(history, vertical.cell) : currentLines;
+            const int lcdRow = vertical.cell / (expand ? 2 : 1);
+            const bool reverse =
+                blending == FrameBlending::Accurate && (lcdRow & 1) != int(oddFrame);
+            auto *out = outputRow;
+            for (const auto &span : spans) {
+                const auto current = currentLines.at(span.position.cell);
+                auto color = current.corner(span.position.secondHalf, vertical.secondHalf);
+                if (blend) {
+                    const auto previousCells = previousLines.at(span.position.cell);
+                    auto old = previousCells.corner(span.position.secondHalf, vertical.secondHalf);
+                    auto center = current.center;
+                    auto oldCenter = previousCells.center;
+                    if (reverse) {
+                        std::swap(color, old);
+                        std::swap(center, oldCenter);
+                    }
+                    color = antialias ? mixAntialiased(color, center, old, oldCenter, temporal,
+                                                       oldHalfWeight)
+                                      : mixPixel(color, old, temporal);
+                } else if (antialias) {
+                    color = mixPixel(color, current.center, midpoint);
+                }
+                auto *end = outputRow + span.end;
+                std::fill(out, end, color);
+                out = end;
+            }
+        }
+    };
+
+    // The caller renders one band and joins the others before exposing the image.
+    // Each band reads immutable frames and writes its own rows, including row copies.
+    constexpr int64_t minimumParallelPixels = 160000;
+    const int height = output.height();
+    const int workers =
+        int64_t(output.width()) * height < minimumParallelPixels
+            ? 0
+            : std::clamp(QThread::idealThreadCount() - 1, 0, std::min(2, height - 1));
+    if (workers == 0) {
+        renderRows(0, height);
+        return result;
+    }
+
+    static const auto pool = [] {
+        auto threads = std::make_unique<QThreadPool>();
+        threads->setMaxThreadCount(2);
+        return threads;
+    }();
+    QFutureSynchronizer<void> jobs;
+    const auto boundary = [&](int band) { return int(int64_t(height) * band / (workers + 1)); };
+    for (int band = 0; band < workers; ++band) {
+        const int first = boundary(band), end = boundary(band + 1);
+        auto promise = std::make_shared<QPromise<void>>();
+        promise->start();
+        jobs.addFuture(promise->future());
+        // Concurrent views share the worker limit. A saturated pool uses the calling thread.
+        if (!pool->tryStart([promise, &renderRows, first, end] {
+                renderRows(first, end);
+                promise->finish();
+            })) {
+            renderRows(first, end);
+            promise->finish();
         }
     }
+    renderRows(boundary(workers), height);
+    jobs.waitForFinished();
     return result;
 }
 } // namespace
