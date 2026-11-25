@@ -165,9 +165,9 @@ registers, and native pixels. Six sampled images in Mortal Kombat I and
 151 in Mortal Kombat II differ along the way when the probe samples the
 live framebuffer at fixed guest clocks. The first three differences
 occur partway through scanline 31. A separate comparison of published
-frames matches all 3,301 Mortal Kombat I images and 3,001 of 3,004 Mortal
-Kombat II images. The three remaining presentation differences affect
-four, ten, and five pixels on the top row.
+frames at the window checkpoint matched all 3,301 Mortal Kombat I images
+and 3,001 of 3,004 Mortal Kombat II images. The three presentation
+differences affected four, ten, and five pixels on the top row.
 
 The paired PCM still differs later in both games. The audio validation
 records the envelope and pulse timing changes. [Monochrome pulse validation](validation-audio.md#monochrome-pulse-frequency-writes)
@@ -183,6 +183,34 @@ Windows and Linux produced identical initial and restored PCM, native
 version 32 states, final clocks and registers, and terminal images for
 both active replays. The DMG and CGB Acid2 images each matched all 23,040
 pixel positions on both hosts after palette mapping.
+
+### OAM DMA across scanline zero
+
+The three Mortal Kombat II images above share an OAM transfer that ends
+while the LCD selects sprites for scanline zero. Before the fix, CupidGB
+sampled monochrome sprite coordinates two dots early and kept one extra
+sprite. With the corrected search time, the three runs select the same
+sprite IDs and reproduce every pixel when the comparison uses its
+dot-stepped rendering path.
+
+The ordinary replay now matches 3,002 of 3,004 published Mortal Kombat II
+images, and all 3,301 Mortal Kombat I images. The two remaining frames
+differ in 14 pixels. The batched comparison path rereads live OAM and
+uses different sprite coordinates in those frames. CupidGB retains the
+Y/X recorded at selection. Both routes still match the instruction
+intervals, guest clocks, CPU registers and terminal images.
+
+A generated DMA-tail regression verifies the handoff from the held OAM
+word to live OAM. A native-state regression resumes an already selected
+sprite without selecting it twice. The external DMG OAM bug ROM passed
+all eight cases on Windows and Linux using the local DMG firmware.
+
+The generated comparison checked 280 DMA start placements and controls
+on DMG, Pocket, CGB-E, SGB and SGB2, across scanlines 0, 1, 32 and 133.
+All sprite selections, captured coordinates and guest DMA write clocks
+match. The dot-stepped comparison matches 272 completed scanlines, up
+from 268. The eight remaining monochrome cases carry DMA into transfer
+on scanline 0 or 1 and produce the same output as the preceding build.
 
 ## Live cartridge replacement
 

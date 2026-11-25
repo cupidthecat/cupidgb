@@ -721,6 +721,36 @@ static void test_window_comparison_edge_state(void) {
     destroy_rig(target);
 }
 
+static void test_early_oam_selection_state(void) {
+    Rig *source = create_rig(0, false), *target = create_rig(0, false);
+    CupidGb *gb = source->gb;
+    cupid_gb_write_u8(gb, 0xfe9c, 17);
+    cupid_gb_write_u8(gb, 0xfe9d, 88);
+    cupid_gb_write_u8(gb, 0xff40, 0x93);
+    for (unsigned dot = 0; dot < 456 + 80 && (gb->pixels.line < 1 || gb->pixels.dot < 80); ++dot)
+        advance_dot(source);
+    assert(gb->pixels.line == 1 && gb->pixels.dot == 80 && !gb->pixels.object_count);
+    const Blob pending = save_rig(source);
+
+    /* The preceding schedule had already sampled object 39 by this dot. */
+    cupid_gb_pixels_scan_object(gb, 39);
+    assert(gb->pixels.object_count == 1 && gb->pixels.objects[0] == 39);
+    const Blob early = save_rig(source);
+    assert(load_rig(source, &pending, 0) == CUPID_GB_STATE_OK);
+    assert(load_rig(target, &early, 0) == CUPID_GB_STATE_OK);
+    for (unsigned dot = 0; dot < 2; ++dot) {
+        advance_dot(source);
+        advance_dot(target);
+    }
+    assert(gb->pixels.object_count == 1 && gb->pixels.objects[0] == 39);
+    compare_display(source, target);
+
+    free(early.bytes);
+    free(pending.bytes);
+    destroy_rig(source);
+    destroy_rig(target);
+}
+
 static void test_malformed_window_history(void) {
     static const struct {
         size_t offset;
@@ -1023,6 +1053,7 @@ int main(int argc, char **argv) {
     test_legacy_projection();
     test_malformed_tails();
     test_window_comparison_edge_state();
+    test_early_oam_selection_state();
     test_malformed_window_history();
     test_malformed_abort();
     test_direct_codecs();

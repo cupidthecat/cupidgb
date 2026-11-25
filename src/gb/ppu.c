@@ -490,8 +490,12 @@ static void tick_ppu(CupidGb *gb, uint32_t dots) {
         return;
     CupidGbPixels *p = &gb->pixels;
     const bool lcd_enabled = cupid_gb_lcd_enabled(gb);
-    const bool stopped = gb->cpu.stopped && !cupid_gb_model_is_cgb(gb->model);
+    const bool color = cupid_gb_model_is_cgb(gb->model);
+    const bool stopped = gb->cpu.stopped && !color;
     const bool sgb = cupid_gb_model_is_sgb(gb->model);
+    /* Monochrome samples Y/X at the end of the two-dot OAM slot. The final
+     * sample can overlap the eager transfer prefix before object fetching. */
+    const unsigned oam_delay = color ? 0u : 2u;
     const uint32_t initial_dots = dots;
     const uint32_t initial_repeat = gb->lcd_repeat_countdown;
     gb->display_cycles_since_frame += dots;
@@ -532,7 +536,7 @@ static void tick_ppu(CupidGb *gb, uint32_t dots) {
         p->dot = (uint16_t)(gb->ppu_counter * 4);
         cupid_gb_pixels_begin_line(gb);
         if (p->line < 144 && !gb->ppu_lcd_startup) {
-            for (unsigned index = 0; index < 40 && index * 2 < p->dot; ++index)
+            for (unsigned index = 0; index < 40 && index * 2 + 1u + oam_delay < p->dot; ++index)
                 cupid_gb_pixels_scan_object(gb, index);
         }
         if (p->line < 144 && p->dot >= 80) {
@@ -570,8 +574,7 @@ static void tick_ppu(CupidGb *gb, uint32_t dots) {
                     cupid_gb_set_ppu_mode(gb, CUPID_GB_PPU_MODE_HBLANK);
                 cupid_gb_update_stat_irq(gb);
             }
-            unsigned transfer =
-                gb->ppu_lcd_startup ? (cupid_gb_model_is_cgb(gb->model) ? 78u : 79u) : 80u;
+            const unsigned transfer = gb->ppu_lcd_startup ? (color ? 78u : 79u) : 80u;
             if (p->line < 144) {
                 if (p->dot == 0) {
                     cupid_gb_pixels_begin_line(gb);
@@ -584,8 +587,13 @@ static void tick_ppu(CupidGb *gb, uint32_t dots) {
                         update_stat_irq(gb, STAT_CLOCK, false, -1);
                     }
                 }
-                if (!gb->ppu_lcd_startup && p->dot < 80 && (p->dot & 1))
-                    cupid_gb_pixels_scan_object(gb, p->dot >> 1);
+                const unsigned search_dot = p->dot - oam_delay;
+                if (!gb->ppu_lcd_startup && search_dot < 80 && (search_dot & 1u)) {
+                    const unsigned index = search_dot / 2u;
+                    /* Older native states can already contain this selection. */
+                    if (!p->object_count || p->objects[p->object_count - 1u] != index)
+                        cupid_gb_pixels_scan_object(gb, index);
+                }
                 if (p->dot == transfer) {
                     cupid_gb_pixels_begin_transfer(gb);
                     cupid_gb_set_ppu_mode(gb, CUPID_GB_PPU_MODE_TRANSFER);

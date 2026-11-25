@@ -198,6 +198,31 @@ static void test_dmg_window_y_late_horizontal_trigger(void) {
     destroy_fixture(&fixture);
 }
 
+static void test_dmg_oam_search_at_dma_tail(void) {
+    const unsigned row = 3;
+    const unsigned row_start = row * 456 - 3;
+    Fixture fixture = create_fixture(0, false, 0, 7, false);
+    for (unsigned i = 0; i < 160; ++i)
+        write_byte(&fixture, (uint16_t)(0xc000 + i), 0);
+    write_byte(&fixture, 0xfe9c, row + 16);
+    write_byte(&fixture, 0xfe9d, 88);
+    write_byte(&fixture, 0xc09c, row + 16);
+    write_byte(&fixture, 0xc09d, 88);
+    write_byte(&fixture, 0xff40, 0x93);
+    advance_to(&fixture, row_start - 642);
+    assert(fixture.gb->oam_search_word == 0x5813);
+    write_byte(&fixture, 0xff46, 0xc0);
+
+    advance_to(&fixture, row_start + 3);
+    assert(fixture.gb->dma_active && !fixture.gb->pixels.object_count);
+    advance_to(&fixture, row_start + 4);
+    assert(!fixture.gb->dma_active && fixture.gb->pixels.object_count == 1);
+    assert(fixture.gb->pixels.objects[0] == 0 && fixture.gb->pixels.object_y[0] == row + 16);
+    advance_to(&fixture, row_start + 82);
+    assert(fixture.gb->pixels.object_count == 2 && fixture.gb->pixels.objects[1] == 39);
+    destroy_fixture(&fixture);
+}
+
 static void test_hidden_objects_keep_color_fetch_timing(void) {
     for (unsigned profile = 0; profile < 3; ++profile)
         for (unsigned fast = 0; fast <= (profile != 0); ++fast)
@@ -293,6 +318,7 @@ int main(void) {
     test_window_edges_and_pixels();
     test_window_y_compare_after_register_writes();
     test_dmg_window_y_late_horizontal_trigger();
+    test_dmg_oam_search_at_dma_tail();
     test_hidden_objects_keep_color_fetch_timing();
     test_monochrome_object_abort_edges();
     test_window_restart_after_scroll_write();
