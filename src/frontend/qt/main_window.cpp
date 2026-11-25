@@ -434,13 +434,7 @@ void MainWindow::buildMenus() {
             present();
         });
     }
-    borderAction_ = view->addAction("Show &SGB Border");
-    borderAction_->setCheckable(true);
-    borderAction_->setObjectName("video/sgbBorder");
-    connect(borderAction_, &QAction::triggered, this, [this](bool enabled) {
-        settings_.setValue("video/sgbBorder", enabled);
-        applyDisplaySettings();
-    });
+    buildSgbBorderMenu(view);
     auto *messages = view->addAction("On-screen &Messages");
     messages->setObjectName("video/osd");
     messages->setCheckable(true);
@@ -999,6 +993,8 @@ bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflo
     }
     if (inspectorsWindow_)
         inspectorsWindow_->sessionChanged();
+    if (!sameCheatSession)
+        invalidateSgbBorder();
     romData_ = data;
     romPath_ = absolute;
     if (debugger_ && !sameCartridge && !reload && !hotSwap) {
@@ -1156,6 +1152,7 @@ bool MainWindow::closeRom() {
     resetRewind();
     romPath_.clear();
     romData_.clear();
+    invalidateSgbBorder();
     image_ = {};
     previousDisplayFrame_ = {};
     currentDisplayFrame_ = {};

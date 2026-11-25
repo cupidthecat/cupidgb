@@ -80,3 +80,28 @@ mismatch. Its timings do not become measurements of these new executables.
 The unchanged cores retain their earlier validation evidence; this focused
 frontend run does not add hardware, mapper, audible-quality or full-speed
 qualification.
+
+## Super Game Boy border modes, 2026-11-24
+
+The reference at `ea667ad79aa28409f034b1fd6da7304e1844750d` reported 160 × 144 for
+handheld profiles in SGB Only and Never, and 256 × 224 in Always. Always asked for
+SGB donor firmware once for an eligible cartridge. The external SGB profile
+reported 256 × 224 in Always and left the surround to its caller. Qt fills this
+area with black. Handheld sessions use a CupidGB bezel until a border is ready.
+
+The production renderer matched the full 34,304-pixel surround for a generated
+donor and a commercial Donkey Kong cartridge. The comparison used linear and
+corrected SGB colors on Windows and Linux. All eight samples matched, and all
+23,040 viewport pixels retained their sentinel. The comparison receipt SHA-256 is
+`2a9b1794edb9213ae31f8b0941ad34a3895f43d29e14d157fe29a409c6e3244d`.
+
+The Qt workflow uses generated cartridge and firmware bytes. It checks both
+settings controls, migration from the old checkbox, native dimensions, integrated
+overlays, the handheld and external-host surrounds, and borrowing while paused.
+It checks that in-flight results from a prior cartridge are discarded and that
+the live guest state stays byte-identical during the donor run. It also covers
+cache retention through resets, a model change, native state loads and a failed
+open, plus cache removal on close. The core render and capture tests passed under
+ASan and UBSan. The complete Release suites passed 111/111 on Windows and 109/109
+on Linux. The Windows run used the working local 7-Zip executable. The Linux run
+used an isolated PulseAudio sink.

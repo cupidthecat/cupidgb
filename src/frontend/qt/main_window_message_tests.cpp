@@ -32,14 +32,20 @@ extern "C" {
 bool MainWindow::screenMessagesSmokeTest(const QString &, const QString &directory) {
     const bool hadPreference = settings_.contains("video/osd");
     const QVariant preference = settings_.value("video/osd");
+    const QVariant borderPreference = settings_.value("video/sgbBorderMode");
     const auto restorePreference = qScopeGuard([&] {
         if (hadPreference)
             settings_.setValue("video/osd", preference);
         else
             settings_.remove("video/osd");
+        if (borderPreference.isValid())
+            settings_.setValue("video/sgbBorderMode", borderPreference);
+        else
+            settings_.remove("video/sgbBorderMode");
         applyDisplaySettings();
     });
     settings_.setValue("video/osd", false);
+    settings_.setValue("video/sgbBorderMode", int(SgbBorderMode::SgbOnly));
     MainWindow session(true, true, false, QStringLiteral(""), CUPID_GB_MODEL_DMG_ABC);
     session.timer_.stop();
     auto *toggle = session.findChild<QAction *>("video/osd");
@@ -172,12 +178,12 @@ bool MainWindow::screenMessagesSmokeTest(const QString &, const QString &directo
         constexpr std::array<const char *, 9> preferenceKeys = {"video/osd",
                                                                 "video/palette",
                                                                 "video/blendingMode",
-                                                                "video/sgbBorder",
                                                                 "video/customPalette/0",
                                                                 "video/customPalette/1",
                                                                 "video/customPalette/2",
                                                                 "video/customPalette/3",
-                                                                "video/customPalette/off"};
+                                                                "video/customPalette/off",
+                                                                "video/sgbBorderMode"};
         std::array<std::optional<QVariant>, preferenceKeys.size()> preferences;
         for (size_t index = 0; index < preferenceKeys.size(); ++index)
             if (window.settings_.contains(preferenceKeys[index]))
@@ -194,7 +200,7 @@ bool MainWindow::screenMessagesSmokeTest(const QString &, const QString &directo
         window.settings_.setValue("video/osd", true);
         window.settings_.setValue("video/palette", int(MonochromePalette::Custom));
         window.settings_.setValue("video/blendingMode", int(mode));
-        window.settings_.setValue("video/sgbBorder", window.borderAction_->isChecked());
+        window.settings_.setValue("video/sgbBorderMode", int(window.sgbBorderMode_));
         for (const char *key :
              {"video/customPalette/0", "video/customPalette/1", "video/customPalette/2",
               "video/customPalette/3", "video/customPalette/off"})
@@ -206,8 +212,7 @@ bool MainWindow::screenMessagesSmokeTest(const QString &, const QString &directo
         window.present(Presentation::Reset);
         window.present(Presentation::Frame);
         const QImage clean = window.image_;
-        const QSize expectedSize =
-            sgb && window.borderAction_->isChecked() ? QSize(256, 224) : QSize(160, 144);
+        const QSize expectedSize = window.showSgbBorder(gb) ? QSize(256, 224) : QSize(160, 144);
         if (clean.size() != expectedSize || window.display_->image != clean ||
             !window.previousMessageFrame_.isNull())
             return false;
@@ -378,7 +383,9 @@ bool MainWindow::screenMessagesSmokeTest(const QString &, const QString &directo
             return smokeFailure(__FILE__, __LINE__);
         enhancedSession.setPaused(true);
         for (const bool border : {false, true}) {
-            enhancedSession.borderAction_->setChecked(border);
+            enhancedSession
+                .sgbBorderActions_[size_t(border ? SgbBorderMode::SgbOnly : SgbBorderMode::Never)]
+                ->trigger();
             for (const auto mode :
                  {FrameBlending::Disabled, FrameBlending::Simple, FrameBlending::Accurate})
                 for (const bool odd : {false, true})

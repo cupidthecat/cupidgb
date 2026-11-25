@@ -24,6 +24,7 @@
 #include "cupid/gb/input.h"
 #include "cupid/gb/ppu.h"
 #include "cupid/gb/sgb.h"
+#include "cupid/gb/sgb_border.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -513,7 +514,111 @@ static void test_border_compositor(void) {
     free(gb);
 }
 
+static void test_borrowed_border_rendering(void) {
+    const size_t count = CUPID_SGB_SCREEN_WIDTH * CUPID_SGB_SCREEN_HEIGHT;
+    CupidGbSgbBorder *border = calloc(1, sizeof(*border));
+    uint32_t *pixels = malloc((count + 1u) * sizeof(*pixels));
+    uint32_t *before = malloc((count + 1u) * sizeof(*before));
+    uint32_t *table = malloc(32768u * sizeof(*table));
+    assert(border && pixels && before && table);
+    border->palettes[0] = 0x83e0;
+    border->palettes[32] = 0x7c00;
+    border->palettes[33] = 0x801f;
+    border->palettes[34] = 0x7c00;
+    border->palettes[36] = 0x03ff;
+    border->palettes[40] = 0x7fe0;
+    border->palettes[47] = 0x7fff;
+    border->tiles[32] = 0x80;
+    border->tiles[47] = 1;
+    border->tiles[50] = 0x10;
+    border->tiles[51] = 0x08;
+    border->tiles[36] = border->tiles[37] = border->tiles[52] = border->tiles[53] = 0x20;
+    const unsigned flips[] = {0, 0x4000, 0x8000, 0xc000};
+    const unsigned red[] = {0, 7, 7 * CUPID_SGB_SCREEN_WIDTH, 7 * CUPID_SGB_SCREEN_WIDTH + 7};
+    const unsigned blue[] = {7 * CUPID_SGB_SCREEN_WIDTH + 7, 7 * CUPID_SGB_SCREEN_WIDTH, 7, 0};
+    const unsigned yellow[] = {259, 260, 1539, 1540};
+    const unsigned cyan[] = {260, 259, 1540, 1539};
+    const unsigned white[] = {514, 517, 1282, 1285};
+    const uint32_t sentinel = 0x15335799;
+    for (unsigned flip = 0; flip < sizeof(flips) / sizeof(flips[0]); ++flip) {
+        /* The unused tile-index bits cannot turn a borrowed tile into an empty
+         * native-adapter entry. Palette two selects the same low-byte tile. */
+        border->map[0] = (uint16_t)(0x0b01u | flips[flip]);
+        for (size_t pixel = 0; pixel <= count; ++pixel)
+            pixels[pixel] = sentinel;
+        cupid_gb_sgb_render_borrowed_border(border, pixels, count + 1u, NULL);
+        assert(pixels[red[flip]] == 0xffff0000u);
+        assert(pixels[blue[flip]] == 0xff0000ffu);
+        assert(pixels[yellow[flip]] == 0xffffff00u);
+        assert(pixels[cyan[flip]] == 0xff00ffffu);
+        assert(pixels[white[flip]] == 0xffffffffu);
+        assert(pixels[CUPID_SGB_SCREEN_WIDTH + 1u] == 0xff00ff00u);
+        assert(pixels[count - 1u] == 0xff00ff00u && pixels[count] == sentinel);
+        for (unsigned y = 40; y < 184; ++y)
+            for (unsigned x = 48; x < 208; ++x)
+                assert(pixel_at(pixels, x, y) == sentinel);
+    }
+
+    for (unsigned color = 0; color < 32768; ++color)
+        table[color] = 0x77000000u | color;
+    cupid_gb_sgb_render_borrowed_border(border, pixels, count, table);
+    assert(pixels[red[3]] == table[0x001f] && pixels[blue[3]] == table[0x7c00]);
+    assert(pixels[CUPID_SGB_SCREEN_WIDTH + 1u] == table[0x03e0]);
+    memcpy(before, pixels, (count + 1u) * sizeof(*before));
+    cupid_gb_sgb_render_borrowed_border(border, pixels, count - 1u, NULL);
+    cupid_gb_sgb_render_borrowed_border(NULL, pixels, count, NULL);
+    cupid_gb_sgb_render_borrowed_border(border, NULL, count, NULL);
+    cupid_gb_sgb_render_borrowed_border(border, pixels, count, pixels);
+    assert(!memcmp(before, pixels, (count + 1u) * sizeof(*pixels)));
+    cupid_gb_sgb_render_borrowed_border((const CupidGbSgbBorder *)pixels, pixels, count, NULL);
+    assert(!memcmp(before, pixels, (count + 1u) * sizeof(*pixels)));
+    free(table);
+    free(before);
+    free(pixels);
+    free(border);
+}
+
+static void test_borrowed_border_rejection(void) {
+    uint8_t rom[0x150] = {0};
+    uint8_t firmware[256] = {0x18, 0xfe};
+    CupidGbSgbBorder *border = malloc(sizeof(*border));
+    CupidGbSgbBorder *before = malloc(sizeof(*before));
+    assert(border && before);
+    memset(border, 0xa5, sizeof(*border));
+    memcpy(before, border, sizeof(*border));
+    rom[0x146] = 3;
+    assert(!cupid_gb_sgb_borrow_border(NULL, sizeof(rom), firmware, sizeof(firmware), border));
+    assert(!cupid_gb_sgb_borrow_border(rom, sizeof(rom) - 1u, firmware, sizeof(firmware), border));
+    assert(!cupid_gb_sgb_borrow_border(rom, CUPID_GB_SGB_BORROW_MAX_ROM_SIZE + 1u, firmware,
+                                       sizeof(firmware), border));
+    assert(!cupid_gb_sgb_borrow_border(rom, sizeof(rom), NULL, sizeof(firmware), border));
+    assert(!cupid_gb_sgb_borrow_border(rom, sizeof(rom), firmware, sizeof(firmware) - 1u, border));
+    assert(!cupid_gb_sgb_borrow_border(rom, sizeof(rom), firmware, sizeof(firmware) + 1u, border));
+    assert(!cupid_gb_sgb_borrow_border(rom, sizeof(rom), firmware, sizeof(firmware), NULL));
+    rom[0x146] = 0;
+    assert(!cupid_gb_sgb_borrow_border(rom, sizeof(rom), firmware, sizeof(firmware), border));
+    assert(!memcmp(before, border, sizeof(*border)));
+    rom[0x146] = 3;
+    assert(!cupid_gb_sgb_borrow_border(rom, sizeof(rom), border->tiles, sizeof(firmware), border));
+    ((uint8_t *)border)[0x146] = 3;
+    memcpy(before, border, sizeof(*before));
+    assert(!cupid_gb_sgb_borrow_border((const uint8_t *)border, sizeof(*border), firmware,
+                                       sizeof(firmware), border));
+    assert(!memcmp(before, border, sizeof(*border)));
+
+    /* Declared support alone cannot create a border. An infinite firmware loop
+     * reaches the donor budget and leaves the caller's previous cache intact. */
+    for (unsigned offset = 0x134; offset < 0x14d; ++offset)
+        rom[0x14d] = (uint8_t)(rom[0x14d] - rom[offset] - 1u);
+    assert(!cupid_gb_sgb_borrow_border(rom, sizeof(rom), firmware, sizeof(firmware), border));
+    assert(!memcmp(before, border, sizeof(*border)));
+    free(before);
+    free(border);
+}
+
 int main(void) {
+    test_borrowed_border_rendering();
+    test_borrowed_border_rejection();
     test_irregular_multiplayer_request();
     test_block_controls();
     test_block_geometry();

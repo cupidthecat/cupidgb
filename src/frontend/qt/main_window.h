@@ -79,6 +79,7 @@ class PaletteLibrary;
 class HostCamera;
 class CoreAudioCollector;
 class GbsPlayer;
+struct CupidGbSgbBorder;
 
 class MainWindow final : public QMainWindow {
   public:
@@ -139,6 +140,11 @@ class MainWindow final : public QMainWindow {
     void appendMusicSamples(const int16_t *samples, size_t frames);
     void publishMusicFrame();
     bool presentMusic();
+    void buildSgbBorderMenu(QMenu *view);
+    bool showSgbBorder(const CupidGb &gb) const;
+    void borrowSgbBorder();
+    void invalidateSgbBorder();
+    QImage handheldBorder(const CupidGb &gb);
     void buildColorMenus(QMenu *view);
     void buildPaletteFileMenu(QMenu *palette);
     void importPalette();
@@ -309,6 +315,7 @@ class MainWindow final : public QMainWindow {
     bool modelSmokeTest(const QString &directory);
     bool startupSmokeTest(const QString &directory);
     bool sgbSmokeTest(const QString &directory);
+    bool sgbBorderModesSmokeTest(const QString &directory);
     bool externalSgbSmokeTest(const QString &directory);
     bool rtcSmokeTest(const QString &directory);
     bool rtcBatterySmokeTest(const QString &directory);
@@ -410,6 +417,13 @@ class MainWindow final : public QMainWindow {
     std::unique_ptr<ColorTable> cgbColorTable_;
     std::unique_ptr<ColorTable> sgbColorTable_;
     FrameBlending frameBlending_ = FrameBlending::Accurate;
+    SgbBorderMode sgbBorderMode_ = SgbBorderMode::SgbOnly;
+    std::shared_ptr<const CupidGbSgbBorder> borrowedSgbBorder_;
+    QImage sgbBorderImage_;
+    CupidGbModel sgbBorderImageModel_ = CUPID_GB_MODEL_DMG_ABC;
+    uint64_t sgbBorderCartridge_ = 0;
+    bool sgbBorderAttempted_ = false;
+    bool sgbBorderJobPending_ = false;
     QImage image_;
     QSize displayNativeSize_{160, 144};
     QImage previousDisplayFrame_;
@@ -442,7 +456,7 @@ class MainWindow final : public QMainWindow {
     std::array<QAction *, 3> blendingActions_{};
     std::array<QAction *, 7> colorCorrectionActions_{};
     QSlider *colorTemperatureSlider_ = nullptr;
-    QAction *borderAction_ = nullptr;
+    std::array<QAction *, 3> sgbBorderActions_{};
     std::array<QAction *, 10> saveSlotActions_{};
     std::array<QAction *, 10> loadSlotActions_{};
     std::array<int, 8> keys_{};

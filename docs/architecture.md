@@ -81,6 +81,7 @@ Qt's debugger window presents commands and views through callbacks. MainWindow o
 | `src/gb/link.c` | Paired serial pins, infrared forwarding, callback ownership and physical-clock interleave |
 | `src/gb/printer.c`, `src/gb/printer_state.c` | Printer protocol, image jobs, and native device-state codec |
 | `src/gb/sgb.c` | SGB command packets, palette/attribute state, masking, border rendering |
+| `src/gb/sgb_border.c` | Isolated cartridge border capture and outer-border rendering for handheld profiles |
 | `src/gb/sgb_startup.c`, `sgb_startup_audio.c`, `sgb_startup_render.c` | Host startup timing, bounded sound delivery and pure CupidGB artwork |
 | `src/gb/state_startup.c` | Validated portable startup continuation and output ownership |
 | `src/gbc/cgb.c` | Color hardware reset, memory-bank addressing and register dispatch |

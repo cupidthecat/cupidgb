@@ -78,6 +78,7 @@ bool MainWindow::externalSgbSmokeTest(const QString &directory) {
         for (const auto &[key, value] : preferences)
             settings_.setValue(key, value);
     });
+    settings_.setValue("video/sgbBorderMode", int(SgbBorderMode::SgbOnly));
     QByteArray cartridge(32768, char(0));
     cartridge[0x100] = char(0x18);
     cartridge[0x101] = char(0xfe);
@@ -155,9 +156,8 @@ bool MainWindow::externalSgbSmokeTest(const QString &directory) {
             cupid_gb_presentation_cycles(&gb) != gb.elapsed_cycles || !session.runFrame() ||
             session.startupAudioFrames_)
             return smokeFailure(__FILE__, __LINE__);
-        for (const bool border : {false, true}) {
-            session.borderAction_->setChecked(border);
-            session.present(Presentation::Reset);
+        for (const auto border : {SgbBorderMode::Never, SgbBorderMode::SgbOnly}) {
+            session.sgbBorderActions_[size_t(border)]->trigger();
             if (session.image_.size() != QSize(160, 144))
                 return smokeFailure(__FILE__, __LINE__);
         }
@@ -258,7 +258,7 @@ bool MainWindow::externalSgbSmokeTest(const QString &directory) {
 }
 
 bool MainWindow::sgbSmokeTest(const QString &directory) {
-    if (!externalSgbSmokeTest(directory))
+    if (!sgbBorderModesSmokeTest(directory) || !externalSgbSmokeTest(directory))
         return smokeFailure(__FILE__, __LINE__);
     std::vector<std::pair<QString, QVariant>> preferences;
     for (const QString &key : settings_.allKeys())
@@ -270,6 +270,7 @@ bool MainWindow::sgbSmokeTest(const QString &directory) {
     });
     settings_.setValue("emulation/rewindSeconds", 120);
     settings_.setValue("emulation/speed", 100);
+    settings_.setValue("video/sgbBorderMode", int(SgbBorderMode::SgbOnly));
     const QDir fixtures(QDir(directory).filePath("sgb"));
     const QDir firmware(fixtures.filePath("firmware"));
     const QString captures = qEnvironmentVariable("CUPIDGB_UI_CAPTURE_DIR");
@@ -450,7 +451,7 @@ bool MainWindow::sgbSmokeTest(const QString &directory) {
                         nativeChecked = true;
                         session.stopAudio();
                     }
-                    session.borderAction_->setChecked(true);
+                    session.sgbBorderActions_[size_t(SgbBorderMode::SgbOnly)]->trigger();
                     session.present(Presentation::Reset);
                     const QByteArray state = session.captureState();
                     const QImage full = session.image_;
@@ -467,16 +468,14 @@ bool MainWindow::sgbSmokeTest(const QString &directory) {
                         (!captures.isEmpty() &&
                          !session.grab().save(output.filePath("redraw.png"))))
                         return smokeFailure(__FILE__, __LINE__);
-                    session.borderAction_->setChecked(false);
-                    session.present();
+                    session.sgbBorderActions_[size_t(SgbBorderMode::Never)]->trigger();
                     if (session.captureState() != state ||
                         session.image_ !=
                             full.copy(CUPID_SGB_VIEWPORT_X, CUPID_SGB_VIEWPORT_Y, 160, 144) ||
                         (!captures.isEmpty() &&
                          !session.grab().save(output.filePath("cropped.png"))))
                         return smokeFailure(__FILE__, __LINE__);
-                    session.borderAction_->setChecked(true);
-                    session.present();
+                    session.sgbBorderActions_[size_t(SgbBorderMode::SgbOnly)]->trigger();
                     captured = true;
                 }
             }

@@ -63,7 +63,7 @@ add_library(cupidgb_core STATIC
     src/gb/oam_bus.c src/gb/ppu.c src/gb/pixels.c src/gb/apu.c src/gb/timer.c
     src/gb/cartridge.c src/gb/gbs.c src/gb/camera.c src/gb/mbc6.c src/gb/mbc7.c src/gb/tama5.c
     src/gb/input.c
-    src/gb/debugger.c src/gb/sgb.c
+    src/gb/debugger.c src/gb/sgb.c src/gb/sgb_border.c
     src/gb/sgb_startup.c src/gb/sgb_startup_audio.c src/gb/sgb_startup_render.c src/gb/state_startup.c
     src/gb/state_sgb_protocol.c
     src/gbc/cgb.c src/gbc/cgb_palette.c src/gbc/cgb_dma.c src/gbc/cgb_render.c
@@ -172,6 +172,8 @@ if(CUPIDGB_BUILD_QT)
         src/frontend/qt/main_window_gbs_tests.cpp
         src/frontend/qt/main_window_session.cpp
         src/frontend/qt/main_window_display.cpp
+        src/frontend/qt/main_window_border.cpp
+        src/frontend/qt/main_window_border_tests.cpp
         src/frontend/qt/main_window_display_files.cpp
         src/frontend/qt/main_window_display_file_tests.cpp
         src/frontend/qt/main_window_message_tests.cpp

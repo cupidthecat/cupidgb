@@ -36,6 +36,16 @@ constexpr std::array<ColorCorrection, 7> correctionOrder = {
     ColorCorrection::Disabled,   ColorCorrection::Curves,        ColorCorrection::Balanced,
     ColorCorrection::Accurate,   ColorCorrection::BoostContrast, ColorCorrection::ReduceContrast,
     ColorCorrection::LowContrast};
+constexpr std::array<const char *, 3> sgbBorderNames = {"SGB Only", "Never", "Always"};
+
+SgbBorderMode configuredSgbBorderMode(const QSettings &settings) {
+    bool valid = false;
+    const int mode = settings.value("video/sgbBorderMode").toInt(&valid);
+    if (valid && mode >= 0 && mode < int(sgbBorderNames.size()))
+        return SgbBorderMode(mode);
+    return settings.value("video/sgbBorder", true).toBool() ? SgbBorderMode::SgbOnly
+                                                            : SgbBorderMode::Never;
+}
 
 ColorSettings configuredColorSettings(const QSettings &settings) {
     bool valid = false;
@@ -55,6 +65,22 @@ void configureTemperatureSlider(QSlider *slider) {
     slider->setToolTip("Cooler light at the left, warmer light at the right. Center is neutral.");
 }
 } // namespace
+
+void MainWindow::buildSgbBorderMenu(QMenu *view) {
+    auto *menu = view->addMenu("S&GB Border");
+    auto *group = new QActionGroup(menu);
+    for (size_t i = 0; i < sgbBorderNames.size(); ++i) {
+        auto *action = menu->addAction(sgbBorderNames[i]);
+        action->setObjectName(QString("video/sgbBorderMode/%1").arg(i));
+        action->setCheckable(true);
+        group->addAction(action);
+        sgbBorderActions_[i] = action;
+        connect(action, &QAction::triggered, this, [this, i] {
+            settings_.setValue("video/sgbBorderMode", int(i));
+            applyDisplaySettings();
+        });
+    }
+}
 
 void MainWindow::buildColorMenus(QMenu *view) {
     auto *correctionMenu = view->addMenu("&Color Correction");
@@ -130,6 +156,7 @@ void MainWindow::applyDisplaySettings() {
             std::make_unique<ColorTable>(makeColorTable(ColorHardware::Cgb, colorSettings));
         sgbColorTable_ =
             std::make_unique<ColorTable>(makeColorTable(ColorHardware::Sgb, colorSettings));
+        sgbBorderImage_ = {};
         colorSettings_ = colorSettings;
         if (inspectorsWindow_)
             inspectorsWindow_->setColorTable(cgbColorTable_.get());
@@ -137,18 +164,19 @@ void MainWindow::applyDisplaySettings() {
     colorCorrectionActions_[size_t(colorSettings.correction)]->setChecked(true);
     const QSignalBlocker blockTemperature(colorTemperatureSlider_);
     colorTemperatureSlider_->setValue(colorSettings.temperature);
-    const bool showBorder = settings_.value("video/sgbBorder", true).toBool();
-    const bool borderChanged = emulator_ && cupid_gb_sgb_host_present(&emulator_->gb) &&
-                               !image_.isNull() &&
-                               (image_.width() == CUPID_SGB_SCREEN_WIDTH) != showBorder;
-    const bool colorHardware = emulator_ && (cupid_gb_model_is_cgb(emulator_->gb.model) ||
-                                             cupid_gb_sgb_host_present(&emulator_->gb));
+    sgbBorderMode_ = configuredSgbBorderMode(settings_);
+    sgbBorderActions_[size_t(sgbBorderMode_)]->setChecked(true);
+    const bool showBorder = emulator_ && showSgbBorder(emulator_->gb);
+    const bool borderChanged =
+        !image_.isNull() && !musicInfo_ && (image_.width() == CUPID_SGB_SCREEN_WIDTH) != showBorder;
+    const bool colorHardware =
+        emulator_ && (cupid_gb_model_is_cgb(emulator_->gb.model) ||
+                      cupid_gb_sgb_host_present(&emulator_->gb) || showBorder);
     const bool resetHistory = displayPalette_ != colors || displayOffColor_ != offColor ||
                               borderChanged || (colorChanged && colorHardware);
     displayPalette_ = colors;
     displayOffColor_ = offColor;
     setFrameBlending(configuredFrameBlending(settings_));
-    borderAction_->setChecked(showBorder);
     if (emulator_)
         present(resetHistory ? Presentation::Reset : Presentation::Redraw);
     else
@@ -188,7 +216,10 @@ void MainWindow::resizeDisplay(int scale) {
         if (auto *fullscreen = findChild<QAction *>("fullscreen"))
             fullscreen->setChecked(false);
     }
-    const QSize source = image_.isNull() ? QSize(160, 144) : image_.size();
+    const QSize emptySize = sgbBorderMode_ == SgbBorderMode::Always
+                                ? QSize(CUPID_SGB_SCREEN_WIDTH, CUPID_SGB_SCREEN_HEIGHT)
+                                : QSize(160, 144);
+    const QSize source = image_.isNull() ? emptySize : image_.size();
     displayNativeSize_ = source;
     resizeWindowCentered(logicalWindowSize(source, scale), QRect(pos(), size()));
     for (size_t i = 0; i < windowSizeActions_.size(); ++i)
@@ -226,9 +257,9 @@ void MainWindow::present(Presentation presentation) {
     if (!sgb && presentation == Presentation::Frame &&
         gb.display_frame_type == CUPID_GB_FRAME_REPEAT)
         return;
-    const QSize nativeSize = sgb && borderAction_->isChecked()
-                                 ? QSize(CUPID_SGB_SCREEN_WIDTH, CUPID_SGB_SCREEN_HEIGHT)
-                                 : QSize(160, 144);
+    const bool showBorder = showSgbBorder(gb);
+    const QSize nativeSize =
+        showBorder ? QSize(CUPID_SGB_SCREEN_WIDTH, CUPID_SGB_SCREEN_HEIGHT) : QSize(160, 144);
     bool resizeWindow = false;
     QRect previousWindowGeometry;
     int defaultScale = 2;
@@ -247,25 +278,37 @@ void MainWindow::present(Presentation presentation) {
         cupid_gb_sgb_render_with_color_table(&gb, reinterpret_cast<uint32_t *>(image_.bits()),
                                              size_t(image_.width() * image_.height()),
                                              sgbColorTable_->data());
-        if (!borderAction_->isChecked())
+        if (!showBorder)
             image_ = image_.copy(CUPID_SGB_VIEWPORT_X, CUPID_SGB_VIEWPORT_Y, 160, 144);
     } else {
-        image_ = QImage(160, 144, QImage::Format_RGB32);
+        if (showBorder)
+            borrowSgbBorder();
+        image_ = showBorder ? handheldBorder(gb) : QImage(160, 144, QImage::Format_RGB32);
+        auto *viewport = reinterpret_cast<QRgb *>(image_.bits());
+        const int width = image_.width();
+        if (showBorder)
+            viewport += CUPID_SGB_VIEWPORT_Y * width + CUPID_SGB_VIEWPORT_X;
         const bool offImage = gb.display_frame_type == CUPID_GB_FRAME_LCD_OFF ||
                               gb.display_frame_type == CUPID_GB_FRAME_BLANK_FIRST;
         if (offImage || gb.display_frame_type == CUPID_GB_FRAME_ARTIFICIAL) {
-            image_.fill(cupid_gb_model_is_cgb(gb.model) ? (*cgbColorTable_)[0x7fff]
-                        : offImage                      ? displayOffColor_
-                                                        : displayPalette_[0]);
+            const QRgb color = cupid_gb_model_is_cgb(gb.model) ? (*cgbColorTable_)[0x7fff]
+                               : offImage                      ? displayOffColor_
+                                                               : displayPalette_[0];
+            for (int y = 0; y < 144; ++y)
+                std::fill_n(viewport + y * width, 160, color);
+        } else if (gb.cgb_mode || cupid_cgb_compat_active(&gb)) {
+            for (int y = 0; y < 144; ++y) {
+                const auto *source = gb.frame_buffer_color + y * 160;
+                auto *row = viewport + y * width;
+                for (int x = 0; x < 160; ++x)
+                    row[x] = (*cgbColorTable_)[source[x] & 0x7fffu];
+            }
         } else {
-            auto *pixels = reinterpret_cast<QRgb *>(image_.bits());
-            // Hardware mode stays fixed while this framebuffer is converted.
-            if (gb.cgb_mode || cupid_cgb_compat_active(&gb)) {
-                for (size_t i = 0; i < 160 * 144; ++i)
-                    pixels[i] = (*cgbColorTable_)[gb.frame_buffer_color[i] & 0x7fffu];
-            } else {
-                for (size_t i = 0; i < 160 * 144; ++i)
-                    pixels[i] = displayPalette_[gb.frame_buffer[i] & 3];
+            for (int y = 0; y < 144; ++y) {
+                const auto *source = gb.frame_buffer + y * 160;
+                auto *row = viewport + y * width;
+                for (int x = 0; x < 160; ++x)
+                    row[x] = displayPalette_[source[x] & 3];
             }
         }
     }
@@ -455,10 +498,12 @@ void MainWindow::configure() {
     configureTemperatureSlider(temperature);
     temperature->setValue(colorSettings_.temperature);
     form->addRow("Ambient light temperature", temperature);
-    auto *border = new QCheckBox("Show the Super Game Boy border");
-    border->setObjectName("sgbBorder");
-    border->setChecked(settings_.value("video/sgbBorder", true).toBool());
-    form->addRow("SGB display", border);
+    auto *border = new QComboBox;
+    border->setObjectName("sgbBorderMode");
+    for (const auto *name : sgbBorderNames)
+        border->addItem(name);
+    border->setCurrentIndex(int(configuredSgbBorderMode(settings_)));
+    form->addRow("Display border", border);
     auto *messages = new QCheckBox("Show on-screen messages");
     messages->setObjectName("onScreenMessages");
     messages->setChecked(settings_.value("video/osd", false).toBool());
@@ -690,7 +735,7 @@ void MainWindow::configure() {
         settings_.setValue("video/blendingMode", blending->currentIndex());
         settings_.setValue("video/colorCorrection", correction->currentData());
         settings_.setValue("video/colorTemperature", temperature->value());
-        settings_.setValue("video/sgbBorder", border->isChecked());
+        settings_.setValue("video/sgbBorderMode", border->currentIndex());
         settings_.setValue("video/osd", messages->isChecked());
         for (size_t i = 0; i < colorNames.size(); ++i)
             settings_.setValue(QString("video/customPalette/%1").arg(i), colorNames[i]);

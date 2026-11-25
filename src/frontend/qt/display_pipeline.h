@@ -30,6 +30,7 @@ enum class DisplayScaling { Integer = 0, Aspect = 1, Fill = 2 };
 enum class ScalingFilter { Nearest = 0, Bilinear = 1, SmoothBilinear = 2 };
 enum class MonochromePalette { Lime = 0, Grayscale = 1, Olive = 2, Teal = 3, Custom = 4 };
 enum class FrameBlending { Disabled = 0, Simple = 1, Accurate = 2 };
+enum class SgbBorderMode { SgbOnly = 0, Never = 1, Always = 2 };
 
 QRectF displayViewport(QSize source, QSizeF available, DisplayScaling scaling,
                        qreal devicePixelRatio = 1.0);

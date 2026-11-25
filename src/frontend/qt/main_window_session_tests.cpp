@@ -201,9 +201,9 @@ bool MainWindow::modelSmokeTest(const QString &directory) {
     if (!latestRevision.openRom(colorOnly) || latestRevision.emulator_->gb.boot_rom[0x200] != 0x45)
         return smokeFailure(__FILE__, __LINE__);
     const QVariant savedScale = settings_.value("video/defaultScale", 2);
-    const QVariant savedBorder = settings_.value("video/sgbBorder", true);
+    const QVariant savedBorder = settings_.value("video/sgbBorderMode");
     settings_.setValue("video/defaultScale", 2);
-    settings_.setValue("video/sgbBorder", true);
+    settings_.setValue("video/sgbBorderMode", int(SgbBorderMode::SgbOnly));
     settings_.setValue("emulation/model", int(CUPID_GB_MODEL_DMG_ABC));
     {
         MainWindow hidden(true);
@@ -257,13 +257,13 @@ bool MainWindow::modelSmokeTest(const QString &directory) {
             sized.size() != sized.logicalWindowSize(QSize(256, 224), 2) ||
             sized.size().height() <= handheldSize.height() || !centerPreserved(enlargedCenter))
             return smokeFailure(__FILE__, __LINE__);
-        sized.borderAction_->trigger();
+        sized.sgbBorderActions_[size_t(SgbBorderMode::Never)]->trigger();
         if (sized.image_.size() != QSize(160, 144) || sized.size() != handheldSize)
             return smokeFailure(__FILE__, __LINE__);
         sized.resizeDisplay(2);
         if (sized.size() != handheldSize)
             return smokeFailure(__FILE__, __LINE__);
-        sized.borderAction_->trigger();
+        sized.sgbBorderActions_[size_t(SgbBorderMode::SgbOnly)]->trigger();
         if (sized.size() != automaticBorderedSize)
             return smokeFailure(__FILE__, __LINE__);
         settings_.setValue("video/defaultScale", 1);
@@ -273,7 +273,7 @@ bool MainWindow::modelSmokeTest(const QString &directory) {
         const QSize smallBorderedMinimum = sized.minimumSize();
         const QSize smallBorderedHint = sized.minimumSizeHint();
         const QSize smallBorderedLayoutMinimum = sized.layout()->minimumSize();
-        sized.borderAction_->trigger();
+        sized.sgbBorderActions_[size_t(SgbBorderMode::Never)]->trigger();
         if (sized.size() != sized.logicalWindowSize(QSize(160, 144), 1) ||
             !centerPreserved(smallBorderedCenter)) {
             qWarning() << "Window sizing before border hide:" << smallBorderedGeometry << "minimum"
@@ -292,7 +292,7 @@ bool MainWindow::modelSmokeTest(const QString &directory) {
             return smokeFailure(__FILE__, __LINE__);
         }
         const QPoint smallHandheldCenter = doubledCenter();
-        sized.borderAction_->trigger();
+        sized.sgbBorderActions_[size_t(SgbBorderMode::SgbOnly)]->trigger();
         if (sized.size() != sized.logicalWindowSize(QSize(256, 224), 1) ||
             !centerPreserved(smallHandheldCenter))
             return smokeFailure(__FILE__, __LINE__);
@@ -309,10 +309,10 @@ bool MainWindow::modelSmokeTest(const QString &directory) {
         const QSize customSize = automaticBorderedSize + QSize(73, 61);
         sized.resize(customSize);
         const QPoint customPosition = sized.pos();
-        sized.borderAction_->trigger();
+        sized.sgbBorderActions_[size_t(SgbBorderMode::Never)]->trigger();
         if (sized.size() != customSize || sized.pos() != customPosition)
             return smokeFailure(__FILE__, __LINE__);
-        sized.borderAction_->trigger();
+        sized.sgbBorderActions_[size_t(SgbBorderMode::SgbOnly)]->trigger();
         if (sized.size() != customSize || sized.pos() != customPosition)
             return smokeFailure(__FILE__, __LINE__);
         settings_.setValue("emulation/model", int(CUPID_GB_MODEL_DMG_ABC));
@@ -328,7 +328,7 @@ bool MainWindow::modelSmokeTest(const QString &directory) {
             return smokeFailure(__FILE__, __LINE__);
         fullscreen->trigger();
         const QPoint fullscreenPosition = sized.pos();
-        sized.borderAction_->trigger();
+        sized.sgbBorderActions_[size_t(SgbBorderMode::Never)]->trigger();
         if (!sized.isFullScreen() || !fullscreen->isChecked() || sized.pos() != fullscreenPosition)
             return smokeFailure(__FILE__, __LINE__);
         settings_.setValue("emulation/model", int(CUPID_GB_MODEL_DMG_ABC));
@@ -338,7 +338,7 @@ bool MainWindow::modelSmokeTest(const QString &directory) {
         sized.setPaused(true);
         fullscreen->trigger();
         sized.resizeDisplay(2);
-        settings_.setValue("video/sgbBorder", true);
+        settings_.setValue("video/sgbBorderMode", int(SgbBorderMode::SgbOnly));
         sized.applyDisplaySettings();
         settings_.setValue("emulation/model", int(CUPID_GB_MODEL_SGB2));
         if (!sized.restart() || sized.size() != automaticBorderedSize || !sized.closeRom())
@@ -380,7 +380,10 @@ bool MainWindow::modelSmokeTest(const QString &directory) {
         }
     }
     settings_.setValue("video/defaultScale", savedScale);
-    settings_.setValue("video/sgbBorder", savedBorder);
+    if (savedBorder.isValid())
+        settings_.setValue("video/sgbBorderMode", savedBorder);
+    else
+        settings_.remove("video/sgbBorderMode");
     if (hadModel)
         settings_.setValue("emulation/model", savedModel);
     else

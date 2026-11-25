@@ -117,7 +117,13 @@ View > Monochrome Palette offers Lime (Game Boy), Grayscale, Olive (Pocket), Tea
 
 View > Frame Blending and Settings offer Disabled, Simple, and Accurate. Simple gives the two most recent completed LCD images equal weight. Accurate alternates the weighting by LCD row and guest frame phase. Both mix in linear light using gamma 2.2. New settings default to Accurate, which uses Simple on SGB and SGB2. Existing on/off preferences keep their previous behavior. Cartridge changes, reset, state loads, rewind, and palette changes clear the frame history.
 
-Settings > SGB display controls whether to show the Super Game Boy border. Hiding it crops the image to the game viewport and does not disable SGB commands or palette behavior. Host palettes and blending do not establish hardware color accuracy. See [the parity checklist](parity.md).
+Use View > SGB Border or Settings > Display border to choose the image size.
+
+- **SGB Only** shows the 256 × 224 border on integrated Super Game Boy profiles. This is the default.
+- **Never** shows only the 160 × 144 viewport. On an integrated profile, adapter palettes, masks, and any border pixels that overlap the viewport still appear.
+- **Always** frames the game at 256 × 224. On Game Boy and Game Boy Color profiles, an enhanced cartridge can supply its own border if `sgb_boot.bin` is installed in the boot directory. CupidGB shows its own handheld bezel while it looks for a border and when the cartridge supplies none. External-host Super Game Boy profiles use a black surround.
+
+CupidGB looks for a cartridge border once per open cartridge. Resets and state loads keep the result. Screenshots use the selected image size. [Border capture details](sgb-startup.md#cartridge-borders-on-handheld-profiles)
 
 View > On-screen Messages and Settings > Notifications enable brief messages inside the game image. They start disabled. Opening a cartridge shows the CupidGB version, cartridge header title and CRC-32. The CRC describes the logical cartridge image, including erased padding and MMM01 menu ordering, so it can differ from the raw file's CRC. Saving or loading a state, taking a screenshot, and starting or stopping audio recording can also display a message. Holding turbo, slow motion or rewind refreshes its mode message. Message time follows guest presentation events, so pausing or repainting the window does not consume it. Messages follow the selected frame blending; toggling the setting while paused preserves the submitted image until the next guest frame. Screenshots exclude these messages.
 

@@ -18,6 +18,23 @@ Automatic selection uses the integrated host for SGB-enhanced cartridges.
 An application using the core can register a raw P1 write callback and
 drive the four contacts directly. [Core input API](core-api.md#input-and-memory-access)
 
+## Cartridge borders on handheld profiles
+
+In Always mode, a Game Boy or Game Boy Color session can use a border sent
+by a cartridge that declares SGB support. CupidGB starts a separate SGB NTSC
+instance with the configured `sgb_boot.bin` and fresh cartridge memory.
+It captures the first completed border transfer and applies it outside the
+handheld image at (48, 40). The handheld session keeps its own timing, input,
+saves, and LCD colors. Captured border colors use the SGB correction setting
+and ambient light temperature.
+
+One attempt runs per open cartridge. Capture stops after 600 presentations,
+600 frame periods of adapter time, or 48 million steps, whichever comes first.
+The separate instance accepts cartridge images up to 32 MiB. If capture fails,
+the handheld profile keeps its CupidGB bezel. Closing the cartridge or opening
+a different one drops the cached surround. The result belongs to the window,
+so native and portable save files need no additional data.
+
 ## Boot headers and command permission
 
 The integrated SGB and SGB2 host accepts packets while firmware is mapped, including for cartridges whose header does not declare enhancements. `cupid_gb_sgb_active` reports the cartridge declaration. `cupid_gb_sgb_commands_enabled` reports the receiver's current permission.

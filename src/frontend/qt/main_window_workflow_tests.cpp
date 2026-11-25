@@ -973,11 +973,11 @@ bool MainWindow::smokeTest(SmokeWorkflow workflow) {
     blendingActions_[disabledBlend]->trigger();
     emulator_->gb.sgb.border_palettes[1] = 0x001f;
     present();
-    borderAction_->trigger();
+    sgbBorderActions_[size_t(SgbBorderMode::Never)]->trigger();
     if (image_.size() != QSize(160, 144) || display_->minimumSize() != image_.size() ||
         image_ != bordered.copy(CUPID_SGB_VIEWPORT_X, CUPID_SGB_VIEWPORT_Y, 160, 144))
         return smokeFailure(__FILE__, __LINE__);
-    borderAction_->trigger();
+    sgbBorderActions_[size_t(SgbBorderMode::SgbOnly)]->trigger();
     if (image_.size() != bordered.size())
         return smokeFailure(__FILE__, __LINE__);
     emulator_->gb.sgb.border_palettes[1] = 0x294a;
