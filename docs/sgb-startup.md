@@ -1,12 +1,26 @@
 # SGB startup
 
-CupidGB models adapter startup separately from cartridge enhancement commands. A physical SGB or SGB2 runs its introduction when entering an installed boot binary, including with a cartridge that does not request SGB enhancements. The approximate post-boot path starts with the introduction complete. Hiding the border changes presentation only; it does not disable the physical host or its startup timing.
+CupidGB models adapter startup separately from cartridge enhancement commands. The integrated SGB or SGB2 host runs its introduction when entering an installed boot binary, including with a cartridge that does not request SGB enhancements. The approximate post-boot path starts with the introduction complete. The border setting changes presentation.
 
 This guide describes the implemented core, output and Qt contracts. The [startup validation record](validation-sgb-startup.md) separates build gates, paired clock observations, native workflows and bounded runtime measurements. Original artwork and sound remain distinct from timing and output-ownership evidence. See [Validation status](#validation-status).
 
+## External-host profiles
+
+SGB NTSC, SGB PAL and SGB2 each have an external-host profile. They keep
+their regional clocks and firmware choices. The handheld runs its first
+firmware instruction immediately and produces a 160 × 144 image and
+handheld audio. An external host supplies the P1 contacts. The integrated
+adapter introduction, border, command receiver and multiplayer controller
+selection are absent in these profiles.
+
+The Qt settings and ROM runner can select these profiles explicitly.
+Automatic selection uses the integrated host for SGB-enhanced cartridges.
+An application using the core can register a raw P1 write callback and
+drive the four contacts directly. [Core input API](core-api.md#input-and-memory-access)
+
 ## Boot headers and command permission
 
-Physical SGB and SGB2 accept packets while firmware is mapped, including for cartridges whose header does not declare enhancements. `cupid_gb_sgb_active` reports the cartridge declaration; `cupid_gb_sgb_commands_enabled` reports the receiver's current permission. Neither query substitutes for the physical-model check.
+The integrated SGB and SGB2 host accepts packets while firmware is mapped, including for cartridges whose header does not declare enhancements. `cupid_gb_sgb_active` reports the cartridge declaration. `cupid_gb_sgb_commands_enabled` reports the receiver's current permission.
 
 Boot-header packets use identifiers `F1`, `F3`, `F5`, `F7`, `F9`, `FB`, `FD` and `FF`. Each is one 16-byte packet: an identifier, an eight-bit checksum and fourteen data bytes. The checksum is the sum of those fourteen bytes modulo 256. A bad checksum disables further command reception until a new boot session. It does not clear the selected controller, its button mask or the existing picture.
 

@@ -111,6 +111,8 @@ bool MainWindow::prepareResetCandidate(CupidEmulator *candidate, ResetWorkflow w
     next.serial_output_callback = previous.serial_output_callback;
     next.serial_output_user_data = previous.serial_output_user_data;
     next.serial_link = previous.serial_link;
+    next.joyp_write_callback = previous.joyp_write_callback;
+    next.joyp_write_user_data = previous.joyp_write_user_data;
     next.rumble_callback = previous.rumble_callback;
     next.rumble_user_data = previous.rumble_user_data;
     next.rumble_strength_callback = previous.rumble_strength_callback;

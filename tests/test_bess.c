@@ -23,8 +23,11 @@
 #include "cupid/gb/bess.h"
 
 #include "../src/gb/oam_bus.h"
+#include "../src/gb/state_startup.h"
+#include "cupid/common/sha256.h"
 #include "cupid/gb/apu.h"
 #include "cupid/gb/cartridge.h"
+#include "cupid/gb/input.h"
 #include "cupid/gb/sgb_startup.h"
 #include "cupid/gb/timer.h"
 
@@ -479,6 +482,88 @@ static void check_extended_mbc3(void) {
     }
 }
 
+typedef struct ExternalJoypLog {
+    unsigned count;
+    uint8_t last;
+} ExternalJoypLog;
+
+static void observe_external_joyp(CupidGb *gb, uint8_t raw, void *user_data) {
+    (void)gb;
+    ExternalJoypLog *log = user_data;
+    ++log->count;
+    log->last = raw;
+}
+
+static void check_external_adapter_states(CupidGbModel model, CupidGbModel integrated,
+                                          const char *portable_model) {
+    CupidGb *source = machine(model, 0, false);
+    CupidGb *target = machine(model, 0, false);
+    CupidGb *host = machine(integrated, 0, false);
+    assert(cupid_gb_model_is_sgb(source->model) && !cupid_gb_sgb_host_present(source));
+    size_t startup_size = 1;
+    assert(cupid_gb_sgb_startup_state_size(source, &startup_size) && !startup_size);
+    assert(cupid_gb_sgb_startup_state_size(host, &startup_size) && startup_size);
+
+    cupid_gb_set_external_joyp(source, 13);
+    cupid_gb_write_u8(source, 0xff00, 0x10);
+    assert(cupid_gb_read_u8(source, 0xff00) == 0x1d);
+    ExternalJoypLog log = {0};
+    cupid_gb_set_joyp_write_callback(target, observe_external_joyp, &log);
+    const size_t native_length = cupid_gb_state_size(source);
+    assert(native_length && native_length < cupid_gb_state_size(host));
+    uint8_t *native = malloc(native_length);
+    assert(native && cupid_gb_save_state(source, native, native_length, NULL) == CUPID_GB_STATE_OK);
+    assert(cupid_gb_load_state(host, native, native_length) == CUPID_GB_STATE_WRONG_MODEL);
+    assert(cupid_gb_load_state(target, native, native_length) == CUPID_GB_STATE_OK);
+    assert(cupid_gb_read_u8(target, 0xff00) == 0x1d && !log.count);
+
+    CupidGbStateContext context;
+    assert(cupid_gb_state_context_init(&context, target) == CUPID_GB_STATE_OK);
+    cupid_gb_set_external_joyp(target, 10);
+    assert(cupid_gb_load_state_live_with_context(target, native, native_length, &context) ==
+           CUPID_GB_STATE_OK);
+    assert(cupid_gb_read_u8(target, 0xff00) == 0x1d && !log.count);
+    native[8] = 29;
+    cupid_sha256_parts(native, 96, native + 128, native_length - 128, native + 96);
+    assert(cupid_gb_load_state(target, native, native_length) ==
+           CUPID_GB_STATE_UNSUPPORTED_VERSION);
+    assert(cupid_gb_read_u8(target, 0xff00) == 0x1d && !log.count);
+
+    size_t size;
+    uint8_t *portable = capture(source, &size);
+    uint8_t *core = find_block(portable, size, "CORE");
+    assert(!memcmp(core + 4, portable_model, 4) && !lookup_block(portable, size, "SGB "));
+    assert(core[0x18] == 0x1d);
+    const uint8_t saved_p1[] = {0x0d, 0x1d, 0x2d, 0x3d, 0x7d, 0xbd, 0xfd, 0xff};
+    const uint8_t restored_p1[] = {0xcf, 0x1f, 0x2f, 0x3f, 0x7f, 0xbf, 0xff, 0xff};
+    for (size_t index = 0; index < sizeof(saved_p1); ++index) {
+        core[0x18] = saved_p1[index];
+        cupid_gb_set_buttons(target, 0xfe);
+        assert(cupid_gb_bess_load(target, portable, size) == CUPID_GB_STATE_OK);
+        assert(cupid_gb_read_u8(target, 0xff00) == restored_p1[index] && !log.count);
+        assert(cupid_gb_sgb_active(target) && !target->joyp_sample_pending &&
+               !target->sgb.commands_disabled && target->sgb.player_count == 1);
+    }
+    check_native_snapshot(target);
+    cupid_gb_write_u8(target, 0xff00, 0xac);
+    assert(log.count == 1 && log.last == 0xac && cupid_gb_read_u8(target, 0xff00) == 0xff);
+
+    size_t host_size;
+    uint8_t *host_portable = capture(host, &host_size);
+    assert(lookup_block(host_portable, host_size, "SGB "));
+    assert(cupid_gb_bess_load(target, host_portable, host_size) == CUPID_GB_STATE_INVALID);
+    assert(cupid_gb_read_u8(target, 0xff00) == 0xff && log.count == 1);
+    assert(cupid_gb_bess_load(host, portable, size) == CUPID_GB_STATE_OK);
+    assert(cupid_gb_sgb_host_present(host) && !cupid_gb_sgb_commands_enabled(host));
+
+    free(host_portable);
+    free(portable);
+    free(native);
+    destroy(host);
+    destroy(target);
+    destroy(source);
+}
+
 int main(void) {
     const CupidGbModel models[] = {
         CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_DMG0,  CUPID_GB_MODEL_MGB,   CUPID_GB_MODEL_CGB_0,
@@ -496,5 +581,8 @@ int main(void) {
     check_sgb(CUPID_GB_MODEL_SGB, "SN  ", true);
     check_sgb(CUPID_GB_MODEL_SGB_PAL, "SP  ", false);
     check_sgb(CUPID_GB_MODEL_SGB2, "S2  ", true);
+    check_external_adapter_states(CUPID_GB_MODEL_SGB_EXTERNAL, CUPID_GB_MODEL_SGB, "SN  ");
+    check_external_adapter_states(CUPID_GB_MODEL_SGB_PAL_EXTERNAL, CUPID_GB_MODEL_SGB_PAL, "SP  ");
+    check_external_adapter_states(CUPID_GB_MODEL_SGB2_EXTERNAL, CUPID_GB_MODEL_SGB2, "S2  ");
     puts("Portable states preserve mapped cartridge and memory state.");
 }

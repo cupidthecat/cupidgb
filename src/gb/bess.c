@@ -181,7 +181,7 @@ static CupidGbStateResult validate(const CupidGb *gb, const BessState *state,
          (state->tpp1.size != BESS_TPP1_SIZE || (state->tpp1.bytes[16] & 0xf0u))) ||
         (state->mbc7.bytes && state->mbc7.size != BESS_MBC7_SIZE) ||
         (state->extra_oam.bytes && state->extra_oam.size != BESS_XOAM_SIZE) ||
-        (state->sgb.bytes && !cupid_gb_model_is_sgb(gb->model)) ||
+        (state->sgb.bytes && !cupid_gb_sgb_host_present(gb)) ||
         (!cupid_gb_model_is_cgb(gb->model) && (state->regions[5].size || state->regions[6].size)))
         return CUPID_GB_STATE_INVALID;
     if (!core[BESS_PORTS + 0x50])
@@ -214,10 +214,10 @@ static void copy_words(uint16_t *dest, size_t capacity, BessBlock region) {
 }
 
 static void restore_sgb(CupidGb *gb, const BessState *state) {
-    if (!cupid_gb_model_is_sgb(gb->model))
-        return;
     CupidGbSgb *sgb = &gb->sgb;
-    sgb->enabled = gb->header.sgb_flag == 3;
+    sgb->enabled = cupid_gb_model_is_sgb(gb->model) && gb->header.sgb_flag == 3;
+    if (!cupid_gb_sgb_host_present(gb))
+        return;
     sgb->commands_disabled = !state->sgb.bytes;
     if (sgb->commands_disabled)
         return;
@@ -286,7 +286,14 @@ static void restore_registers(CupidGb *gb, const uint8_t *core) {
     cupid_gb_write_u8(gb, 0xff40, io[0x40]);
 
     /* The transfer and timer phases are not represented in the file. */
-    gb->io_registers[0x00] = (uint8_t)(0xc0u | (io[0] & 0x30u) | 0x0fu);
+    if (cupid_gb_model_is_sgb_external(gb->model)) {
+        /* Replay the saved row write from fresh, released external contacts.
+         * The candidate has no observer yet, so this only updates the latch. */
+        gb->io_registers[0x00] = 0xcfu;
+        cupid_gb_input_select(gb, io[0]);
+    } else {
+        gb->io_registers[0x00] = (uint8_t)(0xc0u | (io[0] & 0x30u) | 0x0fu);
+    }
     gb->io_registers[0x01] = io[1];
     gb->io_registers[0x02] = (uint8_t)(io[2] & (color ? 3u : 1u));
     gb->serial_fast_clock = color && (io[2] & 2u) != 0;

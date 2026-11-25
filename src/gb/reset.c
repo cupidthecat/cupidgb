@@ -208,6 +208,8 @@ void cupid_gb_reset_restore_host(CupidGb *next, const CupidGb *gb) {
     next->serial_output_callback = gb->serial_output_callback;
     next->serial_output_user_data = gb->serial_output_user_data;
     next->serial_link = gb->serial_link;
+    next->joyp_write_callback = gb->joyp_write_callback;
+    next->joyp_write_user_data = gb->joyp_write_user_data;
     next->rumble_callback = gb->rumble_callback;
     next->rumble_user_data = gb->rumble_user_data;
     next->rumble_strength_callback = gb->rumble_strength_callback;

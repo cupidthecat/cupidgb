@@ -11,6 +11,34 @@ commercial sessions and a separate synthetic startup pacing run. Normal native
 Linux audio qualification remains open. The results below do not establish
 complete hardware, frontend or all-game parity.
 
+## External-host hardware and firmware
+
+SGB NTSC, SGB PAL and SGB2 each run with their integrated host disabled.
+The comparison against revision `ea667ad79aa28409f034b1fd6da7304e1844750d`
+covered the three external profiles and the corresponding integrated
+profiles. The external profiles deliver the 160 × 144 handheld image,
+retain their board clocks and leave multiplayer commands to the external host.
+
+The SGB and SGB2 firmware images matched their published hashes. On each
+external profile they reached cartridge entry at PC `0100` after 192,607
+steps and 1,955,928 base clocks in both builds. P1 began at `CF` and read
+`3F` at entry. Both builds observed 1,561 writes to P1, ending in `30`.
+Accumulator A held `01` on the two SGB profiles and `FF` on SGB2.
+
+Controller tests check repeated raw writes, falling-edge interrupts and
+independence from ordinary pad masks. The portable import tests match 24
+reference P1 projections. Native capture preserves the entire P1 latch and
+resumes with the receiving host's callback. The external-host profiles use
+the physical board identifiers in portable files and export without an
+integrated host block. [State format](save-states.md#external-host-sgb-profiles-in-version-30)
+
+An external input driver replayed Tetris from built-in startup and Donkey
+Kong from installed firmware on all three profiles. Across 1,800 intervals
+per run, Windows and Linux matched guest clocks, P1 writes, final pixels
+and stereo PCM. Tetris reached an active game on all three profiles.
+These replays exercise the software input boundary. A physical external
+console connection remains unverified.
+
 ## Source and build identity
 
 The tested inventory contains 301 build inputs. Its SHA-256 is

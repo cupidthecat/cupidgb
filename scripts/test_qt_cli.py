@@ -159,11 +159,15 @@ def check_selection(run, binary, environment, root, plain, licensed, color):
                               ("cgb-0", "cgb-0"), ("cgb-a", "cgb-a"), ("cgb-b", "cgb-b"),
                               ("cgb-c", "cgb-c"), ("cgb-d", "cgb-d"),
                               ("sgb", "sgb"), ("sgb2", "sgb2"),
-                              ("sgbpal", "sgbpal")):
+                              ("sgbpal", "sgbpal"), ("sgb-external", "sgb-external"),
+                              ("sgb-pal-external", "sgb-pal-external"),
+                              ("sgb2-external", "sgb2-external")):
         result = run(plain, "--model", requested)
         assert result["requested_model"] == actual, result
         assert result["hardware_model"] == actual, result
-        assert result["base_clock_hz"] == {"sgb": 4295454, "sgbpal": 4256274}.get(actual, 4194304)
+        assert result["base_clock_hz"] == {"sgb": 4295454, "sgbpal": 4256274,
+                                           "sgb-external": 4295454,
+                                           "sgb-pal-external": 4256274}.get(actual, 4194304)
     result = run(licensed, "--model", "auto")
     assert result["requested_model"] == "auto" and result["hardware_model"] == "cgb"
     result = run(color, "--model", "auto")
@@ -183,7 +187,8 @@ def check_selection(run, binary, environment, root, plain, licensed, color):
         assert post_warmup["elapsed_seconds"] > 0
     else:
         assert post_warmup["reason"] == "warmup_sample_unavailable"
-    for requested in ("dmg", "dmg0", "mgb", "sgb", "sgb2", "sgbpal"):
+    for requested in ("dmg", "dmg0", "mgb", "sgb", "sgb2", "sgbpal", "sgb-external",
+                      "sgb-pal-external", "sgb2-external"):
         run(color, "--model", requested, expected=1)
     for options in (("--camera-source", "generated", "--smoke-test"),
                     ("--model", "invalid"), ("--model", "cgb-f"),
@@ -391,6 +396,11 @@ def main():
             assert result["requested_duration_seconds"] == float(duration), result
             assert result["elapsed_seconds"] >= result["requested_duration_seconds"], result
             assert Path(str(report) + ".png").exists()
+            if result["hardware_model"].endswith("-external"):
+                image = Path(str(report) + ".png").read_bytes()
+                assert image.startswith(b"\x89PNG\r\n\x1a\n")
+                assert int.from_bytes(image[16:20], "big") == 160
+                assert int.from_bytes(image[20:24], "big") == 144
             assert result["window_visible"] and result["window_capture_saved"]
             window = Path(str(report) + ".window.png").read_bytes()
             assert window.startswith(b"\x89PNG\r\n\x1a\n")

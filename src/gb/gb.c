@@ -92,6 +92,12 @@ const char *cupid_gb_model_name(CupidGbModel model) {
             return "sgb2";
         case CUPID_GB_MODEL_SGB_PAL:
             return "sgbpal";
+        case CUPID_GB_MODEL_SGB_EXTERNAL:
+            return "sgb-external";
+        case CUPID_GB_MODEL_SGB_PAL_EXTERNAL:
+            return "sgb-pal-external";
+        case CUPID_GB_MODEL_SGB2_EXTERNAL:
+            return "sgb2-external";
         case CUPID_GB_MODEL_DMG_ABC:
         default:
             return "dmgabc";
@@ -119,6 +125,7 @@ void cupid_gb_set_model(CupidGb *gb, CupidGbModel model) {
 }
 
 bool cupid_gb_model_is_sgb(CupidGbModel model) {
+    model = cupid_gb_model_base(model);
     return model == CUPID_GB_MODEL_SGB || model == CUPID_GB_MODEL_SGB2 ||
            model == CUPID_GB_MODEL_SGB_PAL;
 }
@@ -126,9 +133,10 @@ bool cupid_gb_model_is_sgb(CupidGbModel model) {
 uint32_t cupid_gb_base_clock_hz(const CupidGb *gb) {
     /* The first SGB divides its regional host clock by five. SGB2 has an
      * independent oscillator matching the handheld base clock. */
-    if (gb && gb->model == CUPID_GB_MODEL_SGB_PAL)
+    const CupidGbModel model = gb ? cupid_gb_model_base(gb->model) : CUPID_GB_MODEL_DMG_ABC;
+    if (model == CUPID_GB_MODEL_SGB_PAL)
         return 4256274u;
-    return gb && gb->model == CUPID_GB_MODEL_SGB ? 4295454u : 4194304u;
+    return model == CUPID_GB_MODEL_SGB ? 4295454u : 4194304u;
 }
 
 /**
@@ -141,6 +149,7 @@ uint32_t cupid_gb_base_clock_hz(const CupidGb *gb) {
  * @param gb Pointer to the Game Boy state.
  */
 static void cupid_gb_apply_boot_profile(CupidGb *gb) {
+    const CupidGbModel model = cupid_gb_model_base(gb->model);
     if (gb->model == CUPID_GB_MODEL_DMG0) {
         gb->cpu.a = 0x01u;
         gb->cpu.f = 0x00u;
@@ -171,7 +180,7 @@ static void cupid_gb_apply_boot_profile(CupidGb *gb) {
         gb->io_registers[CUPID_GB_IO_LY] = 0x00u;
         gb->div_counter = 52u;
         gb->ppu_counter = 0u;
-    } else if (gb->model == CUPID_GB_MODEL_SGB || gb->model == CUPID_GB_MODEL_SGB_PAL) {
+    } else if (model == CUPID_GB_MODEL_SGB || model == CUPID_GB_MODEL_SGB_PAL) {
         gb->cpu.a = 0x01u;
         gb->cpu.f = 0x00u;
         gb->cpu.b = 0x00u;
@@ -188,7 +197,7 @@ static void cupid_gb_apply_boot_profile(CupidGb *gb) {
         gb->io_registers[CUPID_GB_IO_LY] = 144u;
         gb->div_counter = 24u;
         gb->ppu_counter = 50u;
-    } else if (gb->model == CUPID_GB_MODEL_SGB2) {
+    } else if (model == CUPID_GB_MODEL_SGB2) {
         gb->cpu.a = 0xffu;
         gb->cpu.f = 0x00u;
         gb->cpu.b = 0x00u;
@@ -310,6 +319,8 @@ void cupid_gb_init(CupidGb *gb) {
     const CupidGbCameraHost camera_host = gb->camera_host;
     const bool hide_background_layer = gb->hide_background_layer;
     const bool hide_object_layer = gb->hide_object_layer;
+    const CupidGbJoypWriteCallback joyp_write_callback = gb->joyp_write_callback;
+    void *const joyp_write_user_data = gb->joyp_write_user_data;
     memset(gb, 0, sizeof(*gb));
     /* Approximate boot starts after firmware has already driven the bus. */
     gb->cartridge_bus_data = 0xffu;
@@ -330,6 +341,8 @@ void cupid_gb_init(CupidGb *gb) {
     gb->serial_output_callback = serial_output_callback;
     gb->serial_output_user_data = serial_output_user_data;
     gb->serial_link = serial_link;
+    gb->joyp_write_callback = joyp_write_callback;
+    gb->joyp_write_user_data = joyp_write_user_data;
     gb->rumble_callback = rumble_callback;
     gb->rumble_user_data = rumble_user_data;
     gb->rumble_strength_callback = rumble_strength_callback;
@@ -417,7 +430,10 @@ void cupid_gb_init(CupidGb *gb) {
     gb->apu.ch4_lfsr = 0x7fffu;
     cupid_cgb_init_state(gb);
     gb->io_registers[0x4du] = 0x00u; /* KEY1: normal speed, switch not armed */
-    gb->io_registers[0x00u] = cupid_gb_model_is_sgb(gb->model) ? 0xffu : 0xcfu; /* P1 */
+    gb->io_registers[0x00u] =
+        cupid_gb_model_is_sgb(gb->model) && !cupid_gb_model_is_sgb_external(gb->model)
+            ? 0xffu
+            : 0xcfu;    /* P1 */
     gb->joypad = 0xffu; /* all buttons released (0=pressed) */
     memset(gb->joypad_extra, 0xff, sizeof(gb->joypad_extra));
     gb->frame_ready = false;
@@ -682,6 +698,8 @@ void cupid_gb_cleanup(CupidGb *gb) {
     gb->serial_output_callback = NULL;
     gb->serial_output_user_data = NULL;
     gb->serial_link = (CupidGbSerialLink){0};
+    gb->joyp_write_callback = NULL;
+    gb->joyp_write_user_data = NULL;
     gb->rumble_callback = NULL;
     gb->rumble_user_data = NULL;
     gb->rumble_strength_callback = NULL;
@@ -1566,7 +1584,7 @@ void cupid_gb_write_u8_phase(CupidGb *gb, uint16_t address, uint8_t value, bool 
             if ((value & 0x80u) == 0u) {
                 if (lcd_was_enabled) {
                     cupid_cgb_hdma_lcd_off(gb, previous_mode);
-                    if (!cupid_gb_sgb_host_present(gb))
+                    if (!cupid_gb_model_is_sgb(gb->model))
                         gb->lcd_frame_odd = !gb->lcd_frame_odd;
                 }
                 gb->ppu_counter = 0u;

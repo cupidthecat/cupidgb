@@ -251,7 +251,8 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "--help")) {
             puts("CupidGB ROM runner: [--model dmg|dmg0|mgb|cgb|cgb-0|cgb-a|cgb-b|cgb-c|"
-                 "cgb-d|cgb-e|sgb|sgbpal|sgb2] [--frames N] "
+                 "cgb-d|cgb-e|sgb|sgbpal|sgb2|sgb-external|sgb-pal-external|sgb2-external] "
+                 "[--frames N] "
                  "[--max-steps N] [--protocol none|serial|register|fibonacci|memory] [--boot FILE] "
                  "[--image FILE.ppm] [--audio FILE.pcm] [--input-trace FILE] "
                  "[--power-on-seed auto|UINT64] [--serial-output] ROM\n"
@@ -310,7 +311,8 @@ int main(int argc, char **argv) {
         model = CUPID_GB_MODEL_CGB_E;
         known_model = true;
     }
-    for (int id = CUPID_GB_MODEL_DMG_ABC; !known_model && id <= CUPID_GB_MODEL_CGB_D; ++id) {
+    for (int id = CUPID_GB_MODEL_DMG_ABC; !known_model && id <= CUPID_GB_MODEL_SGB2_EXTERNAL;
+         ++id) {
         if (!strcmp(model_name, cupid_gb_model_name((CupidGbModel)id))) {
             model = (CupidGbModel)id;
             known_model = true;

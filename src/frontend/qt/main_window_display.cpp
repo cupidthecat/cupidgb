@@ -336,6 +336,14 @@ void MainWindow::configure() {
     model->addItem("Super Game Boy NTSC", CUPID_GB_MODEL_SGB);
     model->addItem("Super Game Boy PAL", CUPID_GB_MODEL_SGB_PAL);
     model->addItem("Super Game Boy 2", CUPID_GB_MODEL_SGB2);
+    model->addItem("Super Game Boy NTSC (external host)", CUPID_GB_MODEL_SGB_EXTERNAL);
+    model->addItem("Super Game Boy PAL (external host)", CUPID_GB_MODEL_SGB_PAL_EXTERNAL);
+    model->addItem("Super Game Boy 2 (external host)", CUPID_GB_MODEL_SGB2_EXTERNAL);
+    for (const auto external : {CUPID_GB_MODEL_SGB_EXTERNAL, CUPID_GB_MODEL_SGB_PAL_EXTERNAL,
+                                CUPID_GB_MODEL_SGB2_EXTERNAL})
+        model->setItemData(model->findData(int(external)),
+                           "160 × 144 output with controller lines supplied by an external host.",
+                           Qt::ToolTipRole);
     model->setCurrentIndex(
         model->findData(modelOverride_.value_or(settings_.value("emulation/model", -1).toInt())));
     if (modelOverride_) {

@@ -82,7 +82,7 @@ static StartupNoise fill_memory(CupidGb *gb) {
     const bool color = cupid_gb_model_is_cgb(gb->model);
     const bool early_color = cupid_gb_model_is_early_cgb(gb->model);
     const bool pocket = gb->model == CUPID_GB_MODEL_MGB;
-    const bool sgb2 = gb->model == CUPID_GB_MODEL_SGB2;
+    const bool sgb2 = cupid_gb_model_base(gb->model) == CUPID_GB_MODEL_SGB2;
     const size_t work_bytes = color ? sizeof(gb->work_ram) : 0x2000u;
 
     memset(gb->video_ram, 0, sizeof(gb->video_ram));
@@ -127,7 +127,9 @@ static StartupNoise fill_memory(CupidGb *gb) {
 static StartupNoise noise_after_memory(const CupidGb *gb) {
     const bool color = cupid_gb_model_is_cgb(gb->model);
     const bool pocket = gb->model == CUPID_GB_MODEL_MGB;
-    const unsigned work_draws = color || pocket ? 1 : gb->model == CUPID_GB_MODEL_SGB2 ? 3 : 2;
+    const unsigned work_draws = color || pocket                                         ? 1
+                                : cupid_gb_model_base(gb->model) == CUPID_GB_MODEL_SGB2 ? 3
+                                                                                        : 2;
     const size_t work_bytes = color ? sizeof(gb->work_ram) : 0x2000u;
     const size_t bytes =
         work_bytes * work_draws + sizeof(gb->high_ram) * (color ? 1u : 3u) +

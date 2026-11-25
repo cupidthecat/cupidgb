@@ -472,13 +472,9 @@ static void state_extension_v4(StateIo *io, CupidGb *gb) {
     boolean(io, &gb->mbc5_rumble_on);
 }
 
-static bool sgb_model(CupidGbModel model) {
-    return cupid_gb_model_is_sgb(model);
-}
-
 /* Version 5 sections follow the immutable hardware and cartridge identity. */
 static unsigned state_sections(const CupidGb *gb) {
-    unsigned sections = sgb_model(gb->model) ? STATE_SECTION_SGB : 0;
+    unsigned sections = cupid_gb_sgb_host_present(gb) ? STATE_SECTION_SGB : 0;
     if (gb->header.mbc_type == CUPID_GB_MMM01) {
         sections |= STATE_SECTION_MMM01;
     } else if (gb->header.mbc_type == CUPID_GB_MBC7) {
@@ -539,7 +535,7 @@ static bool valid_sgb_extension(const CupidGbSgbTransfer *transfer) {
 static void import_legacy_sgb(CupidGb *gb) {
     CupidGbSgb *sgb = &gb->sgb;
     memset(&sgb->transfer, 0, sizeof(sgb->transfer));
-    if (sgb_model(gb->model)) {
+    if (cupid_gb_sgb_host_present(gb)) {
         /* Older states applied transfers immediately. Retain the visible
          * border as the starting point for subsequent staged uploads. */
         memcpy(sgb->transfer.tiles, sgb->border_tiles, sizeof(sgb->transfer.tiles));
@@ -1226,7 +1222,7 @@ static void import_legacy_sgb_startup(CupidGb *gb) {
      * VBlank phase. The DIV subphase depends on the cartridge header packet
      * stream, so retain that validated value. No memory or host configuration
      * belongs to this migration. */
-    if (!cupid_gb_model_is_sgb(gb->model) || gb->boot_rom_enabled || gb->elapsed_cycles ||
+    if (!cupid_gb_sgb_host_present(gb) || gb->boot_rom_enabled || gb->elapsed_cycles ||
         cpu->a != (gb->model == CUPID_GB_MODEL_SGB2 ? 0xffu : 0x01u) || cpu->f || cpu->b ||
         cpu->c != 0x14u || cpu->d || cpu->e || cpu->h != 0xc0u || cpu->l != 0x60u ||
         cpu->sp != 0xfffeu || cpu->pc != CUPID_GB_ENTRY_POINT || cpu->ime || cpu->ime_delay ||
@@ -1355,7 +1351,8 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
     if (get_u32(data + 16) != (uint32_t)gb->model) {
         return CUPID_GB_STATE_WRONG_MODEL;
     }
-    if (version < STATE_VERSION_V27 && extra_oam_size)
+    if ((version < STATE_VERSION_V27 && extra_oam_size) ||
+        (version < STATE_VERSION_V30 && cupid_gb_model_is_sgb_external(gb->model)))
         return CUPID_GB_STATE_UNSUPPORTED_VERSION;
     const uint32_t flags = get_u32(data + 28);
     if (flags & ~(version >= STATE_VERSION_V23 ? 3u : 1u))

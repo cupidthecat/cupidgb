@@ -698,8 +698,10 @@ bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflo
             cupid_gb_set_model(&candidate->gb, CupidGbModel(model));
             candidate->gb.boot_rom_size = 0;
             std::memset(candidate->gb.boot_rom, 0, sizeof(candidate->gb.boot_rom));
-            // A reset of the staged machine must never clear the live printer.
+            // A staged reset must not reach live accessories or an external host.
             candidate->gb.serial_link = {};
+            candidate->gb.joyp_write_callback = nullptr;
+            candidate->gb.joyp_write_user_data = nullptr;
         }
     } else {
         if (powerOnSeedOverride_)
@@ -753,6 +755,7 @@ bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflo
     // Reject unavailable firmware before exporting the current cartridge's clock.
     const QString bootFolder = music || preserveConsole ? QString() : bootDirectory();
     if (!bootFolder.isEmpty()) {
+        const auto physicalModel = cupid_gb_model_base(CupidGbModel(model));
         QString name = "dmg_boot.bin";
         if (model == CUPID_GB_MODEL_CGB_0)
             name = "cgb0_boot.bin";
@@ -765,9 +768,9 @@ bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflo
                 name = "cgbE_boot.bin";
         } else if (model == CUPID_GB_MODEL_MGB)
             name = "mgb_boot.bin";
-        else if (model == CUPID_GB_MODEL_SGB || model == CUPID_GB_MODEL_SGB_PAL)
+        else if (physicalModel == CUPID_GB_MODEL_SGB || physicalModel == CUPID_GB_MODEL_SGB_PAL)
             name = "sgb_boot.bin";
-        else if (model == CUPID_GB_MODEL_SGB2)
+        else if (physicalModel == CUPID_GB_MODEL_SGB2)
             name = "sgb2_boot.bin";
         QFile boot(QDir(bootFolder).filePath(name));
         if (!boot.open(QIODevice::ReadOnly) ||

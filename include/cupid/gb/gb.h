@@ -284,11 +284,32 @@ typedef enum CupidGbModel {
     CUPID_GB_MODEL_CGB_A = 8,
     CUPID_GB_MODEL_CGB_B = 9,
     CUPID_GB_MODEL_CGB_C = 10,
-    CUPID_GB_MODEL_CGB_D = 11
+    CUPID_GB_MODEL_CGB_D = 11,
+    CUPID_GB_MODEL_SGB_EXTERNAL = 12,
+    CUPID_GB_MODEL_SGB_PAL_EXTERNAL = 13,
+    CUPID_GB_MODEL_SGB2_EXTERNAL = 14
 } CupidGbModel;
 
 static inline bool cupid_gb_model_is_valid(CupidGbModel model) {
-    return (unsigned)model <= CUPID_GB_MODEL_CGB_D;
+    return (unsigned)model <= CUPID_GB_MODEL_SGB2_EXTERNAL;
+}
+
+static inline bool cupid_gb_model_is_sgb_external(CupidGbModel model) {
+    return model >= CUPID_GB_MODEL_SGB_EXTERNAL && model <= CUPID_GB_MODEL_SGB2_EXTERNAL;
+}
+
+/* Physical board identity, independently of the adapter's integrated host. */
+static inline CupidGbModel cupid_gb_model_base(CupidGbModel model) {
+    switch (model) {
+        case CUPID_GB_MODEL_SGB_EXTERNAL:
+            return CUPID_GB_MODEL_SGB;
+        case CUPID_GB_MODEL_SGB_PAL_EXTERNAL:
+            return CUPID_GB_MODEL_SGB_PAL;
+        case CUPID_GB_MODEL_SGB2_EXTERNAL:
+            return CUPID_GB_MODEL_SGB2;
+        default:
+            return model;
+    }
 }
 
 static inline bool cupid_gb_model_is_cgb(CupidGbModel model) {
@@ -344,6 +365,8 @@ typedef struct CupidGbHuc3 {
 } CupidGbHuc3;
 
 struct CupidGb;
+
+typedef void (*CupidGbJoypWriteCallback)(struct CupidGb *gb, uint8_t value, void *user_data);
 typedef struct CupidGbCheats CupidGbCheats;
 typedef void (*CupidGbSerialOutputCallback)(const struct CupidGb *gb, uint8_t transmitted,
                                             void *user_data);
@@ -600,6 +623,8 @@ typedef struct CupidGb {
     CupidGbSerialOutputCallback serial_output_callback;
     void *serial_output_user_data;
     CupidGbSerialLink serial_link;
+    CupidGbJoypWriteCallback joyp_write_callback;
+    void *joyp_write_user_data;
     CupidGbRumbleCallback rumble_callback;
     void *rumble_user_data;
     CupidGbRumbleStrengthCallback rumble_strength_callback;
@@ -710,7 +735,7 @@ void cupid_gb_set_model(CupidGb *gb, CupidGbModel model);
  * A NULL instance returns the ordinary handheld clock. */
 uint32_t cupid_gb_base_clock_hz(const CupidGb *gb);
 const char *cupid_gb_model_name(CupidGbModel model);
-/** Return whether the profile contains an emulated SGB or SGB2 host. */
+/** Return whether the profile contains physical SGB or SGB2 hardware. */
 bool cupid_gb_model_is_sgb(CupidGbModel model);
 bool cupid_gb_parse_header(const uint8_t *rom_data, size_t rom_size,
                            CupidGbCartridgeHeader *header);

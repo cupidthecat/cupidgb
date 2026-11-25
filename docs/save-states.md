@@ -21,7 +21,7 @@ embedded in a foreign state container. A file with a CupidGB native header
 must pass native validation.
 
 Portable states support completed cartridge boot on DMG, Pocket, CGB,
-SGB NTSC, SGB PAL, and SGB2 with ROM-only or ROM+RAM, MBC1, MBC2, MBC3
+SGB NTSC, SGB PAL, and SGB2, including external-host profiles, with ROM-only or ROM+RAM, MBC1, MBC2, MBC3
 (standard and extended, with optional RTC), MBC5, MBC7, MMM01, HuC1, HuC3,
 Camera, and TPP1.
 The importer checks the model family and, when present, the saved
@@ -29,11 +29,17 @@ cartridge title and global checksum. It validates every referenced memory
 range before replacing the running state.
 
 BESS restores CPU registers, memory, mapped banks, and register values.
-On SGB, it also carries command permission, palettes, attributes, visible
+With an integrated SGB host, it also carries command permission, palettes, attributes, visible
 border data, and the selected controller. The latest captured border
 appears immediately after import. The four tilemap rows outside the
 display are written as zeros. Files without an SGB block restore a
 single controller with commands disabled.
+
+External-host profiles use the matching SGB board identifier and omit the
+host block. Import releases the externally driven contacts and applies the
+saved P1 row write to a fresh latch. The receiving external host stays
+registered. Import into an external-host profile rejects a file containing
+an integrated host block.
 
 Extended MBC3 cartridges restore all eight ROM-bank bits and up to eight
 SRAM banks. The optional clock block carries separate live and latched
@@ -525,6 +531,15 @@ device connected. The load keeps the receiving connection and clock
 callbacks. An older state, a state for another device, or a portable state
 starts fresh keyboard protocol history. The desktop clock offset is a
 preference and follows the receiving session.
+
+### External-host SGB profiles in version 30
+
+Native version 30 assigns separate hardware identifiers to the three
+external-host profiles. A native state preserves the complete P1 latch,
+including its upper bits, together with the guest interrupt state. It
+keeps the receiving host callback. These profiles omit transfer and
+startup audio history for the integrated host. The native model check
+requires the same profile on import.
 
 ## Validation scope
 

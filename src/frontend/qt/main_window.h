@@ -309,6 +309,7 @@ class MainWindow final : public QMainWindow {
     bool modelSmokeTest(const QString &directory);
     bool startupSmokeTest(const QString &directory);
     bool sgbSmokeTest(const QString &directory);
+    bool externalSgbSmokeTest(const QString &directory);
     bool rtcSmokeTest(const QString &directory);
     bool rtcBatterySmokeTest(const QString &directory);
     void openCheats(bool search = false);

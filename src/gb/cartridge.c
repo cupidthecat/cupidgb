@@ -874,6 +874,10 @@ void cupid_gb_cartridge_post_boot(CupidGb *gb) {
     if (!color)
         cupid_gb_display_clock_import_legacy(gb);
     gb->sgb.enabled = cupid_gb_model_is_sgb(gb->model) && gb->header.sgb_flag == 3;
+    /* Executed adapter firmware ends its last header packet with a raw 30
+     * select write. With an external host, no pad sampler pulls P16/P17 high. */
+    if (cupid_gb_model_is_sgb_external(gb->model))
+        gb->io_registers[0] = 0x3fu;
     /* Without executed firmware, project the two header permission bytes into
      * the post-boot latch. No received packet history is invented. */
     gb->sgb.commands_disabled = cupid_gb_sgb_host_present(gb) &&

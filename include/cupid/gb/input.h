@@ -27,11 +27,23 @@
 
 /* Bits 0..7 are Right, Left, Up, Down, A, B, Select, Start; zero means pressed.
  * Host changes, including unchanged resubmissions, wait for the next delivered
- * hardware span. Sampling then updates JOYP and detects selected falling edges. */
+ * hardware span. Sampling then updates JOYP and detects selected falling edges.
+ * External-host SGB models retain these masks without sampling their contacts. */
 void cupid_gb_set_buttons(CupidGb *gb, uint8_t released_mask);
 /* Players are numbered 0..3. Additional pads are selected by the SGB protocol;
  * changing an unselected pad does not produce a selected-line interrupt. */
 bool cupid_gb_set_buttons_for_player(CupidGb *gb, unsigned player, uint8_t released_mask);
+
+/* A registered host owns every raw P1 write, including repeated select values.
+ * It may supply contact lines with cupid_gb_set_external_joyp, but must not run
+ * or otherwise reenter the core. Registration survives initialization, resets,
+ * cartridge swaps and state loading; cleanup clears it. NULL detaches it. */
+void cupid_gb_set_joyp_write_callback(CupidGb *gb, CupidGbJoypWriteCallback callback,
+                                      void *user_data);
+/* External-host SGB contacts are driven independently of ordinary pad masks.
+ * Replace P10..P13 (zero means closed), retain the select bits, and request the
+ * joypad interrupt on falling contact edges. Other models ignore this call. */
+void cupid_gb_set_external_joyp(CupidGb *gb, uint8_t lines);
 
 /* Memory-map helpers. Monochrome row release is delayed while select-bit
  * readback changes immediately. Physical contact bounce is not modeled. */

@@ -266,6 +266,7 @@ static void write_sgb_memory(uint8_t *data, size_t *cursor, uint8_t payload[BESS
 }
 
 static void model_name(CupidGbModel model, uint8_t name[4]) {
+    model = cupid_gb_model_base(model);
     if (cupid_gb_model_is_sgb(model)) {
         memcpy(name,
                model == CUPID_GB_MODEL_SGB_PAL ? "SP  "

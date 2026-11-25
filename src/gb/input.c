@@ -66,10 +66,14 @@ uint8_t cupid_gb_input_read(const CupidGb *gb) {
 }
 
 uint8_t cupid_gb_input_peek(const CupidGb *gb) {
-    return gb ? (uint8_t)(gb->io_registers[0] | 0xc0u) : 0xffu;
+    return gb ? (uint8_t)(gb->io_registers[0] |
+                          (cupid_gb_model_is_sgb_external(gb->model) ? 0u : 0xc0u))
+              : 0xffu;
 }
 
 static void sample_lines(CupidGb *gb) {
+    if (cupid_gb_model_is_sgb_external(gb->model))
+        return;
     const uint8_t before = gb->io_registers[0];
     const uint8_t after = electrical_lines(gb);
     gb->io_registers[0] = after;
@@ -79,6 +83,23 @@ static void sample_lines(CupidGb *gb) {
     if ((before & (uint8_t)~after & 0x0fu) != 0u) {
         cupid_gb_request_interrupt(gb, CUPID_GB_INTERRUPT_JOYPAD);
     }
+}
+
+void cupid_gb_set_joyp_write_callback(CupidGb *gb, CupidGbJoypWriteCallback callback,
+                                      void *user_data) {
+    if (!gb)
+        return;
+    gb->joyp_write_callback = callback;
+    gb->joyp_write_user_data = callback ? user_data : NULL;
+}
+
+void cupid_gb_set_external_joyp(CupidGb *gb, uint8_t lines) {
+    if (!gb || !cupid_gb_model_is_sgb_external(gb->model))
+        return;
+    const uint8_t previous = gb->io_registers[0];
+    gb->io_registers[0] = (uint8_t)((previous & 0xf0u) | (lines & 0x0fu) | 0xc0u);
+    if ((previous & (uint8_t)~lines & 0x0fu) != 0)
+        cupid_gb_request_interrupt(gb, CUPID_GB_INTERRUPT_JOYPAD);
 }
 
 void cupid_gb_set_buttons(CupidGb *gb, uint8_t released_mask) {
@@ -101,10 +122,21 @@ bool cupid_gb_set_buttons_for_player(CupidGb *gb, unsigned player, uint8_t relea
 void cupid_gb_input_select(CupidGb *gb, uint8_t value) {
     if (!gb)
         return;
+    if (gb->joyp_write_callback) {
+        gb->joyp_write_callback(gb, value, gb->joyp_write_user_data);
+        sample_lines(gb);
+        return;
+    }
     const uint8_t selected = value & 0x30u;
     uint8_t active = gb->io_registers[0] & 0x30u;
     if (active == selected)
         return;
+    if (cupid_gb_model_is_sgb_external(gb->model)) {
+        /* The external host owns the contacts. P14/P15 transitions expose the
+         * entire written upper nibble; a same-select write never reaches here. */
+        gb->io_registers[0] = (uint8_t)((value & 0xf0u) | (gb->io_registers[0] & 0x0fu));
+        return;
+    }
     if (!cupid_gb_model_is_cgb(gb->model) && !cupid_gb_model_is_sgb(gb->model)) {
         /* A second write starts from the previous requested row but cannot
          * shorten an outstanding release. Newly selected rows pull low at
@@ -168,6 +200,7 @@ void cupid_gb_input_tick_half_dots(CupidGb *gb, unsigned half_dots) {
 void cupid_gb_input_import_legacy(CupidGb *gb) {
     if (!gb)
         return;
-    gb->io_registers[0] = electrical_lines(gb);
+    if (!cupid_gb_model_is_sgb_external(gb->model))
+        gb->io_registers[0] = electrical_lines(gb);
     gb->joyp_sample_pending = false;
 }

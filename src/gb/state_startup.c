@@ -54,10 +54,6 @@ typedef struct StartupFields {
     StartupBatchFields batches[CUPID_GB_SGB_AUDIO_BATCHES];
 } StartupFields;
 
-static bool physical_host(const CupidGb *gb) {
-    return gb && cupid_gb_model_is_sgb(gb->model);
-}
-
 static void signed_word(StateIo *io, int16_t *value) {
     uint16_t raw = (uint16_t)*value;
     word(io, &raw);
@@ -145,8 +141,8 @@ static void capture_fields(const CupidGbSgbStartup *startup, StartupFields *fiel
 }
 
 static bool audio_valid(const CupidGb *gb, const CupidGbSgbStartupAudio *audio) {
-    if (!physical_host(gb)) {
-        /* No non-adapter continuation may hide an unrecorded active output owner. */
+    if (!cupid_gb_sgb_host_present(gb)) {
+        /* With no integrated host there is no startup audio to record. */
         if (audio->sweep_phase || audio->sweep_filter_q16 || audio->noise_state != 1 ||
             audio->dropped_frames || audio->normal_prefix_frames || audio->batch_count)
             return false;
@@ -172,7 +168,7 @@ static bool audio_valid(const CupidGb *gb, const CupidGbSgbStartupAudio *audio) 
 static bool startup_valid(const CupidGb *gb, const CupidGbSgbStartup *startup) {
     if (!gb || startup->phase < -10 || startup->phase > 200 ||
         startup->elapsed_cycles > UINT64_MAX - gb->elapsed_cycles ||
-        (!physical_host(gb) && (startup->phase != 200 || startup->elapsed_cycles)))
+        (!cupid_gb_sgb_host_present(gb) && (startup->phase != 200 || startup->elapsed_cycles)))
         return false;
     return audio_valid(gb, &startup->output);
 }
@@ -191,7 +187,7 @@ bool cupid_gb_sgb_startup_state_size(const CupidGb *gb, size_t *length) {
     *length = 0;
     if (!cupid_gb_sgb_startup_state_valid(gb))
         return false;
-    if (!physical_host(gb))
+    if (!cupid_gb_sgb_host_present(gb))
         return true;
     StartupFields fields;
     capture_fields(&gb->sgb_startup, &fields);
@@ -237,7 +233,7 @@ bool cupid_gb_sgb_startup_state_measure(const CupidGb *gb, const uint8_t *data, 
     if (!gb || !length)
         return false;
     *length = 0;
-    if (!physical_host(gb))
+    if (!cupid_gb_sgb_host_present(gb))
         return true;
     StartupFields fields;
     return inspect_fields(gb, data, available, &fields, length);
@@ -270,7 +266,7 @@ bool cupid_gb_sgb_startup_state_encode(const CupidGb *gb, uint8_t *data, size_t 
 bool cupid_gb_sgb_startup_state_decode(CupidGb *gb, const uint8_t *data, size_t length) {
     if (!gb)
         return false;
-    if (!physical_host(gb)) {
+    if (!cupid_gb_sgb_host_present(gb)) {
         if (length)
             return false;
         cupid_gb_sgb_startup_state_import_legacy(gb);

@@ -376,11 +376,17 @@ def main():
         assert bounded["vblank_frames"] == 0
         assert bounded["presentation_events"] == 2
         assert bounded["base_cycles"] >= 140448
-        for model, clock in (("sgb", 4295454), ("sgb2", 4194304), ("sgbpal", 4256274)):
-            model_result = run(runner, rom, "--frames", "2", "--model", model)
+        for model, clock in (("sgb", 4295454), ("sgb2", 4194304), ("sgbpal", 4256274),
+                              ("sgb-external", 4295454), ("sgb-pal-external", 4256274),
+                              ("sgb2-external", 4194304)):
+            image = root / (model + ".ppm")
+            model_result = run(runner, rom, "--frames", "2", "--model", model,
+                               "--image", str(image))
             assert model_result["base_clock_hz"] == clock
             assert model_result["base_cycles"] == bounded["base_cycles"]
             assert model_result["audio_frames"] == model_result["base_cycles"] * 44100 // clock
+            dimensions = b"160 144" if model.endswith("-external") else b"256 224"
+            assert image.read_bytes().startswith(b"P6\n" + dimensions + b"\n255\n")
         assert run(runner, rom, "--frames", "2", "--protocol", "serial",
                    expected_code=3)["status"] == "bounded"
         assert run(runner, rom, "--max-steps", "1")["status"] == "step_limit"

@@ -20,7 +20,9 @@ Omit the option to use the saved preference. Explicit `auto` applies automatic s
 
 The SGB NTSC profile uses 4,295,454 Hz, and SGB PAL uses 4,256,274 Hz. Select PAL in Emulation > Settings or pass `--model sgbpal`. Both first-generation profiles load `sgb_boot.bin` from the configured boot folder. SGB2 and the other current profiles use 4,194,304 Hz. Normal-speed playback, audio delivery and rewind duration follow the selected clock. Each regular LCD frame spans 70,224 base clocks.
 
-SGB and SGB2 show a CupidGB introduction when executing a configured boot ROM, including with ordinary monochrome cartridges. The adapter holds the guest CPU for the first 106 presentations, then lets firmware execute while the introduction finishes. Approximate post-boot startup skips the introduction. Hiding the SGB border keeps the introduction inside the game viewport.
+With the integrated SGB host, CupidGB shows an introduction when executing a configured boot ROM, including with ordinary monochrome cartridges. The adapter holds the guest CPU for the first 106 presentations, then lets firmware execute while the introduction finishes. Approximate post-boot startup skips the introduction. Hiding the SGB border keeps the introduction inside the game viewport.
+
+The three **external host** choices in Settings run the SGB handheld hardware with 160 × 144 output. Firmware starts immediately and uses the same regional clock and boot file as the matching board. These profiles expect an external host to drive the controller lines through the core API. Choose one with `--model sgb-external`, `--model sgb-pal-external` or `--model sgb2-external`. [SGB startup](sgb-startup.md#external-host-profiles)
 
 Emulation > Reset saves the current battery and clock history, refreshes the cartridge, firmware and companion symbols, and applies the selected hardware settings. It starts execution again and clears rewind history. File > Close File saves the current battery and closes the session. A failed battery write prevents reset, reload, closing or replacement and keeps the session and any recording available for retry.
 

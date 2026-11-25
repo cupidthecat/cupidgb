@@ -205,8 +205,9 @@ void cupid_gb_trigger_oam_bug_read_access(CupidGb *gb, uint16_t address) {
             if (column == 2u)
                 c = cupid_gb_oam_bug_get_word(gb, address & 0xfeu, 0);
             if (column != 4u) {
-                bool majority = column == 2u || (column == 0u && gb->model != CUPID_GB_MODEL_MGB &&
-                                                 gb->model != CUPID_GB_MODEL_SGB2);
+                bool majority =
+                    column == 2u || (column == 0u && gb->model != CUPID_GB_MODEL_MGB &&
+                                     cupid_gb_model_base(gb->model) != CUPID_GB_MODEL_SGB2);
                 uint16_t value =
                     majority ? (uint16_t)((a & b) | (b & c) | (a & c)) : (uint16_t)(b | (a & c));
                 cupid_gb_oam_bug_set_word(gb, target, 0, value);
@@ -237,13 +238,13 @@ void cupid_gb_trigger_oam_bug_read_access(CupidGb *gb, uint16_t address) {
         uint16_t all = current & middle & older & distant;
         uint16_t any = current | middle | older | distant;
         if (gb->model == CUPID_GB_MODEL_MGB ||
-            (offset == 96u && gb->model != CUPID_GB_MODEL_SGB2)) {
+            (offset == 96u && cupid_gb_model_base(gb->model) != CUPID_GB_MODEL_SGB2)) {
             merged = (uint16_t)((previous & any) | (middle & older & distant));
         } else if (offset == 64u) {
             uint16_t first = cupid_gb_oam_bug_get_word(gb, 0, 0);
             uint16_t near = cupid_gb_oam_bug_get_word(gb, offset - 6u, 0);
             uint16_t far = cupid_gb_oam_bug_get_word(gb, offset - 14u, 0);
-            if (gb->model == CUPID_GB_MODEL_SGB2) {
+            if (cupid_gb_model_base(gb->model) == CUPID_GB_MODEL_SGB2) {
                 merged =
                     (uint16_t)((previous & (distant | older | middle | (first & current))) |
                                ((middle & older & distant) & (current | first | (uint16_t)~far)));
@@ -252,7 +253,7 @@ void cupid_gb_trigger_oam_bug_read_access(CupidGb *gb, uint16_t address) {
                                                  ((uint16_t)~near & far))) |
                                     (middle & older & distant));
             }
-        } else if (offset == 32u || gb->model == CUPID_GB_MODEL_SGB2) {
+        } else if (offset == 32u || cupid_gb_model_base(gb->model) == CUPID_GB_MODEL_SGB2) {
             merged = (uint16_t)((previous & any) | all);
         } else {
             merged = (uint16_t)(previous | all);

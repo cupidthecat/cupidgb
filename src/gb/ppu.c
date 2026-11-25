@@ -119,7 +119,7 @@ static void publish_frame(CupidGb *gb, uint8_t type, uint32_t remaining_dots) {
     if (cupid_gb_sgb_host_present(gb))
         cupid_gb_sgb_present(gb, type == CUPID_GB_FRAME_NORMAL, remaining_dots);
     gb->frame_ready = true;
-    if (!cupid_gb_sgb_host_present(gb) && type != CUPID_GB_FRAME_NORMAL &&
+    if (!cupid_gb_model_is_sgb(gb->model) && type != CUPID_GB_FRAME_NORMAL &&
         type != CUPID_GB_FRAME_REPEAT) {
         // Blank presentation changes the output surface, not the fetch pipeline.
         memset(gb->frame_buffer, 0, sizeof(gb->frame_buffer));
@@ -392,7 +392,7 @@ void cupid_gb_reset_ppu(CupidGb *gb) {
     cupid_gb_pixels_begin_line(gb);
     gb->ppu_counter = 0u;
     gb->stat_irq_delay = 0u;
-    gb->lcd_first_frame = !cupid_gb_sgb_host_present(gb);
+    gb->lcd_first_frame = !cupid_gb_model_is_sgb(gb->model);
     gb->ppu_lcd_warmup_lines = 2u;
     gb->ppu_lcd_startup = true;
     gb->ppu_line_boundary_hold = false;
@@ -491,12 +491,12 @@ static void tick_ppu(CupidGb *gb, uint32_t dots) {
     CupidGbPixels *p = &gb->pixels;
     const bool lcd_enabled = cupid_gb_lcd_enabled(gb);
     const bool stopped = gb->cpu.stopped && !cupid_gb_model_is_cgb(gb->model);
-    const bool sgb = cupid_gb_sgb_host_present(gb);
+    const bool sgb = cupid_gb_model_is_sgb(gb->model);
     const uint32_t initial_dots = dots;
     const uint32_t initial_repeat = gb->lcd_repeat_countdown;
     gb->display_cycles_since_frame += dots;
     gb->lcd_repeat_countdown = initial_repeat > dots ? initial_repeat - dots : 0;
-    if (sgb) {
+    if (cupid_gb_sgb_host_present(gb)) {
         cupid_gb_sgb_clock(gb, dots);
     }
     if (!lcd_enabled) {

@@ -26,6 +26,10 @@
 #include <QJsonArray>
 #include <QScopeGuard>
 
+extern "C" {
+#include "cupid/gb/timer.h"
+}
+
 namespace {
 bool writeSgbFixture(const QString &path, const QByteArray &bytes) {
     QFile file(path);
@@ -62,7 +66,200 @@ bool drainSmallChunks(CupidGb &gb, QByteArray &bytes) {
 }
 } // namespace
 
+bool MainWindow::externalSgbSmokeTest(const QString &directory) {
+    QTemporaryDir fixtures(QDir(directory).filePath("sgb-external-XXXXXX"));
+    if (!fixtures.isValid())
+        return smokeFailure(__FILE__, __LINE__);
+    std::vector<std::pair<QString, QVariant>> preferences;
+    for (const QString &key : settings_.allKeys())
+        preferences.emplace_back(key, settings_.value(key));
+    const auto restorePreferences = qScopeGuard([&] {
+        settings_.clear();
+        for (const auto &[key, value] : preferences)
+            settings_.setValue(key, value);
+    });
+    QByteArray cartridge(32768, char(0));
+    cartridge[0x100] = char(0x18);
+    cartridge[0x101] = char(0xfe);
+    cartridge[0x146] = 3;
+    cartridge[0x14b] = 0x33;
+    for (unsigned address = 0x134; address <= 0x14c; ++address)
+        cartridge[0x14d] = char(uint8_t(cartridge[0x14d]) - uint8_t(cartridge[address]) - 1);
+    const QString cartridgePath = fixtures.filePath("adapter.gb");
+    if (!writeSgbFixture(cartridgePath, cartridge) ||
+        automaticModel(cartridge) != CUPID_GB_MODEL_SGB)
+        return smokeFailure(__FILE__, __LINE__);
+    const auto bootFixture = [](uint8_t marker) {
+        QByteArray boot(256, char(0));
+        boot[0] = char(0x3e);
+        boot[1] = char(marker);
+        boot[2] = char(0xea);
+        boot[4] = char(0xc0);
+        boot[5] = char(0x18);
+        boot[6] = char(0xfe);
+        return boot;
+    };
+    const auto firstFirmware = bootFixture(0x42);
+    const auto secondFirmware = bootFixture(0x63);
+    if (!writeSgbFixture(fixtures.filePath("sgb_boot.bin"), firstFirmware) ||
+        !writeSgbFixture(fixtures.filePath("sgb2_boot.bin"), secondFirmware))
+        return smokeFailure(__FILE__, __LINE__);
+    const std::array profiles{CUPID_GB_MODEL_SGB_EXTERNAL, CUPID_GB_MODEL_SGB_PAL_EXTERNAL,
+                              CUPID_GB_MODEL_SGB2_EXTERNAL};
+    for (const auto model : profiles) {
+        settings_.setValue("emulation/model", int(model));
+        MainWindow session(true, true, false, fixtures.path(), std::nullopt, uint64_t(0));
+        session.timer_.stop();
+        bool selected = false;
+        QTimer driver;
+        driver.setInterval(1);
+        connect(&driver, &QTimer::timeout, &session, [&] {
+            auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+            if (!dialog || dialog->objectName() != "settings")
+                return;
+            driver.stop();
+            auto *choice = dialog->findChild<QComboBox *>("hardwareModel");
+            selected = choice && choice->isEnabled() && choice->currentData().toInt() == model;
+            for (const auto available : profiles) {
+                const int index = choice ? choice->findData(int(available)) : -1;
+                selected =
+                    selected && index >= 0 && choice->itemText(index).contains("external host");
+            }
+            dialog->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Ok)->click();
+        });
+        driver.start();
+        session.configure();
+        if (!selected || settings_.value("emulation/model").toInt() != model ||
+            !session.openRom(cartridgePath))
+            return smokeFailure(__FILE__, __LINE__);
+        auto &gb = session.emulator_->gb;
+        const bool second = model == CUPID_GB_MODEL_SGB2_EXTERNAL;
+        const auto expectedFirmware = second ? secondFirmware : firstFirmware;
+        const uint8_t marker = second ? 0x63 : 0x42;
+        const uint32_t expectedClock = second                                     ? 4194304
+                                       : model == CUPID_GB_MODEL_SGB_PAL_EXTERNAL ? 4256274
+                                                                                  : 4295454;
+        if (gb.model != model || !gb.boot_rom_enabled || gb.cpu.pc || gb.elapsed_cycles ||
+            gb.boot_rom_size != 256 || std::memcmp(gb.boot_rom, expectedFirmware.data(), 256) ||
+            !cupid_gb_model_is_sgb(gb.model) || cupid_gb_sgb_host_present(&gb) ||
+            cupid_gb_sgb_startup_active(&gb) || !cupid_gb_sgb_active(&gb) ||
+            cupid_gb_sgb_commands_enabled(&gb) || session.image_.size() != QSize(160, 144) ||
+            session.displayNativeSize_ != QSize(160, 144) || session.inputPlayerCount() != 1 ||
+            cupid_gb_base_clock_hz(&gb) != expectedClock)
+            return smokeFailure(__FILE__, __LINE__);
+        gb.work_ram[0] = 0;
+        for (unsigned step = 0; step < 8; ++step)
+            if (!cupid_gb_step(&gb))
+                return smokeFailure(__FILE__, __LINE__);
+        if (gb.work_ram[0] != marker || !gb.elapsed_cycles ||
+            cupid_gb_presentation_cycles(&gb) != gb.elapsed_cycles || !session.runFrame() ||
+            session.startupAudioFrames_)
+            return smokeFailure(__FILE__, __LINE__);
+        for (const bool border : {false, true}) {
+            session.borderAction_->setChecked(border);
+            session.present(Presentation::Reset);
+            if (session.image_.size() != QSize(160, 144))
+                return smokeFailure(__FILE__, __LINE__);
+        }
+        // Ordinary controls retain host masks. External hardware owns electrical P1 lines.
+        cupid_gb_write_u8(&gb, 0xff00, 0x10);
+        gb.interrupt_flags &= uint8_t(~0x10);
+        const uint8_t unconnected = cupid_gb_read_u8(&gb, 0xff00);
+        QKeyEvent press(QEvent::KeyPress, session.keys_[4], Qt::NoModifier);
+        QKeyEvent release(QEvent::KeyRelease, session.keys_[4], Qt::NoModifier);
+        QCoreApplication::sendEvent(session.display_, &press);
+        cupid_gb_tick(&gb, 1);
+        if ((gb.joypad & 0x10) || cupid_gb_read_u8(&gb, 0xff00) != unconnected ||
+            (gb.interrupt_flags & 0x10))
+            return smokeFailure(__FILE__, __LINE__);
+        QCoreApplication::sendEvent(session.display_, &release);
+        auto controller = session.controllerOutput_;
+        controller.buttons[0] = 0xef;
+        session.receiveControllerOutput(controller);
+        cupid_gb_tick(&gb, 1);
+        if ((gb.joypad & 0x10) || cupid_gb_read_u8(&gb, 0xff00) != unconnected ||
+            (gb.interrupt_flags & 0x10))
+            return smokeFailure(__FILE__, __LINE__);
+        cupid_gb_set_external_joyp(&gb, 0x0f);
+        gb.interrupt_flags &= uint8_t(~0x10);
+        cupid_gb_set_external_joyp(&gb, 0x0e);
+        const uint8_t driven = cupid_gb_read_u8(&gb, 0xff00);
+        controller.buttons[0] = 0xff;
+        session.receiveControllerOutput(controller);
+        cupid_gb_tick(&gb, 1);
+        if ((driven & 0x0f) != 0x0e || !(gb.interrupt_flags & 0x10) ||
+            cupid_gb_read_u8(&gb, 0xff00) != driven)
+            return smokeFailure(__FILE__, __LINE__);
+        unsigned hostWrites = 0;
+        const auto hostWrite = [](CupidGb *, uint8_t, void *context) {
+            ++*static_cast<unsigned *>(context);
+        };
+        cupid_gb_set_joyp_write_callback(&gb, hostWrite, &hostWrites);
+        const auto registrationRetained = [&] {
+            const auto &current = session.emulator_->gb;
+            return current.joyp_write_callback == hostWrite &&
+                   current.joyp_write_user_data == &hostWrites && !hostWrites;
+        };
+        if (!session.restart() || !registrationRetained() || !session.quickReset() ||
+            session.emulator_->gb.model != model ||
+            cupid_gb_sgb_startup_active(&session.emulator_->gb) || !registrationRetained() ||
+            !session.reloadRom() || !registrationRetained() ||
+            session.emulator_->gb.model != model ||
+            cupid_gb_sgb_startup_active(&session.emulator_->gb) ||
+            session.image_.size() != QSize(160, 144))
+            return smokeFailure(__FILE__, __LINE__);
+        settings_.setValue("emulation/model", int(cupid_gb_model_base(model)));
+        if (!session.openRom(cartridgePath, false, ResetWorkflow::HotSwap) ||
+            !registrationRetained() || !cupid_gb_sgb_host_present(&session.emulator_->gb))
+            return smokeFailure(__FILE__, __LINE__);
+        settings_.setValue("emulation/model", int(model));
+        if (!session.openRom(cartridgePath, false, ResetWorkflow::HotSwap) ||
+            !registrationRetained() || session.emulator_->gb.model != model ||
+            cupid_gb_sgb_host_present(&session.emulator_->gb))
+            return smokeFailure(__FILE__, __LINE__);
+        cupid_gb_write_u8(&session.emulator_->gb, 0xff00, 0x20);
+        if (hostWrites != 1)
+            return smokeFailure(__FILE__, __LINE__);
+        const auto retained = session.captureState();
+        const QString required = fixtures.filePath(second ? "sgb2_boot.bin" : "sgb_boot.bin");
+        const QString held = required + ".hold";
+        if (retained.isEmpty() || !QFile::rename(required, held))
+            return smokeFailure(__FILE__, __LINE__);
+        const bool rejected = !session.reloadRom();
+        const bool recovered = QFile::rename(held, required);
+        if (!rejected || !recovered || session.captureState() != retained || hostWrites != 1 ||
+            session.emulator_->gb.joyp_write_callback != hostWrite ||
+            session.emulator_->gb.joyp_write_user_data != &hostWrites)
+            return smokeFailure(__FILE__, __LINE__);
+        session.failed_ = false;
+        cupid_gb_set_joyp_write_callback(&session.emulator_->gb, nullptr, nullptr);
+        if (!session.closeRom())
+            return smokeFailure(__FILE__, __LINE__);
+
+        MainWindow portable(true, true, false, QStringLiteral(""), model, uint64_t(0));
+        portable.timer_.stop();
+        if (!portable.openRom(cartridgePath) || !portable.runFrame())
+            return smokeFailure(__FILE__, __LINE__);
+        portable.setPaused(true);
+        auto &restored = portable.emulator_->gb;
+        restored.work_ram[4] = 0x5a;
+        const QString statePath = fixtures.filePath(QString("external-%1.bess").arg(int(model)));
+        if (!portable.savePortableStateFile(statePath))
+            return smokeFailure(__FILE__, __LINE__);
+        restored.work_ram[4] = 0x81;
+        if (!portable.loadStateFile(statePath) || restored.model != model ||
+            restored.work_ram[4] != 0x5a || cupid_gb_sgb_host_present(&restored) ||
+            cupid_gb_sgb_startup_active(&restored) || portable.inputPlayerCount() != 1 ||
+            portable.image_.size() != QSize(160, 144) || !portable.paused_)
+            return smokeFailure(__FILE__, __LINE__);
+    }
+    qInfo("CupidGB external adapter Qt model, firmware, input, and state workflows passed");
+    return true;
+}
+
 bool MainWindow::sgbSmokeTest(const QString &directory) {
+    if (!externalSgbSmokeTest(directory))
+        return smokeFailure(__FILE__, __LINE__);
     std::vector<std::pair<QString, QVariant>> preferences;
     for (const QString &key : settings_.allKeys())
         preferences.emplace_back(key, settings_.value(key));
