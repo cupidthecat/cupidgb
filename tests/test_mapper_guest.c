@@ -144,10 +144,10 @@ static uint8_t *make_rom(const MapperCase *test, CupidGbModel model) {
     header[0x147] = test->type;
     for (unsigned banks = test->banks; banks > 2; banks >>= 1)
         ++header[0x148];
-    static const bool has_sram[256] = {
-        [0x02] = true, [0x03] = true, [0x08] = true, [0x09] = true, [0x0c] = true, [0x0d] = true,
-        [0x10] = true, [0x12] = true, [0x13] = true, [0x1a] = true, [0x1b] = true, [0x1d] = true,
-        [0x1e] = true, [0xfc] = true, [0xfe] = true, [0xff] = true};
+    static const bool has_sram[256] = {[0x02] = true, [0x03] = true, [0x08] = true, [0x09] = true,
+                                       [0x0c] = true, [0x0d] = true, [0x10] = true, [0x12] = true,
+                                       [0x13] = true, [0x1a] = true, [0x1b] = true, [0x1d] = true,
+                                       [0x1e] = true, [0xfc] = true, [0xfe] = true, [0xff] = true};
     header[0x149] = has_sram[test->type] ? 3 : 0;
     if (test->type == 0xbc) {
         header[0x149] = 0xc1;
