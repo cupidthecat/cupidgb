@@ -126,9 +126,9 @@ constexpr std::array<const char *, 5> specialNames = {"Turbo", "Rewind", "Slow m
 constexpr std::array<int, 5> defaultSpecialKeys = {Qt::Key_Space, Qt::Key_Tab, Qt::Key_Shift, 0, 0};
 constexpr std::array<const char *, 3> frameBlendingNames = {"Disabled", "Simple", "Accurate"};
 constexpr std::array<const char *, size_t(ScalingFilter::Count)> scalingFilterNames = {
-    "Nearest Neighbor", "Bilinear",      "Smooth Bilinear",     "Pixelated",
-    "Scale2x",          "Scale4x",       "Antialiased Scale2x", "Antialiased Scale4x",
-    "LCD Display",      "Monochrome LCD"};
+    "Nearest Neighbor", "Bilinear",       "Smooth Bilinear",     "Pixelated",
+    "Scale2x",          "Scale4x",        "Antialiased Scale2x", "Antialiased Scale4x",
+    "LCD Display",      "Monochrome LCD", "Flat CRT Display",    "CRT Display"};
 constexpr std::array<const char *, 3> audioFilterNames = {"None (Keep DC Offset)", "Accurate",
                                                           "Preserve Waveform"};
 constexpr std::array<const char *, 4> audioChannelNames = {"Square Channel 1", "Square Channel 2",
@@ -358,22 +358,30 @@ class DisplayWidget final : public QWidget {
             painter.drawImage(target, image);
             return;
         }
+        const QPoint rasterOrigin =
+            filter == ScalingFilter::Crt
+                ? QPoint(qRound(physicalOrigin.x()) & 1, qRound(physicalOrigin.y()) & 1)
+                : QPoint();
         if (filteredSourceKey != image.cacheKey() || filteredImage.size() != output ||
-            cachedFilter != filter) {
+            cachedFilter != filter || cachedRasterOrigin_ != rasterOrigin) {
             if (filter == ScalingFilter::Nearest)
                 filteredImage = scaleNearestDisplayImage(image, output);
             else
-                filteredImage = currentFrame_.isNull()
-                                    ? filterDisplayImage(image, output, filter)
-                                    : renderDisplayFrames(currentFrame_, previousFrame_, output,
-                                                          filter, blending_, oddFrame_);
+                filteredImage =
+                    currentFrame_.isNull()
+                        ? renderDisplayFrames(image, {}, output, filter, FrameBlending::Disabled,
+                                              false, rasterOrigin)
+                        : renderDisplayFrames(currentFrame_, previousFrame_, output, filter,
+                                              blending_, oddFrame_, rasterOrigin);
             filteredSourceKey = image.cacheKey();
             cachedFilter = filter;
+            cachedRasterOrigin_ = rasterOrigin;
         }
         painter.drawImage(target, filteredImage);
     }
 
   private:
+    QPoint cachedRasterOrigin_;
     QImage currentFrame_;
     QImage previousFrame_;
     FrameBlending blending_ = FrameBlending::Disabled;

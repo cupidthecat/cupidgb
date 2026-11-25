@@ -468,8 +468,7 @@ void testExpandedFilterOrientation() {
 }
 
 void testLcdCaptures() {
-    static_assert(int(ScalingFilter::Lcd) == 8 && int(ScalingFilter::MonochromeLcd) == 9 &&
-                  int(ScalingFilter::Count) == 10);
+    static_assert(int(ScalingFilter::Lcd) == 8 && int(ScalingFilter::MonochromeLcd) == 9);
     const std::array filters = {ScalingFilter::Lcd, ScalingFilter::MonochromeLcd};
     const std::array names = {"Lcd", "MonochromeLcd"};
     const std::array sizes = {QSize(5, 3),   QSize(7, 5),   QSize(9, 7),
@@ -655,6 +654,269 @@ void testConcurrentLcdFrames() {
     assert(canonicalRgbaHash(frames[1]) == previousHash);
 }
 
+void testCrtCaptures() {
+    static_assert(int(ScalingFilter::FlatCrt) == 10 && int(ScalingFilter::Crt) == 11 &&
+                  int(ScalingFilter::Count) == 12);
+    const std::array sizes = {QSize(5, 3),   QSize(7, 5),   QSize(9, 7),
+                              QSize(14, 10), QSize(17, 13), QSize(28, 20)};
+    const std::array origins = {QPoint(0, 0), QPoint(1, 0), QPoint(0, 1), QPoint(1, 1)};
+    const auto rasterOrigin = [](QPoint capturedOrigin, QSize extent) {
+        // The capture API measures from the bottom of a 64-pixel surface.
+        return QPoint(capturedOrigin.x(), 64 - capturedOrigin.y() - extent.height());
+    };
+    // Full top-down RGBA digests of the generated controls. Capture alpha is
+    // normalized to 255; canonicalRgbaHash separately checks opaque Qt output.
+    // Each row covers Disabled, Simple, Accurate-even, Accurate-odd.
+    const char *flatHashes[6][4] = {
+        {"2959e534efd9a5f7d92e9914f73a89ad2c640c3dc7813ccbc3bd889619437183",
+         "9df0b25d5b69ff367b2fdec28e8a9b9a5238fa0d192328f88c6426f05976588d",
+         "1f9d7d06ce0624c21d6975c245975d6008f4490b5420cdc081ea3169f8eb9371",
+         "09827d1bdfb2d1514186573f7443750edb2ec21a93ed8aad8ef1d1989641164b"},
+        {"39fca85e2ce7cc8ca7f620ed3466567221555b0f0717dd45e9ca06a3fd86cf2e",
+         "59a8af73256091f8185ee778fbda0b5bade165e20bc908e187f9c08fb6e4959c",
+         "025ee1fd59a17050c6de5c024bad1f8e118b417d02a92e56decd5af95b35adad",
+         "459c57f82c81cc106e1d86c82801088788501a8194670cbd3abf323ce236d47f"},
+        {"fcd2a339dcbf796bc8e42fee2cc188b1d9c497bd3de20e7990bbe21317342261",
+         "de71e55a44c5dbbb979217e380a8cd3a115ba83519df5f2f68dad486a7085fbf",
+         "c1925a674307bb5522a993167e1a9db14cb25670fd0e583fa6bd199d7ed2898c",
+         "1e17952f78637c950dd45980f0f2e8fd0caac22c8b69e626e5f75c1f2e9a99bb"},
+        {"6eb97f3113e1787c9a7e9d4223de509dea95116ea22d342ff2b7c877904c06ac",
+         "69d1ffe8a56b67cfc5c6df21508064c19e3d6fd970312197c099f205f2b2b0cc",
+         "82d8840377775a9d344b8413f1a0479adc52c063c0ec20fdd3cf6f9181c0d5cb",
+         "e7c2f22434c91d56c269ebaa3caa93d0fbb2f08b545f381920e0123bf8f7337f"},
+        {"571f4eb2a862f133dbeeaf00b9381dd3443ae222e2b08b5eb4592a393a9a68fd",
+         "5b10e462887e57fdfdb9f2f9eb2ccccfaf3300060d14ef81d398359a380db04f",
+         "3a8de932e56e99dac7424256816dbf067d7983ed8e31925d7be70f3e23635e32",
+         "95ed2f146c5b7931d7cca241c85485f8a33d047f5bd42520ccdd96387f265883"},
+        {"c27ebad7e5e132e0cd5c109bdfb13e0c6b57068266d72b04677410d5e7a963a4",
+         "14a6d01fc1a50fb8aeefedd64d6a093054dd47e9c8feb5f3e2d3935f19d4cd05",
+         "cd2a6e23cb681e38213a2358a34e4ca8c08061d22a7cfd1a9cb3db4e29deffb9",
+         "338bc55eb02a5a0626f9453bec6b6256e685c9d85b41b426ad72d13f3cb7af88"},
+    };
+    const char *curvedHashes[4][6][4] = {
+        {
+            // Bottom-left origin (0, 0).
+            {"19b8088fae895eaf7a1c492c0e5a74310aa42457ac9c25cd838b1a3921625c0d",
+             "1b52f2b3c66b7cd00c58ffdefbcb3293bdbfbd7674f092e7aa328dfa2172a63e",
+             "61fd4d3602bd5bfcb059f7fd8a8ed8b68b26990bb5464f0b374ff02bc6abd0e8",
+             "392f724e306612c70b45d85d278ad394803482379cc155c84d86835c22df3593"},
+            {"585b1a87198bbfe53c2a0a8568465ec6c499638dd3f07b2dc6b195a7aaab9ea8",
+             "e38c6fe317f03744b3722ef75627c5a9b928c6b425069087095a33f1dd0914b3",
+             "0dec26ba3a8c48ed9e96ef731f7e8953661003099756d5eabbc280268296fb3d",
+             "3c5f8464e8c26fb953b005c5208a0716eda9460ccf51ed0c11d11d26c21aff44"},
+            {"de5024309cbeece9a7af1bd9899ff971865ed679ee32821206d7776fe5012d05",
+             "14e10953c63c2ec60492fd92875f5c5cd4f3b7f388f20c3f4158bf9d38db9e6d",
+             "665228fcd3a3bf5c0300a93c3930d7bf73016690ae333603ecaf38d54b80b875",
+             "3fa72bdf438f7f61c48db4f922d9fba42412bc5f989741a85208d32a4c727bba"},
+            {"0570f5b68c933a54cfd6ba7619f33b3837a9586b7e7100ed51841680fc8187ae",
+             "d6d3e95235479e42f83f60e227e8293675a93e1464852adaead72ed772500747",
+             "9509e133b2835b1ce707abb7ce1fcad8638ec4fc98a61e82c9b1f5dab9f07df9",
+             "611e16e3bcd378a0be7cc6e8579c9189d7424bbc6fbe452753ed04290a7e6dd1"},
+            {"b127e5b741274367da90e0cd6649a3b2abd340714da3d32fdd91617e0c0b91a2",
+             "1b10d1dfe613fdb685709dbc2be208ea7802a1bc9f2a2038359bc0ad5231fe09",
+             "b0c393a57e79cd444f68d800abe89b2dad3b7339131741411adc68dab4206f19",
+             "0feebd9fd29ed989c9dccbfc12bd33892d13e237d988ecec078cb833fe6f1996"},
+            {"8bafaa3ce699db08dddb68524728ef75f5c28d82315d48d0ea1af262d21b317e",
+             "319208d992524466c1601063324cf4f7a1a676853278c1ade0aa57a44df3813f",
+             "e946c0f9dbd2fc712334fc0755d12177f24dd98c64f96c55c4d9b376103dffc0",
+             "f9c02036d485bfdbeb5fa442c72b7fdba36aac5991fea38e5f37a6dede5134ea"},
+        },
+        {
+            // Bottom-left origin (1, 0).
+            {"9457d0704bae4e829614b1acbe06267bc0c48602f8e44a76911d367d9d7c35b5",
+             "fae147e918d419caec2fb4999e1b2e47e12423dd01fb24ee84cd7a75ae61372f",
+             "210844a8e27fbcdbf06edd37ac13776f7e43c91cc6d0fa33df4ee199f75735fe",
+             "cc649eb73b2562abab98720571346abb6d1ab966597e021a350ab591ba2d72ce"},
+            {"e2ddb9f35e48300cf390d7dd492b7d01eabad21c40b7b3e478a075473eca106f",
+             "95b235d0741a4df6b40e904327857b59d8f88dd851c2ca3bf89fa03a5deebbc6",
+             "2504f2ad2b346aac2d95318294d19c622712353031e7ef7947b52819fbdbd56d",
+             "59cc65554909358d6f0cee0493f6c4bbff1dbb61bde02864ab78a9d3303b417c"},
+            {"a1890a9796a9ddc526b0cd4140b0c37cf8d0c628190978855da7ea477935e022",
+             "14d809525154a5d3070257f5e4959197f89b117fdb43049bccbee90bcda1b260",
+             "2ee9c75348444d3fd27405d50e9d9f8f6fa944b091c521090627a6a2d6502178",
+             "f1c5667b6e5813c0bc842dfed00a1ed2d7368633836a9c7d3d827d1764330e3c"},
+            {"c6d3cdd1ae8f6d3821cbb89da96f803ab385d2c1ddc1639b4559464103970c73",
+             "9859793886d0d91de0de11503ec2fe8bf382120a3a003aa546de9cc092400356",
+             "a0906e34216db8fd5a2b7c8d858e4b69660732ada2505dffcaf2f4c664fba771",
+             "3e91837ada0bc4fceae9de9f9311f3f25752f0973a47c7672a5543fe55fde4f2"},
+            {"81877b113c385d729122923bca5dda776cca131129896266ce183ddafe73cbdd",
+             "d9169fb4666b4118545d2fb9f00b7efce899fd71872fa9370434ee28fcc4abc4",
+             "167fdf28d30b42f0d0492bda4fae9ba8ae3a9b25cf02aad61fe0cf57abd7d950",
+             "1bcd737f1c40eb3c90e513d245ce46a0f1e570210b6edf61e6e0d11cca5a4e39"},
+            {"abf837be23ba7179d34f77209cf0b63db0108b38fbd570b4f64ba6f4745452da",
+             "8d26e7a28689b3592e8e9be5d05b5ed472a59c1550f261d93a52ab128d8b73af",
+             "445c0ba63dca89bed194073b2c8aafce4904379445123007cf64fc0ca68d9268",
+             "f3474cf48782bf3299823c4082048ef29328d39c96a94634901b4a9b9f495cfa"},
+        },
+        {
+            // Bottom-left origin (0, 1).
+            {"5e790557a3a0493c49141615cfc937190a320d5251fc72fb31c4b33b7229c8a7",
+             "d96b9dc42be2a3eddd31540cb44e1fa795cfa763c5e3ab6d66cdbefe2bdc78d1",
+             "fc7ad6930478f5a6123558b4fe764f9c2429c6dd7dc1e33b62dbf7331154c8f6",
+             "072c3821e890c9c55a8bbb0f00baa5a1e926e6f948b6be02a788928373993135"},
+            {"3d9fe75892112bf290a90b39456b7781f7c1f375609cfebe181016f284085179",
+             "cf511d3a094bf55de2cb54dfb7bca01beeb6d2ea957968c198b143e8b3e6b4ad",
+             "6693a8a746fe94515da293e2b6836717b3e2bf6815d2f3808caa96ae526e0844",
+             "9234f02cf8692e4d73d1869ac467bd30395d35ea05757d35a47881b6b627eca4"},
+            {"9c191722dbcc731324a9b5f97b421717e1ef721d6959b14d8751890a6530f695",
+             "cafc8deece3ac1df0ea29afb2c785bf1c3405888f879fa940d14ade841a7f01f",
+             "03d09149da3aab5cd3c264c81939328c30ec6b29833ca3960055081647148aa6",
+             "c3bd3751a3361cb07e3c194a447f4dd0cb87be07a5058f02d631712f337356ca"},
+            {"3c86a00d84f29bf7b3c73500553c59a9659e9d2301df31c01c2ed24b27649789",
+             "6d928e97bb978602e7ab1a51ebc47d2895627662c07100ad1918e49efebd18e2",
+             "7e85a5dd12dc96d43ad8242a84c75c295c892cab1d8d0767c1bc272668c37c96",
+             "6fcfe40128e65e5b749341ffbcc8bdf1b85a477c0a49aa38076f63711bc49b11"},
+            {"7b28c73406a3e7ca60d7f9c8b3724ab68753712121d99b3f2506452e5e2181bd",
+             "6a8c551ac254e6dbae1a41b247c8048be9f4ce4835b98471b376fe45bc95cd41",
+             "92a9cfecdbed761eb2f98e2a162c0321411fb166b6b2bc318efef80246434ed8",
+             "b035e5fae4833601c3943d3ad2ca3042c91edc09ce762ef22112714e4e2b045e"},
+            {"06594accc610c65f2231b1941124ef426b6b28ac9d97f9b5edaa2f83b2efc2e8",
+             "1f98d7dcb97df09aff276d0419966bfbc9472aebd645e7136c9d4ee41ed195a3",
+             "6ceb82453a796088f0fb75ebc0b317ad5a24b393cd6c99f7a5dd3aff2839e85e",
+             "45c3511b03eff4a9c208e4635ea25cde336aeee7a1078307a5ecc0cd4a92202c"},
+        },
+        {
+            // Bottom-left origin (1, 1).
+            {"1475f3f7cf4b2e7b756d18d182a49999bf9917ce7b11d77d41abc58dea5cce6a",
+             "9d443a3b983642eeb69f6c62aac4b35d27e6880eecfc1a6476a78b8cec19c0d6",
+             "87c84feb91df63d7c6fd2f2260652c469b55d453e4d7b7016d46cab10138a7f1",
+             "d7de177b73e26695fa122ab9ce70713bb5e97b8457b8276dedbc08f901f2f5b9"},
+            {"88959ab2df35eef99a1919e11b3f1fb33ec1ba63389bbb8d1fef2cf3537ee3dc",
+             "410e70acddfcfd5d271e75638dac073f44c293d259d7c7935015acf75be0bdef",
+             "b2ba5b388e077ea24c2c43dbe537dee1b519c2b44d307b78e2afd83118d0c9e3",
+             "e4f25018e08e3991cc1a5020e5a30e05b6307954efe5dec38e3c209ce367abaa"},
+            {"eb9ec29d0365a11989f5b9cea1cd5be025da35be283d1946d9a0f76cf29f834b",
+             "d208aef0c17015a8d141f4cbb44b7e242d51a1b5429af8f39b8a8fa92c90d92b",
+             "c056db176d3ff52c751b7d4901400f23ccbd848bd0f89d7185a6266ad5cf7e7d",
+             "a0b94b02de2672af82aaf659fdfb02fb91c12c2dcfdfd9cc13cf1ffd9efd25cd"},
+            {"5824b2ab7fdd166989ef31b4301ad59b51c28ff3672ce8fa15df6c592a47e5d7",
+             "00751de48e44afa8764f4649b1054871a778d30e1edc16ce27b2cf7d659d9724",
+             "b60c114f5d3a214a070b4b9dc4b9081f4c96dd5cb43ee4511e57500bf338c6c4",
+             "3f061a9275fda98dda9baca1dc88241f030701c7112c7ed13f52005a0d8cc1da"},
+            {"73255a857a40c8a4ea25ca93564710933c5d897417e5e29551ae66b8772b60f5",
+             "fc1c4c3dc6836f0e1b9b94839cdd2cbe5f47a7b2c33b2c870f2ed4343468316e",
+             "9886df9e49472e1dbce3526182bf9da58045e723bff13de40678546796fb243b",
+             "a5da2673d7a6589b6e739f98437eaa5922762fe92d5f258f467246a754e31e90"},
+            {"08cfa4588799ac3c5051dcdf444b3f65b7226054c9452eb0e7877150a79c2af8",
+             "e389de1fafbc1474a6bff75a9439cce2cdfeccf6fbde51575e51708f10f4e2e2",
+             "abd228bea99a7751b0e3fa0a9199192ee2dd20913bd6952d4a501e6022ed7bae",
+             "b11f9633703081603a0b7b0dba851d885680c23faeb1e46b8aaa3595c514d6c8"},
+        },
+    };
+    const auto frames = generatedFilterFrames();
+    const auto compare = [&](ScalingFilter filter, QSize outputSize, unsigned phase, QPoint origin,
+                             const char *expected) {
+        const auto blending = phase == 0   ? FrameBlending::Disabled
+                              : phase == 1 ? FrameBlending::Simple
+                                           : FrameBlending::Accurate;
+        const auto output = renderDisplayFrames(frames[0], frames[1], outputSize, filter, blending,
+                                                phase == 3, origin);
+        assert(output.size() == outputSize);
+        const auto observed = canonicalRgbaHash(output);
+        if (observed != expected) {
+            std::fprintf(stderr, "%s %dx%d blend %u origin (%d,%d): %s, expected %s\n",
+                         filter == ScalingFilter::FlatCrt ? "FlatCrt" : "Crt", outputSize.width(),
+                         outputSize.height(), phase, origin.x(), origin.y(), observed.constData(),
+                         expected);
+        }
+        assert(observed == expected);
+    };
+    for (size_t size = 0; size < sizes.size(); ++size) {
+        for (unsigned phase = 0; phase < 4; ++phase) {
+            // Flat output is independent of placement, including odd translations.
+            for (const auto origin : {QPoint(0, 0), QPoint(1, 0), QPoint(0, 1), QPoint(1, 1),
+                                      QPoint(2, 2), QPoint(-17, 43)})
+                compare(ScalingFilter::FlatCrt, sizes[size], phase, origin,
+                        flatHashes[size][phase]);
+            for (size_t origin = 0; origin < origins.size(); ++origin)
+                compare(ScalingFilter::Crt, sizes[size], phase,
+                        rasterOrigin(origins[origin], sizes[size]),
+                        curvedHashes[origin][size][phase]);
+            // Translating both physical coordinates by two preserves the mask.
+            compare(ScalingFilter::Crt, sizes[size], phase, rasterOrigin({2, 2}, sizes[size]),
+                    curvedHashes[0][size][phase]);
+        }
+        const size_t defaultOrigin = sizes[size].height() & 1 ? 2 : 0;
+        assert(canonicalRgbaHash(filterDisplayImage(
+                   frames[0], sizes[size], ScalingFilter::FlatCrt)) == flatHashes[size][0]);
+        assert(canonicalRgbaHash(filterDisplayImage(frames[0], sizes[size], ScalingFilter::Crt)) ==
+               curvedHashes[defaultOrigin][size][0]);
+        assert(canonicalRgbaHash(renderDisplayFrames(frames[0], frames[1], sizes[size],
+                                                     ScalingFilter::FlatCrt, FrameBlending::Simple,
+                                                     false)) == flatHashes[size][1]);
+        assert(canonicalRgbaHash(renderDisplayFrames(
+                   frames[0], frames[1], sizes[size], ScalingFilter::Crt, FrameBlending::Simple,
+                   false)) == curvedHashes[defaultOrigin][size][1]);
+    }
+
+    // Different views can render the same size at different physical origins.
+    // Each concurrent Accurate phase retains its independent observed digest.
+    QSemaphore ready;
+    QSemaphore start;
+    std::array<std::future<QByteArray>, 8> pending;
+    for (size_t job = 0; job < pending.size(); ++job) {
+        pending[job] = std::async(std::launch::async, [&, job] {
+            ready.release();
+            start.acquire();
+            const auto output = renderDisplayFrames(
+                frames[0], frames[1], sizes[4], ScalingFilter::Crt, FrameBlending::Accurate,
+                job % 2 != 0, rasterOrigin(origins[job / 2], sizes[4]));
+            assert(output.size() == sizes[4]);
+            return canonicalRgbaHash(output);
+        });
+    }
+    ready.acquire(int(pending.size()));
+    start.release(int(pending.size()));
+    for (size_t job = 0; job < pending.size(); ++job)
+        assert(pending[job].get() == curvedHashes[job / 2][4][2 + job % 2]);
+}
+
+void testCrtBoundaryDimensionsAndHistory() {
+    const auto frames = generatedFilterFrames();
+    QImage unrelated(1, 1, QImage::Format_RGB32);
+    unrelated.fill(Qt::magenta);
+    for (const auto filter : {ScalingFilter::FlatCrt, ScalingFilter::Crt}) {
+        assert(renderDisplayFrames({}, frames[1], {7, 5}, filter, FrameBlending::Accurate, true,
+                                   {1, 1})
+                   .isNull());
+        assert(renderDisplayFrames(frames[0], frames[1], {}, filter, FrameBlending::Simple, false,
+                                   {1, 1})
+                   .isNull());
+        for (const auto size : {QSize(1, 1), QSize(1, 7), QSize(9, 1)}) {
+            for (const auto origin : {QPoint(0, 0), QPoint(1, 0), QPoint(0, 1), QPoint(1, 1)}) {
+                const auto single = renderDisplayFrames(frames[0], {}, size, filter,
+                                                        FrameBlending::Disabled, false, origin);
+                assert(single.size() == size);
+                canonicalRgbaHash(single);
+                for (const auto &history : {QImage(), unrelated, frames[0]}) {
+                    for (const auto mode : {FrameBlending::Simple, FrameBlending::Accurate}) {
+                        for (bool odd : {false, true})
+                            assert(renderDisplayFrames(frames[0], history, size, filter, mode, odd,
+                                                       origin) == single);
+                    }
+                }
+            }
+        }
+        for (const auto sourceSize : {QSize(1, 1), QSize(1, 5), QSize(7, 1)}) {
+            const auto current = frames[0].copy(QRect(QPoint(), sourceSize));
+            const auto previous = frames[1].copy(QRect(QPoint(), sourceSize));
+            for (const auto size : {QSize(1, 1), QSize(1, 9), QSize(11, 1), QSize(17, 13)}) {
+                for (const auto origin : {QPoint(0, 0), QPoint(1, 1), QPoint(2, 2)}) {
+                    for (bool odd : {false, true}) {
+                        const auto output = renderDisplayFrames(
+                            current, previous, size, filter, FrameBlending::Accurate, odd, origin);
+                        assert(output.size() == size);
+                        const auto digest = canonicalRgbaHash(output);
+                        assert(digest == canonicalRgbaHash(renderDisplayFrames(
+                                             current, previous, size, filter,
+                                             FrameBlending::Accurate, odd, origin)));
+                    }
+                }
+            }
+        }
+    }
+}
+
 void testPreciseNearestSampling() {
     QImage source(160, 144, QImage::Format_RGB32);
     for (int y = 0; y < source.height(); ++y)
@@ -787,6 +1049,8 @@ int main() {
     testLcdBoundaryDimensionsAndHistory();
     testMonochromeShadowHistory();
     testConcurrentLcdFrames();
+    testCrtCaptures();
+    testCrtBoundaryDimensionsAndHistory();
     testPreciseNearestSampling();
     testFilteredFrameBlending();
     QImage corners(2, 2, QImage::Format_RGB32);

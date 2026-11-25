@@ -190,3 +190,48 @@ The Qt workflow checks both menu and Settings selections, settings reload,
 blending with separate frames, and native-size screenshots. It passed at the
 default device scale and at 125% on both platforms. Full Release passed 111
 tests on Windows and 109 on Linux.
+
+## CRT display filters
+
+Flat CRT Display combines scanlines with a staggered color mask. CRT Display
+adds curvature and soft corners. The corner mask uses the physical pixel
+position of the picture within the viewport. A one-pixel shift can change
+coverage. A two-pixel shift preserves it.
+The renderer keeps the latest curved sampling map for viewports up to
+2,073,600 pixels. Larger pictures compute their samples in row bands.
+
+The comparison at `ea667ad79aa28409f034b1fd6da7304e1844750d` checks six sizes,
+four blend phases, and all four physical origin parities. Both platforms
+matched all 24 flat and 96 curved generated frames after normalizing capture
+alpha to opaque. The captured RGB already includes dimming at the corners
+and edges. The Qt workflow checks a one-pixel shift in either axis with the
+same picture size and source frames, plus settings and native screenshots.
+
+On Linux, two Super Mario Bros. Deluxe frame pairs were compared at 127 × 117,
+160 × 144, and 733 × 551. Sixteen of 24 flat outputs matched exactly. The
+remaining flat outputs differed in at most four RGB channels. Each curved
+output differed in at most 427 RGB channels. All those differences were one
+level on the 8-bit scale. The commercial comparison used an odd-height
+raster, which changes the conversion from a bottom-left capture origin to
+Qt's top-left physical coordinates.
+
+Release passed 111 tests on Windows and 109 on Linux, plus the Qt desktop
+workflow at 125% device scale on each host. The Linux filter suite passed
+ASan and UBSan.
+
+Each filter ran twice per host for 30 seconds in Super Mario Bros. Deluxe on
+CGB-0 with post-boot startup, Accurate blending, audio, rewind, and a
+733 × 601 window. The same timed input trace supplied 76–79 inputs per run.
+Windows used its desktop backend. Linux used Xcb in WSL with an isolated
+PulseAudio sink. The table gives medians after five seconds of warmup.
+
+| Host and filter | Guest speed | Widget paints/s | p95 paint interval | Peak working set |
+| --- | ---: | ---: | ---: | ---: |
+| Windows Flat CRT | 99.99% | 59.22 | 18.03 ms | 78.75 MiB |
+| Windows CRT | 99.99% | 57.50 | 20.96 ms | 95.39 MiB |
+| Linux Flat CRT | 100.00% | 59.90 | 17.92 ms | 111.75 MiB |
+| Linux CRT | 100.00% | 59.92 | 18.01 ms | 128.36 MiB |
+
+The replay recorded zero audio idle events or errors after warmup in all
+eight runs. Each Linux run produced nonzero samples at the sink. Timing
+applies to this window size and input sequence.

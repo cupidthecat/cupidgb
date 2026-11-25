@@ -23,6 +23,7 @@
 #pragma once
 
 #include <QImage>
+#include <QPoint>
 #include <QRectF>
 #include <array>
 
@@ -38,6 +39,8 @@ enum class ScalingFilter {
     AntialiasedScale4x = 7,
     Lcd = 8,
     MonochromeLcd = 9,
+    FlatCrt = 10,
+    Crt = 11,
     Count,
 };
 enum class MonochromePalette { Lime = 0, Grayscale = 1, Olive = 2, Teal = 3, Custom = 4 };
@@ -48,8 +51,10 @@ QRectF displayViewport(QSize source, QSizeF available, DisplayScaling scaling,
                        qreal devicePixelRatio = 1.0);
 QImage scaleNearestDisplayImage(const QImage &source, QSize output);
 QImage filterDisplayImage(const QImage &source, QSize output, ScalingFilter filter);
+// The curved CRT uses the parity of the top-left origin in physical pixels.
 QImage renderDisplayFrames(const QImage &current, const QImage &previous, QSize output,
-                           ScalingFilter filter, FrameBlending blending, bool oddFrame);
+                           ScalingFilter filter, FrameBlending blending, bool oddFrame,
+                           QPoint rasterOrigin = {});
 std::array<QRgb, 4> monochromeColors(MonochromePalette palette, const std::array<QRgb, 4> &custom);
 QRgb monochromeOffColor(MonochromePalette palette, QRgb custom);
 QImage blendDisplayFrames(const QImage &current, const QImage &previous, FrameBlending mode,

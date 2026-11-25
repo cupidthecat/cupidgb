@@ -212,6 +212,43 @@ bool MainWindow::displayFilesSmokeTest(const QString &directory) {
              filterProbe.cachedFilter != ScalingFilter(mode)))
             return smokeFailure(__FILE__, __LINE__);
     }
+    // Moving a letterboxed picture by one physical pixel changes the curved
+    // mask even when the source frame and the picture dimensions stay fixed.
+    filterProbe.filter = ScalingFilter::Crt;
+    filterProbe.scaling = DisplayScaling::Aspect;
+    const qreal ratio = filterProbe.devicePixelRatioF();
+    const auto physicalViewport = [&] {
+        const QRectF viewport =
+            displayViewport(edges.size(), filterProbe.size(), filterProbe.scaling, ratio);
+        return QRect((viewport.topLeft() * ratio).toPoint(), (viewport.size() * ratio).toSize());
+    };
+    const auto paintProbe = [&] {
+        QImage canvas((QSizeF(filterProbe.size()) * ratio).toSize(), QImage::Format_RGB32);
+        canvas.setDevicePixelRatio(ratio);
+        filterProbe.render(&canvas);
+    };
+    const auto verifyCrtShift = [&](QSize base, QSize step) {
+        filterProbe.resize(base);
+        const QRect firstViewport = physicalViewport();
+        paintProbe();
+        const QImage firstCrt = filterProbe.filteredImage;
+        for (int amount = 1; amount <= 8; ++amount) {
+            filterProbe.resize(base + amount * step);
+            const QRect viewport = physicalViewport();
+            const QPoint shift = viewport.topLeft() - firstViewport.topLeft();
+            if (viewport.size() != firstViewport.size() || ((shift.x() | shift.y()) & 1) == 0)
+                continue;
+            paintProbe();
+            const auto expected =
+                renderDisplayFrames(edges, history, viewport.size(), ScalingFilter::Crt,
+                                    FrameBlending::Accurate, false, viewport.topLeft());
+            return filterProbe.filteredImage == expected && filterProbe.filteredImage != firstCrt;
+        }
+        return false;
+    };
+    if (!verifyCrtShift({401, 359}, {1, 0}) || !verifyCrtShift({359, 401}, {0, 1}))
+        return smokeFailure(__FILE__, __LINE__);
+
     const QVariant originalFilter = settings_.value("video/filter");
     const auto restoreFilter = qScopeGuard([&] {
         if (originalFilter.isValid())
@@ -219,9 +256,11 @@ bool MainWindow::displayFilesSmokeTest(const QString &directory) {
         else
             settings_.remove("video/filter");
     });
-    const std::array<std::pair<ScalingFilter, const char *>, 2> lcdFilters = {
+    const std::array<std::pair<ScalingFilter, const char *>, 4> panelFilters = {
         std::make_pair(ScalingFilter::Lcd, "LCD Display"),
-        std::make_pair(ScalingFilter::MonochromeLcd, "Monochrome LCD")};
+        std::make_pair(ScalingFilter::MonochromeLcd, "Monochrome LCD"),
+        std::make_pair(ScalingFilter::FlatCrt, "Flat CRT Display"),
+        std::make_pair(ScalingFilter::Crt, "CRT Display")};
     const auto configureFilter = [&](int expected, int selected, bool accept) {
         bool checked = false;
         bool timedOut = false;
@@ -236,7 +275,7 @@ bool MainWindow::displayFilesSmokeTest(const QString &directory) {
             auto *buttons = dialog->findChild<QDialogButtonBox *>();
             checked = choice && buttons && choice->count() == int(ScalingFilter::Count) &&
                       choice->currentIndex() == expected;
-            for (const auto &[filter, label] : lcdFilters)
+            for (const auto &[filter, label] : panelFilters)
                 checked = checked && choice->itemText(int(filter)) == QString::fromLatin1(label);
             if (checked) {
                 choice->setCurrentIndex(selected);
@@ -274,7 +313,7 @@ bool MainWindow::displayFilesSmokeTest(const QString &directory) {
         auto *action = session.findChild<QAction *>(QString("video/filter/%1").arg(mode));
         if (!action)
             return smokeFailure(__FILE__, __LINE__);
-        for (const auto &[filter, label] : lcdFilters)
+        for (const auto &[filter, label] : panelFilters)
             if (mode == int(filter) && action->text() != QString::fromLatin1(label))
                 return smokeFailure(__FILE__, __LINE__);
         action->trigger();
@@ -296,7 +335,7 @@ bool MainWindow::displayFilesSmokeTest(const QString &directory) {
             return smokeFailure(__FILE__, __LINE__);
     }
     int configuredFilter = int(ScalingFilter::Count) - 1;
-    for (const auto &[filter, label] : lcdFilters) {
+    for (const auto &[filter, label] : panelFilters) {
         if (!configureFilter(configuredFilter, int(filter), true) ||
             session.display_->filter != filter ||
             !session.scalingFilterActions_[size_t(filter)]->isChecked() ||
