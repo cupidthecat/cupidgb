@@ -153,6 +153,51 @@ static void test_window_edges_and_pixels(void) {
                 }
 }
 
+static void test_window_y_compare_after_register_writes(void) {
+    for (unsigned profile = 0; profile < 3; ++profile)
+        for (unsigned fast = 0; fast <= (profile != 0); ++fast)
+            for (unsigned matches = 0; matches < 2; ++matches) {
+                const unsigned row = matches ? 8 : 12;
+                const unsigned speed = fast ? 2 : 1;
+                Fixture fixture = create_fixture(profile, fast != 0, 0, 7, false);
+                write_byte(&fixture, 0xff4a, matches ? 40 : 8);
+                write_byte(&fixture, 0xff40, matches ? 0xf3 : 0xd3);
+                advance_to(&fixture, speed * (row * 456 + 40));
+                assert(fixture.gb->pixels.line == row);
+                if (matches)
+                    write_byte(&fixture, 0xff4a, (uint8_t)row);
+                else
+                    write_byte(&fixture, 0xff40, 0xf3);
+                advance_to(&fixture, speed * (row * 456 + 300));
+
+                assert(fixture.gb->pixels.window_armed == (matches != 0));
+                assert(fixture.gb->frame_buffer[row * 160] == (matches ? 2 : 1));
+                destroy_fixture(&fixture);
+            }
+}
+
+static void test_dmg_window_y_late_horizontal_trigger(void) {
+    const unsigned row = 8;
+    const unsigned row_start = row * 456 - 3;
+    Fixture fixture = create_fixture(0, false, 0, 7, false);
+    write_byte(&fixture, 0xff4a, row);
+    write_byte(&fixture, 0xff40, 0xd3);
+    advance_to(&fixture, row_start + 92);
+    assert(fixture.gb->pixels.line == row && !fixture.gb->pixels.window_armed);
+    write_byte(&fixture, 0xff40, 0xf3);
+    advance_to(&fixture, row_start + 94);
+    assert(fixture.gb->pixels.x == 1 && fixture.gb->pixel_timing.logical_x == 1);
+    assert(fixture.gb->pixel_timing.flags & CUPID_GB_PIXEL_WINDOW_Y_EDGE);
+    assert(fixture.gb->frame_buffer[row * 160] == 1);
+
+    advance_to(&fixture, row_start + 95);
+    assert(fixture.gb->pixels.window_active && fixture.gb->pixels.x == 0);
+    advance_to(&fixture, row_start + 300);
+    assert(fixture.gb->pixels.window_used);
+    assert(fixture.gb->frame_buffer[row * 160] == 2);
+    destroy_fixture(&fixture);
+}
+
 static void test_hidden_objects_keep_color_fetch_timing(void) {
     for (unsigned profile = 0; profile < 3; ++profile)
         for (unsigned fast = 0; fast <= (profile != 0); ++fast)
@@ -246,6 +291,8 @@ static void test_double_speed_mode_half_dots(void) {
 
 int main(void) {
     test_window_edges_and_pixels();
+    test_window_y_compare_after_register_writes();
+    test_dmg_window_y_late_horizontal_trigger();
     test_hidden_objects_keep_color_fetch_timing();
     test_monochrome_object_abort_edges();
     test_window_restart_after_scroll_write();

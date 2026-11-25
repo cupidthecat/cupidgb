@@ -10,7 +10,7 @@ Load a native state file through File > Load State File or drop a `.s0` through 
 
 Writes use an atomic file replacement. Loading checks the complete cartridge identity and hardware model. A state captured with an active boot overlay requires the matching local boot binary. Failed validation preserves the running session and its host audio queue. A successful load replaces the emulated state, reapplies current physical input, clears queued host audio, and realigns pacing.
 
-Native files use CupidGB version 31. Earlier cartridge states, including both supported version 19 development layouts, remain loadable on their original hardware profiles when they contain the required hardware history and SRAM. GBS programs require version 23 or newer and the matching music file already loaded. Desktop loads retain current listening settings, reconstruction and filter history, and the receiving startup synthesis and queued batches. Saved hardware startup phase, host-only time and command-receiver history still restore.
+Native files use CupidGB version 32. Earlier cartridge states, including both supported version 19 development layouts, remain loadable on their original hardware profiles when they contain the required hardware history and SRAM. GBS programs require version 23 or newer and the matching music file already loaded. Desktop loads retain current listening settings, reconstruction and filter history, and the receiving startup synthesis and queued batches. Saved hardware startup phase, host-only time and command-receiver history still restore.
 
 ## Portable cartridge states
 
@@ -318,7 +318,7 @@ The following four bytes preserve pixel-fetch timing on every model, including m
 | Relative offset within pixel record | Bytes | Added state |
 | --- | --- | --- |
 | 0 | 2 | Signed little-endian logical horizontal position, minus sixteen through 160 |
-| 2 | 1 | Fractional-scroll, first-window-fetch, CGB WX-read, monochrome window-hold and pending background-insertion flags |
+| 2 | 1 | Fractional-scroll, first-window-fetch, CGB WX-read, monochrome window-hold, pending background-insertion and pending WY comparison flags |
 | 3 | 1 | Reserved, zero |
 
 The logical position includes discarded pixels before the visible row. The CGB WX-read flag is invalid on other hardware. A monochrome window hold requires a matching active window, empty fetch queue and idle object engine. Pending background insertion retains a zero-valued window-edge pixel across an intervening object fetch while leaving the fetched background tile queued. Version 15 also permits a pending monochrome object-fetch abort in the existing object-stage byte. This stage retains the selected object until the next pixel step consumes the abort; earlier versions reject that stage value. These fields preserve fetch work that the visible horizontal coordinate cannot describe.
@@ -554,6 +554,19 @@ decrement. The loader advances that count through phase 6 when it has
 already passed and reconstructs a pending latch when the rising DIV edge
 has passed as well. Earlier live-write lock history has no recorded value
 and starts clear. Exact restores of version 31 retain the recorded latches.
+
+### Window comparison in version 32
+
+Version 32 records when a write to WY or LCDC arms the window between
+visible pixel steps. The next pixel step uses that edge for the horizontal
+window check, then clears it. The flag uses bit 5 of the existing
+pixel-timing flags byte. File sizes and field offsets stay the same.
+
+Earlier files start with the edge cleared. They can still contain the older
+display scheduler's window-check flag, which has no effect on pixel start
+timing. A continuation test saves the edge just before the last visible
+pixel on CGB, checks the next pixel after restoration, and exercises both
+version 31 import and rejection of a version 31 file claiming the new bit.
 
 ## Validation scope
 

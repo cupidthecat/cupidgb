@@ -54,7 +54,8 @@
 
 enum {
     STATE_HEADER_SIZE = 128,
-    STATE_VERSION_V31 = CUPID_GB_STATE_VERSION,
+    STATE_VERSION_V32 = CUPID_GB_STATE_VERSION,
+    STATE_VERSION_V31 = 31,
     STATE_VERSION_V30 = 30,
     STATE_VERSION_V29 = 29,
     STATE_VERSION_V28 = 28,
@@ -1127,7 +1128,7 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
     }
     memset(data, 0, STATE_HEADER_SIZE);
     memcpy(data, state_magic, sizeof(state_magic));
-    put_u32(data + 8, STATE_VERSION_V31);
+    put_u32(data + 8, STATE_VERSION_V32);
     put_u32(data + 12, (uint32_t)size);
     put_u32(data + 16, (uint32_t)gb->model);
     put_u32(data + 20, (uint32_t)gb->rom_size);
@@ -1143,7 +1144,7 @@ static CupidGbStateResult save_state(const CupidGb *gb, uint8_t *data, size_t ca
         cupid_sha256(gb->boot_rom, gb->boot_rom_size, data + 64);
     }
     StateIo io = {NULL, data, STATE_HEADER_SIZE, hardware_size, false};
-    state_fields(&io, (CupidGb *)gb, STATE_VERSION_V31);
+    state_fields(&io, (CupidGb *)gb, STATE_VERSION_V32);
     state_extension_v3(&io, (CupidGb *)gb);
     state_extension_v4(&io, (CupidGb *)gb);
     state_extension_v5(&io, (CupidGb *)gb, sections, &camera);
@@ -1283,7 +1284,7 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
         return CUPID_GB_STATE_INVALID;
     }
     const uint32_t version = get_u32(data + 8);
-    if (version < STATE_VERSION_V2 || version > STATE_VERSION_V31 ||
+    if (version < STATE_VERSION_V2 || version > STATE_VERSION_V32 ||
         (gb->header.mbc_type == CUPID_GB_TAMA5 && version < STATE_VERSION_V26) ||
         (version < STATE_VERSION_V19 && gb->cartridge_ram_size > CUPID_GB_INLINE_RAM_SIZE)) {
         return CUPID_GB_STATE_UNSUPPORTED_VERSION;
@@ -1613,6 +1614,7 @@ static CupidGbStateResult load_state(CupidGb *gb, const uint8_t *data, size_t le
     if (pixel_timing_size) {
         if (!reserve(&io, pixel_timing_size) ||
             (version < STATE_VERSION_V17 && data[io.offset + 3]) ||
+            (version < STATE_VERSION_V32 && (data[io.offset + 2] & CUPID_GB_PIXEL_WINDOW_Y_EDGE)) ||
             !cupid_gb_pixels_timing_decode(candidate, data + io.offset, pixel_timing_size))
             io.invalid = true;
         io.offset += pixel_timing_size;

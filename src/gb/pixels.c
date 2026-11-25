@@ -42,7 +42,10 @@ void cupid_gb_pixels_begin_line(CupidGb *gb) {
     p->active = false;
     gb->pixel_timing = (CupidGbPixelTiming){0};
     gb->ppu_transfer_end_dot = 0;
-    if (p->line == gb->io_registers[CUPID_GB_IO_WY])
+    /* A disabled window cannot latch WY when its line begins. Keep the line
+     * comparison for callers that advance only the eager LCD. */
+    if ((gb->io_registers[CUPID_GB_IO_LCDC] & 0xa0u) == 0xa0u &&
+        p->line == gb->io_registers[CUPID_GB_IO_WY])
         p->window_armed = true;
 }
 
@@ -429,7 +432,7 @@ static void emit_pixel(CupidGb *gb, bool inserted) {
 }
 
 /* True means the restart consumed this dot before any fetch work. */
-static bool start_window(CupidGb *gb) {
+static bool start_window(CupidGb *gb, bool y_edge) {
     CupidGbPixels *p = &gb->pixels;
     CupidGbPixelTiming *timing = &gb->pixel_timing;
     const unsigned wx = gb->io_registers[CUPID_GB_IO_WX];
@@ -438,7 +441,12 @@ static bool start_window(CupidGb *gb) {
     const int position = timing->logical_x;
     if (p->window_active || !p->window_armed || !(gb->io_registers[CUPID_GB_IO_LCDC] & 0x20))
         return false;
-    bool reached = wx < (color ? 167u : 166u) && position + 7 == (int)wx;
+    if (y_edge && color && !gb->double_speed)
+        return false;
+    /* Monochrome can catch the horizontal trigger one pixel late when the
+     * vertical comparison arms during transfer. */
+    const bool late = !color && y_edge && wx > 0 && wx < 166u && position + 6 == (int)wx;
+    bool reached = late || (wx < (color ? 167u : 166u) && position + 7 == (int)wx);
     if (wx == 0)
         reached = position >= -15 && position <= -7;
     if (wx == 0 && scroll && position == -16)
@@ -446,6 +454,9 @@ static bool start_window(CupidGb *gb) {
     if (!reached)
         return false;
 
+    /* DMG replaces the pixel just emitted. Pocket and SGB retain it. */
+    if (late && gb->model != CUPID_GB_MODEL_MGB && !cupid_gb_model_is_sgb(gb->model) && p->x)
+        --p->x;
     if (p->window_used)
         ++gb->window_line_counter;
     p->window_active = p->window_used = true;
@@ -520,6 +531,8 @@ void cupid_gb_pixels_finish_line(CupidGb *gb) {
 
 bool cupid_gb_pixels_tick(CupidGb *gb) {
     CupidGbPixels *p = &gb->pixels;
+    const bool window_y_edge = (gb->pixel_timing.flags & CUPID_GB_PIXEL_WINDOW_Y_EDGE) != 0;
+    gb->pixel_timing.flags &= (uint8_t)~CUPID_GB_PIXEL_WINDOW_Y_EDGE;
     if (p->x == CUPID_GB_SCREEN_WIDTH)
         return true;
     if (p->delay > 7) {
@@ -532,7 +545,7 @@ bool cupid_gb_pixels_tick(CupidGb *gb) {
         p->fetched_objects &= (uint16_t)~(1u << p->object_index);
         gb->object_fetch_stage = CUPID_GB_OBJECT_IDLE;
     } else if (gb->object_fetch_stage == CUPID_GB_OBJECT_IDLE && !p->object_delay &&
-               start_window(gb))
+               start_window(gb, window_y_edge))
         return false;
     if (!aborted && gb->object_fetch_stage == CUPID_GB_OBJECT_IDLE && !p->object_delay &&
         p->window_active && !(gb->pixel_timing.flags & CUPID_GB_PIXEL_WINDOW_FIRST) && !p->phase &&
@@ -605,6 +618,9 @@ bool cupid_gb_pixels_timing_valid(const CupidGb *gb) {
     if (timing->logical_x < -16 || timing->logical_x > 160 ||
         (timing->flags & ~CUPID_GB_PIXEL_TIMING_FLAGS) ||
         ((timing->flags & CUPID_GB_PIXEL_WX_GLITCH) && !cupid_gb_model_is_cgb(gb->model)))
+        return false;
+    if ((timing->flags & CUPID_GB_PIXEL_WINDOW_Y_EDGE) &&
+        (!p->active || !p->window_armed || p->window_active || p->x >= 160 || p->line >= 144))
         return false;
     if (timing->flags & CUPID_GB_PIXEL_WINDOW_HOLD)
         return !cupid_gb_model_is_cgb(gb->model) && p->active && p->window_active &&

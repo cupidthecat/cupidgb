@@ -22,6 +22,7 @@
 
 #include "display_clock.h"
 
+#include "cupid/gb/ppu.h"
 #include "vram_bus.h"
 
 #include <assert.h>
@@ -89,10 +90,28 @@ bool cupid_gb_display_clock_sync_address(uint16_t address, bool write) {
     return false;
 }
 
-static void window_compare(CupidGb *gb) {
+static unsigned window_write_row(const CupidGb *gb) {
+    const CupidGbDisplayClock *clock = &gb->display_clock;
+    /* The LY comparison still sees the previous line at the OAM prefix on
+     * monochrome hardware and in double speed. */
+    if ((!cupid_gb_model_is_cgb(gb->model) || gb->double_speed) &&
+        clock->phase == CUPID_GB_DISPLAY_CLOCK_OAM_PREFIX && clock->cursor <= 1 && clock->row > 0 &&
+        clock->row < 144)
+        return clock->row - 1u;
+    return clock->row;
+}
+
+static bool window_y_matches(const CupidGb *gb, unsigned row) {
+    return (gb->io_registers[0x40] & 0xa0u) == 0xa0u && gb->io_registers[0x4a] == row;
+}
+
+static void window_compare(CupidGb *gb, unsigned row) {
     CupidGbDisplayClock *clock = &gb->display_clock;
-    if (lcd_on(gb) && (gb->io_registers[0x40] & 0x20u) && gb->io_registers[0x4a] == clock->row)
+    if (window_y_matches(gb, row)) {
         clock->flags |= CUPID_GB_DISPLAY_CLOCK_WINDOW_Y;
+        if (row < 144)
+            gb->pixels.window_armed = true;
+    }
 }
 
 static void wait_dots(CupidGbDisplayClock *clock, unsigned dots, unsigned phase, unsigned cursor) {
@@ -116,7 +135,7 @@ static void begin_row(CupidGb *gb) {
     clock->phase = clock->row < 144   ? CUPID_GB_DISPLAY_CLOCK_OAM_PREFIX
                    : clock->row < 153 ? CUPID_GB_DISPLAY_CLOCK_VBLANK_EDGES
                                       : CUPID_GB_DISPLAY_CLOCK_VBLANK_LAST;
-    window_compare(gb);
+    window_compare(gb, clock->row);
 }
 
 static unsigned transfer_budget(const CupidGb *gb) {
@@ -225,7 +244,7 @@ static void run_schedule(CupidGb *gb, bool force) {
                     clock->cursor = 0;
                     clock->batch_half_dots = 160;
                     clock->phase = CUPID_GB_DISPLAY_CLOCK_OAM_QUIET;
-                    window_compare(gb);
+                    window_compare(gb, clock->row);
                 }
                 break;
             case CUPID_GB_DISPLAY_CLOCK_OAM_QUIET:
@@ -353,21 +372,47 @@ static void advance_clock(CupidGb *gb, unsigned half_dots, bool force) {
     run_schedule(gb, force);
 }
 
+static unsigned window_deadline(const CupidGb *gb) {
+    const unsigned offset = gb->double_speed ? 6u : cupid_gb_model_is_cgb(gb->model) ? 0u : 2u;
+    return 8u - ((gb->display_clock.window_alignment + offset) & 7u);
+}
+
+void cupid_gb_display_clock_sample_window(CupidGb *gb, unsigned before, unsigned after) {
+    const unsigned deadline = window_deadline(gb);
+    if (before >= deadline || after < deadline || (gb->io_registers[0x40] & 0xa0u) != 0xa0u)
+        return;
+
+    /* Locate the scheduled comparison between eager dots. Keep the observer's
+     * VRAM delivery and window history on their regular CPU-span boundary. */
+    const CupidGbDisplayClock saved_clock = gb->display_clock;
+    const CupidGbVramBus saved_bus = gb->vram_bus;
+    const bool was_armed = gb->pixels.window_armed;
+    advance_clock(gb, deadline, true);
+    const unsigned row = window_write_row(gb);
+    gb->display_clock = saved_clock;
+    gb->vram_bus = saved_bus;
+    gb->pixels.window_armed = was_armed;
+    if (row < 144 && window_y_matches(gb, row)) {
+        gb->pixels.window_armed = true;
+        if (!was_armed && gb->pixels.active)
+            gb->pixel_timing.flags |= CUPID_GB_PIXEL_WINDOW_Y_EDGE;
+    }
+}
+
 static void deliver_clock(CupidGb *gb, unsigned half_dots, bool force) {
     CupidGbDisplayClock *clock = &gb->display_clock;
     if (clock->flags & CUPID_GB_DISPLAY_CLOCK_WINDOW_Y)
         clock->flags &= (uint8_t)~CUPID_GB_DISPLAY_CLOCK_WINDOW_PENDING;
     if (clock->flags & CUPID_GB_DISPLAY_CLOCK_WINDOW_PENDING) {
         force = true;
-        const unsigned offset = gb->double_speed ? 6u : cupid_gb_model_is_cgb(gb->model) ? 0u : 2u;
-        const unsigned until_check = 8u - ((clock->window_alignment + offset) & 7u);
+        const unsigned until_check = window_deadline(gb);
         if (half_dots >= until_check) {
             clock->flags &= (uint8_t)~CUPID_GB_DISPLAY_CLOCK_WINDOW_PENDING;
             advance_clock(gb, until_check, true);
-            window_compare(gb);
-            if (clock->phase == CUPID_GB_DISPLAY_CLOCK_TRANSFER_FINE &&
-                cupid_gb_model_is_cgb(gb->model) && !gb->double_speed)
-                clock->flags |= CUPID_GB_DISPLAY_CLOCK_WINDOW_JUST_CHECKED;
+            const bool was_armed = gb->pixels.window_armed;
+            window_compare(gb, window_write_row(gb));
+            if (!was_armed && gb->pixels.window_armed && gb->pixels.active)
+                gb->pixel_timing.flags |= CUPID_GB_PIXEL_WINDOW_Y_EDGE;
             half_dots -= until_check;
         }
     }

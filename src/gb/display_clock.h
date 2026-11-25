@@ -66,6 +66,14 @@ void cupid_gb_display_clock_advance_host(CupidGb *gb, unsigned half_dots);
 void cupid_gb_display_clock_sync(CupidGb *gb);
 bool cupid_gb_display_clock_sync_address(uint16_t address, bool write);
 
+static inline bool cupid_gb_display_clock_window_pending(const CupidGb *gb) {
+    const unsigned flags = CUPID_GB_DISPLAY_CLOCK_WINDOW_PENDING | CUPID_GB_DISPLAY_CLOCK_WINDOW_Y;
+    return (gb->display_clock.flags & flags) == CUPID_GB_DISPLAY_CLOCK_WINDOW_PENDING &&
+           !gb->pixels.window_armed;
+}
+
+void cupid_gb_display_clock_sample_window(CupidGb *gb, unsigned before, unsigned after);
+
 bool cupid_gb_display_clock_state_valid(const CupidGb *gb);
 bool cupid_gb_display_clock_state_encode(const CupidGb *gb, uint8_t *data, size_t size);
 bool cupid_gb_display_clock_state_decode(CupidGb *gb, const uint8_t *data, size_t size);

@@ -133,8 +133,9 @@ matching guest clocks, CPU registers, and native pixels. Changing the
 fight inputs changed 6,439 terminal pixels in Mortal Kombat I and 5,675
 in Mortal Kombat II in both builds.
 
-The Windows and Linux CupidGB active replays produced identical PCM,
-native version 31 states, final registers, and pixels. Restoring a state
+At the monochrome envelope checkpoint, the Windows and Linux CupidGB
+active replays produced identical PCM, native version 31 states, final
+registers, and pixels. Restoring a state
 in either fight reproduced the next 300 intervals and all 221,506 stereo
 frames. All four Linux active and idle routes passed the same restore
 check. Restoring both original version 30 fight snapshots also matched
@@ -152,11 +153,30 @@ idle events or errors after warmup.
 | Windows | 100.00% | 59.77 | 22.41 ms | 74.04 MiB |
 | Linux/Xcb | 100.01% | 59.79 | 20.97 ms | 92.72 MiB |
 
-The Mortal Kombat I comparison still differs during a STAT poll on
-line 21. CupidGB reads LCD mode 3 where the comparison reads mode 0, so
-the guest takes one additional poll before proceeding. The paired PCM
-also differs later in both games. The [envelope validation](validation-audio.md#monochrome-envelope-edges)
-records the boot sound fix and the remaining sample differences.
+### Window timing during gameplay
+
+Mortal Kombat I enables the window after the WY comparison has passed.
+CupidGB had started the window on line 21 and reported transfer mode
+during a STAT poll that should see HBlank. Correcting the WY latch removed
+the extra poll. The replay now matches every instruction interval across
+22,294,718 instructions. The Mortal Kombat II replay still matches across
+21,219,482 instructions. Both routes end with matching clocks, CPU
+registers, and native pixels. Six sampled images in Mortal Kombat I and
+151 in Mortal Kombat II differ along the way, and the paired PCM still
+differs later in both games. The envelope checkpoint records those audio
+differences. [Monochrome envelope validation](validation-audio.md#monochrome-envelope-edges)
+
+All 8,680 generated timing cases match the pinned comparison. The cases
+cover DMG ABC, Pocket, CGB 0/C/E, SGB, and SGB2. They vary the placement
+of WY and LCDC writes around the comparison, test WX positions from the
+left edge to 166, and cover frame wrap and LCD power changes. The preceding
+build differed in 4,277 cases. A separate 3,720-case matrix matched after
+guest code entered double speed through KEY1 and STOP on CGB 0/C/E.
+
+Windows and Linux produced identical initial and restored PCM, native
+version 32 states, final clocks and registers, and terminal images for
+both active replays. The DMG and CGB Acid2 images each matched all 23,040
+pixel positions on both hosts after palette mapping.
 
 ## Live cartridge replacement
 

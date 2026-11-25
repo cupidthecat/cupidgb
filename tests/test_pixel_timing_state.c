@@ -675,6 +675,52 @@ static void test_malformed_tails(void) {
     }
 }
 
+static void test_window_comparison_edge_state(void) {
+    Rig *source = create_rig(5, false), *target = create_rig(5, false);
+    CupidGb *gb = source->gb;
+    cupid_gb_write_u8(gb, 0xff43, 0);
+    cupid_gb_write_u8(gb, 0xff4a, 8);
+    cupid_gb_write_u8(gb, 0xff4b, 166);
+    cupid_gb_write_u8(gb, 0xff40, 0xd1);
+    for (unsigned dot = 0; dot < 8 * 456 + 248 && (gb->pixels.line < 8 || gb->pixels.dot < 248);
+         ++dot)
+        advance_dot(source);
+    assert(gb->pixels.line == 8 && gb->pixels.dot == 248 && gb->pixels.active &&
+           !gb->pixels.window_armed);
+    cupid_gb_write_u8(gb, 0xff40, 0xf1);
+    for (unsigned dot = 0; dot < 4; ++dot)
+        advance_dot(source);
+    assert(gb->pixels.dot == 252 && gb->pixel_timing.logical_x == 159);
+    assert(gb->pixel_timing.flags & CUPID_GB_PIXEL_WINDOW_Y_EDGE);
+
+    Blob pending = save_rig(source);
+    assert(load_rig(target, &pending, 0) == CUPID_GB_STATE_OK);
+    assert(target->gb->pixel_timing.flags & CUPID_GB_PIXEL_WINDOW_Y_EDGE);
+    advance_dot(source);
+    advance_dot(target);
+    assert(!gb->pixels.window_active && !(gb->pixel_timing.flags & CUPID_GB_PIXEL_WINDOW_Y_EDGE));
+    compare_display(source, target);
+
+    Blob older = copy_blob(&pending);
+    const size_t pixel = pixel_offset(source, &older);
+    put_le(older.bytes + 8, 31, 4);
+    resign(&older);
+    reject_unchanged(target, &older);
+    older.bytes[pixel + 2] &= (uint8_t)~CUPID_GB_PIXEL_WINDOW_Y_EDGE;
+    /* Older builds could leave the observer's flag set after a WY check. */
+    const size_t clock = pixel - CUPID_GB_DISPLAY_CLOCK_STATE_SIZE;
+    older.bytes[clock + 16] |= CUPID_GB_DISPLAY_CLOCK_WINDOW_JUST_CHECKED;
+    resign(&older);
+    assert(load_rig(target, &older, 0) == CUPID_GB_STATE_OK);
+    advance_dot(target);
+    assert(target->gb->pixels.window_active);
+
+    free(older.bytes);
+    free(pending.bytes);
+    destroy_rig(source);
+    destroy_rig(target);
+}
+
 static void test_malformed_window_history(void) {
     static const struct {
         size_t offset;
@@ -976,6 +1022,7 @@ int main(int argc, char **argv) {
     test_continuations();
     test_legacy_projection();
     test_malformed_tails();
+    test_window_comparison_edge_state();
     test_malformed_window_history();
     test_malformed_abort();
     test_direct_codecs();
