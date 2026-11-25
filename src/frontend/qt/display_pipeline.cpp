@@ -41,6 +41,50 @@ using BlendTable = std::array<uint8_t, 256 * 256>;
 
 const BlendTable &blendTable(FrameBlending mode);
 
+QThreadPool &displayWorkerPool() {
+    static const auto pool = [] {
+        auto threads = std::make_unique<QThreadPool>();
+        threads->setMaxThreadCount(2);
+        return threads;
+    }();
+    return *pool;
+}
+
+template <typename RenderRows> void renderDisplayRows(QSize output, const RenderRows &renderRows) {
+    // The caller renders one band and joins the others before exposing the image.
+    // Each band reads immutable frame data and writes disjoint rows.
+    constexpr int64_t minimumParallelPixels = 160000;
+    const int height = output.height();
+    const int workers =
+        int64_t(output.width()) * height < minimumParallelPixels
+            ? 0
+            : std::clamp(QThread::idealThreadCount() - 1, 0, std::min(2, height - 1));
+    if (workers == 0) {
+        renderRows(0, height);
+        return;
+    }
+
+    auto &pool = displayWorkerPool();
+    QFutureSynchronizer<void> jobs;
+    const auto boundary = [&](int band) { return int(int64_t(height) * band / (workers + 1)); };
+    for (int band = 0; band < workers; ++band) {
+        const int first = boundary(band), end = boundary(band + 1);
+        auto promise = std::make_shared<QPromise<void>>();
+        promise->start();
+        jobs.addFuture(promise->future());
+        // Concurrent views share the worker limit. A saturated pool uses the calling thread.
+        if (!pool.tryStart([promise, &renderRows, first, end] {
+                renderRows(first, end);
+                promise->finish();
+            })) {
+            renderRows(first, end);
+            promise->finish();
+        }
+    }
+    renderRows(boundary(workers), height);
+    jobs.waitForFinished();
+}
+
 const auto &linearLight() {
     static const auto values = [] {
         std::array<double, 256> table{};
@@ -252,42 +296,276 @@ QImage renderEdgeFrames(const QImage &source, const QImage &previous, QSize outp
         }
     };
 
-    // The caller renders one band and joins the others before exposing the image.
-    // Each band reads immutable frames and writes its own rows, including row copies.
-    constexpr int64_t minimumParallelPixels = 160000;
-    const int height = output.height();
-    const int workers =
-        int64_t(output.width()) * height < minimumParallelPixels
-            ? 0
-            : std::clamp(QThread::idealThreadCount() - 1, 0, std::min(2, height - 1));
-    if (workers == 0) {
-        renderRows(0, height);
+    renderDisplayRows(output, renderRows);
+    return result;
+}
+
+using PanelPixel = std::array<double, 3>;
+using MonoPixel = std::array<float, 4>;
+
+template <typename Pixel> std::vector<Pixel> decodePanelFrame(const QImage &image) {
+    const auto rgb = image.convertToFormat(QImage::Format_RGB32);
+    if (rgb.isNull())
+        return {};
+    using Component = typename Pixel::value_type;
+    std::vector<Pixel> result(size_t(rgb.width()) * rgb.height());
+    const auto &light = linearLight();
+    for (int y = 0; y < rgb.height(); ++y) {
+        const auto *row = reinterpret_cast<const QRgb *>(rgb.constScanLine(y));
+        auto *output = result.data() + size_t(y) * rgb.width();
+        for (int x = 0; x < rgb.width(); ++x)
+            output[x] = {Component(light[qRed(row[x])]), Component(light[qGreen(row[x])]),
+                         Component(light[qBlue(row[x])])};
+    }
+    return result;
+}
+
+double panelHistoryWeight(const QImage &previous, FrameBlending blending, bool oddFrame, int row) {
+    if (previous.isNull())
+        return 0;
+    if (blending == FrameBlending::Accurate)
+        return bool(row & 1) != oddFrame ? 2.0 / 3.0 : 1.0 / 3.0;
+    return 0.5;
+}
+
+float panelColumn(int x, QSize source, QSize output) {
+    return ((float(x) + 0.5f) / float(output.width())) * float(source.width());
+}
+
+float panelRow(int y, QSize source, QSize output) {
+    // Form the position from the bottom edge before turning it right side up.
+    const float fromBottom = (float(output.height() - y) - 0.5f) / float(output.height());
+    return (1.0f - fromBottom) * float(source.height());
+}
+
+double panelEdge(double phase) {
+    return std::max(1.0 - 6.0 * std::min(phase, 1.0 - phase), 0.0);
+}
+
+struct LcdColumn {
+    std::array<int, 2> positions[3];
+    std::array<double, 2> weights[3];
+};
+
+std::vector<LcdColumn> lcdColumns(QSize source, QSize output) {
+    // Measured transmission at seven positions across the subpixel pattern.
+    // Red and green use center/right taps, blue uses left/center taps.
+    constexpr double response[7][3][2] = {
+        {{1, 0}, {.6, 0}, {1, 0}},   {{1, 0}, {.6, 0}, {.6, 0}}, {{1, 0}, {1, 0}, {.3, .3}},
+        {{.3, .3}, {1, 0}, {0, .6}}, {{0, .6}, {1, 0}, {0, 1}},  {{0, .6}, {.3, .3}, {0, 1}},
+        {{0, 1}, {0, .6}, {0, 1}},
+    };
+    std::vector<LcdColumn> columns(size_t(output.width()));
+    for (int x = 0; x < output.width(); ++x) {
+        const double location = panelColumn(x, source, output);
+        const int cell = int(location);
+        const int center = std::min(cell, source.width() - 1);
+        const double across = (location - cell) * 6.0;
+        const int left = std::min(int(across), 5);
+        const double fraction = across - left;
+        auto &column = columns[size_t(x)];
+        const std::array<int, 2> right = {center, std::min(center + 1, source.width() - 1)};
+        column.positions[0] = right;
+        column.positions[1] = right;
+        column.positions[2] = {std::max(center - 1, 0), center};
+        for (int channel = 0; channel < 3; ++channel)
+            for (int tap = 0; tap < 2; ++tap)
+                column.weights[channel][tap] = response[left][channel][tap] * (1.0 - fraction) +
+                                               response[left + 1][channel][tap] * fraction;
+    }
+    return columns;
+}
+
+struct PanelTap {
+    int first;
+    int second;
+    double weight;
+};
+
+PanelTap panelTap(double position, int limit, bool smooth) {
+    const int first = int(std::floor(position));
+    double fraction = position - first;
+    if (smooth)
+        fraction = fraction * fraction * (3.0 - 2.0 * fraction);
+    return {std::clamp(first, 0, limit - 1), std::clamp(first + 1, 0, limit - 1), fraction};
+}
+
+struct MonoAxis {
+    int center;
+    PanelTap bloom;
+    PanelTap shadow;
+    double grid;
+};
+
+MonoAxis monoAxis(double position, int limit, double shadowOffset) {
+    const int cell = int(position);
+    return {std::min(cell, limit - 1), panelTap(position - 0.5, limit, true),
+            panelTap(position - shadowOffset, limit, false),
+            1.0 - 0.25 * panelEdge(position - cell)};
+}
+
+MonoPixel mixMonoPixel(const MonoPixel &a, const MonoPixel &b, float weight) {
+    MonoPixel result;
+    const float left = 1.0f - weight;
+    for (size_t lane = 0; lane < result.size(); ++lane)
+        result[lane] = a[lane] * left + b[lane] * weight;
+    return result;
+}
+
+struct MonoPanelRow {
+    const MonoPixel *center = nullptr;
+    std::vector<MonoPixel> bloom;
+    std::vector<MonoPixel> shadow;
+
+    void prepare(const std::vector<MonoPixel> &frame, const MonoAxis &axis, int width) {
+        const auto row = [&](int y) { return frame.data() + size_t(y) * width; };
+        center = row(axis.center);
+        bloom.resize(size_t(width));
+        shadow.resize(size_t(width));
+        const auto *bloomFirst = row(axis.bloom.first);
+        const auto *bloomSecond = row(axis.bloom.second);
+        const auto *shadowFirst = row(axis.shadow.first);
+        const auto *shadowSecond = row(axis.shadow.second);
+        for (int x = 0; x < width; ++x) {
+            bloom[size_t(x)] =
+                mixMonoPixel(bloomFirst[x], bloomSecond[x], float(axis.bloom.weight));
+            shadow[size_t(x)] =
+                mixMonoPixel(shadowFirst[x], shadowSecond[x], float(axis.shadow.weight));
+        }
+    }
+
+    MonoPixel sample(const MonoAxis &column, float grid) const {
+        const auto glow =
+            mixMonoPixel(bloom[size_t(column.bloom.first)], bloom[size_t(column.bloom.second)],
+                         float(column.bloom.weight));
+        const auto shade =
+            mixMonoPixel(shadow[size_t(column.shadow.first)], shadow[size_t(column.shadow.second)],
+                         float(column.shadow.weight));
+        const auto &pixel = center[column.center];
+        MonoPixel result;
+        // Pad the RGB pixel to four float lanes for the optical calculation.
+        for (size_t lane = 0; lane < result.size(); ++lane) {
+            const float beam = pixel[lane] * grid + glow[lane] * 0.4f;
+            result[lane] = beam - std::max(beam - shade[lane], 0.0f) * 0.25f;
+        }
+        return result;
+    }
+};
+
+QImage renderPanelFrames(const QImage &source, const QImage &previous, QSize output, bool mono,
+                         FrameBlending blending, bool oddFrame) {
+    QImage result(output, QImage::Format_RGB32);
+    if (result.isNull())
+        return {};
+    const QSize input = source.size();
+    const auto row = [width = input.width()](const std::vector<PanelPixel> &pixels, int y) {
+        return pixels.data() + size_t(y) * width;
+    };
+    auto *pixels = result.bits();
+    const auto scan = [pixels, stride = result.bytesPerLine()](int y) {
+        return reinterpret_cast<QRgb *>(pixels + y * stride);
+    };
+
+    if (mono) {
+        const auto frame = decodePanelFrame<MonoPixel>(source);
+        const auto history = decodePanelFrame<MonoPixel>(previous);
+        if (frame.empty() || (!previous.isNull() && history.empty()))
+            return {};
+        std::vector<uint8_t> changed;
+        if (!history.empty()) {
+            // The shadow and bloom can reuse the current frame when all source
+            // rows they sample have the same pixels in both frames.
+            changed.resize(size_t(input.height()));
+            const size_t rowSize = size_t(input.width());
+            for (int y = 0; y < input.height(); ++y) {
+                const size_t offset = size_t(y) * rowSize;
+                changed[size_t(y)] = std::memcmp(frame.data() + offset, history.data() + offset,
+                                                 rowSize * sizeof(MonoPixel)) != 0;
+            }
+        }
+        std::vector<MonoAxis> columns;
+        columns.reserve(size_t(output.width()));
+        for (int x = 0; x < output.width(); ++x)
+            columns.push_back(monoAxis(panelColumn(x, input, output), input.width(), 1.10));
+        renderDisplayRows(output, [&](int first, int end) {
+            MonoPanelRow now, old;
+            for (int y = first; y < end; ++y) {
+                const auto axis = monoAxis(panelRow(y, input, output), input.height(), 1.30);
+                const bool mix =
+                    !changed.empty() &&
+                    (changed[size_t(axis.center)] || changed[size_t(axis.bloom.first)] ||
+                     changed[size_t(axis.bloom.second)] || changed[size_t(axis.shadow.first)] ||
+                     changed[size_t(axis.shadow.second)]);
+                now.prepare(frame, axis, input.width());
+                if (mix)
+                    old.prepare(history, axis, input.width());
+                const float oldWeight =
+                    float(panelHistoryWeight(previous, blending, oddFrame, axis.center));
+                auto *destination = scan(y);
+                for (const auto &column : columns) {
+                    const float grid = float(0.6 * axis.grid * column.grid);
+                    auto light = now.sample(column, grid);
+                    // Shadow depends on the brightness of each input frame.
+                    if (mix)
+                        light = mixMonoPixel(light, old.sample(column, grid), oldWeight);
+                    *destination++ = qRgb(encodeLinear(light[0]), encodeLinear(light[1]),
+                                          encodeLinear(light[2]));
+                }
+            }
+        });
         return result;
     }
 
-    static const auto pool = [] {
-        auto threads = std::make_unique<QThreadPool>();
-        threads->setMaxThreadCount(2);
-        return threads;
-    }();
-    QFutureSynchronizer<void> jobs;
-    const auto boundary = [&](int band) { return int(int64_t(height) * band / (workers + 1)); };
-    for (int band = 0; band < workers; ++band) {
-        const int first = boundary(band), end = boundary(band + 1);
-        auto promise = std::make_shared<QPromise<void>>();
-        promise->start();
-        jobs.addFuture(promise->future());
-        // Concurrent views share the worker limit. A saturated pool uses the calling thread.
-        if (!pool->tryStart([promise, &renderRows, first, end] {
-                renderRows(first, end);
-                promise->finish();
-            })) {
-            renderRows(first, end);
-            promise->finish();
+    const auto frame = decodePanelFrame<PanelPixel>(source);
+    const auto history = decodePanelFrame<PanelPixel>(previous);
+    if (frame.empty() || (!previous.isNull() && history.empty()))
+        return {};
+    const auto columns = lcdColumns(input, output);
+    renderDisplayRows(output, [&](int first, int end) {
+        std::vector<PanelPixel> lightRow(size_t(input.width()));
+        for (int y = first; y < end; ++y) {
+            const double location = panelRow(y, input, output);
+            const int cell = int(location);
+            const int center = std::min(cell, input.height() - 1);
+            const double phase = location - cell;
+            const double edge = panelEdge(phase);
+            const double beside = 0.5 * edge;
+            const double transmittance = 1.0 - 0.2 * edge;
+            const int neighbor = std::clamp(center + (phase < 0.5 ? -1 : 1), 0, input.height() - 1);
+            const double oldWeight = panelHistoryWeight(previous, blending, oddFrame, center);
+            const auto *here = row(frame, center);
+            const auto *there = row(frame, neighbor);
+
+            // Temporal and vertical weights are linear for the color panel, so
+            // evaluate them once per source column for the whole output row.
+            const double currentCenter = transmittance * (1.0 - beside) * (1.0 - oldWeight);
+            const double currentNeighbor = transmittance * beside * (1.0 - oldWeight);
+            for (int x = 0; x < input.width(); ++x)
+                for (int channel = 0; channel < 3; ++channel)
+                    lightRow[size_t(x)][channel] =
+                        here[x][channel] * currentCenter + there[x][channel] * currentNeighbor;
+            if (!history.empty()) {
+                const auto *oldHere = row(history, center);
+                const auto *oldThere = row(history, neighbor);
+                const double oldCenter = transmittance * (1.0 - beside) * oldWeight;
+                const double oldNeighbor = transmittance * beside * oldWeight;
+                for (int x = 0; x < input.width(); ++x)
+                    for (int channel = 0; channel < 3; ++channel)
+                        lightRow[size_t(x)][channel] +=
+                            oldHere[x][channel] * oldCenter + oldThere[x][channel] * oldNeighbor;
+            }
+            auto *destination = scan(y);
+            for (const auto &column : columns) {
+                const auto channel = [&](int index) {
+                    const auto &position = column.positions[index];
+                    const auto &weight = column.weights[index];
+                    return encodeLinear(lightRow[size_t(position[0])][index] * weight[0] +
+                                        lightRow[size_t(position[1])][index] * weight[1]);
+                };
+                *destination++ = qRgb(channel(0), channel(1), channel(2));
+            }
         }
-    }
-    renderRows(boundary(workers), height);
-    jobs.waitForFinished();
+    });
     return result;
 }
 } // namespace
@@ -350,6 +628,10 @@ QImage renderDisplayFrames(const QImage &source, const QImage &previous, QSize o
         case ScalingFilter::AntialiasedScale4x:
             return renderEdgeFrames(source, blend ? previous : QImage(), output, filter, blending,
                                     oddFrame);
+        case ScalingFilter::Lcd:
+        case ScalingFilter::MonochromeLcd:
+            return renderPanelFrames(source, blend ? previous : QImage(), output,
+                                     filter == ScalingFilter::MonochromeLcd, blending, oddFrame);
         default:
             break;
     }

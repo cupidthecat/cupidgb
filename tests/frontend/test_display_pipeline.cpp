@@ -265,7 +265,7 @@ void testExpandedFilterCaptures() {
                   int(ScalingFilter::SmoothBilinear) == 2 && int(ScalingFilter::Pixelated) == 3 &&
                   int(ScalingFilter::Scale2x) == 4 && int(ScalingFilter::Scale4x) == 5 &&
                   int(ScalingFilter::AntialiasedScale2x) == 6 &&
-                  int(ScalingFilter::AntialiasedScale4x) == 7 && int(ScalingFilter::Count) == 8);
+                  int(ScalingFilter::AntialiasedScale4x) == 7);
     const std::array filters = {ScalingFilter::Pixelated, ScalingFilter::Scale2x,
                                 ScalingFilter::Scale4x, ScalingFilter::AntialiasedScale2x,
                                 ScalingFilter::AntialiasedScale4x};
@@ -467,6 +467,194 @@ void testExpandedFilterOrientation() {
     }
 }
 
+void testLcdCaptures() {
+    static_assert(int(ScalingFilter::Lcd) == 8 && int(ScalingFilter::MonochromeLcd) == 9 &&
+                  int(ScalingFilter::Count) == 10);
+    const std::array filters = {ScalingFilter::Lcd, ScalingFilter::MonochromeLcd};
+    const std::array names = {"Lcd", "MonochromeLcd"};
+    const std::array sizes = {QSize(5, 3),   QSize(7, 5),   QSize(9, 7),
+                              QSize(14, 10), QSize(17, 13), QSize(28, 20)};
+    // Observed top-down RGBA digests of the generated controls. Each row covers
+    // Disabled, Simple, Accurate-even, Accurate-odd, including unity and reduction.
+    const char *hashes[2][6][4] = {
+        {
+            // Lcd
+            {"0c064b2934cdf83aa3b71254f2993daf37e39140eeae31b46baab5ab9e7e5a66",
+             "c20128bdb851bdc286b6053d5ae9a4f03cfa80db01825a0a4fe977c131aea948",
+             "56f668faba8216d1fd526c8abc00216a7d16738993e3907966a9384f6bb1758f",
+             "9106d5877e684962e25aa5205302011a4d4ed21ad07ef36dae78e95363d4547b"},
+            {"78ee52dd050390bfdac67500964161655095685110cf17a0ab5a405236f55af0",
+             "ad73d1a788c5e450e62b33350853241a658dff37e006249434956fb0a3b2b2f3",
+             "9004f1dd485651af8be3a4cc6a463954c7b7df1c99e873b3c69b22ab8a1f5380",
+             "a617b7ba78519ffca09a5154afdef9ed78c0b07d95f3f8231346d15ada982e66"},
+            {"c403e3e0fb52fd2693157d50f496c48a732dd7ef26259349f391baa00f3979ea",
+             "f8c78b3520c72f9d66938d8300e5a2d25bae5cedc78568215965a2562db0e4a9",
+             "4fdee465f8b8acabfb0e83f9e0eb71319753e9c683d0a5116348200a79f6e3da",
+             "cf7aa03449b12abb6cdf7c432feac0855e886135c9dd15380c24686693861908"},
+            {"afd8ca258d08ee58774b508005c1306be84555c5fbddd6829e3af076ec751774",
+             "22dbb9df6ea1ab39c04dbe30222f440302f672e0b14c08baad36127e5d1e2bf4",
+             "80a7883a5e03fbceb0067e8b1a858cc882be3726cc3c1fc285a1a611f2a928a3",
+             "6b29cef2f7b0c5c9cf20b0e88b912f9d1457612bdbab8fb11f9bab4c0a3ca493"},
+            {"17c9fe29e45b81c8f9568cfdf3e344d8297ce5db54eece9f490a3344f92a0fb1",
+             "9cecda3bcffc787a6cf3896aa2b11d683d1b695810692b11476be45483623903",
+             "7e0f597b92404b5ae13620134816118ca6d1b1fc37d3cbe50d80b4d12e24a893",
+             "e279c5e0b60bce5fa9ded6b27452be5c2e15cdfda2c1c717dfe05abcd31c9c6d"},
+            {"18381f32b8837f248e5d2250626073abaa7bf2e2641e6d89002462d330c1f8be",
+             "5e30bc229694b2c389070954a2f591fd4137258466e541570f120f25d573d6e4",
+             "e1f9c83624bbd1fd12a9d3f346e5253252dd9d959293bc6985074aa267cb0734",
+             "af145820cd489e4b49c31a5c4c511430fdabda92f00e5d8373258ad2d20667aa"},
+        },
+        {
+            // MonochromeLcd
+            {"0a016482e1b7575a54eab955c85f11f98eb5b580cb059126caa74c5eb3a703f2",
+             "dad92ec8cdd385045ebea828a088e8d5a24b6a564ffe2b2a59c1ef978fda54fc",
+             "843e0cf4b1a7770a42cb7ae378bb974f68892fff1587a5a8477b7cf14cd073a5",
+             "6d82b0d9dfdb4041ad62fde16455bfc7c2a070a9728ae19a6d5cb48a27b4cb7e"},
+            {"26530fd6d49e12405216777cfced7d6eadef91d69d1023c388734ec743fae4e1",
+             "1426e4e837b47d0faea465beb3e505959334ebc8d27b9dbcae1a76040904180e",
+             "5f6364f2bdfa4ac7da3afb0f505ec9c3713ce966cebb48092b6362d2fa9b060c",
+             "7c53b2ff1d9bbb8d98665298ed2e99cc5a8fa4b09b982329fdb866e193064e10"},
+            {"bf25f0ff43227de71af5775b13e4c0d879a7f62fb97ae646e00212d6a298afd6",
+             "fc5e67f44fef792795940e3767d9081f7da93f8024bfc5d0a22a12875221e621",
+             "24cd0de36f7171535c9faa51180235efdf467baa329ba348e91cec7522b70e03",
+             "90abb1c0aa92676bcc2647517a0b3bfec5ee4175e6ecced8ea22be8451b8269c"},
+            {"8b386ac6579b0750959e857a01af22aef4fc4600ee25d730265ead12cc30c004",
+             "576c924d8c4b377d29e4edf7836419e110bec6fa9ea43ab10094ef60399246a1",
+             "74e2f1842fc23fcabc736e5e0fdc19adad6b31a85d7b1c9d030c03799641ebc0",
+             "bf41cb992fa20ff8f74a0383c9484507a3e45863a886302ec39eb2d1808786b3"},
+            {"5b8681e760568cb65293b94b12a1923cc1b215b495bdb2355408fc1032a30b46",
+             "f16ab4a150f1bdb9e9b8d4376138bd860cb611f66b926ead614753096d1e67dd",
+             "a662c7b4b5a51b0dfa35f7001993b259993f0c283689197be576e9c563dbe5f4",
+             "6bef8619d4d39af4a0d16f3e9c62ba437c3c690102c81c7f0800a67e5f4970d4"},
+            {"96d4f29e2735b81393b3f4ab0cc58ca406d625b167945433b6f745e3e8e080aa",
+             "c1b0e7a47b047b01eb8b9a890e861f59b80bedeade23e2ae7bd707cdd36c02fc",
+             "ed3f9fc848ab718dbcd9dcba6eb4b58628d4a7666b9583b1fd9683adc1b5f840",
+             "81feb9bd1cc1283f0d278d8a6c4e0e137a5f74df6237a3ef547e5b8a35b4bd16"},
+        },
+    };
+    const auto frames = generatedFilterFrames();
+    for (size_t filter = 0; filter < filters.size(); ++filter) {
+        assert(filterDisplayImage({}, sizes[0], filters[filter]).isNull());
+        assert(filterDisplayImage(frames[0], {}, filters[filter]).isNull());
+        for (size_t size = 0; size < sizes.size(); ++size) {
+            for (unsigned phase = 0; phase < 4; ++phase) {
+                const auto blending = phase == 0   ? FrameBlending::Disabled
+                                      : phase == 1 ? FrameBlending::Simple
+                                                   : FrameBlending::Accurate;
+                const auto output = renderDisplayFrames(frames[0], frames[1], sizes[size],
+                                                        filters[filter], blending, phase == 3);
+                assert(output.size() == sizes[size]);
+                const auto observed = canonicalRgbaHash(output);
+                if (observed != hashes[filter][size][phase]) {
+                    std::fprintf(stderr, "%s %dx%d blend %u: %s, expected %s\n", names[filter],
+                                 sizes[size].width(), sizes[size].height(), phase,
+                                 observed.constData(), hashes[filter][size][phase]);
+                }
+                assert(observed == hashes[filter][size][phase]);
+            }
+            assert(canonicalRgbaHash(filterDisplayImage(frames[0], sizes[size], filters[filter])) ==
+                   hashes[filter][size][0]);
+        }
+    }
+}
+
+void testLcdBoundaryDimensionsAndHistory() {
+    const auto frames = generatedFilterFrames();
+    QImage unrelated(1, 1, QImage::Format_RGB32);
+    unrelated.fill(Qt::magenta);
+    for (const auto filter : {ScalingFilter::Lcd, ScalingFilter::MonochromeLcd}) {
+        for (const auto size : {QSize(1, 1), QSize(1, 17), QSize(19, 1), QSize(17, 13)}) {
+            const auto filtered = filterDisplayImage(frames[0], size, filter);
+            assert(filtered.size() == size);
+            canonicalRgbaHash(filtered);
+            for (const auto &history : {QImage(), unrelated, frames[0], frames[0].copy()}) {
+                for (const auto mode : {FrameBlending::Simple, FrameBlending::Accurate}) {
+                    for (bool odd : {false, true})
+                        assert(renderDisplayFrames(frames[0], history, size, filter, mode, odd) ==
+                               filtered);
+                }
+            }
+        }
+        for (const auto sourceSize : {QSize(1, 1), QSize(1, 5), QSize(7, 1)}) {
+            QImage current(sourceSize, QImage::Format_RGB32);
+            QImage previous(sourceSize, QImage::Format_RGB32);
+            for (int y = 0; y < sourceSize.height(); ++y) {
+                for (int x = 0; x < sourceSize.width(); ++x) {
+                    current.setPixel(x, y, qRgb(13 + 17 * x, 23 + 31 * y, 219 - 11 * x));
+                    previous.setPixel(x, y, qRgb(231 - 13 * y, 149 - 7 * x, 19 + 17 * y));
+                }
+            }
+            for (const auto size : {QSize(1, 1), QSize(1, 9), QSize(11, 1), QSize(17, 13)}) {
+                for (const auto mode :
+                     {FrameBlending::Disabled, FrameBlending::Simple, FrameBlending::Accurate}) {
+                    for (bool odd : {false, true}) {
+                        const auto output =
+                            renderDisplayFrames(current, previous, size, filter, mode, odd);
+                        assert(output.size() == size);
+                        const auto digest = canonicalRgbaHash(output);
+                        assert(digest == canonicalRgbaHash(renderDisplayFrames(
+                                             current, previous, size, filter, mode, odd)));
+                    }
+                }
+            }
+        }
+    }
+}
+
+void testMonochromeShadowHistory() {
+    QImage current(7, 5, QImage::Format_RGB32);
+    current.fill(qRgb(200, 175, 149));
+    QImage previous = current.copy();
+    previous.setPixel(3, 2, qRgb(0, 0, 0));
+    const auto filter = ScalingFilter::MonochromeLcd;
+    const auto single = filterDisplayImage(current, current.size(), filter);
+    const auto mixed = renderDisplayFrames(current, previous, current.size(), filter,
+                                           FrameBlending::Simple, false);
+    assert(mixed.pixel(3, 2) != single.pixel(3, 2));
+    // The next row has the same center pixels but samples the changed row in its shadow.
+    assert(mixed.pixel(3, 3) != single.pixel(3, 3));
+    for (int y : {0, 1, 4}) {
+        for (int x = 0; x < current.width(); ++x)
+            assert(mixed.pixel(x, y) == single.pixel(x, y));
+    }
+}
+
+void testConcurrentLcdFrames() {
+    const auto frames = generatedParallelEdgeFrames();
+    const auto currentHash = canonicalRgbaHash(frames[0]);
+    const auto previousHash = canonicalRgbaHash(frames[1]);
+    const std::array filters = {ScalingFilter::Lcd, ScalingFilter::MonochromeLcd};
+    const QSize outputSize(733, 601);
+    const auto renderHash = [&](size_t filter, bool odd) {
+        const auto output = renderDisplayFrames(frames[0], frames[1], outputSize, filters[filter],
+                                                FrameBlending::Accurate, odd);
+        assert(output.size() == outputSize);
+        return canonicalRgbaHash(output);
+    };
+    // These comparisons cover repeatability and simultaneous full-size views.
+    // The independent numerical expectations are the observed small controls above.
+    std::array<std::array<QByteArray, 2>, 2> sequential;
+    for (size_t filter = 0; filter < filters.size(); ++filter)
+        for (unsigned odd = 0; odd < 2; ++odd)
+            sequential[filter][odd] = renderHash(filter, odd != 0);
+    QSemaphore ready;
+    QSemaphore start;
+    std::array<std::future<QByteArray>, 8> pending;
+    for (size_t job = 0; job < pending.size(); ++job) {
+        pending[job] = std::async(std::launch::async, [&, job] {
+            ready.release();
+            start.acquire();
+            return renderHash(job % 2, (job / 2) % 2 != 0);
+        });
+    }
+    ready.acquire(int(pending.size()));
+    start.release(int(pending.size()));
+    for (size_t job = 0; job < pending.size(); ++job)
+        assert(pending[job].get() == sequential[job % 2][(job / 2) % 2]);
+    assert(canonicalRgbaHash(frames[0]) == currentHash);
+    assert(canonicalRgbaHash(frames[1]) == previousHash);
+}
+
 void testPreciseNearestSampling() {
     QImage source(160, 144, QImage::Format_RGB32);
     for (int y = 0; y < source.height(); ++y)
@@ -595,6 +783,10 @@ int main() {
     testParallelEdgeCaptures();
     testExpandedFilterCaptures();
     testExpandedFilterOrientation();
+    testLcdCaptures();
+    testLcdBoundaryDimensionsAndHistory();
+    testMonochromeShadowHistory();
+    testConcurrentLcdFrames();
     testPreciseNearestSampling();
     testFilteredFrameBlending();
     QImage corners(2, 2, QImage::Format_RGB32);

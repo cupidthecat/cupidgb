@@ -126,8 +126,9 @@ constexpr std::array<const char *, 5> specialNames = {"Turbo", "Rewind", "Slow m
 constexpr std::array<int, 5> defaultSpecialKeys = {Qt::Key_Space, Qt::Key_Tab, Qt::Key_Shift, 0, 0};
 constexpr std::array<const char *, 3> frameBlendingNames = {"Disabled", "Simple", "Accurate"};
 constexpr std::array<const char *, size_t(ScalingFilter::Count)> scalingFilterNames = {
-    "Nearest Neighbor", "Bilinear", "Smooth Bilinear",     "Pixelated",
-    "Scale2x",          "Scale4x",  "Antialiased Scale2x", "Antialiased Scale4x"};
+    "Nearest Neighbor", "Bilinear",      "Smooth Bilinear",     "Pixelated",
+    "Scale2x",          "Scale4x",       "Antialiased Scale2x", "Antialiased Scale4x",
+    "LCD Display",      "Monochrome LCD"};
 constexpr std::array<const char *, 3> audioFilterNames = {"None (Keep DC Offset)", "Accurate",
                                                           "Preserve Waveform"};
 constexpr std::array<const char *, 4> audioChannelNames = {"Square Channel 1", "Square Channel 2",

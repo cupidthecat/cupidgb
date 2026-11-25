@@ -78,6 +78,9 @@ bool MainWindow::displayFilesSmokeTest(const QString &directory) {
               filterProbe.cachedFilter != selected)))
             return smokeFailure(__FILE__, __LINE__);
     }
+    // This cache-resize probe expects unchanged solid RGB, including when the
+    // preceding loop ends on a filter that simulates a monochrome display.
+    filterProbe.filter = ScalingFilter::Bilinear;
     filterProbe.image.fill(Qt::red);
     filterProbe.resize(400, 300);
     const QSize resizedOutput =
@@ -216,6 +219,9 @@ bool MainWindow::displayFilesSmokeTest(const QString &directory) {
         else
             settings_.remove("video/filter");
     });
+    const std::array<std::pair<ScalingFilter, const char *>, 2> lcdFilters = {
+        std::make_pair(ScalingFilter::Lcd, "LCD Display"),
+        std::make_pair(ScalingFilter::MonochromeLcd, "Monochrome LCD")};
     const auto configureFilter = [&](int expected, int selected, bool accept) {
         bool checked = false;
         bool timedOut = false;
@@ -230,6 +236,8 @@ bool MainWindow::displayFilesSmokeTest(const QString &directory) {
             auto *buttons = dialog->findChild<QDialogButtonBox *>();
             checked = choice && buttons && choice->count() == int(ScalingFilter::Count) &&
                       choice->currentIndex() == expected;
+            for (const auto &[filter, label] : lcdFilters)
+                checked = checked && choice->itemText(int(filter)) == QString::fromLatin1(label);
             if (checked) {
                 choice->setCurrentIndex(selected);
                 buttons->button(accept ? QDialogButtonBox::Ok : QDialogButtonBox::Cancel)->click();
@@ -266,6 +274,9 @@ bool MainWindow::displayFilesSmokeTest(const QString &directory) {
         auto *action = session.findChild<QAction *>(QString("video/filter/%1").arg(mode));
         if (!action)
             return smokeFailure(__FILE__, __LINE__);
+        for (const auto &[filter, label] : lcdFilters)
+            if (mode == int(filter) && action->text() != QString::fromLatin1(label))
+                return smokeFailure(__FILE__, __LINE__);
         action->trigger();
         if (!action->isChecked() || session.display_->filter != ScalingFilter(mode) ||
             settings_.value("video/filter").toInt() != mode || session.image_ != image ||
@@ -283,6 +294,21 @@ bool MainWindow::displayFilesSmokeTest(const QString &directory) {
         if (QApplication::clipboard()->image().convertToFormat(QImage::Format_RGB32) != image ||
             !session.saveScreenshot(nativePath) || QImage(nativePath) != image)
             return smokeFailure(__FILE__, __LINE__);
+    }
+    int configuredFilter = int(ScalingFilter::Count) - 1;
+    for (const auto &[filter, label] : lcdFilters) {
+        if (!configureFilter(configuredFilter, int(filter), true) ||
+            session.display_->filter != filter ||
+            !session.scalingFilterActions_[size_t(filter)]->isChecked() ||
+            settings_.value("video/filter").toInt() != int(filter) ||
+            session.captureState() != state)
+            return smokeFailure(__FILE__, __LINE__);
+        MainWindow restored(true, true);
+        auto *action = restored.scalingFilterActions_[size_t(filter)];
+        if (restored.display_->filter != filter || !action->isChecked() ||
+            action->text() != QString::fromLatin1(label))
+            return smokeFailure(__FILE__, __LINE__);
+        configuredFilter = int(filter);
     }
     if (!configureFilter(int(ScalingFilter::Count) - 1, 1, true) ||
         session.display_->filter != ScalingFilter::Bilinear ||

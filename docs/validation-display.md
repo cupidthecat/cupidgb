@@ -163,3 +163,30 @@ serial and 97.0 MiB parallel on Linux. Every run had zero audio idle events
 and errors after warmup. The isolated Linux PulseAudio sink captured nonzero
 game samples in every run. Guest speed and widget paints measure different
 parts of playback.
+
+## LCD display filters
+
+LCD Display uses two horizontal taps per channel. It evaluates the vertical
+and temporal weights once per source column for each output row. Monochrome
+LCD combines a pixel grid, bloom, and a shadow. Its shadow depends on the
+brightness of each frame, so the renderer applies it before frame blending.
+The monochrome renderer processes color channels together and reuses the
+current-frame calculation where every sampled source row is unchanged.
+Both filters use the shared row worker pool for large outputs.
+
+The comparison at `ea667ad79aa28409f034b1fd6da7304e1844750d` checked six output sizes with blending disabled,
+Simple, and both Accurate phases. All 48 generated RGBA outputs matched
+exactly on Windows and Linux. Regression tests also cover single-pixel
+dimensions, unusable frame history, and eight callers rendering concurrently
+without modifying either input image.
+
+A Linux comparison used two pairs of 160 × 144 frames from Super Mario Bros.
+Deluxe, including a scroll in the first stage. It checked both filters at
+127 × 117, native size, and 733 × 551. Twenty-eight of 48 outputs matched
+exactly. Each remaining output differed in at most three channels, each by
+one 8-bit level. The Qt display tests passed ASan and UBSan on Linux.
+
+The Qt workflow checks both menu and Settings selections, settings reload,
+blending with separate frames, and native-size screenshots. It passed at the
+default device scale and at 125% on both platforms. Full Release passed 111
+tests on Windows and 109 on Linux.

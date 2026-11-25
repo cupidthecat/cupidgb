@@ -36,6 +36,8 @@ enum class ScalingFilter {
     Scale4x = 5,
     AntialiasedScale2x = 6,
     AntialiasedScale4x = 7,
+    Lcd = 8,
+    MonochromeLcd = 9,
     Count,
 };
 enum class MonochromePalette { Lime = 0, Grayscale = 1, Olive = 2, Teal = 3, Custom = 4 };
