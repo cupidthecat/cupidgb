@@ -1148,6 +1148,28 @@ static void test_color_pulse_clock_and_held_duty(void) {
     }
 }
 
+static void test_monochrome_envelope_retrigger_between_divider_edges(void) {
+    CupidGb gb = {0};
+    gb.model = CUPID_GB_MODEL_DMG_ABC;
+    cupid_gb_write_u8(&gb, 0xff26, 0x80);
+    cupid_gb_write_u8(&gb, 0xff12, 0xf1);
+    cupid_gb_write_u8(&gb, 0xff17, 0xf1);
+    cupid_gb_write_u8(&gb, 0xff21, 0xf1);
+
+    for (unsigned trigger = 0; trigger < 2; ++trigger) {
+        cupid_gb_write_u8(&gb, 0xff14, 0x80);
+        cupid_gb_write_u8(&gb, 0xff19, 0x80);
+        cupid_gb_write_u8(&gb, 0xff23, 0x80);
+        cupid_gb_tick(&gb, trigger ? 1024 : 7 * 2048 + 1024);
+        assert(gb.apu.ch1_vol == 15 && gb.apu.ch2_vol == 15 && gb.apu.ch4_vol == 15);
+    }
+
+    cupid_gb_tick(&gb, 7 * 2048 + 1024);
+    assert(gb.apu.ch1_vol == 15 && gb.apu.ch2_vol == 15 && gb.apu.ch4_vol == 15);
+    cupid_gb_tick(&gb, 1024);
+    assert(gb.apu.ch1_vol == 14 && gb.apu.ch2_vol == 14 && gb.apu.ch4_vol == 14);
+}
+
 static void test_color_envelope_edges(void) {
     for (unsigned channel = 0; channel < 2; ++channel) {
         for (unsigned speed = 0; speed < 2; ++speed) {
@@ -1730,6 +1752,7 @@ int main(void) {
     test_pulse_dac_hold();
     test_monochrome_pulse_clock_lifetime();
     test_monochrome_pulse_duty_hold();
+    test_monochrome_envelope_retrigger_between_divider_edges();
     test_color_pulse_phantom_trigger();
     test_color_pulse_clock_and_held_duty();
     test_color_envelope_edges();

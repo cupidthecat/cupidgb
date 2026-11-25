@@ -559,6 +559,59 @@ static void test_v29_filter_history(void) {
     destroy_machine(target);
 }
 
+static void test_monochrome_envelope_history(void) {
+    CupidGb *source = load_machine(CUPID_GB_MODEL_DMG_ABC, 44100, 1);
+    CupidGb *target = load_machine(CUPID_GB_MODEL_DMG_ABC, 44100, 2);
+    cupid_gb_write_u8(source, 0xff26, 0);
+    cupid_gb_write_u8(source, 0xff04, 0);
+    cupid_gb_write_u8(source, 0xff26, 0x80);
+    cupid_gb_write_u8(source, 0xff12, 0xf1);
+    cupid_gb_write_u8(source, 0xff17, 0xf9);
+    cupid_gb_write_u8(source, 0xff21, 0xf1);
+    cupid_gb_write_u8(source, 0xff14, 0x80);
+    cupid_gb_write_u8(source, 0xff19, 0x80);
+    cupid_gb_write_u8(source, 0xff23, 0x80);
+    cupid_gb_tick(source, 7 * 2048);
+
+    CupidGbApu *apu = &source->apu;
+    assert(apu->fs_step == 7 && !apu->ch1_env_timer && !apu->ch2_env_timer && !apu->ch4_env_timer);
+    apu->ch1_env_timer = apu->ch2_env_timer = apu->ch4_env_timer = 1;
+    Blob legacy = encode(source);
+    apu->ch1_env_timer = apu->ch2_env_timer = apu->ch4_env_timer = 0;
+    legacy.bytes[8] = 30;
+    resign(&legacy);
+    assert(load(target, &legacy, 0) == CUPID_GB_STATE_OK);
+    assert_same(source, target);
+    free(legacy.bytes);
+
+    cupid_gb_tick(source, 1024);
+    assert(apu->pulse_timing[0].envelope.clock && apu->pulse_timing[1].envelope.clock &&
+           apu->pulse_timing[1].envelope.lock_pending && apu->noise_timing.envelope.clock);
+    Blob exact = encode(source);
+    assert(load(target, &exact, 0) == CUPID_GB_STATE_OK);
+    assert_same(source, target);
+    free(exact.bytes);
+
+    target->apu.pulse_timing[0].envelope = (CupidGbEnvelopeGate){0};
+    target->apu.pulse_timing[1].envelope = (CupidGbEnvelopeGate){0};
+    target->apu.noise_timing.envelope = (CupidGbEnvelopeGate){0};
+    legacy = encode(target);
+    legacy.bytes[8] = 30;
+    resign(&legacy);
+    assert(load(target, &legacy, 0) == CUPID_GB_STATE_OK);
+    assert_same(source, target);
+    free(legacy.bytes);
+
+    cupid_gb_tick(source, 1024);
+    cupid_gb_tick(target, 1024);
+    assert(apu->ch1_vol == 14 && apu->ch2_vol == 15 && apu->ch4_vol == 14 &&
+           apu->pulse_timing[1].envelope.locked);
+    compare_pcm(source, target);
+    assert_same(source, target);
+    destroy_machine(source);
+    destroy_machine(target);
+}
+
 static void test_firmware_restore_cancels_pending_filter(void) {
     CupidGb *source = load_machine(CUPID_GB_MODEL_CGB_E, 44100, 1);
     CupidGb *target = load_machine(CUPID_GB_MODEL_CGB_E, 44100, 2);
@@ -694,6 +747,7 @@ int main(void) {
     test_startup_filter_history(CUPID_GB_MODEL_CGB_0);
     test_startup_filter_after_guest_write(CUPID_GB_MODEL_CGB_0);
     test_v29_filter_history();
+    test_monochrome_envelope_history();
     test_firmware_restore_cancels_pending_filter();
     test_malformed_history();
     printf("Audio state checks: %u exact replays, %u rate changes, %u live restores, "

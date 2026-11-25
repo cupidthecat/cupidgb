@@ -44,7 +44,7 @@ The caller retains both the queue and the sink during a backend call. Pausing or
 
 The source sometimes calls divided clocks 1 MHz and 2 MHz. Those names describe the handheld clock domains. Their wall-time rates follow the selected model's oscillator. CGB double speed changes CPU throughput without doubling sound pitch or the frame-sequencer rate.
 
-`timer.c` supplies the sequencer's falling DIV edges and a secondary rising edge used by color envelope timing. It selects the appropriate divider bit for normal or double CPU speed. A DIV reset can itself create a falling edge and must use the same edge handling as an ordinary divider transition. Calling `cupid_gb_tick_apu` alone does not generate DIV events; it still advances calculations or delays that an earlier event scheduled.
+`timer.c` supplies the sequencer's falling DIV edges and the secondary rising edge used by the envelope latch. It selects the appropriate divider bit for normal or double CPU speed. A DIV reset can create a falling edge and uses the same handling as an ordinary divider transition. `cupid_gb_tick_apu` advances calculations and delays from earlier edges. The divider supplies new edges.
 
 The sequencer has eight phases. Length counters clock at phases 0, 2, 4 and 6, sweep at 2 and 6, and the ordinary envelope event at 7. At the handheld clock these correspond to 256, 128 and 64 Hz; use the model clock when converting them to elapsed seconds. Powering on while the DIV input is high inhibits one edge before sequencer phase zero resumes. The retained gate state matters across snapshots and register writes.
 
@@ -90,9 +90,9 @@ Length-enable writes can clock length immediately at particular sequencer phases
 
 CH1, CH2 and CH4 have four-bit volume and programmable direction/period. Triggers reload their initial volume and envelope timing. A zero period suppresses ordinary automatic volume changes; it does not make later envelope-register writes inert.
 
-The color pulse envelopes retain rising/falling clock state, endpoint locking and a pending lock. A register write between clock edges can change volume or direction without undoing the endpoint already sampled by the clock. Color double-speed processing also retains a possible two-base-clock delay. These facts live in the timing structures and `envelope_delay`; reconstructing them from the current volume loses information.
+The pulse and noise envelopes count down at sequencer phase 6. The next rising DIV edge arms a due envelope and samples its endpoint. The falling edge applies the volume step. A retrigger between those edges clears the pending step. A live envelope write can change volume or direction while retaining the sampled endpoint. On monochrome hardware a volume change uses the duty bit held by the oscillator. Later color hardware can delay the falling step by two base clocks in double speed.
 
-CH4 and the monochrome pulse paths still use simpler envelope counters. Their implementation should not be described as complete coverage of every live-write or phantom-trigger case. In particular, digital table acceptance for the color pulse paths does not establish all noise-envelope or monochrome behavior.
+Native version 31 retains the monochrome envelope clocks and endpoint locks. Physical variation in monochrome live writes and the full noise-trigger timing range still need qualification.
 
 ## Wave channel
 

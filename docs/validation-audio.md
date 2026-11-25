@@ -190,3 +190,41 @@ All 206 files pass the formatting check, use LF endings and pass the header audi
 The build has no GBA execution target or entry point. File rejection and its regression still recognize unsupported extensions so they can report a useful error.
 
 The [parity checklist](parity.md) retains unresolved model revisions, boot behavior, finer bus and display timing, audio revision differences, SGB host/audio features, infrared transitions, physical accessories, mapper limits, desktop workflows and broader commercial qualification. The [audio guide](audio.md) defines the implemented ownership and timing contracts. Passing this checkpoint does not close those requirements.
+
+## Monochrome envelope edges
+
+A paired DMG multicart replay first differed at output frame 18,963.
+Both builds scheduled the pulse transitions at the same phase. CupidGB
+lowered the pulse volume one 64 Hz tick early after a retrigger. The fix
+counts at sequencer phase 6, arms the envelope on the rising DIV edge,
+and applies the volume step on the falling edge. A trigger clears an
+already armed step.
+
+The first 40 nominal guest intervals now match all 29,534 stereo frames
+with Accurate filtering and with the filter disabled. The paired revision
+is `ea667ad79aa28409f034b1fd6da7304e1844750d`. A generated comparison
+checked 116,640 observations in 1,296 cases across DMG, Game Boy Pocket,
+SGB, and CGB-E. It matched the four-bit volume, countdown, armed latch,
+endpoint lock, and pending lock. The probe masks internal volume to
+the four-bit counter width. The raw comparison value was wider in 3,600
+observations after live control writes.
+
+The four full multicart routes retained the sample counts. Remaining
+paired differences are counted per signed 16-bit channel sample.
+
+| Route | Before | After | Largest remaining difference |
+| --- | ---: | ---: | ---: |
+| Mortal Kombat I, active | 682,609 | 133,292 | 9,248 |
+| Mortal Kombat I, idle | 636,120 | 89,169 | 5,900 |
+| Mortal Kombat II, active | 3,295,012 | 3,229,216 | 9,904 |
+| Mortal Kombat II, idle | 3,295,068 | 3,229,218 | 9,904 |
+
+The generated regression checks both pulse channels and noise after a
+retrigger between divider edges. State tests cover exact pending-latch
+restore, version 30 import before and after the rising edge, and PCM
+publication after a live restore. [Commercial mapper validation](validation-cartridge-storage.md#commercial-mbc1-multicart-fights)
+records the matching cross-platform replays and remaining timing gaps.
+
+Release passed 111 tests on Windows and 109 on Linux. The Qt desktop
+workflow also passed at 125% device scale on both. The APU, audio publication,
+audio state, and native-state tests passed ASan and UBSan on Linux.

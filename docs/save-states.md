@@ -10,7 +10,7 @@ Load a native state file through File > Load State File or drop a `.s0` through 
 
 Writes use an atomic file replacement. Loading checks the complete cartridge identity and hardware model. A state captured with an active boot overlay requires the matching local boot binary. Failed validation preserves the running session and its host audio queue. A successful load replaces the emulated state, reapplies current physical input, clears queued host audio, and realigns pacing.
 
-Native files use CupidGB version 30. Earlier cartridge states, including both supported version 19 development layouts, remain loadable on their original hardware profiles when they contain the required hardware history and SRAM. GBS programs require version 23 or newer and the matching music file already loaded. Desktop loads retain current listening settings, reconstruction and filter history, and the receiving startup synthesis and queued batches. Saved hardware startup phase, host-only time and command-receiver history still restore.
+Native files use CupidGB version 31. Earlier cartridge states, including both supported version 19 development layouts, remain loadable on their original hardware profiles when they contain the required hardware history and SRAM. GBS programs require version 23 or newer and the matching music file already loaded. Desktop loads retain current listening settings, reconstruction and filter history, and the receiving startup synthesis and queued batches. Saved hardware startup phase, host-only time and command-receiver history still restore.
 
 ## Portable cartridge states
 
@@ -540,6 +540,20 @@ including its upper bits, together with the guest interrupt state. It
 keeps the receiving host callback. These profiles omit transfer and
 startup audio history for the integrated host. The native model check
 requires the same profile on import.
+
+### Monochrome envelopes in version 31
+
+Version 31 retains the rising-edge latch, endpoint lock and pending lock
+for the two pulse channels and noise on monochrome hardware. The pulse
+fields keep their existing offsets. Noise uses the three bits above its
+three-bit period, as color hardware has since version 29. The payload size
+and sample queue layout stay the same.
+
+Older monochrome states recorded the countdown before the old phase-7
+decrement. The loader advances that count through phase 6 when it has
+already passed and reconstructs a pending latch when the rising DIV edge
+has passed as well. Earlier live-write lock history has no recorded value
+and starts clear. Exact restores of version 31 retain the recorded latches.
 
 ## Validation scope
 

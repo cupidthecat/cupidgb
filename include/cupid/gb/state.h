@@ -45,7 +45,7 @@ typedef enum CupidGbStateResult {
 /* Recognize the native container even if its length or integrity is invalid. */
 bool cupid_gb_state_has_magic(const uint8_t *data, size_t length);
 
-#define CUPID_GB_STATE_VERSION 30u
+#define CUPID_GB_STATE_VERSION 31u
 
 /* Trusted in-memory snapshots may cache the immutable cartridge identity. Initialize
  * once for the current instance and discard the context on cartridge replacement,

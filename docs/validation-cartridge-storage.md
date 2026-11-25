@@ -122,6 +122,42 @@ Nintendo logo. The MBC7, Camera, and multicart captures showed their
 opening screens or menus. This run measures startup and bounded execution.
 The generated mapper tests cover banking and state continuation separately.
 
+## Commercial MBC1 multicart fights
+
+Two scripted routes start at the Mortal Kombat I & II selector and reach
+active fights in the embedded games. Both builds fetch instructions from
+bank 16 for Mortal Kombat I and bank 32 for Mortal Kombat II. The comparison
+at `ea667ad79aa28409f034b1fd6da7304e1844750d` uses the same DMG firmware,
+button traces, and audio policy. Each active and idle route finishes with
+matching guest clocks, CPU registers, and native pixels. Changing the
+fight inputs changed 6,439 terminal pixels in Mortal Kombat I and 5,675
+in Mortal Kombat II in both builds.
+
+The Windows and Linux CupidGB active replays produced identical PCM,
+native version 31 states, final registers, and pixels. Restoring a state
+in either fight reproduced the next 300 intervals and all 221,506 stereo
+frames. All four Linux active and idle routes passed the same restore
+check. Restoring both original version 30 fight snapshots also matched
+the earlier terminal clocks, registers, and pixels.
+
+The desktop replay ran Mortal Kombat II for 52 seconds at 2× scale with
+the same firmware, 34 scripted inputs, audio and rewind. The final capture
+showed active combat on each host. The table uses measurements after five
+seconds of warmup. Linux ran through Xcb in WSL with an isolated PulseAudio
+sink that recorded 3,848,436 nonzero samples. Both runs recorded zero audio
+idle events or errors after warmup.
+
+| Host | Guest speed | Widget paints/s | p95 paint interval | Peak working set |
+| --- | ---: | ---: | ---: | ---: |
+| Windows | 100.00% | 59.77 | 22.41 ms | 74.04 MiB |
+| Linux/Xcb | 100.01% | 59.79 | 20.97 ms | 92.72 MiB |
+
+The Mortal Kombat I comparison still differs during a STAT poll on
+line 21. CupidGB reads LCD mode 3 where the comparison reads mode 0, so
+the guest takes one additional poll before proceeding. The paired PCM
+also differs later in both games. The [envelope validation](validation-audio.md#monochrome-envelope-edges)
+records the boot sound fix and the remaining sample differences.
+
 ## Live cartridge replacement
 
 A pinned comparison exercised both native-color and monochrome-compatible

@@ -267,8 +267,10 @@ static void test_envelope_steps(void) {
             for (unsigned expires = 0; expires < 2; ++expires) {
                 PublicationFixture fixture = create_fixture(models[model]);
                 CupidGb *gb = fixture.gb;
-                gb->apu.fs_step = 7;
+                gb->apu.fs_step = 6;
                 set_envelope(gb, channel, 2, expires ? 1 : 2);
+                cupid_gb_apu_div_event(gb);
+                cupid_gb_apu_div_secondary_event(gb);
                 const uint8_t previous = gb->apu.dac_sample[channel];
                 restore_with_receiving_routing(&fixture, expires != 0);
                 cupid_gb_apu_div_event(gb);

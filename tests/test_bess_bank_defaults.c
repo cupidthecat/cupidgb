@@ -148,7 +148,7 @@ static CupidGb *native_clone(CupidGb *gb, CupidGbModel model, uint8_t type) {
     const size_t size = cupid_gb_state_size(gb);
     uint8_t *data = malloc(size), *again = malloc(size);
     size_t used = 0;
-    assert(data && again && CUPID_GB_STATE_VERSION == 30);
+    assert(data && again);
     assert(cupid_gb_save_state(gb, data, size, &used) == CUPID_GB_STATE_OK && used == size);
     CupidGb *copy = machine(model, type);
     assert(cupid_gb_load_state(copy, data, size) == CUPID_GB_STATE_OK);
@@ -259,7 +259,7 @@ int main(void) {
         }
         legacy_mbc7(models[i]);
     }
-    puts("Portable bank defaults: 60 imports, fresh/reset markers and exact v30 continuations "
+    puts("Portable bank defaults: 60 imports, fresh/reset markers and exact continuations "
          "passed.");
     return 0;
 }
