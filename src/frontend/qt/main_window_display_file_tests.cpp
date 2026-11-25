@@ -58,11 +58,12 @@ bool MainWindow::displayFilesSmokeTest(const QString &directory) {
     // resized output are exercised through the same entry point as desktop paints.
     DisplayWidget filterProbe(nullptr);
     filterProbe.scaling = DisplayScaling::Fill;
-    filterProbe.resize(320, 288);
+    filterProbe.resize(321, 289);
     filterProbe.image = QImage(2, 2, QImage::Format_RGB32);
     filterProbe.image.fill(Qt::black);
     filterProbe.image.setPixel(1, 1, qRgb(255, 255, 255));
-    for (auto selected : {ScalingFilter::Bilinear, ScalingFilter::SmoothBilinear}) {
+    for (int mode = 1; mode < int(ScalingFilter::Count); ++mode) {
+        const auto selected = ScalingFilter(mode);
         filterProbe.filter = selected;
         const QSize output =
             (QSizeF(filterProbe.size()) * filterProbe.devicePixelRatioF()).toSize();
@@ -71,8 +72,10 @@ bool MainWindow::displayFilesSmokeTest(const QString &directory) {
         filterProbe.render(&rendered);
         QImage expected = filterDisplayImage(filterProbe.image, output, selected);
         expected.setDevicePixelRatio(filterProbe.devicePixelRatioF());
-        if (filterProbe.filteredSourceKey != filterProbe.image.cacheKey() ||
-            filterProbe.cachedFilter != selected || rendered != expected)
+        if (rendered != expected ||
+            (selected != ScalingFilter::Pixelated &&
+             (filterProbe.filteredSourceKey != filterProbe.image.cacheKey() ||
+              filterProbe.cachedFilter != selected)))
             return smokeFailure(__FILE__, __LINE__);
     }
     filterProbe.image.fill(Qt::red);
@@ -155,6 +158,57 @@ bool MainWindow::displayFilesSmokeTest(const QString &directory) {
                     return smokeFailure(__FILE__, __LINE__);
             }
     }
+    // Pixelated integer replication uses the already blended native image.
+    filterProbe.filter = ScalingFilter::Pixelated;
+    for (const auto size : {QSize(320, 288), QSize(640, 576)}) {
+        filterProbe.setFrames({}, {}, FrameBlending::Disabled, false);
+        filterProbe.resize(size);
+        filterProbe.setFrames(tagged, black, FrameBlending::Accurate, true);
+        const QSize physical =
+            (QSizeF(filterProbe.size()) * filterProbe.devicePixelRatioF()).toSize();
+        QImage painted(physical, QImage::Format_RGB32);
+        painted.setDevicePixelRatio(filterProbe.devicePixelRatioF());
+        filterProbe.render(&painted);
+        auto expected = renderDisplayFrames(tagged, black, physical, ScalingFilter::Pixelated,
+                                            FrameBlending::Accurate, true);
+        expected.setDevicePixelRatio(filterProbe.devicePixelRatioF());
+        if (painted != expected)
+            return smokeFailure(__FILE__, __LINE__);
+        const QSizeF exact = QSizeF(filterProbe.size()) * filterProbe.devicePixelRatioF();
+        if (physical.width() % tagged.width() == 0 && physical.height() % tagged.height() == 0 &&
+            qFuzzyCompare(exact.width(), qreal(physical.width())) &&
+            qFuzzyCompare(exact.height(), qreal(physical.height())) &&
+            (!filterProbe.filteredImage.isNull() || filterProbe.filteredSourceKey))
+            return smokeFailure(__FILE__, __LINE__);
+    }
+    // Nonlinear edge decisions use each unblended source frame independently.
+    QImage edges(3, 3, QImage::Format_RGB32), history(3, 3, QImage::Format_RGB32);
+    edges.fill(Qt::black);
+    history.fill(Qt::white);
+    for (const auto point : {QPoint(1, 0), QPoint(1, 1), QPoint(0, 1)})
+        edges.setPixel(point, qRgb(255, 255, 255));
+    for (const auto point : {QPoint(0, 0), QPoint(1, 1), QPoint(2, 2)})
+        history.setPixel(point, qRgb(0, 0, 0));
+    for (int mode = int(ScalingFilter::Pixelated); mode < int(ScalingFilter::Count); ++mode) {
+        filterProbe.filter = ScalingFilter(mode);
+        filterProbe.setFrames({}, {}, FrameBlending::Disabled, false);
+        filterProbe.resize(401, 359);
+        filterProbe.setFrames(edges, history, FrameBlending::Accurate, false);
+        const QSize physical =
+            (QSizeF(filterProbe.size()) * filterProbe.devicePixelRatioF()).toSize();
+        QImage painted(physical, QImage::Format_RGB32);
+        painted.setDevicePixelRatio(filterProbe.devicePixelRatioF());
+        filterProbe.render(&painted);
+        auto expected = renderDisplayFrames(edges, history, physical, ScalingFilter(mode),
+                                            FrameBlending::Accurate, false);
+        expected.setDevicePixelRatio(filterProbe.devicePixelRatioF());
+        if (painted != expected)
+            return smokeFailure(__FILE__, __LINE__);
+        if (mode != int(ScalingFilter::Pixelated) &&
+            (filterProbe.filteredSourceKey != filterProbe.image.cacheKey() ||
+             filterProbe.cachedFilter != ScalingFilter(mode)))
+            return smokeFailure(__FILE__, __LINE__);
+    }
     const QVariant originalFilter = settings_.value("video/filter");
     const auto restoreFilter = qScopeGuard([&] {
         if (originalFilter.isValid())
@@ -174,8 +228,8 @@ bool MainWindow::displayFilesSmokeTest(const QString &directory) {
             driver.stop();
             auto *choice = dialog->findChild<QComboBox *>("scalingFilter");
             auto *buttons = dialog->findChild<QDialogButtonBox *>();
-            checked =
-                choice && buttons && choice->count() == 3 && choice->currentIndex() == expected;
+            checked = choice && buttons && choice->count() == int(ScalingFilter::Count) &&
+                      choice->currentIndex() == expected;
             if (checked) {
                 choice->setCurrentIndex(selected);
                 buttons->button(accept ? QDialogButtonBox::Ok : QDialogButtonBox::Cancel)->click();
@@ -197,7 +251,18 @@ bool MainWindow::displayFilesSmokeTest(const QString &directory) {
         watchdog.stop();
         return checked && !timedOut;
     };
-    for (int mode = 0; mode < 3; ++mode) {
+    settings_.remove("video/filter");
+    session.applyDisplaySettings();
+    if (session.display_->filter != ScalingFilter::Pixelated ||
+        !session.scalingFilterActions_[size_t(ScalingFilter::Pixelated)]->isChecked() ||
+        !configureFilter(int(ScalingFilter::Pixelated), int(ScalingFilter::Nearest), false))
+        return smokeFailure(__FILE__, __LINE__);
+    {
+        MainWindow defaults(true, true);
+        if (defaults.display_->filter != ScalingFilter::Pixelated)
+            return smokeFailure(__FILE__, __LINE__);
+    }
+    for (int mode = 0; mode < int(ScalingFilter::Count); ++mode) {
         auto *action = session.findChild<QAction *>(QString("video/filter/%1").arg(mode));
         if (!action)
             return smokeFailure(__FILE__, __LINE__);
@@ -209,18 +274,22 @@ bool MainWindow::displayFilesSmokeTest(const QString &directory) {
         MainWindow restored(true, true);
         if (restored.display_->filter != ScalingFilter(mode))
             return smokeFailure(__FILE__, __LINE__);
-        if (!configureFilter(mode, (mode + 1) % 3, false) ||
+        if (!configureFilter(mode, (mode + 1) % int(ScalingFilter::Count), false) ||
             session.display_->filter != ScalingFilter(mode) ||
             settings_.value("video/filter").toInt() != mode)
             return smokeFailure(__FILE__, __LINE__);
         session.copyScreenshot();
-        if (QApplication::clipboard()->image().convertToFormat(QImage::Format_RGB32) != image)
+        const auto nativePath = QDir(directory).filePath(QString("native-filter-%1.png").arg(mode));
+        if (QApplication::clipboard()->image().convertToFormat(QImage::Format_RGB32) != image ||
+            !session.saveScreenshot(nativePath) || QImage(nativePath) != image)
             return smokeFailure(__FILE__, __LINE__);
     }
-    if (!configureFilter(2, 1, true) || session.display_->filter != ScalingFilter::Bilinear ||
+    if (!configureFilter(int(ScalingFilter::Count) - 1, 1, true) ||
+        session.display_->filter != ScalingFilter::Bilinear ||
         settings_.value("video/filter").toInt() != 1 || session.captureState() != state)
         return smokeFailure(__FILE__, __LINE__);
-    for (const QVariant &invalid : {QVariant(-1), QVariant(3), QVariant("invalid")}) {
+    for (const QVariant &invalid :
+         {QVariant(-1), QVariant(int(ScalingFilter::Count)), QVariant("invalid")}) {
         settings_.setValue("video/filter", invalid);
         session.applyDisplaySettings();
         if (session.display_->filter != ScalingFilter::Nearest ||

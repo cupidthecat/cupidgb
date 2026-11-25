@@ -105,3 +105,28 @@ open, plus cache removal on close. The core render and capture tests passed unde
 ASan and UBSan. The complete Release suites passed 111/111 on Windows and 109/109
 on Linux. The Windows run used the working local 7-Zip executable. The Linux run
 used an isolated PulseAudio sink.
+
+## Pixelated and Scale filters
+
+The comparison at `ea667ad79aa28409f034b1fd6da7304e1844750d` uses two generated
+7 × 5 RGB frames with different diagonal patterns. It checks reduction, native
+size, fractional enlargement, 2× and 4×, with blending disabled, Simple, and
+both Accurate LCD phases. Windows and Linux matched all 120 RGBA outputs for
+Pixelated, Scale2x, Scale4x, and both antialiased variants.
+
+A second Linux comparison used two 160 × 144 frames from Super Mario Bros.
+Deluxe. It checked a reduction to 127 × 117, native size and enlargement to
+733 × 551. Fifty-two of 60 outputs matched exactly. Every remaining channel
+value differed by at most one on the 8-bit scale.
+
+The renderer keeps edge decisions separate for each frame, then mixes the
+selected colors in linear light. Native-sized Scale filters still sample the
+edges. The Qt workflow covers settings persistence, fractional device-pixel
+rendering, the integer Pixelated fast path and native screenshot dimensions.
+Release passed 111 tests on Windows and 109 on Linux. The display-pipeline
+tests also passed under ASan and UBSan on Linux.
+
+A Linux rendering benchmark used two generated 256 × 224 frames with Accurate
+blending at 1919 × 1079. Reusing sampled rows and looking up blends for flat
+pixels lowered the median render time from 24.8 to 7.8 ms and p95 from 36.7 to
+12.5 ms across alternating runs. These figures time the filter itself.

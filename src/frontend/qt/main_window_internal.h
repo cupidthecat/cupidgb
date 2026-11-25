@@ -125,6 +125,9 @@ constexpr std::array<const char *, 5> specialNames = {"Turbo", "Rewind", "Slow m
                                                       "Rapid B"};
 constexpr std::array<int, 5> defaultSpecialKeys = {Qt::Key_Space, Qt::Key_Tab, Qt::Key_Shift, 0, 0};
 constexpr std::array<const char *, 3> frameBlendingNames = {"Disabled", "Simple", "Accurate"};
+constexpr std::array<const char *, size_t(ScalingFilter::Count)> scalingFilterNames = {
+    "Nearest Neighbor", "Bilinear", "Smooth Bilinear",     "Pixelated",
+    "Scale2x",          "Scale4x",  "Antialiased Scale2x", "Antialiased Scale4x"};
 constexpr std::array<const char *, 3> audioFilterNames = {"None (Keep DC Offset)", "Accurate",
                                                           "Preserve Waveform"};
 constexpr std::array<const char *, 4> audioChannelNames = {"Square Channel 1", "Square Channel 2",
@@ -280,7 +283,7 @@ class DisplayWidget final : public QWidget {
         paintClock.start();
     }
 
-    // The native-sized image keeps the fast nearest-neighbor path. Filtered
+    // The native-sized image keeps exact integer nearest and pixelated paints fast. Filtered
     // paints retain both original frames until spatial sampling is complete.
     void setFrames(const QImage &current, const QImage &previous, FrameBlending blending,
                    bool oddFrame) {
@@ -297,7 +300,7 @@ class DisplayWidget final : public QWidget {
     QImage image;
     ScreenMessages messages;
     DisplayScaling scaling = DisplayScaling::Integer;
-    ScalingFilter filter = ScalingFilter::Nearest;
+    ScalingFilter filter = ScalingFilter::Pixelated;
     QImage filteredImage;
     qint64 filteredSourceKey = 0;
     ScalingFilter cachedFilter = ScalingFilter::Nearest;
@@ -342,11 +345,15 @@ class DisplayWidget final : public QWidget {
         }
         const QRectF target = displayViewport(image.size(), size(), scaling, devicePixelRatioF());
         const QSizeF physicalTarget = target.size() * devicePixelRatioF();
+        const QPointF physicalOrigin = target.topLeft() * devicePixelRatioF();
         const QSize output = physicalTarget.toSize();
-        if (filter == ScalingFilter::Nearest && output.width() > 0 && output.height() > 0 &&
-            output.width() % image.width() == 0 && output.height() % image.height() == 0 &&
+        if ((filter == ScalingFilter::Nearest || filter == ScalingFilter::Pixelated) &&
+            output.width() > 0 && output.height() > 0 && output.width() % image.width() == 0 &&
+            output.height() % image.height() == 0 &&
             qFuzzyCompare(physicalTarget.width(), qreal(output.width())) &&
-            qFuzzyCompare(physicalTarget.height(), qreal(output.height()))) {
+            qFuzzyCompare(physicalTarget.height(), qreal(output.height())) &&
+            qFuzzyIsNull(physicalOrigin.x() - qRound(physicalOrigin.x())) &&
+            qFuzzyIsNull(physicalOrigin.y() - qRound(physicalOrigin.y()))) {
             painter.drawImage(target, image);
             return;
         }

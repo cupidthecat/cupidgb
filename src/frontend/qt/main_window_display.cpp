@@ -119,7 +119,7 @@ void MainWindow::applyDisplaySettings() {
     const int scaling = std::clamp(settings_.value("video/scaling", 0).toInt(), 0, 2);
     display_->scaling = DisplayScaling(scaling);
     bool validFilter = false;
-    int filter = settings_.value("video/filter", 0).toInt(&validFilter);
+    int filter = settings_.value("video/filter", int(ScalingFilter::Pixelated)).toInt(&validFilter);
     if (!validFilter || filter < 0 || filter >= int(scalingFilterActions_.size()))
         filter = 0;
     display_->filter = ScalingFilter(filter);
@@ -436,7 +436,8 @@ void MainWindow::configure() {
     form->addRow("Display scaling", scaling);
     auto *filter = new QComboBox;
     filter->setObjectName("scalingFilter");
-    filter->addItems({"Nearest Neighbor", "Bilinear", "Smooth Bilinear"});
+    for (const auto *name : scalingFilterNames)
+        filter->addItem(name);
     filter->setCurrentIndex(int(display_->filter));
     form->addRow("Scaling filter", filter);
     auto *windowScale = new QComboBox;

@@ -449,7 +449,7 @@ class MainWindow final : public QMainWindow {
     QAction *showBackgroundAction_ = nullptr;
     QAction *showObjectsAction_ = nullptr;
     std::array<QAction *, 3> scalingActions_{};
-    std::array<QAction *, 3> scalingFilterActions_{};
+    std::array<QAction *, size_t(ScalingFilter::Count)> scalingFilterActions_{};
     std::array<QAction *, 12> turboCapActions_{};
     std::array<QAction *, 5> paletteActions_{};
     std::array<QAction *, 8> windowSizeActions_{};

@@ -377,10 +377,8 @@ void MainWindow::buildMenus() {
     }
     auto *filters = view->addMenu("Scaling &Filter");
     auto *filterGroup = new QActionGroup(this);
-    const std::array<const char *, 3> filterNames = {"Nearest Neighbor", "Bilinear",
-                                                     "Smooth Bilinear"};
     for (size_t i = 0; i < scalingFilterActions_.size(); ++i) {
-        auto *action = filters->addAction(filterNames[i]);
+        auto *action = filters->addAction(scalingFilterNames[i]);
         action->setObjectName(QString("video/filter/%1").arg(i));
         action->setCheckable(true);
         filterGroup->addAction(action);
