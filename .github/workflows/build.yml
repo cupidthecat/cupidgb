@@ -1,3 +1,23 @@
+# @file    build.yml
+# @brief   Build and validate Windows, Linux, and instrumented hardware targets.
+# @author  cupidthecat
+# @date    2026-11-16
+#
+# Copyright (C) 2026 cupidthecat
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <https://gnu.org>.
+
 name: Build and test
 on: [push, pull_request]
 permissions:
@@ -68,7 +88,8 @@ jobs:
           echo "$source_hash"
           sudo chown _apt:root "$apt_state/lists/partial"
           sudo chmod 700 "$apt_state/lists/partial"
-          apt_options=(-o Acquire::Retries=2 -o Acquire::http::Timeout=20
+          # Package resolution uses the signed binary indexes, without translations.
+          apt_options=(-o Acquire::Languages=none -o Acquire::Retries=2 -o Acquire::http::Timeout=20
                        -o Acquire::https::Timeout=20 -o Dir::State::lists="$apt_state/lists"
                        -o Dir::Etc::sourcelist="$apt_state/ubuntu.sources"
                        -o Dir::Etc::sourceparts="$apt_state/empty-sources")
@@ -120,7 +141,16 @@ jobs:
           echo 'Requested package policy without reusable binary caches:'
           sudo apt-cache "${apt_options[@]}" -o Dir::Cache::pkgcache= \
             -o Dir::Cache::srcpkgcache= policy qt6-base-dev qt6-multimedia-dev libsdl2-dev
-          sudo apt-get "${apt_options[@]}" install -y qt6-base-dev qt6-multimedia-dev libssl-dev libsdl2-dev 7zip
+          sudo apt-get "${apt_options[@]}" install -y qt6-base-dev qt6-multimedia-dev libssl-dev libsdl2-dev libxcb-cursor0 7zip
+      - name: Linux Qt SDK
+        if: runner.os == 'Linux'
+        timeout-minutes: 15
+        uses: jurplel/install-qt-action@b344308e4483fc892e0d27b3cd1b173ebdd95f06 # v4
+        with:
+          version: '6.8.3'
+          arch: 'linux_gcc_64'
+          modules: qtmultimedia
+          cache: true
       - name: Windows controller SDK
         if: runner.os == 'Windows'
         timeout-minutes: 5
@@ -187,7 +217,8 @@ jobs:
           echo "$source_hash"
           sudo chown _apt:root "$apt_state/lists/partial"
           sudo chmod 700 "$apt_state/lists/partial"
-          apt_options=(-o Acquire::Retries=2 -o Acquire::http::Timeout=20
+          # Package resolution uses the signed binary indexes, without translations.
+          apt_options=(-o Acquire::Languages=none -o Acquire::Retries=2 -o Acquire::http::Timeout=20
                        -o Acquire::https::Timeout=20 -o Dir::State::lists="$apt_state/lists"
                        -o Dir::Etc::sourcelist="$apt_state/ubuntu.sources"
                        -o Dir::Etc::sourceparts="$apt_state/empty-sources")

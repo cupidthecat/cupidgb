@@ -1,3 +1,25 @@
+/**
+ * @file    main_window_cheat_tests.cpp
+ * @brief   Qt workflow regression checks for cheat editing and persistence.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://gnu.org>.
+ */
+
 #include "cheats_window.h"
 #include "main_window_internal.h"
 
@@ -105,6 +127,8 @@ bool MainWindow::cheatSmokeTest(const QString &path, const QString &directory) {
     session.openCheats(true);
     auto &searchGb = session.emulator_->gb;
     std::memset(searchGb.work_ram, 0, sizeof(searchGb.work_ram));
+    std::memset(searchGb.cartridge_ram, 0, searchGb.cartridge_ram_size);
+    std::memset(searchGb.high_ram, 0, sizeof(searchGb.high_ram));
     searchGb.work_ram[0x5009] = 0x77;
     auto *condition = session.cheatsWindow_->findChild<QComboBox *>("cheatSearchCondition");
     auto *operand = session.cheatsWindow_->findChild<QLineEdit *>("cheatSearchOperand");

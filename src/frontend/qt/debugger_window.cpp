@@ -1,5 +1,28 @@
+/**
+ * @file    debugger_window.cpp
+ * @brief   Qt debugger console, command history, and execution controls.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://gnu.org>.
+ */
+
 #include "debugger_window.h"
 
+#include <QComboBox>
 #include <QFileDialog>
 #include <QFontDatabase>
 #include <QHBoxLayout>
@@ -117,6 +140,28 @@ DebuggerWindow::DebuggerWindow(QWidget *parent) : QDialog(parent, Qt::Window) {
     breakControls->addWidget(add);
     breakControls->addWidget(clear);
     layout->addLayout(breakControls);
+    auto *watchControls = new QHBoxLayout;
+    auto *watchAddress = new QLineEdit(this);
+    watchAddress->setObjectName("debuggerWatchpointAddress");
+    watchAddress->setPlaceholderText("Address or range, optionally followed by if condition");
+    auto *watchMode = new QComboBox(this);
+    watchMode->setObjectName("debuggerWatchpointMode");
+    watchMode->addItem("Write", "w");
+    watchMode->addItem("Read", "r");
+    watchMode->addItem("Read/write", "rw");
+    auto *addWatch = new QPushButton("Add Watchpoint", this);
+    addWatch->setObjectName("debuggerAddWatchpoint");
+    connect(addWatch, &QPushButton::clicked, this, [this, watchAddress, watchMode] {
+        submitCommand("watch/" + watchMode->currentData().toString() + " " + watchAddress->text());
+    });
+    auto *clearWatches = new QPushButton("Clear Watchpoints", this);
+    clearWatches->setObjectName("debuggerClearWatchpoints");
+    connect(clearWatches, &QPushButton::clicked, this, [this] { submitCommand("unwatch all"); });
+    watchControls->addWidget(watchAddress, 1);
+    watchControls->addWidget(watchMode);
+    watchControls->addWidget(addWatch);
+    watchControls->addWidget(clearWatches);
+    layout->addLayout(watchControls);
     output_ = readout("debuggerOutput", this);
     output_->document()->setMaximumBlockCount(2000);
     output_->setMaximumHeight(220);

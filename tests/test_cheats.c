@@ -1,3 +1,25 @@
+/**
+ * @file    test_cheats.c
+ * @brief   Regression tests for cheat parsing, memory effects, and file persistence.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://gnu.org>.
+ */
+
 #include "cupid/gb/cartridge.h"
 #include "cupid/gb/cheats.h"
 #include "cupid/gb/state.h"
@@ -118,6 +140,9 @@ static void test_read_interception_and_bank_aliases(void) {
 
 static void test_priority_and_transactional_files(void) {
     CupidGb *gb = cartridge(0x1b);
+    /* These conditional rules deliberately match zero at both test addresses. */
+    cupid_gb_write_u8(gb, 0xc000, 0);
+    cupid_gb_write_u8(gb, 0xc100, 0);
     CupidGbCheats *cheats = cupid_gb_cheats_create();
     assert(cheats);
     cupid_gb_set_cheats(gb, cheats);

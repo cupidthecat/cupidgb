@@ -16,7 +16,7 @@ Reset preserves current rules and global enable, including edits awaiting export
 
 ## Memory search
 
-Tools > Cheat Search scans physical work RAM, cartridge storage, and the 127 high-RAM bytes. CGB hardware includes all eight physical work-RAM banks. The search reads actual bytes, including banks currently hidden from the CPU.
+Tools > Cheat Search scans physical work RAM, the complete active cartridge storage span, and the 127 high-RAM bytes. CGB hardware includes all eight physical work-RAM banks; TPP1 storage can include all 256 SRAM banks through 2 MiB. The search reads actual bytes, including banks currently hidden from the CPU. The debugger's mapped-memory editor has a separate scope; complete physical-bank debugger editing remains a [parity gap](parity.md).
 
 Choose an eight-bit value or a 16-bit little-/big-endian word. Filters support any value, six comparisons with a supplied hexadecimal value, and changed, unchanged, increased, or decreased comparisons with the previous snapshot. The first snapshot starts at zero. Each successful filter captures all current bytes after evaluating every candidate, so overlapping words use one consistent previous snapshot. Reset clears the history. A search following zero results starts a fresh candidate set.
 

@@ -1,4 +1,28 @@
+/**
+ * @file    mbc7.c
+ * @brief   MBC7 motion latches, mapper gates, and serial EEPROM commands.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://gnu.org>.
+ */
+
 #include "cupid/gb/mbc7.h"
+
+#include "cartridge_internal.h"
 
 #include <string.h>
 
@@ -41,12 +65,24 @@ void cupid_gb_mbc7_reset_serial(CupidGb *gb) {
     gb->mbc7.programming_enabled = false;
 }
 
+bool cupid_gb_mbc7_serial_valid(const CupidGbMbc7 *device) {
+    if ((device->pins & ~(EEPROM_SELECT | EEPROM_CLOCK | EEPROM_DI | EEPROM_DO)) ||
+        device->data_bits > 16)
+        return false;
+    if (!device->data_bits)
+        return device->command < EEPROM_START;
+    /* Only WRITE and WRAL have a separate data phase. */
+    return (device->command >= 0x500u && device->command <= 0x5ffu) ||
+           (device->command >= 0x440u && device->command <= 0x47fu);
+}
+
 void cupid_gb_mbc7_reset(CupidGb *gb) {
     gb->mbc7_sensor_x = SENSOR_RESET;
     gb->mbc7_sensor_y = SENSOR_RESET;
     gb->mbc7_latch = true;
     cupid_gb_mbc7_reset_serial(gb);
-    memset(gb->cartridge_ram, 0xff, CUPID_GB_MBC7_EEPROM_SIZE);
+    /* EEPROM is persistent storage. Cartridge creation fills it separately;
+     * a console reset changes only the sensor and serial-controller latches. */
 }
 
 void cupid_gb_mbc7_set_motion(CupidGb *gb, int16_t x, int16_t y) {

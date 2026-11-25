@@ -1,14 +1,40 @@
+/**
+ * @file    main_window_internal.h
+ * @brief   Shared Qt window helpers, validated preferences, and display widget.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <https://gnu.org>.
+ */
+
 #pragma once
 
 #include "main_window.h"
 
+#include "audio_buffer.h"
 #include "audio_converter.h"
+#include "audio_sink_lifetime.h"
 #include "cartridge_file.h"
 #include "controller_dialog.h"
+#include "core_audio_collector.h"
 #include "cupid/compat/native_v1.h"
 #include "cupid/gb/battery.h"
 #include "debugger_window.h"
 #include "inspectors_window.h"
+#include "screen_messages.h"
 #include "wave_recorder.h"
 
 #include <QAbstractButton>
@@ -46,8 +72,6 @@
 #include <QMessageBox>
 #include <QMimeData>
 #include <QMouseEvent>
-#include <QMutex>
-#include <QMutexLocker>
 #include <QPainter>
 #include <QPlainTextEdit>
 #include <QPointer>
@@ -75,6 +99,22 @@ extern "C" {
 #include "cupid/gbc/cgb.h"
 }
 
+struct MainWindow::PlaybackWork {
+    Playback playback = Playback::Forward;
+    CoreAudioCollector collected;
+    uint64_t startPresentation = 0;
+    uint64_t startGuest = 0;
+    uint64_t session = 0;
+    uint64_t timeline = 0;
+    unsigned steps = 0;
+    bool collectionFailed = false;
+    bool executionFailed = false;
+    bool attemptedHardware = false;
+    bool attemptedGuest = false;
+    bool watching = false;
+    QString debuggerStop;
+};
+
 namespace {
 constexpr std::array<int, 8> defaultKeys = {Qt::Key_Right,     Qt::Key_Left,  Qt::Key_Up,
                                             Qt::Key_Down,      Qt::Key_X,     Qt::Key_Z,
@@ -85,6 +125,67 @@ constexpr std::array<const char *, 5> specialNames = {"Turbo", "Rewind", "Slow m
                                                       "Rapid B"};
 constexpr std::array<int, 5> defaultSpecialKeys = {Qt::Key_Space, Qt::Key_Tab, Qt::Key_Shift, 0, 0};
 constexpr std::array<const char *, 3> frameBlendingNames = {"Disabled", "Simple", "Accurate"};
+constexpr std::array<const char *, size_t(ScalingFilter::Count)> scalingFilterNames = {
+    "Nearest Neighbor", "Bilinear",       "Smooth Bilinear",     "Pixelated",
+    "Scale2x",          "Scale4x",        "Antialiased Scale2x", "Antialiased Scale4x",
+    "LCD Display",      "Monochrome LCD", "Flat CRT Display",    "CRT Display"};
+constexpr std::array<const char *, 3> audioFilterNames = {"None (Keep DC Offset)", "Accurate",
+                                                          "Preserve Waveform"};
+constexpr std::array<const char *, 4> audioChannelNames = {"Square Channel 1", "Square Channel 2",
+                                                           "Wave Channel", "Noise Channel"};
+constexpr std::array<unsigned, 12> turboCapChoices = {0, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
+
+unsigned configuredTurboCapQuarters(const QSettings &settings) {
+    bool valid = false;
+    const int percent = settings.value("emulation/turboCap", 0).toString().toInt(&valid);
+    return valid && percent >= 150 && percent <= 400 && percent % 25 == 0 ? unsigned(percent / 25)
+                                                                          : 0;
+}
+
+CupidGbRtcMode configuredRtcMode(const QSettings &settings) {
+    const QVariant value = settings.value("emulation/rtcMode");
+    // INI values may be strings. Do not round malformed floating-point preferences.
+    switch (value.metaType().id()) {
+        case QMetaType::Int:
+        case QMetaType::UInt:
+        case QMetaType::LongLong:
+        case QMetaType::ULongLong:
+        case QMetaType::QString:
+            return value.toString() == "1" ? CUPID_GB_RTC_ACCURATE : CUPID_GB_RTC_SYNC_TO_HOST;
+        default:
+            return CUPID_GB_RTC_SYNC_TO_HOST;
+    }
+}
+
+int audioPreferenceInteger(const QVariant &value, int maximum, int fallback) {
+    switch (value.metaType().id()) {
+        case QMetaType::Int:
+        case QMetaType::UInt:
+        case QMetaType::LongLong:
+        case QMetaType::ULongLong:
+        case QMetaType::QString: {
+            // INI values can be strings; signs, whitespace and rounded floats
+            // must not turn a malformed preference into a different audio policy.
+            const QString text = value.toString();
+            bool valid = false;
+            const int number = text.toInt(&valid);
+            if (valid && number >= 0 && number <= maximum && text == QString::number(number))
+                return number;
+            return fallback;
+        }
+        default:
+            return fallback;
+    }
+}
+
+CupidGbAudioFilter configuredAudioFilter(const QSettings &settings) {
+    return CupidGbAudioFilter(audioPreferenceInteger(settings.value("audio/highpassMode"), 2,
+                                                     CUPID_GB_AUDIO_FILTER_ACCURATE));
+}
+
+int configuredAudioInterference(const QSettings &settings) {
+    return audioPreferenceInteger(settings.value("audio/interferenceVolume"), 100, 0);
+}
 
 FrameBlending configuredFrameBlending(const QSettings &settings) {
     bool valid = false;
@@ -98,9 +199,10 @@ FrameBlending configuredFrameBlending(const QSettings &settings) {
 }
 
 // LCD geometry stays at 70,224 base cycles; elapsed time follows the model oscillator.
-qint64 nominalFrameNanoseconds(const CupidGb *gb, unsigned speedSteps = 16) {
-    return qint64(uint64_t(70224) * 1000000000 * 16 /
-                  (uint64_t(cupid_gb_base_clock_hz(gb)) * speedSteps));
+qint64 nominalFrameNanoseconds(const CupidGb *gb, unsigned speedSteps = 16,
+                               unsigned turboQuarters = 4) {
+    return qint64(uint64_t(70224) * 1000000000 * 64 /
+                  (uint64_t(cupid_gb_base_clock_hz(gb)) * speedSteps * turboQuarters));
 }
 
 bool smokeFailure(const char *file, int line) {
@@ -153,7 +255,8 @@ class InputKeyEdit final : public QKeySequenceEdit {
 bool isStatePath(const QString &path) {
     const QString extension = QFileInfo(path).suffix().toLower();
     const auto digit = [](QChar character) { return character >= '0' && character <= '9'; };
-    return (extension.size() == 2 && extension[0] == 's' && digit(extension[1])) ||
+    return extension == "bess" ||
+           (extension.size() == 2 && extension[0] == 's' && digit(extension[1])) ||
            (extension.size() == 3 && extension.startsWith("sn") && digit(extension[2]));
 }
 
@@ -181,10 +284,29 @@ class DisplayWidget final : public QWidget {
         paintClock.start();
     }
 
+    // The native-sized image keeps exact integer nearest and pixelated paints fast. Filtered
+    // paints retain both original frames until spatial sampling is complete.
+    void setFrames(const QImage &current, const QImage &previous, FrameBlending blending,
+                   bool oddFrame) {
+        currentFrame_ = current;
+        previousFrame_ = previous;
+        blending_ = blending;
+        oddFrame_ = oddFrame;
+        image = blendDisplayFrames(current, previous, blending, oddFrame);
+        filteredSourceKey = 0;
+        if (current.isNull())
+            filteredImage = {};
+    }
+
     QImage image;
+    ScreenMessages messages;
     DisplayScaling scaling = DisplayScaling::Integer;
+    ScalingFilter filter = ScalingFilter::Pixelated;
+    QImage filteredImage;
+    qint64 filteredSourceKey = 0;
+    ScalingFilter cachedFilter = ScalingFilter::Nearest;
     uint64_t paintCount = 0;
-    QElapsedTimer paintClock;
+    HostElapsedTimer paintClock;
     qint64 lastPaintAt = 0;
     bool collectPaintIntervals = false;
     std::vector<double> paintIntervals;
@@ -212,7 +334,7 @@ class DisplayWidget final : public QWidget {
         if (image.isNull()) {
             painter.setPen(Qt::white);
             painter.drawText(rect(), Qt::AlignCenter,
-                             "CupidGB\nOpen a Game Boy or Game Boy Color ROM");
+                             "CupidGB\nOpen a Game Boy cartridge or GBS music file");
             return;
         }
         ++paintCount;
@@ -223,65 +345,45 @@ class DisplayWidget final : public QWidget {
             lastPaintAt = now;
         }
         const QRectF target = displayViewport(image.size(), size(), scaling, devicePixelRatioF());
-        painter.drawImage(target, image);
-    }
-};
-
-// Keep generated audio until the host accepts it. Backpressure pauses guest execution.
-class AudioBuffer final {
-  public:
-    explicit AudioBuffer(int bytesPerFrame = 4) : bytesPerFrame_(bytesPerFrame) {
-    }
-
-    void append(const char *data, qsizetype size) {
-        {
-            QMutexLocker lock(&mutex_);
-            queue_.append(data, size);
-            maximumQueued_ = std::max(maximumQueued_, queue_.size());
+        const QSizeF physicalTarget = target.size() * devicePixelRatioF();
+        const QPointF physicalOrigin = target.topLeft() * devicePixelRatioF();
+        const QSize output = physicalTarget.toSize();
+        if ((filter == ScalingFilter::Nearest || filter == ScalingFilter::Pixelated) &&
+            output.width() > 0 && output.height() > 0 && output.width() % image.width() == 0 &&
+            output.height() % image.height() == 0 &&
+            qFuzzyCompare(physicalTarget.width(), qreal(output.width())) &&
+            qFuzzyCompare(physicalTarget.height(), qreal(output.height())) &&
+            qFuzzyIsNull(physicalOrigin.x() - qRound(physicalOrigin.x())) &&
+            qFuzzyIsNull(physicalOrigin.y() - qRound(physicalOrigin.y()))) {
+            painter.drawImage(target, image);
+            return;
         }
-    }
-
-    void clear() {
-        QMutexLocker lock(&mutex_);
-        queue_.clear();
-    }
-
-    qint64 bytesAvailable() const {
-        QMutexLocker lock(&mutex_);
-        return queue_.size();
-    }
-
-    void resetTelemetry() {
-        QMutexLocker lock(&mutex_);
-        bytesRead_ = 0;
-        maximumQueued_ = queue_.size();
-    }
-
-    QJsonObject telemetry() const {
-        QMutexLocker lock(&mutex_);
-        return {{"host_frames_written_to_sink", double(bytesRead_) / bytesPerFrame_},
-                {"maximum_queued_bytes", double(maximumQueued_)},
-                {"remaining_queued_bytes", double(queue_.size())}};
-    }
-
-    qint64 writeTo(QIODevice *device, qint64 maximum) {
-        QMutexLocker lock(&mutex_);
-        const qint64 available = std::min(maximum, qint64(queue_.size()));
-        const qint64 aligned = available - available % bytesPerFrame_;
-        if (aligned <= 0)
-            return 0;
-        const qint64 written = device->write(queue_.constData(), aligned);
-        if (written > 0) {
-            queue_.remove(0, qsizetype(written));
-            bytesRead_ += uint64_t(written);
+        const QPoint rasterOrigin =
+            filter == ScalingFilter::Crt
+                ? QPoint(qRound(physicalOrigin.x()) & 1, qRound(physicalOrigin.y()) & 1)
+                : QPoint();
+        if (filteredSourceKey != image.cacheKey() || filteredImage.size() != output ||
+            cachedFilter != filter || cachedRasterOrigin_ != rasterOrigin) {
+            if (filter == ScalingFilter::Nearest)
+                filteredImage = scaleNearestDisplayImage(image, output);
+            else
+                filteredImage =
+                    currentFrame_.isNull()
+                        ? renderDisplayFrames(image, {}, output, filter, FrameBlending::Disabled,
+                                              false, rasterOrigin)
+                        : renderDisplayFrames(currentFrame_, previousFrame_, output, filter,
+                                              blending_, oddFrame_, rasterOrigin);
+            filteredSourceKey = image.cacheKey();
+            cachedFilter = filter;
+            cachedRasterOrigin_ = rasterOrigin;
         }
-        return written;
+        painter.drawImage(target, filteredImage);
     }
 
   private:
-    mutable QMutex mutex_;
-    QByteArray queue_;
-    uint64_t bytesRead_ = 0;
-    int bytesPerFrame_ = 4;
-    qsizetype maximumQueued_ = 0;
+    QPoint cachedRasterOrigin_;
+    QImage currentFrame_;
+    QImage previousFrame_;
+    FrameBlending blending_ = FrameBlending::Disabled;
+    bool oddFrame_ = false;
 };

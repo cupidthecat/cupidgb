@@ -1,7 +1,33 @@
+/**
+ * @file    test_bus.c
+ * @brief   Regression tests for memory-bus ownership, held values, and decay.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://gnu.org>.
+ */
+
+#include "cupid/common/sha256.h"
 #include "cupid/gb/gb.h"
 #include "cupid/gb/ppu.h"
+#include "cupid/gb/reset.h"
+#include "cupid/gb/startup.h"
 #include "cupid/gb/state.h"
 #include "cupid/gb/timer.h"
+#include "cupid/gbc/cgb.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -39,6 +65,65 @@ static CupidGb *hardware(CupidGbModel model, bool fast, uint8_t opcode) {
 static void release(CupidGb *gb) {
     cupid_gb_cleanup(gb);
     free(gb);
+}
+
+static void label_as_v23(uint8_t *state, size_t size) {
+    uint8_t digest[32];
+    state[8] = 23;
+    cupid_sha256_parts(state, 96, state + 128, size - 128, digest);
+    memcpy(state + 96, digest, sizeof(digest));
+}
+
+static void test_boot_bus(CupidGbModel model) {
+    CupidGb *gb = hardware(model, false, 0);
+    CupidGb *receiver = hardware(model, false, 0);
+    gb->boot_rom_size = receiver->boot_rom_size = model == CUPID_GB_MODEL_CGB ? 0x900 : 0x100;
+    cupid_gb_start_boot_rom(gb);
+    cupid_gb_start_boot_rom(receiver);
+
+    /* Floating reads and elapsed clocks alone leave the initial bus undriven. */
+    assert(cupid_gb_read_u8(gb, 0xa000) == 0xff);
+    assert(cupid_gb_read_bus_u8(gb, 0xa000) == 0);
+    cupid_gb_tick_dma_tcycles(gb, 64);
+    assert(cupid_gb_read_bus_u8(gb, 0xa000) == 0);
+    const size_t size = cupid_gb_state_size(gb);
+    uint8_t *state = malloc(size);
+    assert(state && cupid_gb_save_state(gb, state, size, NULL) == CUPID_GB_STATE_OK);
+    (void)cupid_gb_read_bus_u8(receiver, 0x1000);
+    assert(cupid_gb_load_state(receiver, state, size) == CUPID_GB_STATE_OK);
+    assert(cupid_gb_read_bus_u8(receiver, 0xa000) == 0);
+    label_as_v23(state, size);
+    assert(cupid_gb_load_state(receiver, state, size) != CUPID_GB_STATE_OK);
+    assert(cupid_gb_read_bus_u8(receiver, 0xa000) == 0);
+
+    if (model == CUPID_GB_MODEL_CGB) {
+        memset(gb->video_ram, 0xff, 16);
+        gb->hdma_source = 0x8000;
+        gb->hdma_blocks_remaining = 1;
+        gb->hdma_pending = true;
+        cupid_cgb_run_pending_dma(gb);
+        for (unsigned byte = 0; byte < 16; ++byte)
+            assert(gb->video_ram[byte] == 0);
+    }
+
+    gb->rom[0x1000] = 0x5c;
+    assert(cupid_gb_read_bus_u8(gb, 0x1000) == 0x5c);
+    assert(cupid_gb_read_bus_u8(gb, 0xa000) == 0x5c);
+    cupid_gb_tick(gb, 16);
+    assert(cupid_gb_read_bus_u8(gb, 0xa000) == 0xff);
+    receiver->rom[0x1000] = 0x5c;
+    assert(cupid_gb_save_state(gb, state, size, NULL) == CUPID_GB_STATE_OK);
+    label_as_v23(state, size);
+    assert(cupid_gb_load_state(receiver, state, size) == CUPID_GB_STATE_OK);
+    assert(cupid_gb_read_bus_u8(receiver, 0xa000) == 0xff);
+
+    assert(cupid_gb_reset(gb, CUPID_GB_RESET_HARD));
+    assert(cupid_gb_read_bus_u8(gb, 0xa000) == 0);
+    assert(cupid_gb_reset(gb, CUPID_GB_RESET_QUICK));
+    assert(cupid_gb_read_bus_u8(gb, 0xa000) == 0);
+    free(state);
+    release(gb);
+    release(receiver);
 }
 
 static void test_drivers_and_decay(CupidGbModel model) {
@@ -177,11 +262,13 @@ static void test_oam_warmup_write(CupidGbModel model) {
 
 int main(void) {
     for (unsigned model = CUPID_GB_MODEL_DMG_ABC; model <= CUPID_GB_MODEL_SGB2; ++model) {
+        test_boot_bus((CupidGbModel)model);
         test_drivers_and_decay((CupidGbModel)model);
         test_cpu_and_resume((CupidGbModel)model, false);
         test_dma_resolution((CupidGbModel)model, false);
         test_oam_warmup_write((CupidGbModel)model);
     }
+    test_boot_bus(CUPID_GB_MODEL_SGB_PAL);
     test_cpu_and_resume(CUPID_GB_MODEL_CGB, true);
     test_dma_resolution(CUPID_GB_MODEL_CGB, true);
     puts("Shared main-bus checks passed.");

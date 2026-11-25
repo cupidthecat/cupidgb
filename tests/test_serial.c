@@ -1,3 +1,25 @@
+/**
+ * @file    test_serial.c
+ * @brief   Regression tests for serial clocks, bit transfers, and link callbacks.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://gnu.org>.
+ */
+
 #define _POSIX_C_SOURCE 200809L
 
 #include "cupid/gb/gb.h"
@@ -65,6 +87,7 @@ static void capture_byte(const CupidGb *gb, uint8_t transmitted, void *user_data
 
 static void prepare(CupidGb *gb, bool cgb, bool double_speed) {
     *gb = (CupidGb){0};
+    gb->model = cgb ? CUPID_GB_MODEL_CGB : CUPID_GB_MODEL_DMG_ABC;
     gb->cgb_mode = cgb;
     gb->double_speed = double_speed;
     gb->io_registers[0x02] = 0x7e;
@@ -140,8 +163,10 @@ static void test_link_pair(bool cgb, bool fast, bool double_speed) {
     prepare(a, cgb, double_speed);
     prepare(b, cgb, double_speed);
     SerialPeer cable_a = {.gb = b}, cable_b = {.gb = a};
-    cupid_gb_set_serial_link(a, (CupidGbSerialLink){launch_bit, sample_peer, &cable_a});
-    cupid_gb_set_serial_link(b, (CupidGbSerialLink){launch_bit, sample_peer, &cable_b});
+    cupid_gb_set_serial_link(
+        a, (CupidGbSerialLink){.launch = launch_bit, .sample = sample_peer, .user_data = &cable_a});
+    cupid_gb_set_serial_link(
+        b, (CupidGbSerialLink){.launch = launch_bit, .sample = sample_peer, .user_data = &cable_b});
 
     const uint16_t period = cgb && fast ? 4 : 128;
     for (unsigned direction = 0; direction < 2; ++direction) {
@@ -185,7 +210,9 @@ static void test_link_control_write(void) {
     prepare(master, true, false);
     prepare(slave, true, false);
     SerialPeer cable = {.gb = slave};
-    cupid_gb_set_serial_link(master, (CupidGbSerialLink){launch_bit, sample_peer, &cable});
+    cupid_gb_set_serial_link(
+        master,
+        (CupidGbSerialLink){.launch = launch_bit, .sample = sample_peer, .user_data = &cable});
     cupid_gb_write_u8(slave, 0xff01, 0xa5);
     cupid_gb_write_u8(slave, 0xff02, 0x80);
     cupid_gb_write_u8(master, 0xff01, 0x80);
@@ -237,7 +264,9 @@ static void test_link_roms(void) {
     CupidGb *master = calloc(1, sizeof(*master)), *slave = calloc(1, sizeof(*slave));
     assert(master && slave);
     SerialPeer cable = {.gb = slave};
-    cupid_gb_set_serial_link(master, (CupidGbSerialLink){launch_bit, sample_peer, &cable});
+    cupid_gb_set_serial_link(
+        master,
+        (CupidGbSerialLink){.launch = launch_bit, .sample = sample_peer, .user_data = &cable});
     load_link_rom(master, CUPID_GB_MODEL_CGB, 0x23, 0x83);
     load_link_rom(slave, CUPID_GB_MODEL_DMG_ABC, 0xd9, 0x80);
     for (unsigned i = 0; i < 8; ++i) {
@@ -398,6 +427,9 @@ static void test_observer_host_lifetime_and_snapshot_identity(void) {
     SerialPeer cable = {0};
     cupid_gb_set_model(observed, CUPID_GB_MODEL_CGB);
     cupid_gb_set_model(silent, CUPID_GB_MODEL_CGB);
+    /* Both executions need the same guest memory to isolate host observation. */
+    cupid_gb_set_power_on_seed(observed, 0);
+    cupid_gb_set_power_on_seed(silent, 0);
     cupid_gb_set_serial_output_callback(observed, capture_byte, &capture);
     cupid_gb_set_serial_link(observed,
                              (CupidGbSerialLink){.launch = launch_bit, .user_data = &cable});

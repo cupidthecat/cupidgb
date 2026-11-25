@@ -1,3 +1,25 @@
+/**
+ * @file    controller_dialog.cpp
+ * @brief   Qt controller assignment, binding capture, motion, and feedback settings.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://gnu.org>.
+ */
+
 #include "controller_dialog.h"
 
 #include <QCheckBox>
@@ -76,7 +98,7 @@ ControllerDialog::ControllerDialog(ControllerManager &manager,
     background_ = new QCheckBox("Allow gameplay input while CupidGB is in the background");
     background_->setObjectName("controllerBackground");
     background_->setChecked(draft_.background);
-    rumble_ = new QCheckBox("Cartridge rumble on player 1 controllers");
+    rumble_ = new QCheckBox("Enable cartridge rumble");
     rumble_->setObjectName("controllerRumble");
     rumble_->setChecked(draft_.rumble);
     strength_ = new QSlider(Qt::Horizontal);
@@ -103,7 +125,8 @@ ControllerDialog::ControllerDialog(ControllerManager &manager,
     for (int i = 1; i <= 4; ++i)
         player_->addItem(QString("Player %1").arg(i), i - 1);
     player_->setToolTip(
-        "Players 2–4 require a Super Game Boy cartridge that requests multiplayer.");
+        "With a link cable, Player 2 controls the other game from the focused window. "
+        "Players 3–4 require a Super Game Boy cartridge that requests multiplayer.");
     press_ = new QSpinBox;
     press_->setObjectName("controllerPressThreshold");
     press_->setRange(1, 32766);
@@ -239,8 +262,13 @@ ControllerDialog::ControllerDialog(ControllerManager &manager,
     });
     connect(test, &QPushButton::clicked, this, [this] {
         manager_.backend().stopRumble(current_);
-        if (!manager_.backend().rumble(current_, uint16_t(65535 * strength_->value() / 100),
-                                       uint16_t(65535 * strength_->value() / 100), 150, true))
+        const int strength = strength_->value();
+        if (!strength) {
+            status_->setText("Rumble strength is 0%; increase it to test the selected controller.");
+            return;
+        }
+        const auto amplitude = uint16_t(65535 * strength / 100);
+        if (!manager_.backend().rumble(current_, amplitude, amplitude, 150, true))
             status_->setText(
                 "Rumble is unavailable, disabled by focus, or unsupported by this device.");
         else

@@ -1,11 +1,42 @@
+/**
+ * @file    test_mbc7.c
+ * @brief   Regression tests for MBC7 gates, motion latches, EEPROM, and persistence.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://gnu.org>.
+ */
+
+#include "../src/gb/audio_state.h"
+#include "../src/gb/display_clock.h"
+#include "../src/gb/vram_bus.h"
 #include "cupid/common/sha256.h"
 #include "cupid/gb/battery.h"
+#include "cupid/gb/bess.h"
 #include "cupid/gb/mbc7.h"
+#include "cupid/gb/ppu.h"
 #include "cupid/gb/state.h"
+#include "test_state_layout.h"
 
 #include <assert.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* Sampled JOYP, serial selection and the CH3 fetch byte precede the SRAM length. */
+enum { IO_HISTORY_BYTES = 3, SRAM_LENGTH_BYTES = 4 };
 
 enum {
     PORT = 0xa487, /* Address aliases omit bits 8–11 and 0–3. */
@@ -21,6 +52,7 @@ enum {
     READ = 0x200,
     ERASE = 0x300,
     V4_SIZE = 300572,
+    RTC_HISTORY_BYTES = 6,
 };
 
 static CupidGb *machine(CupidGbModel model) {
@@ -153,12 +185,16 @@ static void test_resume(CupidGb *first, CupidGb *second) {
     command(first, WRITE | 0x7f);
     shift(first, 0x6e, 8);
     const size_t size = cupid_gb_state_size(first);
-    assert(size == V4_SIZE + 8 + 16);
+    /* Controller, receiver, clock and audio history precede the empty device descriptor. */
+    assert(size == test_state_post_ram_size(first) + SRAM_LENGTH_BYTES + IO_HISTORY_BYTES +
+                       V4_SIZE + 8 + 28 + 6 + RTC_HISTORY_BYTES + CUPID_GB_AUDIO_STATE_SIZE +
+                       CUPID_GB_DISPLAY_CLOCK_STATE_SIZE + CUPID_GB_PIXEL_TIMING_STATE_SIZE +
+                       CUPID_GB_VRAM_BUS_STATE_SIZE + 8);
     uint8_t *saved = malloc(size), *restored = malloc(size);
     assert(saved && restored);
     size_t written = 0;
     assert(cupid_gb_save_state(first, saved, size, &written) == CUPID_GB_STATE_OK &&
-           written == size && saved[8] == 8);
+           written == size && saved[8] == CUPID_GB_STATE_VERSION);
     cupid_gb_mbc7_set_motion(second, -112, 112);
     assert(cupid_gb_load_state(second, saved, size) == CUPID_GB_STATE_OK);
     assert(cupid_gb_read_u8(first, PORT) == cupid_gb_read_u8(second, PORT));
@@ -189,6 +225,76 @@ static void test_resume(CupidGb *first, CupidGb *second) {
     free(saved);
 }
 
+static unsigned little_u32(const uint8_t *data) {
+    return (unsigned)data[0] | (unsigned)data[1] << 8 | (unsigned)data[2] << 16 |
+           (unsigned)data[3] << 24;
+}
+
+static void test_portable_resume(CupidGb *first, CupidGb *second) {
+    enable_registers(first);
+    cupid_gb_mbc7_set_motion(first, 56, -112);
+    cupid_gb_write_u8(first, 0xa000, 0x55);
+    cupid_gb_write_u8(first, 0xa010, 0xaa);
+    cupid_gb_write_u8(first, 0x2000, 0xff);
+    command(first, EWEN);
+    command(first, WRITE | 0x7f);
+    shift(first, 0x12, 8);
+    const size_t size = cupid_gb_bess_size(first);
+    uint8_t *state = malloc(size);
+    assert(size && state);
+    size_t written = 0;
+    assert(cupid_gb_bess_save(first, state, size, &written) == CUPID_GB_STATE_OK &&
+           written == size);
+    uint8_t *block = state + little_u32(state + size - 8u);
+    while (block + 8u <= state + size - 8u && memcmp(block, "MBC7", 4))
+        block += 8u + little_u32(block + 4);
+    assert(block + 18u <= state + size - 8u && little_u32(block + 4) == 10);
+    uint8_t *payload = block + 8;
+    assert(payload[0] == 0x3a && payload[1] == 8);
+
+    cupid_gb_mbc7_set_motion(second, -112, 112);
+    assert(cupid_gb_bess_load(second, state, size) == CUPID_GB_STATE_OK);
+    assert(cupid_gb_read_u8(second, 0x4000) == 0xff && second->ram_enabled);
+    assert(cupid_gb_read_u8(second, 0xa020) == 0x08 && cupid_gb_read_u8(second, 0xa030) == 0x82);
+    assert(cupid_gb_read_u8(second, 0xa040) == 0x60 && cupid_gb_read_u8(second, 0xa050) == 0x81);
+    assert(cupid_gb_read_u8(second, PORT) == cupid_gb_read_u8(first, PORT));
+    cupid_gb_write_u8(second, PORT, SELECT | CLOCK);
+    assert(second->mbc7.data_bits == 8);
+    shift(first, 0x34, 8);
+    shift(second, 0x34, 8);
+    assert(read_eeprom(first, 0x7f) == 0x1234 && read_eeprom(second, 0x7f) == 0x1234);
+    cupid_gb_write_u8(second, 0xa010, 0xaa);
+    assert(cupid_gb_read_u8(second, 0xa020) == 0x60 && cupid_gb_read_u8(second, 0xa040) == 0x40);
+
+    command(first, READ | 0x7f);
+    assert(shift(first, 0, 5) == 2);
+    assert(cupid_gb_bess_save(first, state, size, NULL) == CUPID_GB_STATE_OK);
+    assert(cupid_gb_bess_load(second, state, size) == CUPID_GB_STATE_OK);
+    assert(shift(first, 0, 11) == 0x234 && shift(second, 0, 11) == 0x234);
+
+    CupidGb *unchanged = malloc(sizeof(*unchanged));
+    assert(unchanged);
+    memcpy(unchanged, second, sizeof(*second));
+    payload[1] = 17;
+    assert(cupid_gb_bess_load(second, state, size) == CUPID_GB_STATE_INVALID);
+    assert(!memcmp(unchanged, second, sizeof(*second)));
+    free(unchanged);
+
+    memcpy(block, "TEST", 4);
+    assert(cupid_gb_bess_load(second, state, size) == CUPID_GB_STATE_OK);
+    assert(cupid_gb_read_u8(second, PORT) == 0 && !second->mbc7.programming_enabled);
+    assert(cupid_gb_read_u8(second, 0xa030) == 0 && read_eeprom(second, 0x7f) == 0x1234);
+
+    command(first, WRAL);
+    shift(first, 0xa5, 8);
+    assert(cupid_gb_bess_save(first, state, size, NULL) == CUPID_GB_STATE_OK);
+    assert(cupid_gb_bess_load(second, state, size) == CUPID_GB_STATE_OK);
+    shift(second, 0x5a, 8);
+    assert(read_eeprom(second, 0) == 0xa55a && read_eeprom(second, 126) == 0xa55a);
+    assert(read_eeprom(second, 127) == 0);
+    free(state);
+}
+
 int main(void) {
     const CupidGbModel models[] = {CUPID_GB_MODEL_DMG_ABC, CUPID_GB_MODEL_CGB};
     for (unsigned i = 0; i < sizeof(models) / sizeof(models[0]); ++i) {
@@ -197,6 +303,7 @@ int main(void) {
         test_serial(first);
         test_battery(first);
         test_resume(first, second);
+        test_portable_resume(first, second);
         cupid_gb_cleanup(first);
         cupid_gb_cleanup(second);
         free(first);

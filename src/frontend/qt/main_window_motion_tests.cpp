@@ -1,3 +1,25 @@
+/**
+ * @file    main_window_motion_tests.cpp
+ * @brief   Qt regression checks for sensor input and session transitions.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://gnu.org>.
+ */
+
 #include "main_window_internal.h"
 
 bool MainWindow::motionSmokeTest(const QString &directory) {
@@ -78,8 +100,52 @@ bool MainWindow::motionSmokeTest(const QString &directory) {
     if (path.isEmpty() || !openRom(path) || emulator_->gb.header.mbc_type != CUPID_GB_MBC7)
         return smokeFailure(__FILE__, __LINE__);
     timer_.stop();
+    // Closing debugger windows and opening audio can deliver native focus
+    // changes after the previous test's synthetic active-widget selection.
+    // Visible pointer tests require actual application activation.
+    const auto hasActivation = [this] {
+        return QApplication::applicationState() == Qt::ApplicationActive &&
+               QApplication::activeWindow() == this;
+    };
+    if (isVisible() && !hasActivation()) {
+        raise();
+        activateWindow();
+        QEventLoop activation;
+        QTimer poll, deadline;
+        poll.setInterval(5);
+        deadline.setSingleShot(true);
+        connect(&poll, &QTimer::timeout, &activation, [&] {
+            if (hasActivation())
+                activation.quit();
+        });
+        connect(&deadline, &QTimer::timeout, &activation, &QEventLoop::quit);
+        poll.start();
+        deadline.start(2000);
+        if (!hasActivation())
+            activation.exec();
+        if (!hasActivation()) {
+            qCritical("Motion workflow could not activate the visible gameplay window");
+            return smokeFailure(__FILE__, __LINE__);
+        }
+    }
     motionFocusActive_ = true;
     refreshControllerGate();
+    if (!motionInputAllowed(true)) {
+        const auto *active = QApplication::activeWindow();
+        const auto *modal = QApplication::activeModalWidget();
+        const auto *popup = QApplication::activePopupWidget();
+        qCritical("Motion workflow gate: paused=%d operation=%d menuDepth=%u menuSuspended=%d "
+                  "trace=%u focus=%d appState=%d isolated=%d visible=%d active=%s activeVisible=%d "
+                  "activeIsMain=%d modal=%s popup=%s",
+                  int(paused_), int(stateOperation_), unsigned(menuDepth_),
+                  int(menuInputSuspended_), unsigned(inputTrace_.size()), int(motionFocusActive_),
+                  int(QApplication::applicationState()), int(isolated_), int(isVisible()),
+                  active ? qPrintable(active->objectName()) : "<none>",
+                  int(active && active->isVisible()), int(active == this),
+                  modal ? qPrintable(modal->objectName()) : "<none>",
+                  popup ? qPrintable(popup->objectName()) : "<none>");
+        return smokeFailure(__FILE__, __LINE__);
+    }
     const auto move = [&](int x, int y) {
         const QSize source = display_->image.size();
         const QRectF viewport = displayViewport(source, display_->size(), display_->scaling,
@@ -239,7 +305,10 @@ bool MainWindow::motionSmokeTest(const QString &directory) {
     mouseMotionAction_->setChecked(true);
     move(0, 0);
     button(true);
-    if (!restart() || !sampleIs(0, 0) || mouseButtonA_)
+    if (!restart() || !sampleIs(112, 112) || !mouseButtonA_ || (emulator_->gb.joypad & 0x10))
+        return smokeFailure(__FILE__, __LINE__);
+    button(false);
+    if (!(emulator_->gb.joypad & 0x10))
         return smokeFailure(__FILE__, __LINE__);
     timer_.stop();
     if (!closeRom())
@@ -377,8 +446,12 @@ bool MainWindow::motionSmokeTest(const QString &directory) {
     if ((emulator_->gb.joypad & 0x10) || !mouseButtonA_ || !restart())
         return smokeFailure(__FILE__, __LINE__);
     timer_.stop();
-    if (emulator_->gb.joypad != 0xff || (emulator_->gb.interrupt_flags & 0x10) || mouseButtonA_ ||
-        physicalJoypad_ != 0xff || !sampleIs(0, 0) || emulator_->gb.elapsed_cycles)
+    if (emulator_->gb.joypad != 0xef || (emulator_->gb.interrupt_flags & 0x10) || !mouseButtonA_ ||
+        physicalJoypad_ != 0xef || !sampleIs(112, 112) || emulator_->gb.elapsed_cycles)
+        return smokeFailure(__FILE__, __LINE__);
+    button(false);
+    QApplication::sendEvent(display_, &keyUp);
+    if (emulator_->gb.joypad != 0xff || mouseButtonA_ || physicalJoypad_ != 0xff)
         return smokeFailure(__FILE__, __LINE__);
     move(0, 0);
     button(true);
@@ -388,7 +461,19 @@ bool MainWindow::motionSmokeTest(const QString &directory) {
     timer_.stop();
     if (controllers_->motionEnabled() || (emulator_->gb.joypad & 1) ||
         !(emulator_->gb.joypad & 0x10) || mouseButtonA_ || physicalJoypad_ != 0xff ||
-        emulator_->gb.elapsed_cycles || !closeRom())
+        emulator_->gb.elapsed_cycles) {
+        qCritical("Motion cartridge transition failed: classified=%d joypad=%02x mouse=%d "
+                  "keyboard=%02x cycles=%llu controller=%02x manager=%02x delivery=%d "
+                  "inputAllowed=%d paused=%d deferred=%d activeIsMain=%d",
+                  int(controllers_->motionEnabled()), unsigned(emulator_->gb.joypad),
+                  int(mouseButtonA_), unsigned(physicalJoypad_),
+                  qulonglong(emulator_->gb.elapsed_cycles), unsigned(controllerOutput_.buttons[0]),
+                  unsigned(controllers_->output().buttons[0]), int(controllers_->deliveryEnabled()),
+                  int(controllers_->backend().inputAllowed()), int(paused_),
+                  int(controllerInputDeferred_), int(QApplication::activeWindow() == this));
+        return smokeFailure(__FILE__, __LINE__);
+    }
+    if (!closeRom())
         return smokeFailure(__FILE__, __LINE__);
     pad.detach();
     if (!waitForController([&] { return !controllers_->backend().state(pad.id, &heldState); }) ||

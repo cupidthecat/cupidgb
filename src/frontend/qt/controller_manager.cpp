@@ -1,3 +1,25 @@
+/**
+ * @file    controller_manager.cpp
+ * @brief   Controller binding evaluation, player routing, and configuration persistence.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://gnu.org>.
+ */
+
 #include "controller_manager.h"
 
 #include <QJsonArray>
@@ -248,7 +270,6 @@ ControllerConfiguration ControllerConfiguration::load(const QByteArray &bytes, b
 }
 
 ControllerManager::ControllerManager(QObject *parent) : QObject(parent) {
-    rumbleClock_.start();
     backend_.deviceAdded = [this](const DeviceInfo &info) {
         states_[info.instance].info = info;
         states_[info.instance].fallback = defaults(info);
@@ -708,13 +729,10 @@ void ControllerManager::setRumble(double amplitude, bool singlePlayer) {
         stopRumble();
         return;
     }
-    const auto value = uint16_t(std::clamp(amplitude, 0.0, 1.0) *
-                                std::clamp(configuration_.rumbleStrength, 0, 100) / 100.0 * 65535);
-    const qint64 now = rumbleClock_.elapsed();
-    // Turbo can complete many guest frames in one host refresh. Keep motor requests bounded.
-    if (value && now - lastRumbleRefresh_ < 16)
-        return;
-    lastRumbleRefresh_ = now;
+    const double intensity = std::clamp(amplitude, 0.0, 1.0);
+    const double strength = std::clamp(configuration_.rumbleStrength, 0, 100) / 100.0;
+    const auto value = uint16_t(
+        intensity > 0.0 && strength > 0.0 ? std::pow(intensity, strength) * strength * 65535 : 0);
     for (const auto &[id, state] : states_) {
         if (eligible(state) && (singlePlayer || profile(state.info).player == 0) && value)
             backend_.rumble(id, value, value, 250);
@@ -724,9 +742,29 @@ void ControllerManager::setRumble(double amplitude, bool singlePlayer) {
 }
 
 void ControllerManager::stopRumble() {
-    lastRumbleRefresh_ = -250;
     for (const auto &state : backend_.devices())
         backend_.stopRumble(state.info.instance);
+}
+
+void ControllerManager::setPlayerRumble(unsigned player, double amplitude) {
+    if (player >= 4)
+        return;
+    const bool allowed =
+        delivery_ && configuration_.enabled && configuration_.rumble && std::isfinite(amplitude);
+    const double intensity = allowed ? std::clamp(amplitude, 0.0, 1.0) : 0.0;
+    const double strength = std::clamp(configuration_.rumbleStrength, 0, 100) / 100.0;
+    const auto value = uint16_t(
+        intensity > 0.0 && strength > 0.0 ? std::pow(intensity, strength) * strength * 65535 : 0);
+    // A linked peer publishes independently. Updating one player's motor must
+    // neither refresh nor stop the other player's most recent amplitude.
+    for (const auto &[id, state] : states_) {
+        if (profile(state.info).player != int(player))
+            continue;
+        if (eligible(state) && value)
+            backend_.rumble(id, value, value, 250);
+        else
+            backend_.stopRumble(id);
+    }
 }
 
 } // namespace cupid::input

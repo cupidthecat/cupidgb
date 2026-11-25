@@ -1,5 +1,29 @@
+/**
+ * @file    test_ppu.c
+ * @brief   Regression tests for LCD timing, presentation, and pixel-pipeline behavior.
+ * @author  cupidthecat
+ * @date    2026-11-16
+ *
+ * Copyright (C) 2026 cupidthecat
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://gnu.org>.
+ */
+
 #include "cupid/gb/gb.h"
 #include "cupid/gb/ppu.h"
+#include "cupid/gb/timer.h"
+#include "cupid/gbc/cgb.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -225,30 +249,38 @@ static void test_lcd_power_preserves_stat_interrupt_latch(void) {
 static void test_halt_midpoint_samples_interrupt_phase(void) {
     CupidGb gb, control;
     prepare(&gb, false, 0);
+    gb.cpu.halted = true;
+    gb.cpu.just_halted = false; /* Steady monochrome HALT polls after two T-cycles. */
     gb.interrupt_enable = 1;
     gb.pixels.initialized = true;
     gb.pixels.line = 144;
     gb.pixels.dot = 0;
     gb.io_registers[CUPID_GB_IO_LY] = 144;
-    assert(cupid_gb_tick_ppu_halt(&gb) == 1); /* VBlank arrives in the first two dots. */
+    assert(cupid_gb_tick_halt(&gb) == 1); /* VBlank arrives in the first two dots. */
     assert(gb.interrupt_flags & 1);
+    assert(gb.elapsed_cycles == 4);
 
     prepare(&gb, false, 0);
+    gb.cpu.halted = true;
+    gb.cpu.just_halted = false;
     gb.interrupt_enable = 1;
     gb.pixels.initialized = true;
     gb.pixels.line = 143;
     gb.pixels.dot = 455;
     gb.io_registers[CUPID_GB_IO_LY] = 143;
     control = gb;
-    assert(cupid_gb_tick_ppu_halt(&gb) == 0); /* The request arrives after the midpoint. */
+    assert(cupid_gb_tick_halt(&gb) == 0); /* The request arrives after the midpoint. */
     assert(gb.interrupt_flags & 1);
-    cupid_gb_tick_ppu(&control, 1);
+    assert(gb.elapsed_cycles == 4);
+    cupid_gb_tick(&control, 1);
     assert(memcmp(&gb, &control, sizeof(gb)) == 0); /* Sampling does not change the elapsed work. */
 }
 
 static void test_hblank_interrupt_follows_visible_mode(void) {
     CupidGb gb;
     prepare(&gb, false, 0);
+    gb.cpu.halted = true;
+    gb.cpu.just_halted = false;
     gb.io_registers[CUPID_GB_IO_STAT] = 0x8a;
     gb.io_registers[CUPID_GB_IO_SCX] = 3;
     gb.interrupt_enable = 2;
@@ -256,9 +288,10 @@ static void test_hblank_interrupt_follows_visible_mode(void) {
         cupid_gb_tick_ppu(&gb, 1);
     assert((gb.interrupt_flags & 2) == 0);
     assert(gb.stat_irq_delay == 1); /* Mode 0 begins on the final dot of this M-cycle. */
-    assert(cupid_gb_tick_ppu_halt(&gb) == 2);
+    assert(cupid_gb_tick_halt(&gb) == 2);
     assert(gb.interrupt_flags & 2);
     assert(gb.stat_irq_delay == 0);
+    assert(gb.elapsed_cycles == 4);
 }
 
 static void test_objects_share_background_fetch_wait(void) {
@@ -634,6 +667,263 @@ static void test_presentation_chunk_invariance(void) {
     }
 }
 
+static void test_blanking_span_edges(void) {
+    static const uint16_t positions[][2] = {{1, 255}, {1, 441}, {1, 453},   {143, 445},
+                                            {144, 0}, {144, 2}, {152, 444}, {152, 455},
+                                            {153, 0}, {153, 5}, {153, 8},   {153, 440}};
+    static const uint16_t lengths[] = {2, 4, 11, 41};
+    static CupidGb original, span, single;
+    for (unsigned speed = 0; speed < 3; ++speed) {
+        for (unsigned index = 0; index < sizeof(positions) / sizeof(positions[0]); ++index) {
+            prepare(&original, speed != 0, 1);
+            original.double_speed = speed == 2;
+            const uint16_t line = positions[index][0];
+            const uint16_t dot = positions[index][1];
+            advance_dots(&original, line * 456u + dot);
+            cupid_gb_write_u8(&original, 0xff45, original.io_registers[CUPID_GB_IO_LY]);
+            cupid_gb_write_u8(&original, 0xff41, 0x78);
+            for (unsigned size = 0; size < sizeof(lengths) / sizeof(lengths[0]); ++size) {
+                span = single = original;
+                cupid_gb_tick_ppu_dots(&span, lengths[size]);
+                for (uint16_t tick = 0; tick < lengths[size]; ++tick)
+                    cupid_gb_tick_ppu_dots(&single, 1);
+                assert(memcmp(&span, &single, sizeof(span)) == 0);
+            }
+        }
+    }
+}
+
+static void test_color_port_ownership_edges(void) {
+    /* Each row records an observed port-ownership transition after LCD enable:
+     * bit 0 = OAM, bit 1 = VRAM, bit 2 = palette. STAT alone misses these edges. */
+    static const unsigned normal[][2] = {{1, 0},   {79, 1},  {81, 5},  {84, 7},  {251, 5}, {252, 4},
+                                         {256, 0}, {452, 1}, {533, 3}, {536, 7}, {705, 5}, {706, 4},
+                                         {710, 0}, {908, 1}, {989, 3}, {992, 7}};
+    static const unsigned fast[][2] = {{1, 0},   {79, 3},  {81, 7},  {252, 4}, {254, 0},
+                                       {452, 1}, {533, 3}, {536, 7}, {706, 4}, {708, 0},
+                                       {908, 1}, {989, 3}, {992, 7}};
+    for (unsigned speed = 0; speed < 2; ++speed) {
+        CupidGb gb;
+        prepare(&gb, true, 0);
+        gb.double_speed = speed != 0;
+        cupid_gb_write_u8(&gb, 0xff40, 0);
+        cupid_gb_write_u8(&gb, 0xff40, 0x91);
+        gb.cgb_bg_palette_ram[0] = 0x12;
+        const unsigned (*edges)[2] = speed ? fast : normal;
+        const size_t count =
+            speed ? sizeof(fast) / sizeof(fast[0]) : sizeof(normal) / sizeof(normal[0]);
+        unsigned expected = 0;
+        size_t edge = 0;
+        for (unsigned dot = 1; dot <= 1000; ++dot) {
+            cupid_gb_tick_ppu_dots(&gb, 1);
+            if (edge < count && dot == edges[edge][0])
+                expected = edges[edge++][1];
+            cupid_gb_ppu_enter_stop(&gb);
+            const unsigned ports = !gb.stop_ppu_oam_blocked |
+                                   (unsigned)!gb.stop_ppu_vram_blocked << 1 |
+                                   (unsigned)!gb.stop_ppu_palette_blocked << 2;
+            assert(ports == expected);
+            assert(cupid_cgb_palettes_cpu_blocked(&gb) == ((expected & 4u) != 0));
+            assert(cupid_gb_read_u8(&gb, 0xff69) == (expected & 4u ? 0xff : 0x12));
+            cupid_gb_ppu_leave_stop(&gb);
+            assert(!gb.stop_ppu_oam_blocked && !gb.stop_ppu_vram_blocked &&
+                   !gb.stop_ppu_palette_blocked);
+        }
+        assert(edge == count);
+    }
+}
+
+static void test_stop_oam_and_palette_ports(void) {
+    CupidGb gb;
+    prepare(&gb, true, 1);
+    object(&gb, 0, 24, 1, 0);
+    gb.cpu.stopped = true;
+    gb.stop_ppu_oam_blocked = true;
+    cupid_gb_pixels_scan_object(&gb, 0);
+    assert(gb.oam_search_word == UINT16_MAX && !gb.pixels.object_count);
+    gb.stop_ppu_oam_blocked = false;
+    cupid_gb_pixels_scan_object(&gb, 0);
+    assert(gb.oam_search_word == 0x1810 && gb.pixels.object_count == 1);
+    for (unsigned color_mode = 0; color_mode < 2; ++color_mode) {
+        prepare(&gb, true, 1);
+        gb.cgb_mode = color_mode != 0;
+        object(&gb, 0, 24, 1, 0);
+        gb.cpu.stopped = true;
+        gb.stop_ppu_palette_blocked = true;
+        render(&gb);
+        assert(gb.frame_buffer_color[0] == 0 && gb.frame_buffer_color[16] == 0);
+        assert(gb.frame_buffer[0] == 1 && gb.frame_buffer[16] == 1);
+    }
+}
+
+static void test_physical_color_attributes_in_compatibility_mode(void) {
+    CupidGb gb;
+    for (unsigned color_hardware = 0; color_hardware < 2; ++color_hardware) {
+        prepare(&gb, color_hardware != 0, 1);
+        gb.cgb_mode = false;
+        object(&gb, 0, 24, 2, 0);
+        memset(gb.video_ram + 0x3800, 0x80, 32);
+        render(&gb);
+        assert(gb.frame_buffer[16] == (color_hardware ? 1 : 2));
+
+        prepare(&gb, color_hardware != 0, 1);
+        gb.cgb_mode = false;
+        memset(gb.video_ram + 0x3800, 8, 32);
+        memset(gb.video_ram + 0x2000, 0xff, 16);
+        render(&gb);
+        assert(gb.frame_buffer[16] == (color_hardware ? 3 : 1));
+    }
+}
+
+static void test_stopped_compatibility_background_priority(void) {
+    CupidGb gb;
+    memset(&gb, 0, sizeof(gb));
+    gb.model = CUPID_GB_MODEL_CGB;
+    gb.oam_vram_row = UINT16_MAX;
+    memset(gb.cgb_bg_palette_ram, 0x11, sizeof(gb.cgb_bg_palette_ram));
+    memset(gb.cgb_obj_palette_ram, 0x22, sizeof(gb.cgb_obj_palette_ram));
+    set_tile(&gb, 0, 3);
+    for (unsigned index = 0; index < 10; ++index)
+        object(&gb, index, (uint8_t)(8 + index * 13), 0, 0);
+    cupid_gb_write_u8(&gb, 0xff43, 1);
+    cupid_gb_write_u8(&gb, 0xff47, 0xe4);
+    cupid_gb_write_u8(&gb, 0xff48, 0xe4);
+    cupid_gb_write_u8(&gb, 0xff40, 0x93);
+    cupid_gb_tick_ppu_dots(&gb, 252);
+    cupid_gb_ppu_enter_stop(&gb);
+    gb.cpu.stopped = true;
+    assert(gb.stop_ppu_vram_blocked && !gb.stop_ppu_oam_blocked && !gb.stop_ppu_palette_blocked);
+    cupid_gb_tick_ppu_dots(&gb, 1148);
+    // Blocked attribute reads retain priority on physical color hardware even
+    // for a monochrome cartridge. Sprite pixels must stay behind the background.
+    for (unsigned pixel = 160; pixel < 480; ++pixel)
+        assert(gb.frame_buffer_color[pixel] == 0x1111);
+}
+
+static void test_palette_output_ignores_unused_bit(void) {
+    CupidGb gb;
+    for (unsigned color_mode = 0; color_mode < 2; ++color_mode) {
+        prepare(&gb, true, 1);
+        gb.cgb_mode = color_mode != 0;
+        for (unsigned shade = 0; shade < 4; ++shade) {
+            const uint16_t background = (uint16_t)(0x9230u + shade);
+            gb.cgb_bg_palette_ram[shade * 2] = (uint8_t)background;
+            gb.cgb_bg_palette_ram[shade * 2 + 1] = (uint8_t)(background >> 8);
+            if (!color_mode)
+                assert(cupid_cgb_compat_bg_color(&gb, (uint8_t)shade) == (background & 0x7fff));
+            for (unsigned palette = 0; palette < 2; ++palette) {
+                const uint16_t color = (uint16_t)(0xa340u + palette * 16 + shade);
+                const unsigned offset = palette * 8 + shade * 2;
+                gb.cgb_obj_palette_ram[offset] = (uint8_t)color;
+                gb.cgb_obj_palette_ram[offset + 1] = (uint8_t)(color >> 8);
+                if (!color_mode)
+                    assert(cupid_cgb_compat_obj_color(&gb, palette, (uint8_t)shade) ==
+                           (color & 0x7fff));
+            }
+        }
+        object(&gb, 0, 24, 1, 0);
+        uint8_t background[64], object_palette[64];
+        memcpy(background, gb.cgb_bg_palette_ram, sizeof(background));
+        memcpy(object_palette, gb.cgb_obj_palette_ram, sizeof(object_palette));
+        render(&gb);
+        assert(gb.frame_buffer_color[0] == 0x1231 && gb.frame_buffer_color[16] == 0x2341);
+        if (color_mode) {
+            memset(gb.frame_buffer_color, 0xff, sizeof(gb.frame_buffer_color));
+            cupid_cgb_render_scanline(&gb, gb.io_registers[CUPID_GB_IO_LCDC], 0, 0);
+            assert(gb.frame_buffer_color[0] == 0x1231 && gb.frame_buffer_color[16] == 0x2341);
+        }
+        assert(memcmp(background, gb.cgb_bg_palette_ram, sizeof(background)) == 0);
+        assert(memcmp(object_palette, gb.cgb_obj_palette_ram, sizeof(object_palette)) == 0);
+    }
+}
+
+static void test_layer_visibility(CupidGbModel model, bool color_mode) {
+    CupidGb gb;
+    CupidGbPixels visible_pixels;
+    CupidGbDisplayClock visible_clock;
+    uint16_t visible_end_dot = 0;
+    uint8_t visible_interrupts = 0;
+    for (unsigned hidden = 0; hidden < 4; ++hidden) {
+        prepare(&gb, cupid_gb_model_is_cgb(model), 1);
+        gb.model = model;
+        gb.cgb_mode = color_mode;
+        gb.io_registers[CUPID_GB_IO_LCDC] = 0xf3;
+        gb.io_registers[CUPID_GB_IO_WY] = 0;
+        gb.io_registers[CUPID_GB_IO_WX] = 87;
+        memset(gb.video_ram + 0x1c00, 2, 32);
+        memset(gb.video_ram + 0x3800, 2, 32);
+        memset(gb.video_ram + 0x3c00, 3, 32);
+        gb.cgb_bg_palette_ram[0] = 0x10;  /* Palette 0, color 0. */
+        gb.cgb_bg_palette_ram[4] = 0x29;  /* Compatibility window. */
+        gb.cgb_bg_palette_ram[18] = 0x34; /* Native background. */
+        gb.cgb_bg_palette_ram[28] = 0x72; /* Native window. */
+        object(&gb, 0, 24, 2, 0x80);      /* Behind the background. */
+        object(&gb, 1, 40, 2, 0);
+        const bool background = !(hidden & 1);
+        const bool objects = !(hidden & 2);
+        cupid_gb_set_layer_visibility(&gb, background, objects);
+        render(&gb);
+        assert(gb.frame_buffer[0] == (background ? 1 : 0));
+        assert(gb.frame_buffer[16] == (background ? 1 : objects ? 2 : 0));
+        assert(gb.frame_buffer[32] == (objects ? 2 : background ? 1 : 0));
+        assert(gb.frame_buffer[100] == (background ? 2 : 0));
+        if (cupid_gb_model_is_cgb(model)) {
+            const uint16_t bg_color = background ? (color_mode ? 0x34 : 0x1f) : 0x10;
+            const uint16_t window_color = background ? (color_mode ? 0x72 : 0x29) : 0x10;
+            assert(gb.frame_buffer_color[0] == bg_color);
+            assert(gb.frame_buffer_color[16] == (!background && objects ? 0x7c00 : bg_color));
+            assert(gb.frame_buffer_color[32] == (objects ? 0x7c00 : bg_color));
+            assert(gb.frame_buffer_color[100] == window_color);
+        }
+        assert(gb.window_line_counter == 1);
+        if (!hidden) {
+            memcpy(&visible_pixels, &gb.pixels, sizeof(visible_pixels));
+            memcpy(&visible_clock, &gb.display_clock, sizeof(visible_clock));
+            visible_end_dot = gb.ppu_transfer_end_dot;
+            visible_interrupts = gb.interrupt_flags;
+        } else {
+            assert(memcmp(&visible_pixels, &gb.pixels, sizeof(visible_pixels)) == 0);
+            assert(memcmp(&visible_clock, &gb.display_clock, sizeof(visible_clock)) == 0);
+            assert(visible_end_dot == gb.ppu_transfer_end_dot);
+            assert(visible_interrupts == gb.interrupt_flags);
+        }
+    }
+}
+
+static void test_pixel_output_preserves_object_queue_lanes(void) {
+    CupidGb gb;
+    for (unsigned color_mode = 0; color_mode < 2; ++color_mode) {
+        for (unsigned pattern = 0; pattern < 256; ++pattern) {
+            prepare(&gb, color_mode != 0, 0);
+            CupidGbPixels *p = &gb.pixels;
+            p->count = 8;
+            p->column = 1;
+            p->x = (uint8_t)(pattern % CUPID_GB_SCREEN_WIDTH);
+            for (unsigned slot = 0; slot < 8; ++slot) {
+                p->sprite_colors[slot] = (uint8_t)((pattern + slot * 13u) & 3u);
+                p->sprite_palettes[slot] =
+                    (uint8_t)((pattern + slot * 19u) & (color_mode ? 7u : 1u));
+                p->sprite_flags[slot] = (uint8_t)((pattern + slot) & 1u);
+                p->sprite_priorities[slot] = (uint16_t)(pattern * 257u + slot * 0x1435u);
+            }
+            const CupidGbPixels before = *p;
+            cupid_gb_pixels_tick(&gb);
+            assert(p->x == before.x + 1);
+            for (unsigned slot = 0; slot < 7; ++slot) {
+                assert(p->sprite_colors[slot] == before.sprite_colors[slot + 1]);
+                assert(p->sprite_palettes[slot] == before.sprite_palettes[slot + 1]);
+                assert(p->sprite_flags[slot] == before.sprite_flags[slot + 1]);
+                assert(p->sprite_priorities[slot] == before.sprite_priorities[slot + 1]);
+            }
+            assert(p->sprite_colors[7] == 0);
+            assert(p->sprite_priorities[7] == UINT16_MAX);
+            // Inactive metadata remains serialized until a later object replaces it.
+            assert(p->sprite_palettes[7] == before.sprite_palettes[7]);
+            assert(p->sprite_flags[7] == before.sprite_flags[7]);
+        }
+    }
+}
+
 int main(void) {
     test_dmg_object_order();
     test_dmg_priority_uses_raw_bg_color();
@@ -663,6 +953,17 @@ int main(void) {
     test_first_frame_presentation(false);
     test_first_frame_presentation(true);
     test_presentation_chunk_invariance();
+    test_blanking_span_edges();
+    test_color_port_ownership_edges();
+    test_stop_oam_and_palette_ports();
+    test_physical_color_attributes_in_compatibility_mode();
+    test_stopped_compatibility_background_priority();
+    test_palette_output_ignores_unused_bit();
+    test_layer_visibility(CUPID_GB_MODEL_DMG_ABC, false);
+    test_layer_visibility(CUPID_GB_MODEL_CGB, false);
+    test_layer_visibility(CUPID_GB_MODEL_CGB, true);
+    test_layer_visibility(CUPID_GB_MODEL_SGB, false);
+    test_pixel_output_preserves_object_queue_lanes();
     puts("PPU priority checks passed.");
     return 0;
 }

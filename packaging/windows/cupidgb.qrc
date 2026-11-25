@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/icons">
+        <file alias="cupidgb.png">cupidgb.png</file>
+    </qresource>
+</RCC>
