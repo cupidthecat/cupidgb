@@ -907,23 +907,31 @@ bool MainWindow::controllerSmokeTest(const QString &directory) {
         first.rumbleCalls != debuggerRumbleCalls)
         return smokeFailure(__FILE__, __LINE__);
 
-    const auto finishDebuggerCommand = [this, &feedbackCleared, &first,
-                                        debuggerRumbleCalls](const char *command) {
+    // The subroutine uses 384 NOPs followed by RET. A debugger slice can
+    // retire just one instruction when recording history on a busy host.
+    constexpr unsigned subroutineInstructions = 0x3a0 - 0x220 + 1;
+    const auto finishDebuggerCommand = [this, &feedbackCleared, &first, debuggerRumbleCalls](
+                                           const char *command, unsigned expectedInstructions) {
         debuggerCommand(command);
         if (!debuggerTimer_.isActive())
             return false;
-        unsigned slices = 0;
+        unsigned productiveSlices = 0;
+        QElapsedTimer deadline;
+        deadline.start();
         do {
+            const uint64_t before = debuggerCommandSteps_;
             debuggerSlice();
-            ++slices;
-            if (!feedbackCleared() || first.rumbleCalls != debuggerRumbleCalls)
+            productiveSlices += debuggerCommandSteps_ != before;
+            if (debuggerCommandSteps_ > expectedInstructions || !feedbackCleared() ||
+                first.rumbleCalls != debuggerRumbleCalls)
                 return false;
-        } while (debuggerTimer_.isActive() && slices < 256);
-        return !debuggerTimer_.isActive() && slices > 1 && paused_ && emulator_->gb.cpu.pc == 0x203;
+        } while (debuggerTimer_.isActive() && deadline.elapsed() < 10000);
+        return !debuggerTimer_.isActive() && debuggerCommandSteps_ == expectedInstructions &&
+               productiveSlices > 1 && paused_ && emulator_->gb.cpu.pc == 0x203;
     };
     debuggerCommand("set pc $0200");
     debuggerCommand("set sp $fffe");
-    if (!finishDebuggerCommand("next"))
+    if (!finishDebuggerCommand("next", subroutineInstructions + 1))
         return smokeFailure(__FILE__, __LINE__);
     debuggerCommand("set pc $0200");
     debuggerCommand("set sp $fffe");
@@ -932,7 +940,8 @@ bool MainWindow::controllerSmokeTest(const QString &directory) {
         return smokeFailure(__FILE__, __LINE__);
     debuggerSlice();
     if (!feedbackCleared() || debuggerTimer_.isActive() || emulator_->gb.cpu.pc != 0x220 ||
-        first.rumbleCalls != debuggerRumbleCalls || !finishDebuggerCommand("finish"))
+        first.rumbleCalls != debuggerRumbleCalls ||
+        !finishDebuggerCommand("finish", subroutineInstructions))
         return smokeFailure(__FILE__, __LINE__);
 
     cupid_gb_write_u8(&emulator_->gb, 3, 0x20);
