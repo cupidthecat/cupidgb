@@ -148,6 +148,8 @@ The window's Y comparison requires both the LCD and window to be enabled. A writ
 
 Monochrome OAM search samples each sprite's Y/X at the end of its two-dot slot. The last sample falls in the eager transfer prefix, before the first sprite fetch. If OAM DMA ends during search, the slots after release can read OAM again. Earlier selected sprites keep the coordinates captured during their slots. A native state saved under the earlier schedule can already contain the last selection, which the new schedule uses without adding it twice.
 
+During pixel transfer, object tile and attribute reads can see the OAM DMA destination word before the transfer releases OAM. Batched CPU delivery advances DMA between display dots so a fetch can see a byte that arrives earlier in the same machine cycle. Single-T-cycle CPU bus delivery already exposes those OAM writes. Double-speed VRAM sources retain their own half-dot pairing.
+
 [vram_bus.c](../src/gb/vram_bus.c) owns the committed map and tile-data addresses, the held read byte, and the pending addresses produced by eager fetching. Fine display work commits those pending addresses. A completed quiet row can leave the previous committed addresses in place. Keeping only the latest eager fetch would change a guest read at the first HBlank edge even when the completed image is correct.
 
 VRAM read and write ownership use separate predicates. On normal-speed CGB, the first scanline exposes STAT mode 3 before closing either port. On ordinary monochrome scanlines, the read port closes before the write port near the end of OAM search. CPU writes and CGB DMA's opposite-bank mirroring use the write predicate, so that early CGB interval cannot create an unintended second-bank write.

@@ -212,6 +212,21 @@ match. The dot-stepped comparison matches 272 completed scanlines, up
 from 268. The eight remaining monochrome cases carry DMA into transfer
 on scanline 0 or 1 and produce the same output as the preceding build.
 
+### OAM DMA during pixel transfer
+
+In the eight remaining rows, the first object fetch read OAM just after
+the penultimate DMA byte was due. CupidGB had deferred the byte
+to the end of the CPU machine cycle and read tile 1 from the old OAM word.
+Advancing DMA between display dots lets the object fetch see tile 3 from
+the just-written word. Selection timing and the retained Y/X coordinates
+use the same search rules.
+
+All 280 generated cases now match completed scanlines in the dot-stepped
+comparison. All 224 CGB-E controls also match the sprite selections,
+completed pixels and guest DMA write clocks. Those controls use ordinary
+and double speed, enter double speed through KEY1 and STOP, and exercise
+both arithmetic waits in HRAM and repeated STAT reads during DMA.
+
 ## Live cartridge replacement
 
 A pinned comparison exercised both native-color and monochrome-compatible

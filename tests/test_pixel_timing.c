@@ -223,6 +223,32 @@ static void test_dmg_oam_search_at_dma_tail(void) {
     destroy_fixture(&fixture);
 }
 
+static void test_oam_dma_updates_before_object_word(void) {
+    Fixture fixture = create_fixture(0, false, 0, 7, true);
+    CupidGb *gb = fixture.gb;
+    write_byte(&fixture, 0xc09e, 3);
+    write_byte(&fixture, 0xfe9e, 1);
+    write_byte(&fixture, 0xfe9f, 0);
+    write_byte(&fixture, 0xff40, 0x93);
+    advance_to(&fixture, 453 + 80);
+    while (fixture.cycles < 453 + 120 &&
+           (gb->object_fetch_stage != CUPID_GB_OBJECT_WAIT_BACKGROUND || gb->pixels.phase < 5 ||
+            !gb->pixels.count))
+        advance_to(&fixture, fixture.cycles + 1);
+    assert(gb->pixels.line == 1 && gb->object_fetch_stage == CUPID_GB_OBJECT_WAIT_BACKGROUND &&
+           gb->pixels.phase >= 5 && gb->pixels.count);
+
+    /* The penultimate DMA byte arrives while the object fetch aligns. */
+    gb->dma_source_base = 0xc000;
+    gb->dma_index = 158;
+    gb->dma_phase = 3;
+    gb->dma_active = true;
+    cupid_gb_tick(gb, 1);
+    assert(gb->dma_index == 159 && gb->object_attribute_memory[158] == 3);
+    assert(gb->oam_search_word == 3 && gb->pixels.object_address == 0x32);
+    destroy_fixture(&fixture);
+}
+
 static void test_hidden_objects_keep_color_fetch_timing(void) {
     for (unsigned profile = 0; profile < 3; ++profile)
         for (unsigned fast = 0; fast <= (profile != 0); ++fast)
@@ -319,6 +345,7 @@ int main(void) {
     test_window_y_compare_after_register_writes();
     test_dmg_window_y_late_horizontal_trigger();
     test_dmg_oam_search_at_dma_tail();
+    test_oam_dma_updates_before_object_word();
     test_hidden_objects_keep_color_fetch_timing();
     test_monochrome_object_abort_edges();
     test_window_restart_after_scroll_write();

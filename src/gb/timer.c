@@ -306,10 +306,12 @@ static void clock_lcd_span(CupidGb *gb, unsigned dots, unsigned before, unsigned
     }
 }
 
-/* The source bus is shared only while both engines can consume it. Callers
- * retain ownership of oscillator, divider, audio, and DMA credit totals. */
-static bool shared_vram_dma(const CupidGb *gb) {
-    return (gb->dma_active || gb->dma_start_delay) && (gb->dma_source_base & 0xe000u) == 0x8000u &&
+/* A batched LCD span must expose each DMA edge to tile and attribute reads
+ * during transfer, even when DMA reads its source outside VRAM. Single CPU
+ * T-cycles already expose those OAM updates. Only VRAM needs half-dot pairing. */
+static bool shared_lcd_dma(const CupidGb *gb, bool batched) {
+    return (gb->dma_active || gb->dma_start_delay) &&
+           ((gb->dma_source_base & 0xe000u) == 0x8000u || (batched && gb->pixels.active)) &&
            cupid_gb_lcd_enabled(gb) && !gb->cpu.halted && !gb->cpu.stopped;
 }
 
@@ -343,7 +345,7 @@ static void switch_clock_segment(CupidGb *gb, unsigned cycles, unsigned *half_do
     /* A partly frozen segment still releases its complete CPU-side DMA budget;
      * only the LCD oscillator loses the frozen prefix. A completely frozen
      * segment has no video or DMA edge. */
-    if (shared_vram_dma(gb)) {
+    if (shared_lcd_dma(gb, true)) {
         unsigned credit = cycles - frozen;
         unsigned start = before;
         unsigned end = start + first_dot;
@@ -448,9 +450,7 @@ static void tick_mcycles(CupidGb *gb, uint16_t cycles, bool cpu_delivery) {
         const unsigned before = display_half_cycles;
         half_cycles += (uint32_t)dots * 2u;
         display_half_cycles += (uint32_t)dots * 2u;
-        const bool shared = (gb->dma_active || gb->dma_start_delay) &&
-                            (gb->dma_source_base & 0xe000u) == 0x8000u &&
-                            cupid_gb_lcd_enabled(gb) && !gb->cpu.halted && !gb->cpu.stopped;
+        const bool shared = shared_lcd_dma(gb, true);
         if (shared) {
             for (unsigned dot = 0; dot < dots; ++dot) {
                 clock_lcd_dot(gb);
@@ -524,7 +524,7 @@ void cupid_gb_acknowledge_interrupt(CupidGb *gb, uint8_t mask) {
     const unsigned half = gb->double_speed ? 1u : 2u;
     if (gb->double_speed && cupid_gb_lcd_enabled(gb))
         gb->speed_switch_alignment ^= 4u;
-    const bool shared = shared_vram_dma(gb);
+    const bool shared = shared_lcd_dma(gb, true);
     clock_cpu_span(gb, 2u);
     cupid_gb_apu_run(gb, false);
     sample_rumble_delivery(gb, 0);
@@ -580,7 +580,7 @@ static void bus_clock_dot(CupidGb *gb, unsigned phase) {
         cupid_gb_sync_stat_half(gb);
     /* Pixel work consumes whole dots. Retain the first half's source-bus
      * credit until that dot's fetch, then release the pair after the fetch. */
-    if (gb->double_speed && shared_vram_dma(gb)) {
+    if (gb->double_speed && shared_lcd_dma(gb, false)) {
         if (!(phase & 1u))
             cupid_gb_tick_dma_tcycles(gb, 2u);
     } else {
