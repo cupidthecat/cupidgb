@@ -100,5 +100,35 @@ scheduled interval but leaves those complete clock records unchanged. This
 bounded exceptional policy is explicit; it does not normalize or reject an
 otherwise accepted native MBC3 timestamp.
 
+## HuC3 desktop alarms
+
+Pausing, closing, or replacing a running HuC3 cartridge schedules its future
+alarm. CupidGB takes the deadline from the cartridge clock and delivers it
+against wall time in either RTC mode. Resuming or reopening the cartridge
+cancels its pending alarm and withdraws any alert still displayed. Each
+cartridge path has its own alarm. Reloading a paused cartridge keeps the
+existing deadline.
+
+Click **Open Cartridge** to focus the cartridge's existing window or reopen
+the file. A deployed Windows build uses Task Scheduler and the notification
+area. Linux uses a systemd user timer and the session notification service.
+When the scheduler is unavailable, or a Windows build relies on the launch
+shell for its Qt runtime, a separate CupidGB process waits for the deadline.
+An alarm dialog is available when the desktop cannot display a notification
+with an open action.
+
+Linux alarms depend on the running user session. Delivery after signing out
+or rebooting remains unverified.
+
+Generated HuC3 cartridges cover repeated pause, resume, state restoration,
+paused reload, hot swap, replacement, and close. A failed replacement or
+close leaves the current session's alarm alone. Separate Windows and Linux
+probes exercised native timers after the scheduling process exited, with an
+offscreen Qt dialog on Windows and an isolated notification service on Linux.
+Both reopened the exact cartridge path, including spaces and Unicode
+characters, or focused an existing window without opening a second one.
+Linux probes also checked withdrawal and ignored clicks from canceled alarms
+on both the native timer and detached helper paths.
+
 The [parity checklist](parity.md) and recorded validation describe measured
 model, bus, save-continuation and commercial coverage.

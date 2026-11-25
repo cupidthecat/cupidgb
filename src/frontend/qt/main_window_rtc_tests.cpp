@@ -448,7 +448,7 @@ bool MainWindow::rtcSmokeTest(const QString &directory) {
         if (!imported())
             return smokeFailure(__FILE__, __LINE__);
     }
-    if (!rtcBatterySmokeTest(fixtures.path()))
+    if (!rtcBatterySmokeTest(fixtures.path()) || !huc3AlarmSmokeTest(fixtures.path()))
         return smokeFailure(__FILE__, __LINE__);
     qInfo("CupidGB RTC settings, battery ordering and history workflows passed");
     return true;
@@ -712,5 +712,104 @@ bool MainWindow::rtcBatterySmokeTest(const QString &directory) {
         }
     }
     qInfo("CupidGB RTC lifecycle battery persistence and clean autosave checks passed");
+    return true;
+}
+
+bool MainWindow::huc3AlarmSmokeTest(const QString &directory) {
+    QByteArray rom(32768, char(0));
+    rom[0x100] = char(0x18);
+    rom[0x101] = char(0xfe);
+    rom[0x147] = char(0xfe);
+    rom[0x149] = 2;
+    rtcFixtureChecksum(rom);
+    const QDir fixtures(directory);
+    const QString first = fixtures.filePath("HuC3 alarm A.gb");
+    const QString second = fixtures.filePath("HuC3 alarm B.gb");
+    if (!writeRtcFixture(first, rom) || !writeRtcFixture(second, rom))
+        return smokeFailure(__FILE__, __LINE__);
+
+    using Event = std::pair<QString, qint64>;
+    QList<Event> events;
+    MainWindow session(true, false, false, QStringLiteral(""), CUPID_GB_MODEL_DMG_ABC, 0);
+    session.timer_.stop();
+    session.huc3AlarmTestSink_ = [&](const QString &path, qint64 due) {
+        events.append({path, due});
+    };
+    if (!session.openRom(first) || events != QList<Event>{{first, 0}})
+        return smokeFailure(__FILE__, __LINE__);
+
+    const auto setAlarm = [&] {
+        auto &clock = session.emulator_->gb.huc3;
+        clock.days = 4;
+        clock.minutes = 15;
+        clock.alarm_days = 0x2004;
+        clock.alarm_minutes = 17;
+        clock.alarm_enabled = true;
+    };
+    const auto expectDeadline = [](const Event &event, const QString &path, qint64 before) {
+        const qint64 now = QDateTime::currentSecsSinceEpoch();
+        return event.first == path && event.second % 60 == 0 && event.second >= before + 61 &&
+               event.second <= now + 120;
+    };
+    session.setPaused(true);
+    if (events.size() != 1)
+        return smokeFailure(__FILE__, __LINE__);
+    session.setPaused(false);
+    if (events.size() != 2 || events.last() != Event{first, 0})
+        return smokeFailure(__FILE__, __LINE__);
+
+    setAlarm();
+    const auto beforePause = QDateTime::currentSecsSinceEpoch();
+    session.setPaused(true);
+    if (events.size() != 3 || !expectDeadline(events.last(), first, beforePause))
+        return smokeFailure(__FILE__, __LINE__);
+    const QByteArray state = session.captureState();
+    session.setPaused(true);
+    if (state.isEmpty() || !session.restoreState(state, true) || !session.reloadRom() ||
+        !session.paused_ || events.size() != 3)
+        return smokeFailure(__FILE__, __LINE__);
+
+    session.setPaused(false);
+    if (events.size() != 4 || events.last() != Event{first, 0})
+        return smokeFailure(__FILE__, __LINE__);
+    setAlarm();
+    const QString battery = session.savePath_;
+    const QString blocked = fixtures.filePath("blocked-alarm-save");
+    if (!fixtures.mkpath(blocked))
+        return smokeFailure(__FILE__, __LINE__);
+    session.savePath_ = blocked;
+    const bool failed = !session.openRom(second) && !session.closeRom();
+    session.savePath_ = battery;
+    if (!failed || events.size() != 4 || session.romPath_ != first || session.paused_)
+        return smokeFailure(__FILE__, __LINE__);
+    session.failed_ = false;
+
+    const auto beforeSwap = QDateTime::currentSecsSinceEpoch();
+    if (!session.openRom(second, false, ResetWorkflow::HotSwap) || events.size() != 6 ||
+        !expectDeadline(events[4], first, beforeSwap) || events[5] != Event{second, 0} ||
+        session.paused_)
+        return smokeFailure(__FILE__, __LINE__);
+
+    setAlarm();
+    const auto beforeClose = QDateTime::currentSecsSinceEpoch();
+    session.setPaused(true);
+    if (!session.closeRom() || events.size() != 7 ||
+        !expectDeadline(events.last(), second, beforeClose))
+        return smokeFailure(__FILE__, __LINE__);
+
+    if (!session.openRom(second) || events.size() != 8 || events.last() != Event{second, 0})
+        return smokeFailure(__FILE__, __LINE__);
+    setAlarm();
+    const auto beforeReplace = QDateTime::currentSecsSinceEpoch();
+    if (!session.openRom(first) || events.size() != 10 ||
+        !expectDeadline(events[8], second, beforeReplace) || events[9] != Event{first, 0})
+        return smokeFailure(__FILE__, __LINE__);
+
+    setAlarm();
+    const auto beforeRunningClose = QDateTime::currentSecsSinceEpoch();
+    if (!session.closeRom() || events.size() != 11 ||
+        !expectDeadline(events.last(), first, beforeRunningClose))
+        return smokeFailure(__FILE__, __LINE__);
+    qInfo("CupidGB HuC3 alarm pause, resume, replacement and close workflows passed");
     return true;
 }

@@ -55,6 +55,8 @@ void MainWindow::setPaused(bool value, bool retainInput) {
 
 void MainWindow::setPausedLocal(bool value, bool retainInput) {
     const QPointer<MainWindow> self(this);
+    const bool changed = paused_ != value;
+    const uint64_t originalSession = sessionId_;
     if (!value)
         debuggerInputPaused_ = false;
     if (debugger_) {
@@ -90,6 +92,12 @@ void MainWindow::setPausedLocal(bool value, bool retainInput) {
         flushBattery();
     if (!self)
         return;
+    if (changed && sessionId_ == originalSession && paused_ == value) {
+        if (!value)
+            updateHuc3Alarm(romPath_, 0);
+        else if (const qint64 due = huc3AlarmDeadline())
+            updateHuc3Alarm(romPath_, due);
+    }
     refreshDebugger();
     refreshMusicControls();
 }

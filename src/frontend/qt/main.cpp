@@ -20,6 +20,7 @@
  * along with this program.  If not, see <https://gnu.org>.
  */
 
+#include "huc3_alarm.h"
 #include "main_window.h"
 
 #include <QApplication>
@@ -42,6 +43,9 @@ int main(int argc, char **argv) {
     parser.setApplicationDescription("CupidGB Game Boy and Game Boy Color emulator");
     parser.addHelpOption();
     parser.addVersionOption();
+    QCommandLineOption alarmDelivery("deliver-huc3-alarm", QString(), "cartridge-id");
+    alarmDelivery.setFlags(QCommandLineOption::HiddenFromHelp);
+    parser.addOption(alarmDelivery);
     parser.addOption({"smoke-test", "Run isolated frontend workflow checks and exit."});
     parser.addOption({"smoke-workflow",
                       "Select smoke checks: all, desktop, storage, sgb, link, or gbs.", "group"});
@@ -66,6 +70,12 @@ int main(int argc, char **argv) {
     parser.addPositionalArgument("file",
                                  "Optional cartridge, GBS music file, or compressed archive.");
     parser.process(app);
+    if (parser.isSet(alarmDelivery)) {
+        if (app.arguments().size() != 4 || parser.positionalArguments().size() != 1)
+            return 1;
+        return huc3Alarm::deliver(app, parser.value(alarmDelivery),
+                                  parser.positionalArguments()[0]);
+    }
     const bool smoke = parser.isSet("smoke-test");
     const bool audioCheck = parser.isSet("audio-check");
     MainWindow::SmokeWorkflow smokeWorkflow = MainWindow::SmokeWorkflow::All;

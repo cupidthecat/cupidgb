@@ -24,10 +24,13 @@
 #include "main_window_internal.h"
 
 #include "host_camera.h"
+#include "huc3_alarm.h"
 
+#include <QDateTime>
 #include <QScopeGuard>
 
 extern "C" {
+#include "cupid/gb/huc3.h"
 #include "cupid/gb/ppu.h"
 }
 
@@ -187,6 +190,7 @@ MainWindow::~MainWindow() {
         inspectorsWindow_->setSession({}, {});
     if (debugger_)
         cupid_gb_debugger_cleanup(debugger_.get());
+    const bool wasRunning = !paused_;
     paused_ = true;
     qApp->removeEventFilter(this);
     stopAudio();
@@ -196,6 +200,8 @@ MainWindow::~MainWindow() {
     setWorkBoyConnected(false);
     if (emulator_) {
         flushBattery(true);
+        if (const qint64 due = wasRunning ? huc3AlarmDeadline() : 0)
+            updateHuc3Alarm(romPath_, due);
         cupid_emulator_shutdown(emulator_.get());
     }
 }
@@ -895,6 +901,11 @@ bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflo
     const bool resetChangedBattery =
         workflow != ResetWorkflow::Open && !hotSwap && sameBattery && emulator_ &&
         candidate->gb.battery_write_generation != emulator_->gb.battery_write_generation;
+    // Read the outgoing deadline before replacing its hardware. Publish it only
+    // once the candidate has committed.
+    const QString outgoingPath =
+        !paused_ && romPath_.compare(absolute, pathCase) != 0 ? romPath_ : QString();
+    const qint64 outgoingAlarm = outgoingPath.isEmpty() ? 0 : huc3AlarmDeadline();
     if (!sameCartridge && workflow == ResetWorkflow::Open) {
         disconnectLink();
         if (!self || sessionId_ != previousSession) {
@@ -921,6 +932,12 @@ bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflo
             cupid_emulator_shutdown(emulator_.get());
         emulator_ = std::move(candidate);
     }
+    if (romPath_.compare(absolute, pathCase) != 0) {
+        delete huc3AlarmReceiver_;
+        huc3AlarmReceiver_ = nullptr;
+    }
+    if (outgoingAlarm)
+        updateHuc3Alarm(outgoingPath, outgoingAlarm);
     setMusicSession(candidateMusic, candidateMusic ? candidateMusic->first_track : 0);
     // Device reclassification can emit output immediately. The outer operation
     // still gates callbacks; resetting a session does not release its controls.
@@ -995,6 +1012,13 @@ bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflo
         invalidateSgbBorder();
     romData_ = data;
     romPath_ = absolute;
+    if (gb.header.mbc_type == CUPID_GB_HUC3) {
+        if (!isolated_ && !automated_ && !huc3AlarmReceiver_)
+            huc3AlarmReceiver_ = huc3Alarm::listenForActivation(romPath_, *this);
+    } else {
+        delete huc3AlarmReceiver_;
+        huc3AlarmReceiver_ = nullptr;
+    }
     if (debugger_ && !sameCartridge && !reload && !hotSwap) {
         const QString symbols = info.dir().filePath(info.completeBaseName() + ".sym");
         if (QFileInfo::exists(symbols))
@@ -1028,11 +1052,16 @@ bool MainWindow::openRom(const QString &path, bool reload, ResetWorkflow workflo
     // Reload keeps its existing pause choice without a transient resume. The
     // reset transaction retains controls until an actual input event changes them.
     if (hotSwap) {
+        if (!paused_)
+            updateHuc3Alarm(romPath_, 0);
         resetPacing();
         if (debugger_ && !paused_)
             cupid_gb_debugger_begin(debugger_.get(), &emulator_->gb, CUPID_GB_DEBUG_RUN);
     } else {
-        setPaused(workflow == ResetWorkflow::Reload && paused_, workflow != ResetWorkflow::Open);
+        const bool remainPaused = workflow == ResetWorkflow::Reload && paused_;
+        if (!remainPaused && !paused_)
+            updateHuc3Alarm(romPath_, 0);
+        setPaused(remainPaused, workflow != ResetWorkflow::Open);
     }
     if (!self || sessionId_ != committedSession)
         return true;
@@ -1115,9 +1144,14 @@ bool MainWindow::closeRom() {
     const uint64_t previousSession = sessionId_;
     if (!flushBattery(true) || !stopRecording())
         return false;
+    const qint64 closingAlarm = !paused_ ? huc3AlarmDeadline() : 0;
     disconnectLink();
     if (!self || sessionId_ != previousSession)
         return true;
+    delete huc3AlarmReceiver_;
+    huc3AlarmReceiver_ = nullptr;
+    if (closingAlarm)
+        updateHuc3Alarm(romPath_, closingAlarm);
     cancelCameraCapture();
     hostCamera_.reset();
     cameraError_.clear();
@@ -1164,6 +1198,29 @@ bool MainWindow::closeRom() {
     setWindowTitle("CupidGB");
     refreshActions();
     return true;
+}
+
+qint64 MainWindow::huc3AlarmDeadline() const {
+    if (!emulator_ || emulator_->gb.header.mbc_type != CUPID_GB_HUC3)
+        return 0;
+    const qint64 now = QDateTime::currentSecsSinceEpoch();
+    const uint32_t delay = cupid_gb_huc3_seconds_to_alarm(&emulator_->gb, now);
+    return delay ? now + delay : 0;
+}
+
+void MainWindow::updateHuc3Alarm(const QString &path, qint64 due) {
+    if (path.isEmpty())
+        return;
+    if (huc3AlarmTestSink_) {
+        huc3AlarmTestSink_(path, due);
+        return;
+    }
+    if (isolated_ || automated_)
+        return;
+    if (due)
+        huc3Alarm::schedule(path, due);
+    else
+        huc3Alarm::cancel(path);
 }
 
 void MainWindow::applyDisplayLayers(CupidGb *gb) const {

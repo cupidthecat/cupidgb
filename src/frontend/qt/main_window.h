@@ -184,6 +184,8 @@ class MainWindow final : public QMainWindow {
     QString bootDirectory() const;
     void setPaused(bool paused, bool retainInput = false);
     void setPausedLocal(bool paused, bool retainInput);
+    qint64 huc3AlarmDeadline() const;
+    void updateHuc3Alarm(const QString &path, qint64 due);
     void releaseKeys(bool resetAudio = true);
     void setJoypad(uint8_t mask);
     void applyHeldButtons();
@@ -319,6 +321,7 @@ class MainWindow final : public QMainWindow {
     bool externalSgbSmokeTest(const QString &directory);
     bool rtcSmokeTest(const QString &directory);
     bool rtcBatterySmokeTest(const QString &directory);
+    bool huc3AlarmSmokeTest(const QString &directory);
     void openCheats(bool search = false);
     void refreshCheats(bool newSession = false);
     bool mutateCheats(const std::function<bool(CupidGbCheats *)> &operation);
@@ -406,6 +409,8 @@ class MainWindow final : public QMainWindow {
     uint64_t pacingGeneration_ = 0;
     GuestClockPacer clockPacer_;
     QString romPath_;
+    QObject *huc3AlarmReceiver_ = nullptr;
+    std::function<void(const QString &, qint64)> huc3AlarmTestSink_;
     QString savePath_;
     QByteArray romData_;
     QByteArray savedRam_;

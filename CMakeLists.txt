@@ -110,7 +110,7 @@ endif()
 add_executable(cupidgb_rom_runner tools/rom_runner.c)
 target_link_libraries(cupidgb_rom_runner PRIVATE cupidgb_core)
 if(CUPIDGB_BUILD_QT)
-    find_package(Qt6 6.4 REQUIRED COMPONENTS Widgets Multimedia PrintSupport)
+    find_package(Qt6 6.4 REQUIRED COMPONENTS Widgets Multimedia Network PrintSupport)
     message(STATUS "CupidGB Qt ${Qt6_VERSION} from ${Qt6_DIR}")
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND cupidgb_ipo_supported)
         # The desktop link mixes core and Qt objects. Keep Qt data references
@@ -154,6 +154,7 @@ if(CUPIDGB_BUILD_QT)
         src/frontend/qt/gbs_player.cpp
         src/frontend/qt/gbs_player.h
         src/frontend/qt/host_camera.cpp
+        src/frontend/qt/huc3_alarm.cpp
         src/frontend/qt/main_window.cpp
         src/frontend/qt/main_window.h
         src/frontend/qt/main_window_cheats.cpp
@@ -213,11 +214,13 @@ if(CUPIDGB_BUILD_QT)
         src/frontend/qt/inspectors_window.cpp
     )
     target_link_libraries(cupidgb PRIVATE cupidgb_core cupidgb_controllers Qt6::Widgets
-        Qt6::Multimedia Qt6::PrintSupport)
+        Qt6::Multimedia Qt6::Network Qt6::PrintSupport)
     target_compile_definitions(cupidgb PRIVATE CUPIDGB_VERSION="${PROJECT_VERSION}")
     qt_add_resources(cupidgb_icon_sources packaging/windows/cupidgb.qrc)
     target_sources(cupidgb PRIVATE ${cupidgb_icon_sources})
     if(WIN32)
+        target_sources(cupidgb PRIVATE src/frontend/qt/huc3_alarm_windows.cpp)
+        target_link_libraries(cupidgb PRIVATE taskschd ole32 oleaut32 advapi32)
         set_target_properties(cupidgb PROPERTIES WIN32_EXECUTABLE TRUE)
         enable_language(RC)
         configure_file(packaging/windows/cupidgb.rc.in
@@ -228,6 +231,12 @@ if(CUPIDGB_BUILD_QT)
         add_custom_command(TARGET cupidgb POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 $<TARGET_FILE:SDL2::SDL2> $<TARGET_FILE_DIR:cupidgb>)
+    endif()
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        find_package(Qt6 6.4 REQUIRED COMPONENTS DBus)
+        set_target_properties(cupidgb PROPERTIES AUTOMOC ON)
+        target_sources(cupidgb PRIVATE src/frontend/qt/huc3_alarm_linux_notification.cpp)
+        target_link_libraries(cupidgb PRIVATE Qt6::DBus)
     endif()
     install(TARGETS cupidgb RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
     install(FILES LICENSE DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/cupidgb)

@@ -8,7 +8,7 @@ CupidGB uses CMake for the hardware core, command-line ROM runner, Qt desktop ap
 | --- | --- |
 | CMake | 3.21 or newer |
 | Compilers | C11 and C++17 |
-| Qt | 6.4 or newer APIs; desktop validation uses 6.8.3 with Widgets, Multimedia, and Print Support |
+| Qt | 6.4 or newer with Widgets, Multimedia, Network, and Print Support. Linux also needs DBus. Desktop validation uses 6.8.3. |
 | SDL2 | 2.24 or newer for the Qt desktop controller backend |
 | Python | 3.9 or newer when tests are enabled |
 | Build tool | Ninja, Make, or the matching Visual Studio generator |

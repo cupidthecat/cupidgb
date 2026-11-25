@@ -52,7 +52,7 @@ Ordinary Reset restarts play with the selected hardware settings and clears rewi
 
 ## Build
 
-Requirements: CMake 3.21 or newer, C11/C++17 compilers, Qt 6.4 or newer with Widgets, Multimedia, and PrintSupport, SDL2 2.24 or newer, and Python 3.9 or newer for tests. Core-only builds need neither Qt nor SDL2.
+Desktop builds need CMake 3.21 or newer, C11 and C++17 compilers, SDL2 2.24 or newer, and Qt 6.4 or newer with Widgets, Multimedia, Network, and PrintSupport. Linux also needs Qt DBus. Tests need Python 3.9 or newer. Core-only builds need neither Qt nor SDL2.
 
 Release builds enable interprocedural optimization when the compiler and linker support it. Other configurations and sanitizer builds retain ordinary compilation. Use `-DCUPIDGB_ENABLE_IPO=OFF` to disable it. On Linux, optional OpenSSL 3 development files enable faster large state hashes. Windows uses its system hashing API. Both retain portable hashing as a fallback.
 
